@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Discover Asset Managers - Yieldr</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, sans-serif;
+            background: #000000;
+            color: #FFFFFF;
+            min-height: 100vh;
+        }
+
+        /* Header */
+        .header {
+            background: #000000;
+            border-bottom: 1px solid #1A1A1A;
+            padding: 1.25rem 2rem;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .header-content {
+            max-width: 1400px;
+            margin: 0 auto;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .logo {
+            font-size: 1.5rem;
+            font-weight: 800;
+            letter-spacing: 0.15em;
+            color: #FFFFFF;
+        }
+
+        .become-manager-btn {
+            background: transparent;
+            color: #00C805;
+            border: 1px solid #00C805;
+            padding: 0.75rem 1.5rem;
+            border-radius: 6px;
+            font-weight: 600;
+            font-size: 0.95rem;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-decoration: none;
+            display: inline-block;
+        }
+
+        .become-manager-btn:hover {
+            background: #00C805;
+            color: #000000;
+        }
+
+        /* Main Content */
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 3rem 2rem;
+        }
+
+        .page-title {
+            font-size: 2rem;
+            font-weight: 700;
+            margin-bottom: 0.5rem;
+        }
+
+        .page-subtitle {
+            color: #8A8A8A;
+            font-size: 1rem;
+            margin-bottom: 3rem;
+        }
+
+        /* Manager Grid */
+        .managers-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+            gap: 1.5rem;
+        }
+
+        /* Manager Card */
+        .manager-card {
+            background: #0A0A0A;
+            border: 1px solid #1A1A1A;
+            border-radius: 8px;
+            padding: 1.5rem;
+            transition: all 0.3s ease;
+            cursor: pointer;
+        }
+
+        .manager-card:hover {
+            border-color: #00C805;
+            transform: translateY(-2px);
+        }
+
+        .card-header {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            margin-bottom: 1rem;
+        }
+
+        .avatar {
+            width: 56px;
+            height: 56px;
+            border-radius: 50%;
+            border: 2px solid #00C805;
+            object-fit: cover;
+        }
+
+        .manager-info {
+            flex: 1;
+        }
+
+        .manager-name {
+            font-size: 1.125rem;
+            font-weight: 600;
+            margin-bottom: 0.25rem;
+        }
+
+        .verified-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.25rem;
+            color: #00C805;
+            font-size: 0.875rem;
+        }
+
+        /* Metrics */
+        .metrics {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 1rem;
+            margin-bottom: 1rem;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.875rem;
+        }
+
+        .metric {
+            display: flex;
+            flex-direction: column;
+            gap: 0.25rem;
+        }
+
+        .metric-label {
+            color: #8A8A8A;
+            font-size: 0.75rem;
+        }
+
+        .metric-value {
+            color: #FFFFFF;
+            font-weight: 500;
+        }
+
+        .metric-value.positive {
+            color: #00C805;
+        }
+
+        .metric-value.negative {
+            color: #FF3B30;
+        }
+
+        /* Platform Icons */
+        .platforms {
+            display: flex;
+            gap: 0.5rem;
+            padding-top: 1rem;
+            border-top: 1px solid #1A1A1A;
+        }
+
+        .platform-icon {
+            height: 20px;
+            width: auto;
+            opacity: 0.6;
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .header {
+                padding: 1rem;
+            }
+
+            .logo {
+                font-size: 1.25rem;
+            }
+
+            .become-manager-btn {
+                padding: 0.6rem 1rem;
+                font-size: 0.875rem;
+            }
+
+            .container {
+                padding: 2rem 1rem;
+            }
+
+            .page-title {
+                font-size: 1.5rem;
+            }
+
+            .managers-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Header -->
+    <header class="header">
+        <div class="header-content">
+            <div class="logo">YIELDR</div>
+            <a href="#" class="become-manager-btn">Become an Asset Manager</a>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="container">
+        <h1 class="page-title">Discover Asset Managers</h1>
+        <p class="page-subtitle">Connect with verified crypto asset managers and grow your portfolio</p>
+
+        <!-- Managers Grid -->
+        <div class="managers-grid">
+            <!-- Manager 1 -->
+            <div class="manager-card">
+                <div class="card-header">
+                    <img src="https://b22290bb4d42a7d0d0d796b264519fb5.cdn.bubble.io/f1760731746086x138133871256527200/kgjADCj7_400x400.jpg" alt="Alex Kim" class="avatar">
+                    <div class="manager-info">
+                        <div class="manager-name">Alex Kim</div>
+                        <div class="verified-badge">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="#00C805">
+                                <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/>
+                            </svg>
+                            Verified
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="metrics">
+                    <div class="metric">
+                        <span class="metric-label">AUM</span>
+                        <span class="metric-value">$245K</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">30d ROI</span>
+                        <span class="metric-value positive">+47.2%</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">Win Rate</span>
+                        <span class="metric-value">68%</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">Fees</span>
+                        <span class="metric-value">20%</span>
+                    </div>
+                </div>
+
+                <div class="platforms">
+                    <img src="https://b22290bb4d42a7d0d0d796b264519fb5.cdn.bubble.io/f1760730571727x652164385115809700/Avantis%20White%20Logo%20-%20Horizontal.png" alt="Avantis" class="platform-icon">
+                    <img src="https://b22290bb4d42a7d0d0d796b264519fb5.cdn.bubble.io/f1760731058931x165828739392198200/aero.png" alt="Aerodrome" class="platform-icon">
+                </div>
+            </div>
+
+            <!-- Manager 2 -->
+            <div class="manager-card">
+                <div class="card-header">
+                    <img src="https://b22290bb4d42a7d0d0d796b264519fb5.cdn.bubble.io/f1760730842873x784538099904239200/av%202.jpeg" alt="Sarah Chen" class="avatar">
+                    <div class="manager-info">
+                        <div class="manager-name">Sarah Chen</div>
+                        <div class="verified-badge">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="#00C805">
+                                <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/>
+                            </svg>
+                            Verified
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="metrics">
+                    <div class="metric">
+                        <span class="metric-label">AUM</span>
+                        <span class="metric-value">$412K</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">30d ROI</span>
+                        <span class="metric-value positive">+63.8%</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">Win Rate</span>
+                        <span class="metric-value">72%</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">Fees</span>
+                        <span class="metric-value">25%</span>
+                    </div>
+                </div>
+
+                <div class="platforms">
+                    <img src="https://b22290bb4d42a7d0d0d796b264519fb5.cdn.bubble.io/f1760730571727x652164385115809700/Avantis%20White%20Logo%20-%20Horizontal.png" alt="Avantis" class="platform-icon">
+                    <img src="https://b22290bb4d42a7d0d0d796b264519fb5.cdn.bubble.io/f1760731058931x165828739392198200/aero.png" alt="Aerodrome" class="platform-icon">
+                </div>
+            </div>
+
+            <!-- Manager 3 -->
+            <div class="manager-card">
+                <div class="card-header">
+                    <img src="https://b22290bb4d42a7d0d0d796b264519fb5.cdn.bubble.io/f1760730856935x924574333228713700/av%203.jpeg" alt="Mike Park" class="avatar">
+                    <div class="manager-info">
+                        <div class="manager-name">Mike Park</div>
+                        <div class="verified-badge">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="#00C805">
+                                <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/>
+                            </svg>
+                            Verified
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="metrics">
+                    <div class="metric">
+                        <span class="metric-label">AUM</span>
+                        <span class="metric-value">$328K</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">30d ROI</span>
+                        <span class="metric-value positive">+52.4%</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">Win Rate</span>
+                        <span class="metric-value">65%</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">Fees</span>
+                        <span class="metric-value">22%</span>
+                    </div>
+                </div>
+
+                <div class="platforms">
+                    <img src="https://b22290bb4d42a7d0d0d796b264519fb5.cdn.bubble.io/f1760730571727x652164385115809700/Avantis%20White%20Logo%20-%20Horizontal.png" alt="Avantis" class="platform-icon">
+                    <img src="https://b22290bb4d42a7d0d0d796b264519fb5.cdn.bubble.io/f1760731058931x165828739392198200/aero.png" alt="Aerodrome" class="platform-icon">
+                </div>
+            </div>
+
+            <!-- Manager 4 -->
+            <div class="manager-card">
+                <div class="card-header">
+                    <img src="https://b22290bb4d42a7d0d0d796b264519fb5.cdn.bubble.io/f1760731762868x445415526606580700/QngrqCSC_400x400.jpg" alt="Lisa Jones" class="avatar">
+                    <div class="manager-info">
+                        <div class="manager-name">Lisa Jones</div>
+                        <div class="verified-badge">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="#00C805">
+                                <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/>
+                            </svg>
+                            Verified
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="metrics">
+                    <div class="metric">
+                        <span class="metric-label">AUM</span>
+                        <span class="metric-value">$567K</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">30d ROI</span>
+                        <span class="metric-value positive">+71.3%</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">Win Rate</span>
+                        <span class="metric-value">74%</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">Fees</span>
+                        <span class="metric-value">18%</span>
+                    </div>
+                </div>
+
+                <div class="platforms">
+                    <img src="https://b22290bb4d42a7d0d0d796b264519fb5.cdn.bubble.io/f1760731058931x165828739392198200/aero.png" alt="Aerodrome" class="platform-icon">
+                </div>
+            </div>
+
+            <!-- Manager 5 -->
+            <div class="manager-card">
+                <div class="card-header">
+                    <img src="https://b22290bb4d42a7d0d0d796b264519fb5.cdn.bubble.io/f1760731794127x999562132716905700/R6ihm6Et_400x400.jpg" alt="Raj Kumar" class="avatar">
+                    <div class="manager-info">
+                        <div class="manager-name">Raj Kumar</div>
+                        <div class="verified-badge">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="#00C805">
+                                <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/>
+                            </svg>
+                            Verified
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="metrics">
+                    <div class="metric">
+                        <span class="metric-label">AUM</span>
+                        <span class="metric-value">$189K</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">30d ROI</span>
+                        <span class="metric-value positive">+39.6%</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">Win Rate</span>
+                        <span class="metric-value">61%</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">Fees</span>
+                        <span class="metric-value">15%</span>
+                    </div>
+                </div>
+
+                <div class="platforms">
+                    <img src="https://b22290bb4d42a7d0d0d796b264519fb5.cdn.bubble.io/f1760730571727x652164385115809700/Avantis%20White%20Logo%20-%20Horizontal.png" alt="Avantis" class="platform-icon">
+                    <img src="https://b22290bb4d42a7d0d0d796b264519fb5.cdn.bubble.io/f1760731058931x165828739392198200/aero.png" alt="Aerodrome" class="platform-icon">
+                </div>
+            </div>
+
+            <!-- Manager 6 -->
+            <div class="manager-card">
+                <div class="card-header">
+                    <img src="https://b22290bb4d42a7d0d0d796b264519fb5.cdn.bubble.io/f1760730891764x296275179448961700/av%206.png" alt="Emma Miller" class="avatar">
+                    <div class="manager-info">
+                        <div class="manager-name">Emma Miller</div>
+                        <div class="verified-badge">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="#00C805">
+                                <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/>
+                            </svg>
+                            Verified
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="metrics">
+                    <div class="metric">
+                        <span class="metric-label">AUM</span>
+                        <span class="metric-value">$693K</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">30d ROI</span>
+                        <span class="metric-value positive">+84.7%</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">Win Rate</span>
+                        <span class="metric-value">79%</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">Fees</span>
+                        <span class="metric-value">30%</span>
+                    </div>
+                </div>
+
+                <div class="platforms">
+                    <img src="https://b22290bb4d42a7d0d0d796b264519fb5.cdn.bubble.io/f1760731058931x165828739392198200/aero.png" alt="Aerodrome" class="platform-icon">
+                </div>
+            </div>
+        </div>
+    </main>
+</body>
+</html>
