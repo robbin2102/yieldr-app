@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Add Wallets - Yieldr</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, sans-serif;
+            background: #000000;
+            color: #FFFFFF;
+            min-height: 100vh;
+            padding: 2rem;
+        }
+
+        .container {
+            max-width: 700px;
+            margin: 0 auto;
+        }
+
+        .header {
+            margin-bottom: 3rem;
+        }
+
+        .title {
+            font-size: 2.5rem;
+            font-weight: 700;
+            margin-bottom: 0.5rem;
+        }
+
+        .subtitle {
+            color: #8A8A8A;
+            font-size: 1.125rem;
+        }
+
+        .info-box {
+            background: rgba(0, 200, 5, 0.1);
+            border: 1px solid #00C805;
+            border-radius: 8px;
+            padding: 1rem;
+            margin-bottom: 2rem;
+            display: flex;
+            gap: 0.75rem;
+        }
+
+        .info-icon {
+            color: #00C805;
+            font-size: 1.25rem;
+            flex-shrink: 0;
+        }
+
+        .info-text {
+            font-size: 0.875rem;
+            color: #FFFFFF;
+            line-height: 1.5;
+        }
+
+        .wallets-section {
+            background: #0A0A0A;
+            border: 1px solid #1A1A1A;
+            border-radius: 12px;
+            padding: 2rem;
+            margin-bottom: 2rem;
+        }
+
+        .section-title {
+            font-size: 1.125rem;
+            font-weight: 600;
+            margin-bottom: 1.5rem;
+        }
+
+        .wallet-item {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            padding: 1rem;
+            background: #000000;
+            border: 1px solid #1A1A1A;
+            border-radius: 8px;
+            margin-bottom: 1rem;
+        }
+
+        .wallet-item:last-child {
+            margin-bottom: 0;
+        }
+
+        .wallet-number {
+            width: 32px;
+            height: 32px;
+            background: #1A1A1A;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 600;
+            font-size: 0.875rem;
+            flex-shrink: 0;
+        }
+
+        .wallet-address {
+            flex: 1;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.875rem;
+        }
+
+        .wallet-address input {
+            width: 100%;
+            background: transparent;
+            border: none;
+            color: #FFFFFF;
+            font-family: inherit;
+            font-size: inherit;
+            outline: none;
+        }
+
+        .wallet-address input::placeholder {
+            color: #8A8A8A;
+        }
+
+        .wallet-badge {
+            background: rgba(0, 200, 5, 0.1);
+            color: #00C805;
+            border: 1px solid #00C805;
+            border-radius: 4px;
+            padding: 0.25rem 0.75rem;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+
+        .remove-btn {
+            background: transparent;
+            border: none;
+            color: #8A8A8A;
+            cursor: pointer;
+            font-size: 1.25rem;
+            padding: 0;
+            width: 24px;
+            height: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: color 0.3s;
+        }
+
+        .remove-btn:hover {
+            color: #FF3B30;
+        }
+
+        .add-wallet-btn {
+            width: 100%;
+            background: transparent;
+            border: 1px dashed #1A1A1A;
+            color: #8A8A8A;
+            padding: 1rem;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 0.95rem;
+            transition: all 0.3s;
+            margin-top: 1rem;
+        }
+
+        .add-wallet-btn:hover:not(:disabled) {
+            border-color: #00C805;
+            color: #00C805;
+        }
+
+        .add-wallet-btn:disabled {
+            opacity: 0.3;
+            cursor: not-allowed;
+        }
+
+        .submit-btn {
+            width: 100%;
+            background: #00C805;
+            color: #000000;
+            border: none;
+            padding: 1.25rem;
+            font-size: 1.125rem;
+            font-weight: 600;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .submit-btn:hover {
+            background: #00A000;
+            transform: translateY(-2px);
+            box-shadow: 0 10px 40px rgba(0, 200, 5, 0.3);
+        }
+
+        .submit-btn:disabled {
+            background: #1A1A1A;
+            color: #8A8A8A;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        @media (max-width: 640px) {
+            body {
+                padding: 1rem;
+            }
+
+            .title {
+                font-size: 2rem;
+            }
+
+            .wallets-section {
+                padding: 1.5rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1 class="title">Add Your Trading Wallets</h1>
+            <p class="subtitle">Connect multiple wallets to verify your complete trading history</p>
+        </div>
+
+        <div class="info-box">
+            <div class="info-icon">ℹ️</div>
+            <div class="info-text">
+                Your connected wallet is automatically added. You can add up to 5 more wallets to aggregate your performance across all addresses.
+            </div>
+        </div>
+
+        <div class="wallets-section">
+            <h3 class="section-title">Wallet Addresses (Max 6)</h3>
+            
+            <div id="walletsList">
+                <!-- Primary wallet (pre-filled) -->
+                <div class="wallet-item">
+                    <div class="wallet-number">1</div>
+                    <div class="wallet-address">
+                        <input type="text" id="wallet-0" readonly>
+                    </div>
+                    <div class="wallet-badge">Primary</div>
+                </div>
+            </div>
+
+            <button class="add-wallet-btn" id="addWalletBtn" onclick="addWalletInput()">
+                + Add Another Wallet
+            </button>
+        </div>
+
+        <button class="submit-btn" onclick="submitWallets()">
+            Continue to Profile Creation
+        </button>
+    </div>
+
+    <script>
+        let walletCount = 1;
+        const MAX_WALLETS = 6;
+
+        // Load primary wallet
+        const primaryWallet = sessionStorage.getItem('walletAddress');
+        if (primaryWallet) {
+            document.getElementById('wallet-0').value = primaryWallet;
+        }
+
+        function addWalletInput() {
+            if (walletCount >= MAX_WALLETS) return;
+
+            const walletsList = document.getElementById('walletsList');
+            const walletItem = document.createElement('div');
+            walletItem.className = 'wallet-item';
+            walletItem.innerHTML = `
+                <div class="wallet-number">${walletCount + 1}</div>
+                <div class="wallet-address">
+                    <input 
+                        type="text" 
+                        id="wallet-${walletCount}"
+                        placeholder="0x..."
+                        pattern="^0x[a-fA-F0-9]{40}$"
+                    >
+                </div>
+                <button class="remove-btn" onclick="removeWallet(this)">×</button>
+            `;
+            
+            walletsList.appendChild(walletItem);
+            walletCount++;
+
+            // Disable add button if max reached
+            if (walletCount >= MAX_WALLETS) {
+                document.getElementById('addWalletBtn').disabled = true;
+            }
+        }
+
+        function removeWallet(btn) {
+            btn.parentElement.remove();
+            walletCount--;
+            
+            // Re-enable add button
+            document.getElementById('addWalletBtn').disabled = false;
+            
+            // Renumber remaining wallets
+            const walletItems = document.querySelectorAll('.wallet-item');
+            walletItems.forEach((item, index) => {
+                item.querySelector('.wallet-number').textContent = index + 1;
+            });
+        }
+
+        async function submitWallets() {
+            const wallets = [];
+            
+            // Collect all wallet addresses
+            for (let i = 0; i < walletCount; i++) {
+                const input = document.getElementById(`wallet-${i}`);
+                if (input && input.value) {
+                    const address = input.value.trim();
+                    
+                    // Validate address format
+                    if (!/^0x[a-fA-F0-9]{40}$/.test(address)) {
+                        alert(`Invalid wallet address at position ${i + 1}`);
+                        return;
+                    }
+                    
+                    wallets.push({
+                        address: address.toLowerCase(),
+                        isPrimary: i === 0,
+                        chain: 'base'
+                    });
+                }
+            }
+
+            if (wallets.length === 0) {
+                alert('Please add at least one wallet');
+                return;
+            }
+
+            // Save wallets to backend
+            try {
+                const response = await fetch('/api/wallets/add-multiple', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        walletAddress: primaryWallet,
+                        wallets: wallets
+                    })
+                });
+
+                if (!response.ok) {
+                    throw new Error('Failed to save wallets');
+                }
+
+                // Save to session for next step
+                sessionStorage.setItem('wallets', JSON.stringify(wallets));
+                
+                // Navigate to profile creation
+                window.location.href = '/onboarding/profile.html';
+                
+            } catch (error) {
+                console.error('Error saving wallets:', error);
+                alert('Failed to save wallets. Please try again.');
+            }
+        }
+    </script>
+</body>
+</html>

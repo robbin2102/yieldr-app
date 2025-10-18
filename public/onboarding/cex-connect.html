@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Connect CEX Account - Yieldr</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, sans-serif;
+            background: #000000;
+            color: #FFFFFF;
+            min-height: 100vh;
+            padding: 2rem;
+        }
+
+        .container {
+            max-width: 700px;
+            margin: 0 auto;
+        }
+
+        .header {
+            margin-bottom: 3rem;
+        }
+
+        .title {
+            font-size: 2.5rem;
+            font-weight: 700;
+            margin-bottom: 0.5rem;
+        }
+
+        .subtitle {
+            color: #8A8A8A;
+            font-size: 1.125rem;
+        }
+
+        .cex-options {
+            display: grid;
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+
+        .cex-option {
+            background: #0A0A0A;
+            border: 1px solid #1A1A1A;
+            border-radius: 12px;
+            padding: 1.5rem;
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .cex-option:hover {
+            border-color: #00C805;
+            transform: translateY(-2px);
+        }
+
+        .cex-icon {
+            width: 48px;
+            height: 48px;
+            border-radius: 8px;
+            background: #1A1A1A;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.5rem;
+            flex-shrink: 0;
+        }
+
+        .cex-info {
+            flex: 1;
+        }
+
+        .cex-name {
+            font-size: 1.125rem;
+            font-weight: 600;
+            margin-bottom: 0.25rem;
+        }
+
+        .cex-status {
+            font-size: 0.875rem;
+            color: #8A8A8A;
+        }
+
+        .coming-soon {
+            background: rgba(255, 184, 0, 0.1);
+            color: #FFB800;
+            border: 1px solid #FFB800;
+            border-radius: 4px;
+            padding: 0.25rem 0.75rem;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+
+        .back-link {
+            text-align: center;
+            margin-top: 2rem;
+        }
+
+        .back-link a {
+            color: #8A8A8A;
+            text-decoration: none;
+            font-size: 0.95rem;
+            transition: color 0.3s;
+        }
+
+        .back-link a:hover {
+            color: #FFFFFF;
+        }
+
+        @media (max-width: 640px) {
+            .title {
+                font-size: 2rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1 class="title">Connect Exchange Account</h1>
+            <p class="subtitle">Link your CEX with read-only API access</p>
+        </div>
+
+        <div class="cex-options">
+            <div class="cex-option" onclick="alert('Binance integration coming soon!')">
+                <div class="cex-icon">🟡</div>
+                <div class="cex-info">
+                    <div class="cex-name">Binance</div>
+                    <div class="cex-status">Read-only API connection</div>
+                </div>
+                <div class="coming-soon">Coming Soon</div>
+            </div>
+
+            <div class="cex-option" onclick="alert('Bybit integration coming soon!')">
+                <div class="cex-icon">🟠</div>
+                <div class="cex-info">
+                    <div class="cex-name">Bybit</div>
+                    <div class="cex-status">Read-only API connection</div>
+                </div>
+                <div class="coming-soon">Coming Soon</div>
+            </div>
+
+            <div class="cex-option" onclick="alert('OKX integration coming soon!')">
+                <div class="cex-icon">⚫</div>
+                <div class="cex-info">
+                    <div class="cex-name">OKX</div>
+                    <div class="cex-status">Read-only API connection</div>
+                </div>
+                <div class="coming-soon">Coming Soon</div>
+            </div>
+        </div>
+
+        <div class="back-link">
+            <a href="/onboarding/verify-method.html">← Back to verification options</a>
+        </div>
+    </div>
+</body>
+</html>

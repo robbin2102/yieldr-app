@@ -1,0 +1,30 @@
+{
+  "name": "yieldr-app",
+  "version": "1.0.0",
+  "description": "Yieldr Asset Manager Platform",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "backend": "node backend-src/server.js"
+  },
+  "dependencies": {
+    "next": "^14.0.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "@rainbow-me/rainbowkit": "^2.0.0",
+    "wagmi": "^2.0.0",
+    "viem": "^2.0.0",
+    "@tanstack/react-query": "^5.0.0",
+    "express": "^4.18.2",
+    "mongoose": "^8.0.0",
+    "dotenv": "^16.3.1",
+    "cors": "^2.8.5"
+  },
+  "devDependencies": {
+    "tailwindcss": "^3.3.0",
+    "postcss": "^8.4.0",
+    "autoprefixer": "^10.4.0",
+    "nodemon": "^3.0.1"
+  }
+}
