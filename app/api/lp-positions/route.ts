@@ -1,102 +1,85 @@
-// app/api/lp-positions/route.ts
 import { NextRequest, NextResponse } from 'next/server';
+
+export const dynamic = 'force-dynamic';
+export const runtime = 'nodejs';
 
 export async function GET(request: NextRequest) {
   try {
-    const searchParams = request.nextUrl.searchParams;
-    const address = searchParams.get('address');
+    const { searchParams } = new URL(request.url);
+    const walletAddress = searchParams.get('address');
     
-    if (!address) {
+    if (!walletAddress) {
       return NextResponse.json(
-        { error: 'Wallet address is required' },
+        { error: 'Wallet address required' },
         { status: 400 }
       );
     }
 
-    // Fetch LP positions from DeFi Krystal API
-    // Chain IDs: 1 (Ethereum), 8453 (Base)
-    const chainIds = '1,8453';
-    const url = `https://api.krystal.app/all/v1/lp/userPositions?addresses=${address}&chainIds=${chainIds}`;
+    // Call DeFi Krystal API
+    const krystalApiUrl = `https://api.krystal.app/v1/lp/userPositions?userAddress=${walletAddress}&chains=base,ethereum`;
     
-    const response = await fetch(url, {
+    console.log('Fetching LP positions from Krystal:', krystalApiUrl);
+    
+    const response = await fetch(krystalApiUrl, {
+      method: 'GET',
       headers: {
-        'accept': 'application/json',
-      },
+        'Accept': 'application/json',
+      }
     });
 
     if (!response.ok) {
-      throw new Error(`Krystal API error: ${response.status}`);
+      throw new Error(`Krystal API error: ${response.statusText}`);
     }
 
     const data = await response.json();
+    
+    console.log('Krystal API response:', JSON.stringify(data, null, 2));
 
-    // Parse and transform the data
-    const parsedData = {
-      summary: {
-        totalOpenPositions: data.statsByChain?.all?.openPositionCount || 0,
-        totalClosedPositions: data.statsByChain?.all?.closedPositionCount || 0,
-        totalPnL: data.statsByChain?.all?.pnl || 0,
-        totalROI: data.statsByChain?.all?.returnOnInvestment || 0,
-        totalAPR: data.statsByChain?.all?.apr || 0,
-        unclaimedFees: data.statsByChain?.all?.unclaimedFees || 0,
-        totalFeeEarned: data.statsByChain?.all?.totalFeeEarned || 0,
-        currentPositionValue: data.statsByChain?.all?.currentPositionValue || 0,
-        initialValue: data.statsByChain?.all?.initialUnderlyingValue || 0,
-      },
-      byChain: {
-        ethereum: data.statsByChain?.['1'] || null,
-        base: data.statsByChain?.['8453'] || null,
-      },
-      positions: data.positions?.map((pos: any) => ({
-        id: pos.id,
-        chain: pos.chainName,
-        protocol: pos.pool?.project || 'Unknown',
-        status: pos.status,
-        tokens: pos.currentAmounts?.map((amt: any) => ({
-          symbol: amt.token.symbol,
-          balance: amt.balance,
-          value: amt.quotes.usd.value,
-          price: amt.quotes.usd.price,
-        })) || [],
-        metrics: {
-          pnl: pos.pnl,
-          roi: pos.returnOnInvestment,
-          apr: pos.apr,
-          currentValue: pos.currentPositionValue,
-          initialValue: pos.initialUnderlyingValue,
-          unclaimedFees: pos.feePending?.reduce((sum: number, fee: any) => 
-            sum + (fee.quotes.usd.value || 0), 0) || 0,
-          impermanentLoss: pos.impermanentLoss,
-        },
-        pool: {
-          address: pos.pool?.poolAddress,
-          price: pos.pool?.price,
-          tvl: pos.pool?.tvl,
-          fees: pos.pool?.fees,
-        },
-        priceRange: {
-          min: pos.minPrice,
-          max: pos.maxPrice,
-          current: pos.pool?.price,
-        },
-        timing: {
-          opened: pos.openedTime,
-          lastUpdate: pos.lastUpdateBlock,
-        },
-      })) || [],
-    };
+    // Transform Krystal response to our format
+    const positions = data.data?.positions || [];
+    
+    const formattedPositions = positions.map((pos: any) => ({
+      platform: pos.platform || pos.protocol,
+      pool: pos.pool || `${pos.token0?.symbol}-${pos.token1?.symbol}`,
+      chain: pos.chain,
+      liquidity: parseFloat(pos.liquidityUSD || pos.positionValue || 0),
+      token0: pos.token0?.symbol,
+      token1: pos.token1?.symbol,
+      pnl: parseFloat(pos.pnl || 0),
+      roi: parseFloat(pos.roi || 0),
+      apr: parseFloat(pos.apr || 0),
+      status: pos.status || 'active'
+    }));
+
+    const totalLiquidity = formattedPositions.reduce((sum: number, pos: any) => sum + pos.liquidity, 0);
+    const totalPnL = formattedPositions.reduce((sum: number, pos: any) => sum + pos.pnl, 0);
 
     return NextResponse.json({
       success: true,
-      data: parsedData,
+      data: {
+        totalPositions: formattedPositions.length,
+        positions: formattedPositions,
+        summary: {
+          totalLiquidity,
+          totalPnL,
+          avgROI: formattedPositions.length > 0 
+            ? formattedPositions.reduce((sum: number, pos: any) => sum + pos.roi, 0) / formattedPositions.length 
+            : 0
+        }
+      }
     });
-
+    
   } catch (error: any) {
     console.error('Error fetching LP positions:', error);
     return NextResponse.json(
       { 
-        error: 'Failed to fetch LP positions',
-        details: error.message 
+        success: false, 
+        error: error.message,
+        data: {
+          totalPositions: 0,
+          positions: [],
+          summary: { totalLiquidity: 0, totalPnL: 0, avgROI: 0 }
+        }
       },
       { status: 500 }
     );

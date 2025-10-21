@@ -1,63 +1,39 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { spawn } from 'child_process';
-import path from 'path';
+
+export const dynamic = 'force-dynamic';
+export const runtime = 'nodejs';
 
 export async function GET(request: NextRequest) {
   try {
-    const searchParams = request.nextUrl.searchParams;
-    const address = searchParams.get('address');
+    const { searchParams } = new URL(request.url);
+    const walletAddress = searchParams.get('address');
     
-    if (!address) {
-      return NextResponse.json({ error: 'Wallet address is required' }, { status: 400 });
+    if (!walletAddress) {
+      return NextResponse.json(
+        { error: 'Wallet address required' },
+        { status: 400 }
+      );
     }
 
-    // Get QuickNode RPC URL from env
-    const rpcUrl = process.env.QUICKNODE_BASE_RPC_URL || 'https://mainnet.base.org';
-
-    const scriptPath = path.join(process.cwd(), 'scripts/python/fetch_avantis.py');
-    const venvPython = path.join(process.cwd(), 'venv/bin/python');
+    const pythonServiceUrl = process.env.PYTHON_SERVICE_URL || 'http://localhost:8000';
     
-    const pythonCmd = require('fs').existsSync(venvPython) ? venvPython : 'python3';
-    
-    const result = await new Promise<any>((resolve, reject) => {
-      const python = spawn(pythonCmd, [scriptPath, address, rpcUrl]);
-      let output = '';
-      let errorOutput = '';
-
-      python.stdout.on('data', (data) => {
-        output += data.toString();
-      });
-
-      python.stderr.on('data', (data) => {
-        errorOutput += data.toString();
-      });
-
-      python.on('close', (code) => {
-        if (code !== 0) {
-          reject(new Error(errorOutput || `Python script exited with code ${code}`));
-        } else {
-          try {
-            resolve(JSON.parse(output));
-          } catch (e) {
-            reject(new Error(`Failed to parse Python output: ${output}`));
-          }
-        }
-      });
-
-      setTimeout(() => {
-        python.kill();
-        reject(new Error('Python script timeout'));
-      }, 30000);
+    const response = await fetch(`${pythonServiceUrl}/fetch-positions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        walletAddress,
+        rpcUrl: process.env.QUICKNODE_RPC_URL || 'https://mainnet.base.org'
+      })
     });
 
-    return NextResponse.json(result);
-
+    const data = await response.json();
+    return NextResponse.json(data);
+    
   } catch (error: any) {
     console.error('Error fetching Avantis positions:', error);
-    return NextResponse.json({ 
-      success: false,
-      error: 'Failed to fetch Avantis positions', 
-      details: error.message 
-    }, { status: 500 });
+    return NextResponse.json(
+      { error: error.message },
+      { status: 500 }
+    );
   }
 }

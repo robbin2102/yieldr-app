@@ -1,11 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
-import connectDB from '@/lib/mongodb';
-import User from '@/models/User';
 
 export async function POST(request: NextRequest) {
   try {
-    await connectDB();
-    
     const { walletAddress, userType } = await request.json();
 
     if (!walletAddress) {
@@ -15,41 +11,22 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Check if user exists
-    let user = await User.findOne({ walletAddress: walletAddress.toLowerCase() });
-    
-    if (!user) {
-      // Create new user
-      user = await User.create({
-        walletAddress: walletAddress.toLowerCase(),
-        role: userType || 'manager',
-        status: 'active'
-      });
-      
-      console.log('✅ New user created:', walletAddress);
-    } else {
-      // Update last login
-      user.updatedAt = new Date();
-      await user.save();
-      
-      console.log('✅ User logged in:', walletAddress);
-    }
+    console.log('User wallet connected:', walletAddress);
 
+    // For MVP, just return success
+    // MongoDB integration can be added after deployment
     return NextResponse.json({
       success: true,
       user: {
-        id: user._id,
-        walletAddress: user.walletAddress,
-        role: user.role,
-        username: user.username,
-        status: user.status,
-        createdAt: user.createdAt
-      }
+        walletAddress,
+        role: userType || 'manager',
+        createdAt: new Date().toISOString(),
+      },
     });
-  } catch (error: any) {
-    console.error('❌ Error in user registration:', error);
+  } catch (error) {
+    console.error('Error in user registration:', error);
     return NextResponse.json(
-      { error: 'Internal server error', details: error.message },
+      { error: 'Internal server error' },
       { status: 500 }
     );
   }
@@ -57,8 +34,6 @@ export async function POST(request: NextRequest) {
 
 export async function GET(request: NextRequest) {
   try {
-    await connectDB();
-    
     const { searchParams } = new URL(request.url);
     const walletAddress = searchParams.get('address');
 
@@ -69,30 +44,17 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    const user = await User.findOne({ walletAddress: walletAddress.toLowerCase() });
-
-    if (!user) {
-      return NextResponse.json(
-        { error: 'User not found' },
-        { status: 404 }
-      );
-    }
-
     return NextResponse.json({
       success: true,
       user: {
-        id: user._id,
-        walletAddress: user.walletAddress,
-        role: user.role,
-        username: user.username,
-        status: user.status,
-        createdAt: user.createdAt
-      }
+        walletAddress,
+        role: 'manager',
+      },
     });
-  } catch (error: any) {
-    console.error('❌ Error fetching user:', error);
+  } catch (error) {
+    console.error('Error fetching user:', error);
     return NextResponse.json(
-      { error: 'Internal server error', details: error.message },
+      { error: 'Internal server error' },
       { status: 500 }
     );
   }
