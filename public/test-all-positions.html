@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>All Positions - Yieldr</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-50 min-h-screen p-8">
+    <div class="max-w-7xl mx-auto">
+        <h1 class="text-3xl font-bold mb-2">All Trading Positions</h1>
+        <p class="text-gray-600 mb-8">LP Positions (Aerodrome & Uniswap) + Perpetual Positions (Avantis)</p>
+        
+        <div class="bg-white rounded-lg shadow p-6 mb-8">
+            <label class="block text-sm font-medium mb-2">Wallet Address</label>
+            <div class="flex gap-3">
+                <input type="text" id="walletInput" placeholder="0x..."
+                    class="flex-1 px-4 py-2 border rounded-lg focus:ring-2 focus:ring-green-500" />
+                <button onclick="fetchAllPositions()" id="fetchBtn"
+                    class="px-6 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700">
+                    Fetch All Positions
+                </button>
+            </div>
+        </div>
+
+        <div id="loading" class="hidden text-center py-12">
+            <div class="inline-block animate-spin rounded-full h-12 w-12 border-4 border-green-500 border-t-transparent"></div>
+            <p class="mt-4 text-gray-600">Fetching positions...</p>
+        </div>
+
+        <div id="error" class="hidden bg-red-50 border border-red-200 rounded-lg p-4 mb-8">
+            <p class="text-red-800 font-medium">Error:</p>
+            <p id="errorMessage" class="text-red-600 mt-1"></p>
+        </div>
+
+        <div id="results" class="hidden space-y-8">
+            
+            <!-- Summary Cards -->
+            <div class="grid grid-cols-4 gap-6">
+                <div class="bg-white rounded-lg shadow p-6">
+                    <h3 class="text-sm text-gray-500 mb-2">LP Positions</h3>
+                    <p class="text-3xl font-bold" id="totalLpPositions">0</p>
+                </div>
+                <div class="bg-white rounded-lg shadow p-6">
+                    <h3 class="text-sm text-gray-500 mb-2">Perp Positions</h3>
+                    <p class="text-3xl font-bold" id="totalPerpPositions">0</p>
+                </div>
+                <div class="bg-white rounded-lg shadow p-6">
+                    <h3 class="text-sm text-gray-500 mb-2">Combined P&L</h3>
+                    <p class="text-3xl font-bold" id="combinedPnl">$0.00</p>
+                </div>
+                <div class="bg-white rounded-lg shadow p-6">
+                    <h3 class="text-sm text-gray-500 mb-2">Combined ROI</h3>
+                    <p class="text-3xl font-bold" id="combinedRoi">0%</p>
+                </div>
+            </div>
+
+            <!-- LP Positions -->
+            <div>
+                <h2 class="text-2xl font-bold mb-4">💧 LP Positions</h2>
+                <div id="lpPositionsList"></div>
+            </div>
+
+            <!-- Avantis Positions -->
+            <div>
+                <h2 class="text-2xl font-bold mb-4">📈 Perpetual Positions (Avantis)</h2>
+                <div id="avantisPositionsList"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        async function fetchAllPositions() {
+            const address = document.getElementById('walletInput').value.trim();
+            if (!address || !address.startsWith('0x')) {
+                document.getElementById('error').classList.remove('hidden');
+                document.getElementById('errorMessage').textContent = 'Please enter a valid wallet address';
+                return;
+            }
+
+            document.getElementById('loading').classList.remove('hidden');
+            document.getElementById('results').classList.add('hidden');
+            document.getElementById('error').classList.add('hidden');
+
+            try {
+                const [lpRes, avantisRes] = await Promise.all([
+                    fetch(`/api/lp-positions?address=${address}`),
+                    fetch(`/api/avantis-positions?address=${address}`)
+                ]);
+
+                const lpData = await lpRes.json();
+                const avantisData = await avantisRes.json();
+
+                if (!lpData.success || !avantisData.success) {
+                    throw new Error('Failed to fetch positions');
+                }
+
+                displayResults(lpData.data, avantisData.data);
+
+            } catch (error) {
+                document.getElementById('error').classList.remove('hidden');
+                document.getElementById('errorMessage').textContent = error.message;
+            } finally {
+                document.getElementById('loading').classList.add('hidden');
+            }
+        }
+
+        function displayResults(lpData, avantisData) {
+            // Summary
+            const totalLpPnl = lpData.summary.totalPnL || 0;
+            const totalAvantisPnl = avantisData.summary.totalPnL || 0;
+            const combinedPnl = totalLpPnl + totalAvantisPnl;
+            
+            const totalLpValue = lpData.summary.currentPositionValue || 0;
+            const totalAvantisMargin = avantisData.summary.totalMargin || 0;
+            const totalValue = totalLpValue + totalAvantisMargin;
+            const combinedRoi = totalValue > 0 ? (combinedPnl / totalValue * 100) : 0;
+
+            const pnlColor = combinedPnl >= 0 ? 'text-green-600' : 'text-red-600';
+
+            document.getElementById('totalLpPositions').textContent = lpData.positions.length;
+            document.getElementById('totalPerpPositions').textContent = avantisData.totalPositions;
+            document.getElementById('combinedPnl').textContent = `$${combinedPnl.toFixed(2)}`;
+            document.getElementById('combinedPnl').className = `text-3xl font-bold ${pnlColor}`;
+            document.getElementById('combinedRoi').textContent = `${combinedRoi.toFixed(2)}%`;
+            document.getElementById('combinedRoi').className = `text-3xl font-bold ${pnlColor}`;
+
+            // LP Positions
+            document.getElementById('lpPositionsList').innerHTML = lpData.positions.length > 0
+                ? lpData.positions.map(pos => createLpCard(pos)).join('')
+                : '<p class="text-gray-500 text-center py-8 bg-white rounded-lg">No LP positions found</p>';
+
+            // Avantis Positions
+            document.getElementById('avantisPositionsList').innerHTML = avantisData.positions.length > 0
+                ? avantisData.positions.map(pos => createAvantisCard(pos)).join('')
+                : '<p class="text-gray-500 text-center py-8 bg-white rounded-lg">No perpetual positions found</p>';
+
+            document.getElementById('results').classList.remove('hidden');
+        }
+
+        function createLpCard(pos) {
+            const pnlColor = pos.metrics.pnl >= 0 ? 'text-green-600' : 'text-red-600';
+            return `
+                <div class="bg-white rounded-lg shadow p-6 mb-4">
+                    <div class="flex justify-between mb-4">
+                        <div>
+                            <h3 class="text-lg font-bold">${pos.tokens.map(t => t.symbol).join(' / ')}</h3>
+                            <p class="text-sm text-gray-500">${pos.protocol} on ${pos.chain}</p>
+                        </div>
+                        <span class="px-3 py-1 rounded-full text-xs ${pos.status === 'IN_RANGE' ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'}">
+                            ${pos.status}
+                        </span>
+                    </div>
+                    <div class="grid grid-cols-5 gap-4">
+                        <div><p class="text-xs text-gray-500">Value</p><p class="font-bold">$${pos.metrics.currentValue.toFixed(2)}</p></div>
+                        <div><p class="text-xs text-gray-500">P&L</p><p class="font-bold ${pnlColor}">$${pos.metrics.pnl.toFixed(2)}</p></div>
+                        <div><p class="text-xs text-gray-500">ROI</p><p class="font-bold ${pnlColor}">${pos.metrics.roi.toFixed(2)}%</p></div>
+                        <div><p class="text-xs text-gray-500">APR</p><p class="font-bold text-blue-600">${pos.metrics.apr.toFixed(2)}%</p></div>
+                        <div><p class="text-xs text-gray-500">Fees</p><p class="font-bold">$${pos.metrics.unclaimedFees.toFixed(4)}</p></div>
+                    </div>
+                </div>
+            `;
+        }
+
+        function createAvantisCard(pos) {
+            const pnlColor = (pos.pnl || 0) >= 0 ? 'text-green-600' : 'text-red-600';
+            const directionColor = pos.direction === 'LONG' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800';
+            return `
+                <div class="bg-white rounded-lg shadow p-6 mb-4">
+                    <div class="flex justify-between mb-4">
+                        <div>
+                            <h3 class="text-lg font-bold">${pos.asset}/USD</h3>
+                            <p class="text-sm text-gray-500">Perpetual Position #${pos.pairIndex}</p>
+                        </div>
+                        <span class="px-3 py-1 rounded-full text-xs font-medium ${directionColor}">
+                            ${pos.direction} ${pos.leverage.toFixed(1)}x
+                        </span>
+                    </div>
+                    <div class="grid grid-cols-2 md:grid-cols-6 gap-4 mb-4">
+                        <div><p class="text-xs text-gray-500">Position Size</p><p class="font-bold">$${pos.positionSize.toFixed(2)}</p></div>
+                        <div><p class="text-xs text-gray-500">Margin</p><p class="font-bold">$${pos.margin.toFixed(2)}</p></div>
+                        <div><p class="text-xs text-gray-500">Entry</p><p class="font-bold">$${pos.entryPrice.toFixed(4)}</p></div>
+                        <div><p class="text-xs text-gray-500">Liq Price</p><p class="font-bold text-red-600">$${pos.liquidationPrice.toFixed(4)}</p></div>
+                        <div><p class="text-xs text-gray-500">P&L</p><p class="font-bold ${pnlColor}">$${(pos.pnl || 0).toFixed(2)}</p></div>
+                        <div><p class="text-xs text-gray-500">ROI</p><p class="font-bold ${pnlColor}">${(pos.roi || 0).toFixed(2)}%</p></div>
+                    </div>
+                    <div class="border-t pt-4 grid grid-cols-2 gap-4 text-xs text-gray-500">
+                        <div>
+                            <p>Take Profit: ${pos.takeProfit > 0 ? '$' + pos.takeProfit.toFixed(4) : 'Not Set'}</p>
+                            <p>Stop Loss: ${pos.stopLoss > 0 ? '$' + pos.stopLoss.toFixed(4) : 'Not Set'}</p>
+                        </div>
+                        <div>
+                            <p class="text-yellow-600">⚠️ Current price = Entry (oracle not integrated)</p>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+    </script>
+</body>
+</html>

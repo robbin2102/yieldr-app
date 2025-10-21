@@ -1,0 +1,506 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Asset Manager Dashboard | Yieldr</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, sans-serif;
+            background: #000000;
+            color: #FFFFFF;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .nav {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 40px;
+            padding: 20px 0;
+        }
+
+        .logo {
+            font-size: 24px;
+            font-weight: 700;
+            color: #00C805;
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 24px;
+        }
+
+        .nav-link {
+            color: #8A8A8A;
+            text-decoration: none;
+            font-size: 14px;
+            transition: color 0.2s;
+        }
+
+        .nav-link:hover {
+            color: #FFFFFF;
+        }
+
+        .profile-header {
+            background: #0A0A0A;
+            border: 2px solid #1A1A1A;
+            border-radius: 16px;
+            padding: 32px;
+            margin-bottom: 24px;
+            display: flex;
+            align-items: flex-start;
+            gap: 24px;
+        }
+
+        .profile-pic {
+            width: 100px;
+            height: 100px;
+            border-radius: 50%;
+            background: #1A1A1A;
+            border: 3px solid #00C805;
+        }
+
+        .profile-info {
+            flex: 1;
+        }
+
+        .profile-name {
+            font-size: 28px;
+            font-weight: 700;
+            margin-bottom: 8px;
+        }
+
+        .verified-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 4px 12px;
+            background: rgba(0, 200, 5, 0.1);
+            border: 1px solid rgba(0, 200, 5, 0.3);
+            border-radius: 12px;
+            font-size: 12px;
+            color: #00C805;
+            margin-bottom: 16px;
+        }
+
+        .wallet-address {
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+            color: #8A8A8A;
+        }
+
+        .edit-profile-btn {
+            padding: 10px 20px;
+            background: #1A1A1A;
+            border: 2px solid #1A1A1A;
+            border-radius: 10px;
+            color: #FFFFFF;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .edit-profile-btn:hover {
+            border-color: #00C805;
+        }
+
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+
+        .metric-card {
+            background: #0A0A0A;
+            border: 2px solid #1A1A1A;
+            border-radius: 16px;
+            padding: 24px;
+        }
+
+        .metric-label {
+            font-size: 12px;
+            color: #8A8A8A;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 8px;
+        }
+
+        .metric-value {
+            font-size: 28px;
+            font-weight: 700;
+        }
+
+        .metric-value.positive {
+            color: #00C805;
+        }
+
+        .metric-value.negative {
+            color: #FF4444;
+        }
+
+        .section {
+            background: #0A0A0A;
+            border: 2px solid #1A1A1A;
+            border-radius: 16px;
+            padding: 32px;
+            margin-bottom: 24px;
+        }
+
+        .section-title {
+            font-size: 20px;
+            font-weight: 700;
+            margin-bottom: 20px;
+        }
+
+        .text-content {
+            font-size: 15px;
+            line-height: 1.6;
+            color: #AAAAAA;
+        }
+
+        .platforms {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 12px;
+        }
+
+        .platform-tag {
+            padding: 8px 16px;
+            background: rgba(0, 200, 5, 0.1);
+            border: 1px solid rgba(0, 200, 5, 0.3);
+            border-radius: 20px;
+            font-size: 13px;
+            color: #00C805;
+            font-weight: 500;
+        }
+
+        .positions-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .positions-table th {
+            text-align: left;
+            padding: 12px;
+            font-size: 12px;
+            color: #8A8A8A;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            border-bottom: 2px solid #1A1A1A;
+        }
+
+        .positions-table td {
+            padding: 16px 12px;
+            border-bottom: 1px solid #1A1A1A;
+        }
+
+        .asset-cell {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .platform-badge {
+            padding: 4px 8px;
+            background: #1A1A1A;
+            border-radius: 6px;
+            font-size: 11px;
+            color: #8A8A8A;
+        }
+
+        .direction-badge {
+            padding: 4px 10px;
+            border-radius: 6px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .direction-badge.long {
+            background: rgba(0, 200, 5, 0.1);
+            color: #00C805;
+        }
+
+        .direction-badge.short {
+            background: rgba(255, 68, 68, 0.1);
+            color: #FF4444;
+        }
+
+        .pnl-positive {
+            color: #00C805;
+        }
+
+        .pnl-negative {
+            color: #FF4444;
+        }
+
+        .invest-btn {
+            width: 100%;
+            padding: 16px;
+            background: #00C805;
+            color: #000000;
+            border: none;
+            border-radius: 12px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            margin-top: 24px;
+        }
+
+        .invest-btn:hover {
+            background: #00A000;
+            transform: translateY(-1px);
+        }
+
+        .coming-soon-btn {
+            width: 100%;
+            padding: 16px;
+            background: #1A1A1A;
+            color: #8A8A8A;
+            border: 2px solid #1A1A1A;
+            border-radius: 12px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .coming-soon-btn:hover {
+            border-color: #00C805;
+            color: #FFFFFF;
+        }
+
+        @media (max-width: 768px) {
+            .profile-header {
+                flex-direction: column;
+            }
+
+            .positions-table {
+                font-size: 13px;
+            }
+
+            .positions-table th,
+            .positions-table td {
+                padding: 8px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <nav class="nav">
+            <div class="logo">Yieldr</div>
+            <div class="nav-links">
+                <a href="/" class="nav-link">Discover</a>
+                <a href="/manager/dashboard.html" class="nav-link">Dashboard</a>
+            </div>
+        </nav>
+
+        <div class="profile-header">
+            <img src="https://api.dicebear.com/7.x/avataaars/svg?seed=user" alt="Profile" class="profile-pic" id="profilePic">
+            <div class="profile-info">
+                <h1 class="profile-name" id="profileName">Loading...</h1>
+                <div class="verified-badge">
+                    ✓ Verified Wallet
+                </div>
+                <div class="wallet-address" id="walletAddress">0x0000...0000</div>
+            </div>
+            <button class="edit-profile-btn" onclick="editProfile()">Edit Profile</button>
+        </div>
+
+        <div class="metrics-grid">
+            <div class="metric-card">
+                <div class="metric-label">30d PnL</div>
+                <div class="metric-value negative" id="totalPnL">-$296.91</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-label">30d ROI</div>
+                <div class="metric-value negative" id="roi">-9.09%</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-label">Total AUM</div>
+                <div class="metric-value" id="aum">$3.3k</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-label">Win Rate</div>
+                <div class="metric-value" id="winRate">0%</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-label">Total Trades</div>
+                <div class="metric-value" id="totalTrades">3</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-label">Avg Position</div>
+                <div class="metric-value" id="avgPosition">$3.1k</div>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2 class="section-title">Market Outlook</h2>
+            <p class="text-content" id="marketOutlook">Loading...</p>
+        </div>
+
+        <div class="section">
+            <h2 class="section-title">Investment Thesis</h2>
+            <p class="text-content" id="investmentThesis">Loading...</p>
+        </div>
+
+        <div class="section">
+            <h2 class="section-title">Position Strategy</h2>
+            <p class="text-content" id="positionStrategy">Loading...</p>
+            <div class="platforms" id="platforms"></div>
+        </div>
+
+        <div class="section">
+            <h2 class="section-title">Live Positions</h2>
+            <table class="positions-table">
+                <thead>
+                    <tr>
+                        <th>Asset</th>
+                        <th>Platform</th>
+                        <th>Type</th>
+                        <th>Size</th>
+                        <th>Entry</th>
+                        <th>Current</th>
+                        <th>PnL</th>
+                        <th>ROI</th>
+                    </tr>
+                </thead>
+                <tbody id="positionsTable">
+                    <tr>
+                        <td colspan="8" style="text-align: center; color: #8A8A8A;">Loading positions...</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="section">
+            <h2 class="section-title">Live Trading Sessions</h2>
+            <button class="coming-soon-btn" onclick="showComingSoon()">
+                Schedule Trading Session
+            </button>
+        </div>
+
+        <button class="invest-btn" onclick="showInvestPopup()" id="investBtn" style="display: none;">
+            Invest with This Manager
+        </button>
+    </div>
+
+    <script src="../js/mock-data.js"></script>
+    <script src="../js/investment-popup.js"></script>
+    <script>
+        // Get username from URL or localStorage
+        const urlParams = new URLSearchParams(window.location.search);
+        const username = urlParams.get('user') || JSON.parse(localStorage.getItem('currentUserProfile') || '{}').username;
+
+        let userData;
+        
+        if (username) {
+            userData = getManagerByUsername(username) || getCurrentUser();
+            if (!userData.username) {
+                userData.username = username;
+            }
+        } else {
+            userData = getCurrentUser();
+        }
+
+        // Load profile data
+        document.getElementById('profileName').textContent = userData.username || 'My Profile';
+        document.getElementById('profilePic').src = userData.profilePic || 'https://api.dicebear.com/7.x/avataaars/svg?seed=' + (userData.username || 'user');
+        
+        const wallet = userData.wallets ? userData.wallets[0] : userData.walletAddress;
+        document.getElementById('walletAddress').textContent = `${wallet.slice(0, 6)}...${wallet.slice(-4)}`;
+
+        // Load metrics
+        document.getElementById('totalPnL').textContent = formatNumber(userData.metrics.totalPnL30d);
+        document.getElementById('totalPnL').className = 'metric-value ' + (userData.metrics.totalPnL30d >= 0 ? 'positive' : 'negative');
+        
+        document.getElementById('roi').textContent = formatPercent(userData.metrics.roi30d);
+        document.getElementById('roi').className = 'metric-value ' + (userData.metrics.roi30d >= 0 ? 'positive' : 'negative');
+        
+        document.getElementById('aum').textContent = formatNumber(userData.metrics.totalAUM);
+        document.getElementById('winRate').textContent = userData.metrics.winRate + '%';
+        document.getElementById('totalTrades').textContent = userData.metrics.totalTrades;
+        document.getElementById('avgPosition').textContent = formatNumber(userData.metrics.avgPositionSize);
+
+        // Load text content
+        document.getElementById('marketOutlook').textContent = userData.marketOutlook || 'No market outlook provided yet.';
+        document.getElementById('investmentThesis').textContent = userData.investmentThesis || 'No investment thesis provided yet.';
+        document.getElementById('positionStrategy').textContent = userData.positionStrategy || 'No position strategy provided yet.';
+
+        // Load platforms
+        const platformsDiv = document.getElementById('platforms');
+        if (userData.platforms) {
+            userData.platforms.forEach(platform => {
+                const tag = document.createElement('span');
+                tag.className = 'platform-tag';
+                tag.textContent = platform;
+                platformsDiv.appendChild(tag);
+            });
+        }
+
+        // Load positions
+        const positionsTable = document.getElementById('positionsTable');
+        positionsTable.innerHTML = '';
+
+        if (userData.positions && userData.positions.length > 0) {
+            userData.positions.forEach(pos => {
+                const row = document.createElement('tr');
+                
+                const pnlClass = pos.pnl >= 0 ? 'pnl-positive' : 'pnl-negative';
+                const directionClass = pos.type === 'LONG' ? 'long' : (pos.type === 'SHORT' ? 'short' : '');
+                
+                row.innerHTML = `
+                    <td>
+                        <div class="asset-cell">
+                            <strong>${pos.asset}</strong>
+                        </div>
+                    </td>
+                    <td><span class="platform-badge">${pos.platform}</span></td>
+                    <td><span class="direction-badge ${directionClass}">${pos.type}</span></td>
+                    <td>${formatNumber(pos.size)}</td>
+                    <td>$${pos.entry?.toFixed(4) || 'N/A'}</td>
+                    <td>$${pos.current?.toFixed(4) || 'N/A'}</td>
+                    <td class="${pnlClass}">${formatNumber(pos.pnl)}</td>
+                    <td class="${pnlClass}">${formatPercent(pos.roi)}</td>
+                `;
+                
+                positionsTable.appendChild(row);
+            });
+        } else {
+            positionsTable.innerHTML = '<tr><td colspan="8" style="text-align: center; color: #8A8A8A;">No active positions</td></tr>';
+        }
+
+        // Show invest button only for other managers
+        const isOwnProfile = !urlParams.get('user') || urlParams.get('user') === JSON.parse(localStorage.getItem('currentUserProfile') || '{}').username;
+        if (!isOwnProfile) {
+            document.getElementById('investBtn').style.display = 'block';
+        }
+
+        function editProfile() {
+            alert('Edit profile functionality coming soon!');
+        }
+
+        function showComingSoon() {
+            alert('🚧 Live trading sessions coming soon!\n\nSoon you will be able to:\n✓ Schedule live trading sessions\n✓ Stream your trading in real-time\n✓ Interact with investors\n✓ Build your following');
+        }
+    </script>
+</body>
+</html>

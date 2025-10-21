@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Verify Performance - Yieldr</title>
+    <title>Verify Trading Performance - Yieldr</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
         * {
@@ -20,7 +20,7 @@
             display: flex;
             align-items: center;
             justify-content: center;
-            padding: 2rem;
+            padding: 20px;
         }
 
         .container {
@@ -30,142 +30,195 @@
 
         .header {
             text-align: center;
-            margin-bottom: 3rem;
+            margin-bottom: 48px;
         }
 
-        .wallet-badge {
-            display: inline-flex;
-            align-items: center;
-            gap: 0.5rem;
-            background: #0A0A0A;
-            border: 1px solid #1A1A1A;
-            border-radius: 20px;
-            padding: 0.5rem 1rem;
-            margin-bottom: 2rem;
-            font-size: 0.875rem;
-        }
-
-        .wallet-dot {
-            width: 8px;
-            height: 8px;
-            background: #00C805;
-            border-radius: 50%;
-        }
-
-        .title {
-            font-size: 2.5rem;
+        .header h1 {
+            font-size: 32px;
             font-weight: 700;
-            margin-bottom: 0.75rem;
+            margin-bottom: 12px;
         }
 
-        .subtitle {
+        .header p {
+            font-size: 16px;
             color: #8A8A8A;
-            font-size: 1.125rem;
         }
 
-        .options-grid {
+        .options {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
-            gap: 2rem;
-            margin-bottom: 2rem;
+            gap: 24px;
+            margin-bottom: 32px;
         }
 
         .option-card {
             background: #0A0A0A;
             border: 2px solid #1A1A1A;
-            border-radius: 12px;
-            padding: 2rem;
+            border-radius: 16px;
+            padding: 32px;
             cursor: pointer;
-            transition: all 0.3s ease;
+            transition: all 0.2s;
             position: relative;
         }
 
-        .option-card:hover {
+        .option-card:hover:not(.disabled) {
             border-color: #00C805;
-            transform: translateY(-4px);
+            transform: translateY(-2px);
+        }
+
+        .option-card.selected {
+            border-color: #00C805;
+            background: rgba(0, 200, 5, 0.05);
+        }
+
+        .option-card.disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .option-card.disabled:hover {
+            transform: none;
+        }
+
+        .option-header {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            margin-bottom: 16px;
         }
 
         .option-icon {
-            width: 64px;
-            height: 64px;
-            background: #1A1A1A;
-            border-radius: 12px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 2rem;
-            margin-bottom: 1.5rem;
+            font-size: 32px;
+            margin-right: 16px;
+        }
+
+        .option-title-wrapper {
+            flex: 1;
         }
 
         .option-title {
-            font-size: 1.5rem;
-            font-weight: 700;
-            margin-bottom: 0.75rem;
+            font-size: 20px;
+            font-weight: 600;
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .tag {
+            font-size: 11px;
+            font-weight: 600;
+            padding: 4px 10px;
+            border-radius: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .tag.upcoming {
+            background: rgba(255, 165, 0, 0.1);
+            color: #FFA500;
+            border: 1px solid rgba(255, 165, 0, 0.3);
         }
 
         .option-description {
+            font-size: 14px;
             color: #8A8A8A;
-            font-size: 0.95rem;
             line-height: 1.6;
-            margin-bottom: 1.5rem;
+            margin-bottom: 20px;
         }
 
-        .option-features {
-            list-style: none;
-            padding: 0;
-            margin-bottom: 1.5rem;
-        }
-
-        .option-features li {
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-            color: #8A8A8A;
-            font-size: 0.875rem;
-            margin-bottom: 0.5rem;
-        }
-
-        .option-features li::before {
-            content: '✓';
+        .wallet-address {
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
             color: #00C805;
-            font-weight: 700;
-        }
-
-        .option-badge {
-            display: inline-block;
             background: rgba(0, 200, 5, 0.1);
+            padding: 8px 12px;
+            border-radius: 8px;
+            margin-bottom: 16px;
+            border: 1px solid rgba(0, 200, 5, 0.2);
+        }
+
+        .features {
+            list-style: none;
+        }
+
+        .features li {
+            font-size: 13px;
+            color: #AAAAAA;
+            margin-bottom: 8px;
+            padding-left: 20px;
+            position: relative;
+        }
+
+        .features li:before {
+            content: "•";
+            position: absolute;
+            left: 0;
             color: #00C805;
-            border: 1px solid #00C805;
-            border-radius: 4px;
-            padding: 0.25rem 0.75rem;
-            font-size: 0.75rem;
+            font-weight: bold;
+        }
+
+        .features.disabled li:before {
+            color: #666;
+        }
+
+        .continue-btn {
+            width: 100%;
+            padding: 16px;
+            background: #00C805;
+            color: #000000;
+            border: none;
+            border-radius: 12px;
+            font-size: 16px;
             font-weight: 600;
-            text-transform: uppercase;
+            cursor: pointer;
+            transition: all 0.2s;
         }
 
-        .skip-link {
-            text-align: center;
-            margin-top: 2rem;
+        .continue-btn:hover {
+            background: #00A000;
+            transform: translateY(-1px);
         }
 
-        .skip-link a {
-            color: #8A8A8A;
-            text-decoration: none;
-            font-size: 0.95rem;
-            transition: color 0.3s;
+        .continue-btn:disabled {
+            background: #1A1A1A;
+            color: #666;
+            cursor: not-allowed;
+            transform: none;
         }
 
-        .skip-link a:hover {
-            color: #FFFFFF;
+        .radio-indicator {
+            width: 20px;
+            height: 20px;
+            border: 2px solid #3A3A3A;
+            border-radius: 50%;
+            position: relative;
+            transition: all 0.2s;
         }
 
-        @media (max-width: 840px) {
-            .options-grid {
+        .option-card.selected .radio-indicator {
+            border-color: #00C805;
+        }
+
+        .option-card.selected .radio-indicator:after {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 10px;
+            height: 10px;
+            background: #00C805;
+            border-radius: 50%;
+        }
+
+        @media (max-width: 768px) {
+            .options {
                 grid-template-columns: 1fr;
             }
-
-            .title {
-                font-size: 2rem;
+            
+            .header h1 {
+                font-size: 24px;
             }
         }
     </style>
@@ -173,73 +226,110 @@
 <body>
     <div class="container">
         <div class="header">
-            <div class="wallet-badge">
-                <div class="wallet-dot"></div>
-                <span id="connectedWallet">Connected</span>
-            </div>
-            <h1 class="title">Verify Your Trading Performance</h1>
-            <p class="subtitle">Choose how you'd like to verify your trading history</p>
+            <h1>Verify Your Trading Performance</h1>
+            <p>Choose how you'd like to verify your trading history</p>
         </div>
 
-        <div class="options-grid">
-            <!-- CEX Option -->
-            <div class="option-card" onclick="selectMethod('cex')">
-                <div class="option-icon">📊</div>
-                <div class="option-title">Connect CEX Account</div>
+        <div class="options">
+            <!-- CEX Option - Disabled with Upcoming Tag -->
+            <div class="option-card disabled" data-method="cex">
+                <div class="option-header">
+                    <div class="option-icon">📊</div>
+                    <div class="option-title-wrapper">
+                        <div class="option-title">
+                            Connect CEX Account
+                            <span class="tag upcoming">Upcoming</span>
+                        </div>
+                    </div>
+                    <div class="radio-indicator"></div>
+                </div>
                 <div class="option-description">
                     Link your centralized exchange account with read-only API access
                 </div>
-                <ul class="option-features">
-                    <li>Binance, Bybit, OKX supported</li>
+                <ul class="features disabled">
+                    <li>Coinbase, Deribit, Robinhood, OKX, Bybit</li>
                     <li>Read-only API keys (safe)</li>
                     <li>Instant verification</li>
                     <li>Complete trade history</li>
                 </ul>
-                <div class="option-badge">Quick Setup</div>
             </div>
 
-            <!-- Wallet Option -->
-        <div class="option-card" onclick="selectMethod('wallet')">
-            <div class="option-icon">🔗</div>
-            <div class="option-title">Use Connected Wallet</div>
-            <div class="option-description">
-                Verify on-chain performance using your connected wallet address
+            <!-- Wallet Option - Pre-selected -->
+            <div class="option-card selected" data-method="wallet">
+                <div class="option-header">
+                    <div class="option-icon">🔗</div>
+                    <div class="option-title-wrapper">
+                        <div class="option-title">
+                            Use Connected Wallet
+                        </div>
+                    </div>
+                    <div class="radio-indicator"></div>
+                </div>
+                <div class="option-description">
+                    Verify on-chain performance using your connected wallet address
+                </div>
+                <div class="wallet-address" id="walletAddress">
+                    Loading wallet address...
+                </div>
+                <ul class="features">
+                    <li>Automatic transaction parsing</li>
+                    <li>Avantis, Aerodrome, Uniswap, Zora</li>
+                    <li>Full on-chain transparency</li>
+                    <li>Real-time performance tracking</li>
+                </ul>
             </div>
-            <ul class="option-features">
-                <li>Uses your connected wallet</li>
-                <li>Automatic transaction parsing</li>
-                <li>Avantis, Aerodrome, Uniswap</li>
-                <li>Full on-chain transparency</li>
-            </ul>
-            <div class="option-badge">Recommended</div>
-        </div>
         </div>
 
-        <div class="skip-link">
-            <a href="/onboarding/profile.html">Skip verification for now →</a>
-        </div>
+        <button class="continue-btn" id="continueBtn">
+            Continue with Connected Wallet
+        </button>
     </div>
 
     <script>
-        // Display connected wallet
-        const walletAddress = sessionStorage.getItem('walletAddress');
-        if (walletAddress) {
-            document.getElementById('connectedWallet').textContent = 
-                walletAddress.slice(0, 6) + '...' + walletAddress.slice(-4);
+        // Get wallet address from localStorage or session
+        const walletAddress = localStorage.getItem('connectedWallet') || 
+                             sessionStorage.getItem('connectedWallet') || 
+                             '0x742d35cc6634c0532925a3b844bc9e7595f0beb2';
+
+        // Display wallet address
+        document.getElementById('walletAddress').textContent = 
+            `${walletAddress.slice(0, 6)}...${walletAddress.slice(-4)}`;
+
+        // Handle card selection (only wallet option is selectable)
+        const cards = document.querySelectorAll('.option-card:not(.disabled)');
+        let selectedMethod = 'wallet'; // Pre-select wallet
+
+        cards.forEach(card => {
+            card.addEventListener('click', () => {
+                cards.forEach(c => c.classList.remove('selected'));
+                card.classList.add('selected');
+                selectedMethod = card.dataset.method;
+                updateContinueButton();
+            });
+        });
+
+        // Update continue button text based on selection
+        function updateContinueButton() {
+            const btn = document.getElementById('continueBtn');
+            if (selectedMethod === 'wallet') {
+                btn.textContent = 'Continue with Connected Wallet';
+            }
         }
 
-        function selectMethod(method) {
-    // Save method choice
-    sessionStorage.setItem('verificationMethod', method);
-    
-    // Navigate to appropriate flow
-    if (method === 'cex') {
-        window.location.href = '/onboarding/cex-connect.html';
-    } else if (method === 'wallet') {
-        // Go directly to profile creation for MVP
-        window.location.href = '/onboarding/profile.html';
-    }
-}
+        // Handle continue button
+        document.getElementById('continueBtn').addEventListener('click', () => {
+            if (selectedMethod === 'wallet') {
+                // Store wallet address for next step
+                localStorage.setItem('verificationMethod', 'wallet');
+                localStorage.setItem('connectedWallet', walletAddress);
+                
+                // Redirect to profile creation (or transaction parsing page)
+                window.location.href = '/onboarding/profile.html';
+            }
+        });
+
+        // Initialize on page load
+        updateContinueButton();
     </script>
 </body>
 </html>

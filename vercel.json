@@ -1,3 +1,15 @@
 {
-  "cleanUrls": true
+  "functions": {
+    "api/fetch-avantis.py": {
+      "runtime": "python3.9",
+      "memory": 1024,
+      "maxDuration": 30
+    }
+  },
+  "rewrites": [
+    {
+      "source": "/manager/:username",
+      "destination": "/manager/dashboard.html"
+    }
+  ]
 }

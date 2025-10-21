@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Create Your Profile | Yieldr</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, sans-serif;
+            background: #000000;
+            color: #FFFFFF;
+            min-height: 100vh;
+            padding: 40px 20px;
+        }
+
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 48px;
+        }
+
+        .logo {
+            font-size: 28px;
+            font-weight: 700;
+            color: #00C805;
+            margin-bottom: 24px;
+        }
+
+        .header h1 {
+            font-size: 32px;
+            font-weight: 700;
+            margin-bottom: 12px;
+        }
+
+        .header p {
+            font-size: 16px;
+            color: #8A8A8A;
+        }
+
+        .metrics-preview {
+            background: #0A0A0A;
+            border: 2px solid #1A1A1A;
+            border-radius: 16px;
+            padding: 24px;
+            margin-bottom: 32px;
+        }
+
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 20px;
+        }
+
+        .metric {
+            text-align: center;
+        }
+
+        .metric-label {
+            font-size: 12px;
+            color: #8A8A8A;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 8px;
+        }
+
+        .metric-value {
+            font-size: 24px;
+            font-weight: 700;
+        }
+
+        .metric-value.positive {
+            color: #00C805;
+        }
+
+        .metric-value.negative {
+            color: #FF4444;
+        }
+
+        .form-section {
+            background: #0A0A0A;
+            border: 2px solid #1A1A1A;
+            border-radius: 16px;
+            padding: 32px;
+            margin-bottom: 24px;
+        }
+
+        .form-group {
+            margin-bottom: 24px;
+        }
+
+        .form-group:last-child {
+            margin-bottom: 0;
+        }
+
+        label {
+            display: block;
+            font-size: 14px;
+            font-weight: 600;
+            margin-bottom: 8px;
+            color: #FFFFFF;
+        }
+
+        .label-hint {
+            font-size: 12px;
+            color: #8A8A8A;
+            font-weight: 400;
+            margin-left: 8px;
+        }
+
+        input, textarea {
+            width: 100%;
+            background: #000000;
+            border: 2px solid #1A1A1A;
+            border-radius: 12px;
+            padding: 14px 16px;
+            font-size: 15px;
+            color: #FFFFFF;
+            font-family: 'Inter', sans-serif;
+            transition: all 0.2s;
+        }
+
+        input:focus, textarea:focus {
+            outline: none;
+            border-color: #00C805;
+        }
+
+        textarea {
+            resize: vertical;
+            min-height: 100px;
+        }
+
+        .char-count {
+            text-align: right;
+            font-size: 12px;
+            color: #8A8A8A;
+            margin-top: 4px;
+        }
+
+        .char-count.warning {
+            color: #FFA500;
+        }
+
+        .char-count.error {
+            color: #FF4444;
+        }
+
+        .username-check {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 4px;
+            font-size: 13px;
+        }
+
+        .username-check.available {
+            color: #00C805;
+        }
+
+        .username-check.taken {
+            color: #FF4444;
+        }
+
+        .platforms-display {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .platform-tag {
+            padding: 8px 16px;
+            background: rgba(0, 200, 5, 0.1);
+            border: 1px solid rgba(0, 200, 5, 0.3);
+            border-radius: 20px;
+            font-size: 13px;
+            color: #00C805;
+            font-weight: 500;
+        }
+
+        .submit-btn {
+            width: 100%;
+            padding: 16px;
+            background: #00C805;
+            color: #000000;
+            border: none;
+            border-radius: 12px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .submit-btn:hover:not(:disabled) {
+            background: #00A000;
+            transform: translateY(-1px);
+        }
+
+        .submit-btn:disabled {
+            background: #1A1A1A;
+            color: #666;
+            cursor: not-allowed;
+        }
+
+        @media (max-width: 768px) {
+            .metrics-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div class="logo">Yieldr</div>
+            <h1>Create Your Asset Manager Profile</h1>
+            <p>Complete your profile to start attracting investors</p>
+        </div>
+
+        <div class="metrics-preview">
+            <div class="metrics-grid">
+                <div class="metric">
+                    <div class="metric-label">30d PnL</div>
+                    <div class="metric-value negative" id="pnlDisplay">-$296.91</div>
+                </div>
+                <div class="metric">
+                    <div class="metric-label">30d ROI</div>
+                    <div class="metric-value negative" id="roiDisplay">-9.09%</div>
+                </div>
+                <div class="metric">
+                    <div class="metric-label">Total AUM</div>
+                    <div class="metric-value" id="aumDisplay">$3.3k</div>
+                </div>
+                <div class="metric">
+                    <div class="metric-label">Positions</div>
+                    <div class="metric-value" id="positionsDisplay">3</div>
+                </div>
+            </div>
+        </div>
+
+        <form id="profileForm">
+            <div class="form-section">
+                <div class="form-group">
+                    <label>
+                        Username
+                        <span class="label-hint">(will be used in your profile URL)</span>
+                    </label>
+                    <input 
+                        type="text" 
+                        id="username" 
+                        placeholder="e.g., crypto_whale"
+                        pattern="[a-z0-9_]+"
+                        required
+                    />
+                    <div class="username-check" id="usernameCheck"></div>
+                </div>
+
+                <div class="form-group">
+                    <label>
+                        Market Outlook
+                        <span class="label-hint">(max 50 words)</span>
+                    </label>
+                    <textarea 
+                        id="marketOutlook"
+                        placeholder="Share your view on current market conditions..."
+                        maxlength="350"
+                    ></textarea>
+                    <div class="char-count" id="outlookCount">0 / 50 words</div>
+                </div>
+
+                <div class="form-group">
+                    <label>
+                        Investment Thesis
+                        <span class="label-hint">(max 50 words)</span>
+                    </label>
+                    <textarea 
+                        id="investmentThesis"
+                        placeholder="Explain your investment strategy and approach..."
+                        maxlength="350"
+                    ></textarea>
+                    <div class="char-count" id="thesisCount">0 / 50 words</div>
+                </div>
+
+                <div class="form-group">
+                    <label>
+                        Position Strategy
+                        <span class="label-hint">(max 50 words)</span>
+                    </label>
+                    <textarea 
+                        id="positionStrategy"
+                        placeholder="Describe your risk management and position sizing..."
+                        maxlength="350"
+                    ></textarea>
+                    <div class="char-count" id="strategyCount">0 / 50 words</div>
+                </div>
+
+                <div class="form-group">
+                    <label>Platforms Used</label>
+                    <div class="platforms-display">
+                        <span class="platform-tag">Avantis</span>
+                    </div>
+                </div>
+            </div>
+
+            <button type="submit" class="submit-btn" id="submitBtn">
+                Publish Profile
+            </button>
+        </form>
+    </div>
+
+    <script src="../js/mock-data.js"></script>
+    <script>
+        const userData = getCurrentUser();
+        const usernameInput = document.getElementById('username');
+        const usernameCheck = document.getElementById('usernameCheck');
+        const submitBtn = document.getElementById('submitBtn');
+
+        // Load metrics
+        document.getElementById('pnlDisplay').textContent = formatNumber(userData.metrics.totalPnL30d);
+        document.getElementById('roiDisplay').textContent = formatPercent(userData.metrics.roi30d);
+        document.getElementById('aumDisplay').textContent = formatNumber(userData.metrics.totalAUM);
+        document.getElementById('positionsDisplay').textContent = userData.metrics.totalTrades;
+
+        // Word counter
+        function updateWordCount(textarea, countElement) {
+            textarea.addEventListener('input', () => {
+                const words = textarea.value.trim().split(/\s+/).filter(w => w.length > 0);
+                const wordCount = words.length;
+                countElement.textContent = `${wordCount} / 50 words`;
+                
+                if (wordCount > 50) {
+                    countElement.classList.add('error');
+                } else if (wordCount > 40) {
+                    countElement.classList.add('warning');
+                    countElement.classList.remove('error');
+                } else {
+                    countElement.classList.remove('warning', 'error');
+                }
+            });
+        }
+
+        updateWordCount(document.getElementById('marketOutlook'), document.getElementById('outlookCount'));
+        updateWordCount(document.getElementById('investmentThesis'), document.getElementById('thesisCount'));
+        updateWordCount(document.getElementById('positionStrategy'), document.getElementById('strategyCount'));
+
+        // Username availability check
+        usernameInput.addEventListener('input', () => {
+            const username = usernameInput.value.toLowerCase();
+            
+            if (username.length < 3) {
+                usernameCheck.textContent = '';
+                return;
+            }
+
+            const existing = getManagers().find(m => m.username === username);
+            
+            if (existing) {
+                usernameCheck.className = 'username-check taken';
+                usernameCheck.textContent = '❌ Username already taken';
+                submitBtn.disabled = true;
+            } else {
+                usernameCheck.className = 'username-check available';
+                usernameCheck.textContent = '✓ Username available';
+                submitBtn.disabled = false;
+            }
+        });
+
+        // Form submission
+        document.getElementById('profileForm').addEventListener('submit', (e) => {
+            e.preventDefault();
+
+            const username = document.getElementById('username').value.toLowerCase();
+            const marketOutlook = document.getElementById('marketOutlook').value;
+            const investmentThesis = document.getElementById('investmentThesis').value;
+            const positionStrategy = document.getElementById('positionStrategy').value;
+
+            // Word count validation
+            const outlookWords = marketOutlook.trim().split(/\s+/).filter(w => w.length > 0).length;
+            const thesisWords = investmentThesis.trim().split(/\s+/).filter(w => w.length > 0).length;
+            const strategyWords = positionStrategy.trim().split(/\s+/).filter(w => w.length > 0).length;
+
+            if (outlookWords > 50 || thesisWords > 50 || strategyWords > 50) {
+                alert('Please keep each section under 50 words');
+                return;
+            }
+
+            const profileData = {
+                username,
+                marketOutlook,
+                investmentThesis,
+                positionStrategy
+            };
+
+            saveUserProfile(profileData);
+
+            // Redirect to manager dashboard
+            window.location.href = `/manager/dashboard.html?user=${username}`;
+        });
+    </script>
+</body>
+</html>

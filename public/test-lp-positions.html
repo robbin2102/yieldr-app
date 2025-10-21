@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LP Positions - Yieldr</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-50 min-h-screen p-8">
+    <div class="max-w-7xl mx-auto">
+        <h1 class="text-3xl font-bold mb-8">LP Positions Viewer</h1>
+        
+        <div class="bg-white rounded-lg shadow p-6 mb-8">
+            <label class="block text-sm font-medium mb-2">Wallet Address</label>
+            <div class="flex gap-3">
+                <input type="text" id="walletInput" placeholder="0x... (Enter your wallet address)"
+                    class="flex-1 px-4 py-2 border rounded-lg focus:ring-2 focus:ring-green-500" />
+                <button onclick="fetchPositions()" id="fetchBtn"
+                    class="px-6 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700">
+                    Fetch Positions
+                </button>
+            </div>
+            <p class="text-xs text-gray-500 mt-2">Test address: 0x780BB763e1463D2236FEC780b7BD6ADb40AAa120</p>
+        </div>
+
+        <div id="loading" class="hidden text-center py-12">
+            <div class="inline-block animate-spin rounded-full h-12 w-12 border-4 border-green-500 border-t-transparent"></div>
+        </div>
+
+        <div id="error" class="hidden bg-red-50 border border-red-200 rounded-lg p-4 mb-8">
+            <p class="text-red-800 font-medium">Error:</p>
+            <p id="errorMessage" class="text-red-600 mt-1"></p>
+        </div>
+
+        <div id="results" class="hidden space-y-8">
+            <div class="grid grid-cols-4 gap-6">
+                <div class="bg-white rounded-lg shadow p-6">
+                    <h3 class="text-sm text-gray-500 mb-2">Total Positions</h3>
+                    <p class="text-3xl font-bold" id="totalPositions">0</p>
+                </div>
+                <div class="bg-white rounded-lg shadow p-6">
+                    <h3 class="text-sm text-gray-500 mb-2">Total Value</h3>
+                    <p class="text-3xl font-bold" id="totalValue">$0</p>
+                </div>
+                <div class="bg-white rounded-lg shadow p-6">
+                    <h3 class="text-sm text-gray-500 mb-2">P&L</h3>
+                    <p class="text-3xl font-bold" id="totalPnl">$0</p>
+                </div>
+                <div class="bg-white rounded-lg shadow p-6">
+                    <h3 class="text-sm text-gray-500 mb-2">ROI</h3>
+                    <p class="text-3xl font-bold" id="totalRoi">0%</p>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-2 gap-6">
+                <div class="bg-white rounded-lg shadow p-6">
+                    <h3 class="text-lg font-semibold mb-4">🔵 Ethereum</h3>
+                    <div class="space-y-2 text-sm">
+                        <div class="flex justify-between">
+                            <span class="text-gray-600">Positions:</span>
+                            <span class="font-medium" id="ethPositions">0</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="text-gray-600">Value:</span>
+                            <span class="font-medium" id="ethValue">$0.00</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="text-gray-600">P&L:</span>
+                            <span class="font-medium" id="ethPnl">$0.00</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="bg-white rounded-lg shadow p-6">
+                    <h3 class="text-lg font-semibold mb-4">🔵 Base</h3>
+                    <div class="space-y-2 text-sm">
+                        <div class="flex justify-between">
+                            <span class="text-gray-600">Positions:</span>
+                            <span class="font-medium" id="basePositions">0</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="text-gray-600">Value:</span>
+                            <span class="font-medium" id="baseValue">$0.00</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="text-gray-600">P&L:</span>
+                            <span class="font-medium" id="basePnl">$0.00</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div id="positionsList"></div>
+
+            <div class="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                <p class="text-sm text-blue-800">
+                    <strong>Note:</strong> Only positions tracked by DeFi Krystal API are shown. 
+                    If you have Uniswap positions not showing, they may not be indexed yet by Krystal.
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        async function fetchPositions() {
+            const address = document.getElementById('walletInput').value.trim();
+            if (!address || !address.startsWith('0x')) {
+                document.getElementById('error').classList.remove('hidden');
+                document.getElementById('errorMessage').textContent = 'Please enter a valid wallet address starting with 0x';
+                return;
+            }
+
+            document.getElementById('loading').classList.remove('hidden');
+            document.getElementById('results').classList.add('hidden');
+            document.getElementById('error').classList.add('hidden');
+
+            try {
+                const res = await fetch(`/api/lp-positions?address=${address}`);
+                const result = await res.json();
+                if (!result.success) throw new Error(result.error);
+                displayResults(result.data);
+            } catch (error) {
+                document.getElementById('error').classList.remove('hidden');
+                document.getElementById('errorMessage').textContent = error.message;
+            } finally {
+                document.getElementById('loading').classList.add('hidden');
+            }
+        }
+
+        function displayResults(data) {
+            const pnlColor = data.summary.totalPnL >= 0 ? 'text-green-600' : 'text-red-600';
+            document.getElementById('totalPositions').textContent = data.positions.length;
+            document.getElementById('totalValue').textContent = `$${data.summary.currentPositionValue.toFixed(2)}`;
+            document.getElementById('totalPnl').textContent = `$${data.summary.totalPnL.toFixed(2)}`;
+            document.getElementById('totalPnl').className = `text-3xl font-bold ${pnlColor}`;
+            document.getElementById('totalRoi').textContent = `${data.summary.totalROI.toFixed(2)}%`;
+            document.getElementById('totalRoi').className = `text-3xl font-bold ${pnlColor}`;
+
+            // Chain breakdown
+            if (data.byChain.ethereum) {
+                const ethPnlColor = data.byChain.ethereum.pnl >= 0 ? 'text-green-600' : 'text-red-600';
+                document.getElementById('ethPositions').textContent = data.byChain.ethereum.openPositionCount;
+                document.getElementById('ethValue').textContent = `$${data.byChain.ethereum.currentPositionValue.toFixed(2)}`;
+                document.getElementById('ethPnl').textContent = `$${data.byChain.ethereum.pnl.toFixed(2)}`;
+                document.getElementById('ethPnl').className = `font-medium ${ethPnlColor}`;
+            }
+
+            if (data.byChain.base) {
+                const basePnlColor = data.byChain.base.pnl >= 0 ? 'text-green-600' : 'text-red-600';
+                document.getElementById('basePositions').textContent = data.byChain.base.openPositionCount;
+                document.getElementById('baseValue').textContent = `$${data.byChain.base.currentPositionValue.toFixed(2)}`;
+                document.getElementById('basePnl').textContent = `$${data.byChain.base.pnl.toFixed(2)}`;
+                document.getElementById('basePnl').className = `font-medium ${basePnlColor}`;
+            }
+
+            document.getElementById('positionsList').innerHTML = data.positions.map(pos => {
+                const posColor = pos.metrics.pnl >= 0 ? 'text-green-600' : 'text-red-600';
+                return `
+                    <div class="bg-white rounded-lg shadow p-6 mb-4">
+                        <div class="flex justify-between mb-4">
+                            <div>
+                                <h3 class="text-lg font-bold">${pos.tokens.map(t => t.symbol).join(' / ')}</h3>
+                                <p class="text-sm text-gray-500">${pos.protocol} on ${pos.chain}</p>
+                            </div>
+                            <span class="px-3 py-1 rounded-full text-xs ${pos.status === 'IN_RANGE' ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'}">
+                                ${pos.status}
+                            </span>
+                        </div>
+                        <div class="grid grid-cols-5 gap-4 mb-4">
+                            <div><p class="text-xs text-gray-500">Value</p><p class="font-bold">$${pos.metrics.currentValue.toFixed(2)}</p></div>
+                            <div><p class="text-xs text-gray-500">P&L</p><p class="font-bold ${posColor}">$${pos.metrics.pnl.toFixed(2)}</p></div>
+                            <div><p class="text-xs text-gray-500">ROI</p><p class="font-bold ${posColor}">${pos.metrics.roi.toFixed(2)}%</p></div>
+                            <div><p class="text-xs text-gray-500">APR</p><p class="font-bold text-blue-600">${pos.metrics.apr.toFixed(2)}%</p></div>
+                            <div><p class="text-xs text-gray-500">Unclaimed Fees</p><p class="font-bold">$${pos.metrics.unclaimedFees.toFixed(4)}</p></div>
+                        </div>
+                        <div class="border-t pt-4 mb-4">
+                            <p class="text-xs text-gray-500 mb-2">Token Balances</p>
+                            ${pos.tokens.map(token => {
+                                // Use actual token value from API (already calculated correctly)
+                                const usdValue = token.value;
+                                // Calculate token amount using correct decimals from raw balance
+                                const rawBalance = token.balance;
+                                // Token decimals info is not in our parsed data, but we can infer from the symbol
+                                // For now, show USD value which is correct
+                                return `
+                                    <div class="flex justify-between text-sm mb-1">
+                                        <span class="font-medium">${token.symbol}</span>
+                                        <span>$${usdValue.toFixed(4)}</span>
+                                    </div>
+                                `;
+                            }).join('')}
+                        </div>
+                        <div class="pt-4 border-t text-xs text-gray-500">
+                            <p>Price Range: $${pos.priceRange.min.toFixed(4)} - $${pos.priceRange.max.toFixed(4)}</p>
+                            <p>Current Pool Price: $${pos.priceRange.current.toFixed(4)}</p>
+                            <p>Impermanent Loss: ${pos.metrics.impermanentLoss.toFixed(4)}%</p>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+
+            document.getElementById('results').classList.remove('hidden');
+        }
+    </script>
+</body>
+</html>
