@@ -3,7 +3,7 @@ import mongoose from 'mongoose';
 const PositionSchema = new mongoose.Schema({
   asset: String,
   platform: String,
-  type: String, // LONG, SHORT, LP
+  type: String,
   size: Number,
   margin: Number,
   entry: Number,
@@ -14,21 +14,48 @@ const PositionSchema = new mongoose.Schema({
   takeProfit: Number,
   stopLoss: Number,
   liquidationPrice: Number
-});
+}, { _id: false });
 
 const ManagerSchema = new mongoose.Schema({
-  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-  username: { type: String, unique: true, required: true },
-  profilePicture: { type: String, default: '' },
-  walletAddress: { type: String, required: true },
+  userId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: true
+  },
+  username: {
+    type: String,
+    unique: true,
+    required: true,
+    lowercase: true
+  },
+  profilePicture: {
+    type: String,
+    default: ''
+  },
+  walletAddress: {
+    type: String,
+    required: true
+  },
   
   // Profile text
-  marketOutlook: { type: String, default: '' },
-  investmentThesis: { type: String, default: '' },
-  positionStrategy: { type: String, default: '' },
+  marketOutlook: {
+    type: String,
+    default: ''
+  },
+  investmentThesis: {
+    type: String,
+    default: ''
+  },
+  positionStrategy: {
+    type: String,
+    default: ''
+  },
   
   // Platforms
-  platforms: [String], // ['Avantis', 'Aerodrome', 'Uniswap']
+  platforms: {
+    type: [String],
+    default: []
+  },
   
   // Performance metrics
   metrics: {
@@ -44,10 +71,25 @@ const ManagerSchema = new mongoose.Schema({
   positions: [PositionSchema],
   
   // Metadata
-  verified: { type: Boolean, default: false },
-  lastPositionSync: { type: Date, default: null },
-  createdAt: { type: Date, default: Date.now },
-  updatedAt: { type: Date, default: Date.now }
+  verified: {
+    type: Boolean,
+    default: false
+  },
+  lastPositionSync: {
+    type: Date,
+    default: null
+  },
+  createdAt: {
+    type: Date,
+    default: Date.now
+  },
+  updatedAt: {
+    type: Date,
+    default: Date.now
+  }
 });
+
+ManagerSchema.index({ username: 1 });
+ManagerSchema.index({ walletAddress: 1 });
 
 export default mongoose.models.Manager || mongoose.model('Manager', ManagerSchema);

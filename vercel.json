@@ -1,9 +1,7 @@
 {
   "functions": {
     "api/fetch-avantis.py": {
-      "runtime": "python3.9",
-      "memory": 1024,
-      "maxDuration": 30
+      "runtime": "vercel-python@4.2.0"
     }
   },
   "rewrites": [
