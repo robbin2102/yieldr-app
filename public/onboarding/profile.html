@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Create Your Profile | Yieldr</title>
+    <title>Setup Your Profile | Yieldr</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
         * {
@@ -21,7 +21,7 @@
         }
 
         .container {
-            max-width: 800px;
+            max-width: 700px;
             margin: 0 auto;
         }
 
@@ -48,45 +48,6 @@
             color: #8A8A8A;
         }
 
-        .metrics-preview {
-            background: #0A0A0A;
-            border: 2px solid #1A1A1A;
-            border-radius: 16px;
-            padding: 24px;
-            margin-bottom: 32px;
-        }
-
-        .metrics-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-            gap: 20px;
-        }
-
-        .metric {
-            text-align: center;
-        }
-
-        .metric-label {
-            font-size: 12px;
-            color: #8A8A8A;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            margin-bottom: 8px;
-        }
-
-        .metric-value {
-            font-size: 24px;
-            font-weight: 700;
-        }
-
-        .metric-value.positive {
-            color: #00C805;
-        }
-
-        .metric-value.negative {
-            color: #FF4444;
-        }
-
         .form-section {
             background: #0A0A0A;
             border: 2px solid #1A1A1A;
@@ -96,7 +57,7 @@
         }
 
         .form-group {
-            margin-bottom: 24px;
+            margin-bottom: 32px;
         }
 
         .form-group:last-child {
@@ -105,20 +66,49 @@
 
         label {
             display: block;
-            font-size: 14px;
+            font-size: 15px;
             font-weight: 600;
-            margin-bottom: 8px;
+            margin-bottom: 12px;
             color: #FFFFFF;
         }
 
         .label-hint {
-            font-size: 12px;
+            font-size: 13px;
             color: #8A8A8A;
             font-weight: 400;
-            margin-left: 8px;
+            display: block;
+            margin-top: 4px;
         }
 
-        input, textarea {
+        /* Profile Picture */
+        .avatar-selector {
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+
+        .avatar-option {
+            width: 70px;
+            height: 70px;
+            border-radius: 50%;
+            border: 3px solid #1A1A1A;
+            cursor: pointer;
+            transition: all 0.2s;
+            object-fit: cover;
+        }
+
+        .avatar-option:hover {
+            border-color: #00C805;
+            transform: scale(1.05);
+        }
+
+        .avatar-option.selected {
+            border-color: #00C805;
+            box-shadow: 0 0 0 2px #00C805;
+        }
+
+        /* Username */
+        input[type="text"] {
             width: 100%;
             background: #000000;
             border: 2px solid #1A1A1A;
@@ -130,36 +120,13 @@
             transition: all 0.2s;
         }
 
-        input:focus, textarea:focus {
+        input[type="text"]:focus {
             outline: none;
             border-color: #00C805;
         }
 
-        textarea {
-            resize: vertical;
-            min-height: 100px;
-        }
-
-        .char-count {
-            text-align: right;
-            font-size: 12px;
-            color: #8A8A8A;
-            margin-top: 4px;
-        }
-
-        .char-count.warning {
-            color: #FFA500;
-        }
-
-        .char-count.error {
-            color: #FF4444;
-        }
-
         .username-check {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            margin-top: 4px;
+            margin-top: 8px;
             font-size: 13px;
         }
 
@@ -171,25 +138,268 @@
             color: #FF4444;
         }
 
-        .platforms-display {
+        /* Trading Type Tags */
+        .tags-container {
             display: flex;
             flex-wrap: wrap;
+            gap: 10px;
+        }
+
+        .tag {
+            padding: 10px 18px;
+            background: #000000;
+            border: 2px solid #1A1A1A;
+            border-radius: 8px;
+            font-size: 14px;
+            cursor: pointer;
+            transition: all 0.2s;
+            user-select: none;
+        }
+
+        .tag:hover {
+            border-color: #00C805;
+        }
+
+        .tag.selected {
+            background: rgba(0, 200, 5, 0.1);
+            border-color: #00C805;
+            color: #00C805;
+        }
+
+        /* Assets */
+        .assets-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
+            gap: 10px;
+            margin-bottom: 16px;
+        }
+
+        .asset-tag {
+            padding: 12px;
+            background: #000000;
+            border: 2px solid #1A1A1A;
+            border-radius: 8px;
+            text-align: center;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .asset-tag:hover {
+            border-color: #00C805;
+        }
+
+        .asset-tag.selected {
+            background: rgba(0, 200, 5, 0.1);
+            border-color: #00C805;
+            color: #00C805;
+        }
+
+        .custom-asset-input {
+            display: flex;
             gap: 8px;
         }
 
-        .platform-tag {
-            padding: 8px 16px;
-            background: rgba(0, 200, 5, 0.1);
-            border: 1px solid rgba(0, 200, 5, 0.3);
-            border-radius: 20px;
-            font-size: 13px;
-            color: #00C805;
-            font-weight: 500;
+        .custom-asset-input input {
+            flex: 1;
+            text-transform: uppercase;
         }
 
+        .add-asset-btn {
+            padding: 14px 20px;
+            background: #00C805;
+            color: #000000;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+
+        .add-asset-btn:hover {
+            background: #00E006;
+        }
+
+        /* Capital Dropdown */
+        select {
+            width: 100%;
+            background: #000000;
+            border: 2px solid #1A1A1A;
+            border-radius: 12px;
+            padding: 14px 16px;
+            font-size: 15px;
+            color: #FFFFFF;
+            font-family: 'Inter', sans-serif;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        select:focus {
+            outline: none;
+            border-color: #00C805;
+        }
+
+        /* Enhanced Fees Section */
+        .fees-section {
+            background: linear-gradient(135deg, rgba(0, 200, 5, 0.05) 0%, rgba(0, 200, 5, 0.02) 100%);
+            border: 2px solid rgba(0, 200, 5, 0.2);
+            border-radius: 16px;
+            padding: 28px;
+            margin-top: 8px;
+        }
+
+        .fees-header {
+            text-align: center;
+            margin-bottom: 24px;
+        }
+
+        .fees-header h3 {
+            font-size: 18px;
+            color: #00C805;
+            margin-bottom: 8px;
+        }
+
+        .fees-header p {
+            font-size: 13px;
+            color: #8A8A8A;
+            line-height: 1.5;
+        }
+
+        .fee-card {
+            background: #000000;
+            border: 2px solid #1A1A1A;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 16px;
+        }
+
+        .fee-card:last-child {
+            margin-bottom: 0;
+        }
+
+        .fee-card-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 12px;
+        }
+
+        .fee-icon {
+            width: 40px;
+            height: 40px;
+            background: rgba(0, 200, 5, 0.1);
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 20px;
+        }
+
+        .fee-card-title {
+            flex: 1;
+        }
+
+        .fee-card-title h4 {
+            font-size: 15px;
+            color: #FFFFFF;
+            margin-bottom: 4px;
+        }
+
+        .fee-card-title p {
+            font-size: 12px;
+            color: #8A8A8A;
+        }
+
+        .fee-input-container {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .fee-input-box {
+            display: flex;
+            align-items: center;
+            background: #0A0A0A;
+            border: 2px solid #1A1A1A;
+            border-radius: 10px;
+            padding: 12px 16px;
+            gap: 8px;
+        }
+
+        .fee-input-box:focus-within {
+            border-color: #00C805;
+        }
+
+        .fee-input-box input {
+            width: 60px;
+            background: transparent;
+            border: none;
+            font-size: 24px;
+            font-weight: 700;
+            color: #00C805;
+            text-align: center;
+            padding: 0;
+        }
+
+        .fee-input-box input:focus {
+            outline: none;
+        }
+
+        .fee-input-box .percent {
+            font-size: 20px;
+            font-weight: 700;
+            color: #00C805;
+        }
+
+        /* Slider */
+        .slider-container {
+            margin-top: 12px;
+        }
+
+        input[type="range"] {
+            width: 100%;
+            height: 8px;
+            background: #1A1A1A;
+            border-radius: 4px;
+            outline: none;
+            -webkit-appearance: none;
+        }
+
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 24px;
+            height: 24px;
+            background: #00C805;
+            border-radius: 50%;
+            cursor: pointer;
+            box-shadow: 0 2px 8px rgba(0, 200, 5, 0.4);
+        }
+
+        input[type="range"]::-moz-range-thumb {
+            width: 24px;
+            height: 24px;
+            background: #00C805;
+            border-radius: 50%;
+            cursor: pointer;
+            border: none;
+            box-shadow: 0 2px 8px rgba(0, 200, 5, 0.4);
+        }
+
+        .slider-labels {
+            display: flex;
+            justify-content: space-between;
+            margin-top: 8px;
+            font-size: 11px;
+            color: #666;
+        }
+
+        /* Submit Button */
         .submit-btn {
             width: 100%;
-            padding: 16px;
+            padding: 18px;
             background: #00C805;
             color: #000000;
             border: none;
@@ -201,8 +411,8 @@
         }
 
         .submit-btn:hover:not(:disabled) {
-            background: #00A000;
-            transform: translateY(-1px);
+            background: #00E006;
+            transform: translateY(-2px);
         }
 
         .submit-btn:disabled {
@@ -211,9 +421,9 @@
             cursor: not-allowed;
         }
 
-        @media (max-width: 768px) {
-            .metrics-grid {
-                grid-template-columns: repeat(2, 1fr);
+        @media (max-width: 640px) {
+            .assets-grid {
+                grid-template-columns: repeat(3, 1fr);
             }
         }
     </style>
@@ -222,188 +432,371 @@
     <div class="container">
         <div class="header">
             <div class="logo">Yieldr</div>
-            <h1>Create Your Asset Manager Profile</h1>
-            <p>Complete your profile to start attracting investors</p>
-        </div>
-
-        <div class="metrics-preview">
-            <div class="metrics-grid">
-                <div class="metric">
-                    <div class="metric-label">30d PnL</div>
-                    <div class="metric-value negative" id="pnlDisplay">-$296.91</div>
-                </div>
-                <div class="metric">
-                    <div class="metric-label">30d ROI</div>
-                    <div class="metric-value negative" id="roiDisplay">-9.09%</div>
-                </div>
-                <div class="metric">
-                    <div class="metric-label">Total AUM</div>
-                    <div class="metric-value" id="aumDisplay">$3.3k</div>
-                </div>
-                <div class="metric">
-                    <div class="metric-label">Positions</div>
-                    <div class="metric-value" id="positionsDisplay">3</div>
-                </div>
-            </div>
+            <h1>Setup Your Profile</h1>
+            <p>Tell investors about your trading style</p>
         </div>
 
         <form id="profileForm">
+            <!-- Profile Picture -->
             <div class="form-section">
+                <div class="form-group">
+                    <label>Profile Picture</label>
+                    <div class="avatar-selector" id="avatarSelector">
+                        <!-- Avatars will be loaded here -->
+                    </div>
+                </div>
+
+                <!-- Username -->
                 <div class="form-group">
                     <label>
                         Username
-                        <span class="label-hint">(will be used in your profile URL)</span>
+                        <span class="label-hint">Choose a unique username for your profile URL</span>
                     </label>
                     <input 
                         type="text" 
                         id="username" 
-                        placeholder="e.g., crypto_whale"
+                        placeholder="crypto_trader"
                         pattern="[a-z0-9_]+"
                         required
                     />
                     <div class="username-check" id="usernameCheck"></div>
                 </div>
 
+                <!-- Trading Type -->
                 <div class="form-group">
                     <label>
-                        Market Outlook
-                        <span class="label-hint">(max 50 words)</span>
+                        Trading & Investment Activity
+                        <span class="label-hint">Select all that apply</span>
                     </label>
-                    <textarea 
-                        id="marketOutlook"
-                        placeholder="Share your view on current market conditions..."
-                        maxlength="350"
-                    ></textarea>
-                    <div class="char-count" id="outlookCount">0 / 50 words</div>
+                    <div class="tags-container">
+                        <div class="tag" data-type="day-trader">Day Trader</div>
+                        <div class="tag" data-type="liquidity-farmer">Liquidity Farmer</div>
+                        <div class="tag" data-type="degen-meme">Degen Meme Trader</div>
+                        <div class="tag" data-type="prediction-market">Prediction Market</div>
+                        <div class="tag" data-type="long-term">Long Term Investor</div>
+                    </div>
                 </div>
 
+                <!-- Top Assets -->
                 <div class="form-group">
                     <label>
-                        Investment Thesis
-                        <span class="label-hint">(max 50 words)</span>
+                        Top 3 Assets Traded
+                        <span class="label-hint">Select up to 3 assets you trade most</span>
                     </label>
-                    <textarea 
-                        id="investmentThesis"
-                        placeholder="Explain your investment strategy and approach..."
-                        maxlength="350"
-                    ></textarea>
-                    <div class="char-count" id="thesisCount">0 / 50 words</div>
+                    <div class="assets-grid">
+                        <div class="asset-tag" data-asset="BTC">BTC</div>
+                        <div class="asset-tag" data-asset="ETH">ETH</div>
+                        <div class="asset-tag" data-asset="ZORA">ZORA</div>
+                        <div class="asset-tag" data-asset="AVNT">AVNT</div>
+                        <div class="asset-tag" data-asset="BRETT">BRETT</div>
+                    </div>
+                    <div class="custom-asset-input">
+                        <input 
+                            type="text" 
+                            id="customAsset" 
+                            placeholder="Add custom token"
+                            maxlength="10"
+                        />
+                        <button type="button" class="add-asset-btn" id="addAssetBtn">Add</button>
+                    </div>
                 </div>
 
+                <!-- Capital Managed -->
                 <div class="form-group">
-                    <label>
-                        Position Strategy
-                        <span class="label-hint">(max 50 words)</span>
-                    </label>
-                    <textarea 
-                        id="positionStrategy"
-                        placeholder="Describe your risk management and position sizing..."
-                        maxlength="350"
-                    ></textarea>
-                    <div class="char-count" id="strategyCount">0 / 50 words</div>
+                    <label>Capital Managed</label>
+                    <select id="capitalRange" required>
+                        <option value="">Select range...</option>
+                        <option value="0-500k">$0 - $500k</option>
+                        <option value="500k-1m">$500k - $1M</option>
+                        <option value="1m-5m">$1M - $5M</option>
+                        <option value="5m+">$5M+</option>
+                    </select>
                 </div>
 
+                <!-- Enhanced Fees Section -->
                 <div class="form-group">
-                    <label>Platforms Used</label>
-                    <div class="platforms-display">
-                        <span class="platform-tag">Avantis</span>
+                    <label>Set Your Fees</label>
+                    
+                    <div class="fees-section">
+                        <div class="fees-header">
+                            <h3>💰 Earn from Investors</h3>
+                            <p>Set competitive fees to attract investors while earning from your trading expertise</p>
+                        </div>
+
+                        <!-- Management Fee -->
+                        <div class="fee-card">
+                            <div class="fee-card-header">
+                                <div class="fee-icon">📅</div>
+                                <div class="fee-card-title">
+                                    <h4>Management Fee (Annual)</h4>
+                                    <p>Earn a yearly fee on total assets under management</p>
+                                </div>
+                            </div>
+                            <div class="fee-input-container">
+                                <div class="fee-input-box">
+                                    <input type="number" id="aumFee" value="2" min="0" max="5" step="0.5" />
+                                    <span class="percent">%</span>
+                                </div>
+                                <span style="color: #8A8A8A; font-size: 13px;">per year</span>
+                            </div>
+                        </div>
+
+                        <!-- Performance Fee -->
+                        <div class="fee-card">
+                            <div class="fee-card-header">
+                                <div class="fee-icon">📈</div>
+                                <div class="fee-card-title">
+                                    <h4>Performance Fee</h4>
+                                    <p>Earn a percentage of profits you generate for investors</p>
+                                </div>
+                            </div>
+                            <div class="fee-input-container">
+                                <div class="fee-input-box">
+                                    <input type="number" id="performanceFeeDisplay" value="20" min="0" max="50" step="5" readonly style="width: 70px;" />
+                                    <span class="percent">%</span>
+                                </div>
+                                <span style="color: #8A8A8A; font-size: 13px;">of profits</span>
+                            </div>
+                            <div class="slider-container">
+                                <input 
+                                    type="range" 
+                                    id="performanceFee" 
+                                    min="0" 
+                                    max="50" 
+                                    value="20" 
+                                    step="5"
+                                />
+                                <div class="slider-labels">
+                                    <span>0%</span>
+                                    <span>25%</span>
+                                    <span>50%</span>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
 
             <button type="submit" class="submit-btn" id="submitBtn">
-                Publish Profile
+                Create Profile
             </button>
         </form>
     </div>
 
-    <script src="../js/mock-data.js"></script>
     <script>
-        const userData = getCurrentUser();
-        const usernameInput = document.getElementById('username');
-        const usernameCheck = document.getElementById('usernameCheck');
-        const submitBtn = document.getElementById('submitBtn');
+        // Avatar URLs
+        const avatarUrls = [
+            'https://api.dicebear.com/7.x/avataaars/svg?seed=Felix',
+            'https://api.dicebear.com/7.x/avataaars/svg?seed=Aneka',
+            'https://api.dicebear.com/7.x/avataaars/svg?seed=Princess',
+            'https://api.dicebear.com/7.x/avataaars/svg?seed=Kitty',
+            'https://api.dicebear.com/7.x/avataaars/svg?seed=Smokey',
+            'https://api.dicebear.com/7.x/avataaars/svg?seed=Jasper',
+            'https://api.dicebear.com/7.x/avataaars/svg?seed=Luna',
+            'https://api.dicebear.com/7.x/avataaars/svg?seed=Oliver'
+        ];
 
-        // Load metrics
-        document.getElementById('pnlDisplay').textContent = formatNumber(userData.metrics.totalPnL30d);
-        document.getElementById('roiDisplay').textContent = formatPercent(userData.metrics.roi30d);
-        document.getElementById('aumDisplay').textContent = formatNumber(userData.metrics.totalAUM);
-        document.getElementById('positionsDisplay').textContent = userData.metrics.totalTrades;
+        // Load avatars
+        const avatarSelector = document.getElementById('avatarSelector');
+        const randomIndex = Math.floor(Math.random() * avatarUrls.length);
+        let selectedAvatar = avatarUrls[randomIndex];
 
-        // Word counter
-        function updateWordCount(textarea, countElement) {
-            textarea.addEventListener('input', () => {
-                const words = textarea.value.trim().split(/\s+/).filter(w => w.length > 0);
-                const wordCount = words.length;
-                countElement.textContent = `${wordCount} / 50 words`;
-                
-                if (wordCount > 50) {
-                    countElement.classList.add('error');
-                } else if (wordCount > 40) {
-                    countElement.classList.add('warning');
-                    countElement.classList.remove('error');
+        avatarUrls.forEach((url, index) => {
+            const img = document.createElement('img');
+            img.src = url;
+            img.className = 'avatar-option' + (index === randomIndex ? ' selected' : '');
+            img.addEventListener('click', () => {
+                document.querySelectorAll('.avatar-option').forEach(a => a.classList.remove('selected'));
+                img.classList.add('selected');
+                selectedAvatar = url;
+            });
+            avatarSelector.appendChild(img);
+        });
+
+        // Trading type selection
+        const tradingTypes = new Set();
+        document.querySelectorAll('.tag').forEach(tag => {
+            tag.addEventListener('click', () => {
+                tag.classList.toggle('selected');
+                const type = tag.dataset.type;
+                if (tag.classList.contains('selected')) {
+                    tradingTypes.add(type);
                 } else {
-                    countElement.classList.remove('warning', 'error');
+                    tradingTypes.delete(type);
                 }
             });
-        }
+        });
 
-        updateWordCount(document.getElementById('marketOutlook'), document.getElementById('outlookCount'));
-        updateWordCount(document.getElementById('investmentThesis'), document.getElementById('thesisCount'));
-        updateWordCount(document.getElementById('positionStrategy'), document.getElementById('strategyCount'));
+        // Asset selection (max 3)
+        const selectedAssets = new Set();
+        document.querySelectorAll('.asset-tag').forEach(tag => {
+            tag.addEventListener('click', () => {
+                const asset = tag.dataset.asset;
+                
+                if (tag.classList.contains('selected')) {
+                    tag.classList.remove('selected');
+                    selectedAssets.delete(asset);
+                } else if (selectedAssets.size < 3) {
+                    tag.classList.add('selected');
+                    selectedAssets.add(asset);
+                } else {
+                    alert('You can select up to 3 assets');
+                }
+            });
+        });
 
-        // Username availability check
-        usernameInput.addEventListener('input', () => {
-            const username = usernameInput.value.toLowerCase();
+        // Add custom asset
+        document.getElementById('addAssetBtn').addEventListener('click', () => {
+            const input = document.getElementById('customAsset');
+            const asset = input.value.trim().toUpperCase();
             
-            if (username.length < 3) {
-                usernameCheck.textContent = '';
+            if (!asset) return;
+            
+            if (selectedAssets.size >= 3) {
+                alert('You can select up to 3 assets');
                 return;
             }
 
-            const existing = getManagers().find(m => m.username === username);
+            if (selectedAssets.has(asset)) {
+                alert('Asset already added');
+                return;
+            }
+
+            // Add to grid
+            const tag = document.createElement('div');
+            tag.className = 'asset-tag selected';
+            tag.textContent = asset;
+            tag.dataset.asset = asset;
+            tag.addEventListener('click', () => {
+                tag.remove();
+                selectedAssets.delete(asset);
+            });
             
-            if (existing) {
-                usernameCheck.className = 'username-check taken';
-                usernameCheck.textContent = '❌ Username already taken';
-                submitBtn.disabled = true;
-            } else {
+            document.querySelector('.assets-grid').appendChild(tag);
+            selectedAssets.add(asset);
+            input.value = '';
+        });
+
+        // Performance fee slider
+        const perfSlider = document.getElementById('performanceFee');
+        const perfDisplay = document.getElementById('performanceFeeDisplay');
+        perfSlider.addEventListener('input', () => {
+            perfDisplay.value = perfSlider.value;
+        });
+
+        // Username availability check
+        const usernameInput = document.getElementById('username');
+        const usernameCheck = document.getElementById('usernameCheck');
+        let usernameAvailable = false;
+
+        usernameInput.addEventListener('input', async () => {
+            const username = usernameInput.value.toLowerCase().trim();
+            
+            if (username.length < 3) {
+                usernameCheck.textContent = '';
+                usernameAvailable = false;
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/managers/profile?username=${username}`);
+                const data = await response.json();
+                
+                if (data.success && data.data) {
+                    usernameCheck.className = 'username-check taken';
+                    usernameCheck.textContent = '❌ Username taken';
+                    usernameAvailable = false;
+                } else {
+                    usernameCheck.className = 'username-check available';
+                    usernameCheck.textContent = '✓ Available';
+                    usernameAvailable = true;
+                }
+            } catch (error) {
                 usernameCheck.className = 'username-check available';
-                usernameCheck.textContent = '✓ Username available';
-                submitBtn.disabled = false;
+                usernameCheck.textContent = '✓ Available';
+                usernameAvailable = true;
             }
         });
 
         // Form submission
-        document.getElementById('profileForm').addEventListener('submit', (e) => {
+        document.getElementById('profileForm').addEventListener('submit', async (e) => {
             e.preventDefault();
 
-            const username = document.getElementById('username').value.toLowerCase();
-            const marketOutlook = document.getElementById('marketOutlook').value;
-            const investmentThesis = document.getElementById('investmentThesis').value;
-            const positionStrategy = document.getElementById('positionStrategy').value;
+            const username = usernameInput.value.toLowerCase().trim();
+            const capitalRange = document.getElementById('capitalRange').value;
+            const aumFee = parseFloat(document.getElementById('aumFee').value);
+            const performanceFee = parseInt(document.getElementById('performanceFee').value);
 
-            // Word count validation
-            const outlookWords = marketOutlook.trim().split(/\s+/).filter(w => w.length > 0).length;
-            const thesisWords = investmentThesis.trim().split(/\s+/).filter(w => w.length > 0).length;
-            const strategyWords = positionStrategy.trim().split(/\s+/).filter(w => w.length > 0).length;
-
-            if (outlookWords > 50 || thesisWords > 50 || strategyWords > 50) {
-                alert('Please keep each section under 50 words');
+            // Validation
+            if (!usernameAvailable) {
+                alert('Please choose an available username');
                 return;
             }
 
-            const profileData = {
-                username,
-                marketOutlook,
-                investmentThesis,
-                positionStrategy
-            };
+            if (tradingTypes.size === 0) {
+                alert('Please select at least one trading type');
+                return;
+            }
 
-            saveUserProfile(profileData);
+            if (selectedAssets.size === 0) {
+                alert('Please select at least one asset');
+                return;
+            }
 
-            // Redirect to manager dashboard
-            window.location.href = `/manager/dashboard.html?user=${username}`;
+            if (!capitalRange) {
+                alert('Please select capital range');
+                return;
+            }
+
+            const submitBtn = document.getElementById('submitBtn');
+            submitBtn.disabled = true;
+            submitBtn.textContent = 'Creating Profile...';
+
+            try {
+                const walletAddress = localStorage.getItem('connectedWallet');
+                const analysisData = JSON.parse(localStorage.getItem('positionsAnalysis') || '{}');
+
+                const response = await fetch('/api/managers/profile', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        username,
+                        walletAddress,
+                        profilePicture: selectedAvatar,
+                        tradingTypes: Array.from(tradingTypes),
+                        topAssets: Array.from(selectedAssets),
+                        capitalRange,
+                        fees: {
+                            aumFee,
+                            performanceFee
+                        },
+                        positions: [
+                            ...(analysisData.lpPositions || []),
+                            ...(analysisData.avantisPositions || [])
+                        ],
+                        metrics: {
+                            totalPnL30d: analysisData.totalPnL || 0,
+                            roi30d: analysisData.totalROI || 0,
+                            totalAUM: analysisData.totalAUM || 0,
+                            totalTrades: analysisData.totalPositions || 0
+                        }
+                    })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    localStorage.setItem('managerUsername', username);
+                    window.location.href = `/manager/dashboard.html?username=${username}`;
+                } else {
+                    throw new Error(data.error || 'Failed to create profile');
+                }
+            } catch (error) {
+                console.error('Profile creation failed:', error);
+                alert('Failed to create profile: ' + error.message);
+                submitBtn.disabled = false;
+                submitBtn.textContent = 'Create Profile';
+            }
         });
     </script>
 </body>

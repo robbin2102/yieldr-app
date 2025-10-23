@@ -171,18 +171,45 @@
             color: #FF3B30;
         }
 
-        /* Platform Icons */
+        /* Platform Tags (replacing icons) */
         .platforms {
             display: flex;
             gap: 0.5rem;
             padding-top: 1rem;
             border-top: 1px solid #1A1A1A;
+            flex-wrap: wrap;
         }
 
-        .platform-icon {
-            height: 20px;
-            width: auto;
-            opacity: 0.6;
+        .platform-tag {
+            padding: 4px 10px;
+            background: rgba(0, 200, 5, 0.1);
+            border: 1px solid rgba(0, 200, 5, 0.3);
+            border-radius: 6px;
+            font-size: 11px;
+            color: #00C805;
+            text-transform: capitalize;
+        }
+
+        /* Loading State */
+        .loading {
+            text-align: center;
+            padding: 4rem 2rem;
+            color: #8A8A8A;
+        }
+
+        .spinner {
+            display: inline-block;
+            width: 40px;
+            height: 40px;
+            border: 3px solid #1A1A1A;
+            border-top-color: #00C805;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-bottom: 1rem;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
         }
 
         /* Responsive */
@@ -219,255 +246,122 @@
     <header class="header">
         <div class="header-content">
             <div class="logo">YIELDR</div>
-            <a href="/onboarding/connect.html" class="become-manager-btn">Signup as Asset Manager</a>
+            <a href="/onboarding/connect" class="become-manager-btn">Signup as Asset Manager</a>
         </div>
     </header>
 
     <!-- Main Content -->
     <main class="container">
-        <h1 class="page-title">Discover Asset Managers</h1>
-        <p class="page-subtitle">Connect with verified crypto asset managers and grow your portfolio</p>
+        <h1 class="page-title">Discover Top Asset Managers</h1>
+        <p class="page-subtitle">Co-invest with top asset managers and grow your portfolio</p>
+
+        <!-- Loading State -->
+        <div id="loadingState" class="loading">
+            <div class="spinner"></div>
+            <p>Loading asset managers...</p>
+        </div>
 
         <!-- Managers Grid -->
-        <div class="managers-grid">
-            <!-- Manager 1 -->
-            <div class="manager-card">
-                <div class="card-header">
-                    <img src="https://b22290bb4d42a7d0d0d796b264519fb5.cdn.bubble.io/f1760731746086x138133871256527200/kgjADCj7_400x400.jpg" alt="Alex Kim" class="avatar">
-                    <div class="manager-info">
-                        <div class="manager-name">Alex Kim</div>
-                        <div class="verified-badge">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="#00C805">
-                                <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/>
-                            </svg>
-                            Verified
-                        </div>
-                    </div>
-                </div>
-                
-                <div class="metrics">
-                    <div class="metric">
-                        <span class="metric-label">AUM</span>
-                        <span class="metric-value">$245K</span>
-                    </div>
-                    <div class="metric">
-                        <span class="metric-label">30d ROI</span>
-                        <span class="metric-value positive">+47.2%</span>
-                    </div>
-                    <div class="metric">
-                        <span class="metric-label">Win Rate</span>
-                        <span class="metric-value">68%</span>
-                    </div>
-                    <div class="metric">
-                        <span class="metric-label">Fees</span>
-                        <span class="metric-value">20%</span>
-                    </div>
-                </div>
-
-                <div class="platforms">
-                    <img src="https://b22290bb4d42a7d0d0d796b264519fb5.cdn.bubble.io/f1760730571727x652164385115809700/Avantis%20White%20Logo%20-%20Horizontal.png" alt="Avantis" class="platform-icon">
-                    <img src="https://b22290bb4d42a7d0d0d796b264519fb5.cdn.bubble.io/f1760731058931x165828739392198200/aero.png" alt="Aerodrome" class="platform-icon">
-                </div>
-            </div>
-
-            <!-- Manager 2 -->
-            <div class="manager-card">
-                <div class="card-header">
-                    <img src="https://b22290bb4d42a7d0d0d796b264519fb5.cdn.bubble.io/f1760730842873x784538099904239200/av%202.jpeg" alt="Sarah Chen" class="avatar">
-                    <div class="manager-info">
-                        <div class="manager-name">Sarah Chen</div>
-                        <div class="verified-badge">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="#00C805">
-                                <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/>
-                            </svg>
-                            Verified
-                        </div>
-                    </div>
-                </div>
-                
-                <div class="metrics">
-                    <div class="metric">
-                        <span class="metric-label">AUM</span>
-                        <span class="metric-value">$412K</span>
-                    </div>
-                    <div class="metric">
-                        <span class="metric-label">30d ROI</span>
-                        <span class="metric-value positive">+63.8%</span>
-                    </div>
-                    <div class="metric">
-                        <span class="metric-label">Win Rate</span>
-                        <span class="metric-value">72%</span>
-                    </div>
-                    <div class="metric">
-                        <span class="metric-label">Fees</span>
-                        <span class="metric-value">25%</span>
-                    </div>
-                </div>
-
-                <div class="platforms">
-                    <img src="https://b22290bb4d42a7d0d0d796b264519fb5.cdn.bubble.io/f1760730571727x652164385115809700/Avantis%20White%20Logo%20-%20Horizontal.png" alt="Avantis" class="platform-icon">
-                    <img src="https://b22290bb4d42a7d0d0d796b264519fb5.cdn.bubble.io/f1760731058931x165828739392198200/aero.png" alt="Aerodrome" class="platform-icon">
-                </div>
-            </div>
-
-            <!-- Manager 3 -->
-            <div class="manager-card">
-                <div class="card-header">
-                    <img src="https://b22290bb4d42a7d0d0d796b264519fb5.cdn.bubble.io/f1760730856935x924574333228713700/av%203.jpeg" alt="Mike Park" class="avatar">
-                    <div class="manager-info">
-                        <div class="manager-name">Mike Park</div>
-                        <div class="verified-badge">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="#00C805">
-                                <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/>
-                            </svg>
-                            Verified
-                        </div>
-                    </div>
-                </div>
-                
-                <div class="metrics">
-                    <div class="metric">
-                        <span class="metric-label">AUM</span>
-                        <span class="metric-value">$328K</span>
-                    </div>
-                    <div class="metric">
-                        <span class="metric-label">30d ROI</span>
-                        <span class="metric-value positive">+52.4%</span>
-                    </div>
-                    <div class="metric">
-                        <span class="metric-label">Win Rate</span>
-                        <span class="metric-value">65%</span>
-                    </div>
-                    <div class="metric">
-                        <span class="metric-label">Fees</span>
-                        <span class="metric-value">22%</span>
-                    </div>
-                </div>
-
-                <div class="platforms">
-                    <img src="https://b22290bb4d42a7d0d0d796b264519fb5.cdn.bubble.io/f1760730571727x652164385115809700/Avantis%20White%20Logo%20-%20Horizontal.png" alt="Avantis" class="platform-icon">
-                    <img src="https://b22290bb4d42a7d0d0d796b264519fb5.cdn.bubble.io/f1760731058931x165828739392198200/aero.png" alt="Aerodrome" class="platform-icon">
-                </div>
-            </div>
-
-            <!-- Manager 4 -->
-            <div class="manager-card">
-                <div class="card-header">
-                    <img src="https://b22290bb4d42a7d0d0d796b264519fb5.cdn.bubble.io/f1760731762868x445415526606580700/QngrqCSC_400x400.jpg" alt="Lisa Jones" class="avatar">
-                    <div class="manager-info">
-                        <div class="manager-name">Lisa Jones</div>
-                        <div class="verified-badge">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="#00C805">
-                                <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/>
-                            </svg>
-                            Verified
-                        </div>
-                    </div>
-                </div>
-                
-                <div class="metrics">
-                    <div class="metric">
-                        <span class="metric-label">AUM</span>
-                        <span class="metric-value">$567K</span>
-                    </div>
-                    <div class="metric">
-                        <span class="metric-label">30d ROI</span>
-                        <span class="metric-value positive">+71.3%</span>
-                    </div>
-                    <div class="metric">
-                        <span class="metric-label">Win Rate</span>
-                        <span class="metric-value">74%</span>
-                    </div>
-                    <div class="metric">
-                        <span class="metric-label">Fees</span>
-                        <span class="metric-value">18%</span>
-                    </div>
-                </div>
-
-                <div class="platforms">
-                    <img src="https://b22290bb4d42a7d0d0d796b264519fb5.cdn.bubble.io/f1760731058931x165828739392198200/aero.png" alt="Aerodrome" class="platform-icon">
-                </div>
-            </div>
-
-            <!-- Manager 5 -->
-            <div class="manager-card">
-                <div class="card-header">
-                    <img src="https://b22290bb4d42a7d0d0d796b264519fb5.cdn.bubble.io/f1760731794127x999562132716905700/R6ihm6Et_400x400.jpg" alt="Raj Kumar" class="avatar">
-                    <div class="manager-info">
-                        <div class="manager-name">Raj Kumar</div>
-                        <div class="verified-badge">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="#00C805">
-                                <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/>
-                            </svg>
-                            Verified
-                        </div>
-                    </div>
-                </div>
-                
-                <div class="metrics">
-                    <div class="metric">
-                        <span class="metric-label">AUM</span>
-                        <span class="metric-value">$189K</span>
-                    </div>
-                    <div class="metric">
-                        <span class="metric-label">30d ROI</span>
-                        <span class="metric-value positive">+39.6%</span>
-                    </div>
-                    <div class="metric">
-                        <span class="metric-label">Win Rate</span>
-                        <span class="metric-value">61%</span>
-                    </div>
-                    <div class="metric">
-                        <span class="metric-label">Fees</span>
-                        <span class="metric-value">15%</span>
-                    </div>
-                </div>
-
-                <div class="platforms">
-                    <img src="https://b22290bb4d42a7d0d0d796b264519fb5.cdn.bubble.io/f1760730571727x652164385115809700/Avantis%20White%20Logo%20-%20Horizontal.png" alt="Avantis" class="platform-icon">
-                    <img src="https://b22290bb4d42a7d0d0d796b264519fb5.cdn.bubble.io/f1760731058931x165828739392198200/aero.png" alt="Aerodrome" class="platform-icon">
-                </div>
-            </div>
-
-            <!-- Manager 6 -->
-            <div class="manager-card">
-                <div class="card-header">
-                    <img src="https://b22290bb4d42a7d0d0d796b264519fb5.cdn.bubble.io/f1760730891764x296275179448961700/av%206.png" alt="Emma Miller" class="avatar">
-                    <div class="manager-info">
-                        <div class="manager-name">Emma Miller</div>
-                        <div class="verified-badge">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="#00C805">
-                                <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/>
-                            </svg>
-                            Verified
-                        </div>
-                    </div>
-                </div>
-                
-                <div class="metrics">
-                    <div class="metric">
-                        <span class="metric-label">AUM</span>
-                        <span class="metric-value">$693K</span>
-                    </div>
-                    <div class="metric">
-                        <span class="metric-label">30d ROI</span>
-                        <span class="metric-value positive">+84.7%</span>
-                    </div>
-                    <div class="metric">
-                        <span class="metric-label">Win Rate</span>
-                        <span class="metric-value">79%</span>
-                    </div>
-                    <div class="metric">
-                        <span class="metric-label">Fees</span>
-                        <span class="metric-value">30%</span>
-                    </div>
-                </div>
-
-                <div class="platforms">
-                    <img src="https://b22290bb4d42a7d0d0d796b264519fb5.cdn.bubble.io/f1760731058931x165828739392198200/aero.png" alt="Aerodrome" class="platform-icon">
-                </div>
-            </div>
-        </div>
+        <div class="managers-grid" id="managersGrid"></div>
     </main>
+
+    <script>
+        let managers = [];
+
+        async function loadManagers() {
+            try {
+                const response = await fetch('/api/managers/list');
+                const data = await response.json();
+
+                console.log('API Response:', data);
+
+                if (data.success && data.data.managers && data.data.managers.length > 0) {
+                    managers = data.data.managers;
+                    displayManagers();
+                } else {
+                    document.getElementById('loadingState').innerHTML = '<p>No asset managers found yet. Be the first to join!</p>';
+                }
+            } catch (error) {
+                console.error('Error loading managers:', error);
+                document.getElementById('loadingState').innerHTML = '<p>Failed to load managers. Please try again.</p>';
+            }
+        }
+
+        function displayManagers() {
+            document.getElementById('loadingState').style.display = 'none';
+            
+            const grid = document.getElementById('managersGrid');
+            
+            grid.innerHTML = managers.map(manager => {
+                const roi = manager.metrics.roi30d || 0;
+                const aum = manager.metrics.totalAUM || 0;
+                const winRate = manager.metrics.winRate || 0;
+                const performanceFee = manager.fees?.performanceFee || 0;
+                const tradingTypes = manager.tradingTypes || [];
+                
+                return `
+                    <div class="manager-card" onclick="viewManager('${manager.username}')">
+                        <div class="card-header">
+                            <img src="${manager.profilePicture}" alt="${manager.username}" class="avatar">
+                            <div class="manager-info">
+                                <div class="manager-name">@${manager.username}</div>
+                                <div class="verified-badge">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="#00C805">
+                                        <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/>
+                                    </svg>
+                                    Verified
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="metrics">
+                            <div class="metric">
+                                <span class="metric-label">AUM</span>
+                                <span class="metric-value">${formatCurrency(aum)}</span>
+                            </div>
+                            <div class="metric">
+                                <span class="metric-label">30d ROI</span>
+                                <span class="metric-value ${roi >= 0 ? 'positive' : 'negative'}">${formatPercent(roi)}</span>
+                            </div>
+                            <div class="metric">
+                                <span class="metric-label">Win Rate</span>
+                                <span class="metric-value">${winRate.toFixed(0)}%</span>
+                            </div>
+                            <div class="metric">
+                                <span class="metric-label">Fees</span>
+                                <span class="metric-value">${performanceFee}%</span>
+                            </div>
+                        </div>
+
+                        <div class="platforms">
+                            ${tradingTypes.slice(0, 3).map(type => 
+                                `<span class="platform-tag">${type.replace(/-/g, ' ')}</span>`
+                            ).join('')}
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function viewManager(username) {
+            window.location.href = `/manager/dashboard.html?username=${username}`;
+        }
+
+        function formatCurrency(value) {
+            const num = parseFloat(value) || 0;
+            if (Math.abs(num) >= 1000000) return `$${(num / 1000000).toFixed(1)}M`;
+            if (Math.abs(num) >= 1000) return `$${(num / 1000).toFixed(0)}K`;
+            return `$${num.toFixed(0)}`;
+        }
+
+        function formatPercent(value) {
+            const num = parseFloat(value) || 0;
+            const sign = num >= 0 ? '+' : '';
+            return `${sign}${num.toFixed(1)}%`;
+        }
+
+        // Load managers on page load
+        loadManagers();
+    </script>
 </body>
 </html>

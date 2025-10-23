@@ -1,25 +1,23 @@
-import '@rainbow-me/rainbowkit/styles.css';
-import './globals.css';
-import type { Metadata } from 'next';
-import { Inter } from 'next/font/google';
-import { Providers } from './providers';
-
-const inter = Inter({ subsets: ['latin'] });
+import type { Metadata } from "next";
+import "./globals.css";
+import { Providers } from "@/components/RainbowKitProvider";
 
 export const metadata: Metadata = {
-  title: 'Yieldr - Asset Management on Base',
-  description: 'Invest with top crypto asset managers. Built on Base.',
+  title: "Yieldr - Discover Asset Managers",
+  description: "Co-invest with top crypto asset managers",
 };
 
 export default function RootLayout({
   children,
-}: {
+}: Readonly<{
   children: React.ReactNode;
-}) {
+}>) {
   return (
     <html lang="en">
-      <body className={inter.className}>
-        <Providers>{children}</Providers>
+      <body className="antialiased">
+        <Providers>
+          {children}
+        </Providers>
       </body>
     </html>
   );

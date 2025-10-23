@@ -15,8 +15,8 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // Call DeFi Krystal API
-    const krystalApiUrl = `https://api.krystal.app/v1/lp/userPositions?userAddress=${walletAddress}&chains=base,ethereum`;
+    // Correct DefiKrystal API endpoint
+    const krystalApiUrl = `https://api.krystal.app/all/v1/lp/userPositions?addresses=${walletAddress}&chainIds=8453,1`;
     
     console.log('Fetching LP positions from Krystal:', krystalApiUrl);
     
@@ -33,38 +33,60 @@ export async function GET(request: NextRequest) {
 
     const data = await response.json();
     
-    console.log('Krystal API response:', JSON.stringify(data, null, 2));
+    console.log('Krystal API response positions count:', data.positions?.length || 0);
 
-    // Transform Krystal response to our format
-    const positions = data.data?.positions || [];
+    // Extract positions from response
+    const positions = data.positions || [];
+    const stats = data.statsByChain?.all || data.statsByChain?.[8453] || {};
     
-    const formattedPositions = positions.map((pos: any) => ({
-      platform: pos.platform || pos.protocol,
-      pool: pos.pool || `${pos.token0?.symbol}-${pos.token1?.symbol}`,
-      chain: pos.chain,
-      liquidity: parseFloat(pos.liquidityUSD || pos.positionValue || 0),
-      token0: pos.token0?.symbol,
-      token1: pos.token1?.symbol,
-      pnl: parseFloat(pos.pnl || 0),
-      roi: parseFloat(pos.roi || 0),
-      apr: parseFloat(pos.apr || 0),
-      status: pos.status || 'active'
-    }));
+    // Format positions for our app
+    const formattedPositions = positions.map((pos: any) => {
+      const token0 = pos.currentAmounts?.[0]?.token;
+      const token1 = pos.currentAmounts?.[1]?.token;
+      
+      const liquidity = pos.currentAmounts?.reduce((sum: number, amount: any) => {
+        return sum + (amount.quotes?.usd?.value || 0);
+      }, 0) || 0;
 
-    const totalLiquidity = formattedPositions.reduce((sum: number, pos: any) => sum + pos.liquidity, 0);
-    const totalPnL = formattedPositions.reduce((sum: number, pos: any) => sum + pos.pnl, 0);
+      // FIXED: Extract platform from correct location
+      const platform = pos.pool?.project || pos.pool?.projectKey || 'Unknown';
+
+      return {
+        platform: platform, // Now correctly extracted
+        pool: `${token0?.symbol || '?'}-${token1?.symbol || '?'}`,
+        chain: pos.chainName || 'base',
+        liquidity: liquidity,
+        token0: token0?.symbol,
+        token1: token1?.symbol,
+        pnl: pos.pnl || 0,
+        roi: pos.returnOnInvestment || 0,
+        apr: pos.apr || 0,
+        status: pos.status || 'active',
+        positionId: pos.id,
+        minPrice: pos.minPrice,
+        maxPrice: pos.maxPrice,
+        unclaimedFees: pos.unclaimedFees || 0
+      };
+    });
+
+    const totalLiquidity = stats.currentLiquidityValue || formattedPositions.reduce((sum: number, pos: any) => sum + pos.liquidity, 0);
+    const totalPnL = stats.pnl || formattedPositions.reduce((sum: number, pos: any) => sum + pos.pnl, 0);
+    const avgROI = stats.returnOnInvestment || 0;
+
+    console.log('Formatted LP positions:', formattedPositions.length);
 
     return NextResponse.json({
       success: true,
       data: {
-        totalPositions: formattedPositions.length,
+        totalPositions: stats.openPositionCount || formattedPositions.length,
         positions: formattedPositions,
         summary: {
           totalLiquidity,
           totalPnL,
-          avgROI: formattedPositions.length > 0 
-            ? formattedPositions.reduce((sum: number, pos: any) => sum + pos.roi, 0) / formattedPositions.length 
-            : 0
+          avgROI,
+          totalFeeEarned: stats.totalFeeEarned || 0,
+          unclaimedFees: stats.unclaimedFees || 0,
+          apr: stats.apr || 0
         }
       }
     });

@@ -36,49 +36,63 @@
             margin-bottom: 60px;
         }
 
-        .progress-circle {
-            width: 160px;
-            height: 160px;
+        .timer-circle {
+            width: 180px;
+            height: 180px;
             margin: 0 auto 40px;
             position: relative;
         }
 
-        .progress-ring {
+        .timer-svg {
             transform: rotate(-90deg);
         }
 
-        .progress-ring-circle {
-            transition: stroke-dashoffset 0.5s ease;
+        .timer-circle-bg {
+            stroke: #1A1A1A;
+            stroke-width: 8;
+            fill: transparent;
+        }
+
+        .timer-circle-progress {
             stroke: #00C805;
-            stroke-width: 4;
+            stroke-width: 8;
             fill: transparent;
             stroke-linecap: round;
+            transition: stroke-dashoffset 1s linear;
         }
 
-        .progress-bg {
-            stroke: #1A1A1A;
-            stroke-width: 4;
-            fill: transparent;
-        }
-
-        .progress-text {
+        .timer-text {
             position: absolute;
             top: 50%;
             left: 50%;
             transform: translate(-50%, -50%);
-            font-size: 36px;
+            text-align: center;
+        }
+
+        .timer-value {
+            font-size: 48px;
             font-weight: 700;
             color: #00C805;
+            line-height: 1;
+            margin-bottom: 8px;
+        }
+
+        .timer-label {
+            font-size: 13px;
+            color: #8A8A8A;
+            text-transform: uppercase;
+            letter-spacing: 1px;
         }
 
         .status-text {
-            color: #8A8A8A;
-            font-size: 18px;
+            color: #FFFFFF;
+            font-size: 20px;
             margin-bottom: 40px;
             min-height: 60px;
             display: flex;
             align-items: center;
             justify-content: center;
+            font-weight: 500;
         }
 
         .steps-container {
@@ -96,6 +110,10 @@
             border-radius: 12px;
             background: #000000;
             transition: all 0.3s ease;
+        }
+
+        .step:last-child {
+            margin-bottom: 0;
         }
 
         .step.active {
@@ -118,6 +136,7 @@
             margin-right: 16px;
             font-size: 16px;
             color: #8A8A8A;
+            flex-shrink: 0;
         }
 
         .step.active .step-icon {
@@ -147,6 +166,7 @@
             color: #00C805;
             font-size: 14px;
             font-weight: 600;
+            margin-left: 12px;
         }
 
         @keyframes pulse {
@@ -167,44 +187,94 @@
         @keyframes spin {
             to { transform: rotate(360deg); }
         }
+
+        .timeout-message {
+            background: rgba(255, 165, 0, 0.1);
+            border: 2px solid rgba(255, 165, 0, 0.3);
+            border-radius: 12px;
+            padding: 20px;
+            margin-top: 20px;
+            color: #FFA500;
+            display: none;
+        }
+
+        .timeout-message.show {
+            display: block;
+        }
+
+        .timeout-message h3 {
+            font-size: 16px;
+            margin-bottom: 8px;
+        }
+
+        .timeout-message p {
+            font-size: 14px;
+            color: #8A8A8A;
+        }
+
+        .continue-btn {
+            margin-top: 16px;
+            padding: 12px 24px;
+            background: #00C805;
+            color: #000000;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .continue-btn:hover {
+            background: #00E006;
+        }
     </style>
 </head>
 <body>
     <div class="analyzing-container">
         <div class="logo">Yieldr</div>
 
-        <div class="progress-circle">
-            <svg width="160" height="160">
-                <circle class="progress-bg" cx="80" cy="80" r="70"></circle>
-                <circle class="progress-ring-circle" cx="80" cy="80" r="70" 
-                        stroke-dasharray="440" stroke-dashoffset="440"></circle>
+        <div class="timer-circle">
+            <svg class="timer-svg" width="180" height="180">
+                <circle class="timer-circle-bg" cx="90" cy="90" r="82"></circle>
+                <circle 
+                    class="timer-circle-progress" 
+                    cx="90" 
+                    cy="90" 
+                    r="82"
+                    stroke-dasharray="515"
+                    stroke-dashoffset="515"
+                ></circle>
             </svg>
-            <div class="progress-text">0%</div>
+            <div class="timer-text">
+                <div class="timer-value" id="timerValue">60</div>
+                <div class="timer-label">seconds</div>
+            </div>
         </div>
 
         <div class="status-text">
-            <span id="statusText">Initializing...</span>
+            <span id="statusText">Analyzing your trading history...</span>
         </div>
 
         <div class="steps-container">
             <div class="step" id="step1">
                 <div class="step-icon"><span class="spinner"></span></div>
-                <div class="step-text">Fetching LP positions from DeFi protocols</div>
+                <div class="step-text">Fetching LP positions from Uniswap & Aerodrome</div>
                 <div class="step-result" id="result1"></div>
             </div>
             <div class="step" id="step2">
                 <div class="step-icon">2</div>
-                <div class="step-text">Analyzing Uniswap & Aerodrome liquidity</div>
+                <div class="step-text">Fetching perpetual positions from Avantis</div>
                 <div class="step-result" id="result2"></div>
             </div>
             <div class="step" id="step3">
                 <div class="step-icon">3</div>
-                <div class="step-text">Checking perpetual positions on Avantis</div>
+                <div class="step-text">Calculating performance metrics</div>
                 <div class="step-result" id="result3"></div>
             </div>
             <div class="step" id="step4">
                 <div class="step-icon">4</div>
-                <div class="step-text">Calculating performance metrics</div>
+                <div class="step-text">Saving positions to database</div>
                 <div class="step-result" id="result4"></div>
             </div>
             <div class="step" id="step5">
@@ -213,9 +283,14 @@
                 <div class="step-result" id="result5"></div>
             </div>
         </div>
+
+        <div class="timeout-message" id="timeoutMessage">
+            <h3>⏱️ Taking longer than expected...</h3>
+            <p>Position analysis is still in progress. This might take a bit longer for wallets with many positions.</p>
+            <button class="continue-btn" onclick="continueAnyway()">Continue Anyway</button>
+        </div>
     </div>
 
-    <script src="../js/mock-data.js"></script>
     <script>
         const walletAddress = localStorage.getItem('connectedWallet');
         
@@ -223,87 +298,222 @@
             window.location.href = '/onboarding/connect';
         }
 
-        const steps = [
-            { 
-                duration: 2000, 
-                statusText: "Scanning DeFi protocols...",
-                result: "2 LP positions"
-            },
-            { 
-                duration: 1500, 
-                statusText: "Analyzing liquidity pools...",
-                result: "$15.2k liquidity"
-            },
-            { 
-                duration: 2000, 
-                statusText: "Checking perpetual positions...",
-                result: "3 active trades"
-            },
-            { 
-                duration: 1500, 
-                statusText: "Computing PnL and ROI...",
-                result: "+23.5% ROI"
-            },
-            { 
-                duration: 1000, 
-                statusText: "Finalizing profile...",
-                result: "✓ Complete"
-            }
-        ];
-
-        let currentStep = 0;
-        const totalSteps = steps.length;
-        const progressCircle = document.querySelector('.progress-ring-circle');
-        const progressText = document.querySelector('.progress-text');
+        const timerValue = document.getElementById('timerValue');
+        const timerProgress = document.querySelector('.timer-circle-progress');
         const statusText = document.getElementById('statusText');
-        const circumference = 440;
+        const timeoutMessage = document.getElementById('timeoutMessage');
+        
+        const circumference = 515;
+        let timeLeft = 60;
+        let timerInterval;
+        let analysisComplete = false;
 
-        function updateProgress(percent) {
-            const offset = circumference - (percent / 100 * circumference);
-            progressCircle.style.strokeDashoffset = offset;
-            progressText.textContent = Math.round(percent) + '%';
+        let lpPositions = [];
+        let avantisPositions = [];
+        let totalPnL = 0;
+        let totalAUM = 0;
+        let totalROI = 0;
+
+        function startTimer() {
+            timerInterval = setInterval(() => {
+                timeLeft--;
+                timerValue.textContent = timeLeft;
+                
+                const progress = (60 - timeLeft) / 60;
+                const offset = circumference - (progress * circumference);
+                timerProgress.style.strokeDashoffset = offset;
+
+                if (timeLeft <= 10) {
+                    timerProgress.style.stroke = '#FFA500';
+                    timerValue.style.color = '#FFA500';
+                }
+
+                if (timeLeft <= 0) {
+                    clearInterval(timerInterval);
+                    if (!analysisComplete) {
+                        timeoutMessage.classList.add('show');
+                        statusText.textContent = 'Analysis is taking longer than usual...';
+                    }
+                }
+            }, 1000);
         }
 
-        function completeStep(stepIndex) {
-            const step = document.getElementById(`step${stepIndex + 1}`);
-            const result = document.getElementById(`result${stepIndex + 1}`);
+        function completeStep(stepIndex, resultText) {
+            const step = document.getElementById(`step${stepIndex}`);
+            const result = document.getElementById(`result${stepIndex}`);
             
             step.classList.remove('active');
             step.classList.add('completed');
             step.querySelector('.step-icon').innerHTML = '✓';
-            result.textContent = steps[stepIndex].result;
+            result.textContent = resultText;
         }
 
-        function activateStep(stepIndex) {
-            if (stepIndex >= totalSteps) return;
-            
-            const step = document.getElementById(`step${stepIndex + 1}`);
+        function activateStep(stepIndex, statusMessage) {
+            const step = document.getElementById(`step${stepIndex}`);
             step.classList.add('active');
-            statusText.textContent = steps[stepIndex].statusText;
+            statusText.textContent = statusMessage;
+        }
+
+        function continueAnyway() {
+            localStorage.setItem('positionsAnalysis', JSON.stringify({
+                lpPositions,
+                avantisPositions,
+                totalPnL,
+                totalAUM,
+                totalROI,
+                totalPositions: lpPositions.length + avantisPositions.length,
+                platforms: getPlatforms()
+            }));
+            
+            window.location.href = '/onboarding/profile.html';
         }
 
         async function runAnalysis() {
-            for (let i = 0; i < totalSteps; i++) {
-                activateStep(i);
-                
-                await new Promise(resolve => {
-                    setTimeout(() => {
-                        completeStep(i);
-                        const progress = ((i + 1) / totalSteps) * 100;
-                        updateProgress(progress);
-                        resolve();
-                    }, steps[i].duration);
-                });
-            }
+            startTimer();
 
-            localStorage.setItem('analysisComplete', 'true');
-            
-            setTimeout(() => {
+            try {
+                // Step 1: Fetch LP positions
+                activateStep(1, "Scanning DeFi protocols for LP positions...");
+                
+                try {
+                    const lpResponse = await fetch(`/api/lp-positions?address=${walletAddress}`);
+                    const lpData = await lpResponse.json();
+                    
+                    if (lpData.success && lpData.data) {
+                        lpPositions = lpData.data.positions || [];
+                        completeStep(1, `${lpPositions.length} LP position${lpPositions.length !== 1 ? 's' : ''}`);
+                    } else {
+                        completeStep(1, "0 LP positions");
+                    }
+                } catch (error) {
+                    console.error('LP fetch error:', error);
+                    completeStep(1, "0 LP positions");
+                }
+                
+                await sleep(500);
+
+                // Step 2: Fetch Avantis positions
+                activateStep(2, "Fetching perpetual positions from Avantis...");
+                
+                try {
+                    const avantisResponse = await fetch(`/api/avantis-positions?address=${walletAddress}`);
+                    const avantisData = await avantisResponse.json();
+                    
+                    if (avantisData.success && avantisData.data) {
+                        avantisPositions = avantisData.data.positions || [];
+                        const count = avantisData.data.totalPositions || avantisPositions.length;
+                        completeStep(2, `${count} active trade${count !== 1 ? 's' : ''}`);
+                    } else {
+                        completeStep(2, "0 active trades");
+                    }
+                } catch (error) {
+                    console.error('Avantis fetch error:', error);
+                    completeStep(2, "0 active trades");
+                }
+                
+                await sleep(500);
+
+                // Step 3: Calculate metrics
+                activateStep(3, "Computing PnL and ROI...");
+                
+                const lpPnL = lpPositions.reduce((sum, pos) => sum + (pos.pnl || 0), 0);
+                const avantisPnL = avantisPositions.reduce((sum, pos) => sum + (pos.pnl || 0), 0);
+                totalPnL = lpPnL + avantisPnL;
+                
+                const lpAUM = lpPositions.reduce((sum, pos) => sum + (pos.liquidity || 0), 0);
+                const avantisAUM = avantisPositions.reduce((sum, pos) => sum + (pos.margin || 0), 0);
+                totalAUM = lpAUM + avantisAUM;
+                
+                totalROI = totalAUM > 0 ? (totalPnL / totalAUM * 100) : 0;
+                
+                const roiSign = totalROI >= 0 ? '+' : '';
+                completeStep(3, `${roiSign}${totalROI.toFixed(2)}% ROI`);
+                
+                await sleep(500);
+
+                // Step 4: Save positions to MongoDB
+                activateStep(4, "Saving positions...");
+                
+                try {
+                    const saveResponse = await fetch('/api/positions', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            walletAddress,
+                            lpPositions,
+                            avantisPositions,
+                            metrics: {
+                                totalPnL,
+                                totalAUM,
+                                totalROI
+                            }
+                        })
+                    });
+                    
+                    const saveData = await saveResponse.json();
+                    
+                    if (saveData.success) {
+                        completeStep(4, `${saveData.data.totalPositions} positions saved`);
+                    } else {
+                        completeStep(4, "⚠️ Save failed");
+                    }
+                } catch (error) {
+                    console.error('Save error:', error);
+                    completeStep(4, "⚠️ Save failed");
+                }
+                
+                await sleep(500);
+
+                // Step 5: Prepare profile data
+                activateStep(5, "Finalizing profile...");
+                
+                localStorage.setItem('positionsAnalysis', JSON.stringify({
+                    lpPositions,
+                    avantisPositions,
+                    totalPnL,
+                    totalAUM,
+                    totalROI,
+                    totalPositions: lpPositions.length + avantisPositions.length,
+                    platforms: getPlatforms()
+                }));
+                
+                completeStep(5, "✓ Complete");
+                
+                await sleep(300);
+                
+                analysisComplete = true;
+                clearInterval(timerInterval);
+                statusText.textContent = 'Analysis complete! Redirecting...';
+                
+                await sleep(1000);
                 window.location.href = '/onboarding/profile.html';
-            }, 500);
+                
+            } catch (error) {
+                console.error('Analysis failed:', error);
+                statusText.textContent = 'Analysis complete with some errors';
+                await sleep(2000);
+                continueAnyway();
+            }
         }
 
-        updateProgress(0);
+        function getPlatforms() {
+            const platforms = new Set();
+            
+            lpPositions.forEach(pos => {
+                if (pos.platform) platforms.add(pos.platform);
+            });
+            
+            if (avantisPositions.length > 0) {
+                platforms.add('Avantis');
+            }
+            
+            return Array.from(platforms);
+        }
+
+        function sleep(ms) {
+            return new Promise(resolve => setTimeout(resolve, ms));
+        }
+
         runAnalysis();
     </script>
 </body>

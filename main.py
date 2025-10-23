@@ -3,7 +3,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import asyncio
 import os
-from web3 import Web3
 from avantis_trader_sdk import TraderClient, FeedClient
 
 app = FastAPI(title="Yieldr Python Service", version="1.0.0")
@@ -34,15 +33,10 @@ async def health():
 async def fetch_positions(request: FetchRequest):
     try:
         rpc_url = request.rpcUrl if request.rpcUrl else DEFAULT_RPC
-        
-        # CRITICAL FIX: Convert address to checksum format
-        checksummed_address = Web3.to_checksum_address(request.walletAddress.lower())
-        
         print(f"Using RPC: {rpc_url[:50]}...")
-        print(f"Fetching positions for: {checksummed_address}")
         
         trader_client = TraderClient(rpc_url)
-        trades, _ = await trader_client.trade.get_trades(checksummed_address)
+        trades, _ = await trader_client.trade.get_trades(request.walletAddress)
         
         if len(trades) == 0:
             return {
@@ -111,8 +105,6 @@ async def fetch_positions(request: FetchRequest):
             total_margin += margin
             total_pnl += pnl
         
-        print(f"✅ Found {len(positions)} positions")
-        
         return {
             'success': True,
             'data': {
@@ -126,7 +118,7 @@ async def fetch_positions(request: FetchRequest):
             }
         }
     except Exception as e:
-        print(f"❌ Error: {str(e)}")
+        print(f"Error: {str(e)}")
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
