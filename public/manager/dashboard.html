@@ -1160,13 +1160,31 @@ loadDashboard();
             let lpData = { success: false, data: { positions: [], summary: { totalPnL: 0, totalLiquidity: 0 } } };
             if (lpResponse.ok) {
                 const krystalData = await lpResponse.json();
-                const krystalPositions = (krystalData.positions || []).map(pos => ({
+                const krystalPositions = (krystalData.positions || []).map(pos => {
+                const token0 = pos.currentAmounts?.[0]?.token;
+                const token1 = pos.currentAmounts?.[1]?.token;
+                
+                return {
                     platform: pos.pool?.project || 'Unknown',
-                    pair: `${pos.currentAmounts?.[0]?.token?.symbol}/${pos.currentAmounts?.[1]?.token?.symbol}`,
+                    pair: `${token0?.symbol || '?'}/${token1?.symbol || '?'}`,
+                    token0: {
+                        symbol: token0?.symbol || '',
+                        amount: pos.currentAmounts?.[0]?.balance || '0',
+                        value: pos.currentAmounts?.[0]?.quotes?.usd?.value || 0
+                    },
+                    token1: {
+                        symbol: token1?.symbol || '',
+                        amount: pos.currentAmounts?.[1]?.balance || '0',
+                        value: pos.currentAmounts?.[1]?.quotes?.usd?.value || 0
+                    },
                     liquidity: pos.currentPositionValue || 0,
                     pnl: pos.pnl || 0,
-                    roi: pos.returnOnInvestment || 0
-                }));
+                    roi: pos.returnOnInvestment || 0,
+                    apr: pos.apr || 0,
+                    status: pos.status || 'UNKNOWN',
+                    positionId: pos.id
+                };
+            });
                 lpData = {
                     success: true,
                     data: {
