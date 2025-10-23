@@ -1267,37 +1267,52 @@ loadDashboard();
     }
 }
 
-        function displayPositions() {
-            const tbody = document.getElementById('positionsTableBody');
+function displayPositions() {
+    const tbody = document.getElementById('positionsTableBody');
 
-            if (positions.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="8" style="text-align: center; color: #8A8A8A;">No positions found</td></tr>';
-                return;
+    if (positions.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="8" style="text-align: center; color: #8A8A8A;">No positions found</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = positions.map(pos => {
+        const isLP = pos.type === 'LP';
+        
+        // Fix: Build asset name from token symbols (works even when pair/pool is null)
+        let asset;
+        if (isLP) {
+            // For LP positions, prefer token symbols from saved data
+            if (pos.token0?.symbol && pos.token1?.symbol) {
+                asset = `${pos.token0.symbol}/${pos.token1.symbol}`;
+            } else {
+                // Fallback to pair or pool fields
+                asset = pos.pair || pos.pool || 'Unknown LP';
             }
-
-            tbody.innerHTML = positions.map(pos => {
-                const isLP = pos.type === 'LP';
-                const asset = isLP ? pos.pool : pos.pair;
-                const platform = pos.platform || (isLP ? 'Uniswap V3' : 'Avantis');
-                const type = isLP ? 'LP' : pos.direction;
-                const size = isLP ? pos.liquidity : pos.positionSize;
-                const entry = isLP ? 'N/A' : formatPrice(pos.entryPrice);
-                const current = isLP ? 'N/A' : formatPrice(pos.currentPrice || pos.entryPrice);
-
-                return `
-                    <tr>
-                        <td><strong>${asset}</strong></td>
-                        <td><span class="platform-badge">${platform}</span></td>
-                        <td><span class="type-badge ${isLP ? 'lp' : type.toLowerCase()}">${type}</span></td>
-                        <td>${formatCurrency(size)}</td>
-                        <td>${entry}</td>
-                        <td>${current}</td>
-                        <td style="color: ${pos.pnl >= 0 ? '#00C805' : '#FF4444'}">${formatCurrency(pos.pnl)}</td>
-                        <td style="color: ${pos.roi >= 0 ? '#00C805' : '#FF4444'}">${formatPercent(pos.roi)}</td>
-                    </tr>
-                `;
-            }).join('');
+        } else {
+            // For perpetual positions, use pair field
+            asset = pos.pair || 'Unknown';
         }
+        
+        const platform = pos.platform || (isLP ? 'Uniswap V3' : 'Avantis');
+        const type = isLP ? 'LP' : pos.direction;
+        const size = isLP ? pos.liquidity : pos.positionSize;
+        const entry = isLP ? 'N/A' : formatPrice(pos.entryPrice);
+        const current = isLP ? 'N/A' : formatPrice(pos.currentPrice || pos.entryPrice);
+
+        return `
+            <tr>
+                <td><strong>${asset}</strong></td>
+                <td><span class="platform-badge">${platform}</span></td>
+                <td><span class="type-badge ${isLP ? 'lp' : type.toLowerCase()}">${type}</span></td>
+                <td>${formatCurrency(size)}</td>
+                <td>${entry}</td>
+                <td>${current}</td>
+                <td style="color: ${pos.pnl >= 0 ? '#00C805' : '#FF4444'}">${formatCurrency(pos.pnl)}</td>
+                <td style="color: ${pos.roi >= 0 ? '#00C805' : '#FF4444'}">${formatPercent(pos.roi)}</td>
+            </tr>
+        `;
+    }).join('');
+}
 
         function updateAggregateMetrics() {
             // Calculate total metrics across all wallets
