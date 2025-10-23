@@ -1567,15 +1567,78 @@ function displayPositions() {
             throw new Error('Failed to update manager profile');
         }
 
+        // Step 5: Recalculate aggregate metrics across ALL wallets
+        document.getElementById('verifyStatus').textContent = 'Calculating aggregate metrics...';
+        console.log('🔵 Step 5: Recalculating metrics for all wallets...');
+
+        let totalPnL = 0;
+        let totalAUM = 0;
+        let totalPositions = 0;
+
+        // Fetch positions for ALL wallets and sum up
+        for (const wallet of updatedWallets) {
+            try {
+                console.log(`📊 Fetching positions for wallet: ${wallet}`);
+                const posResponse = await fetch(`/api/positions?address=${wallet}`);
+                const posData = await posResponse.json();
+                
+                if (posData.success && posData.data) {
+                    const lpPositions = posData.data.lpPositions || [];
+                    const perpPositions = posData.data.perpPositions || [];
+                    
+                    console.log(`Found ${lpPositions.length} LP + ${perpPositions.length} perp for ${wallet}`);
+                    
+                    // Sum PnL
+                    lpPositions.forEach(pos => totalPnL += (pos.pnl || 0));
+                    perpPositions.forEach(pos => totalPnL += (pos.pnl || 0));
+                    
+                    // Sum AUM
+                    lpPositions.forEach(pos => totalAUM += (pos.liquidity || 0));
+                    perpPositions.forEach(pos => totalAUM += (pos.margin || pos.positionSize || 0));
+                    
+                    totalPositions += lpPositions.length + perpPositions.length;
+                } else {
+                    console.warn(`No positions found for ${wallet}`);
+                }
+            } catch (err) {
+                console.error('Error fetching positions for', wallet, err);
+            }
+        }
+
+        const totalROI = totalAUM > 0 ? (totalPnL / totalAUM * 100) : 0;
+
+        console.log('📊 Aggregate metrics calculated:', { 
+            totalPnL, 
+            totalAUM, 
+            totalROI: totalROI.toFixed(2) + '%', 
+            totalPositions 
+        });
+
+        // Update manager metrics
+        const metricsUpdateResponse = await fetch('/api/managers/profile', {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                username: managerData.username,
+                metrics: {
+                    totalPnL30d: totalPnL,
+                    totalAUM: totalAUM,
+                    roi30d: totalROI,
+                    totalTrades: totalPositions,
+                    lastUpdated: new Date().toISOString()
+                }
+            })
+        });
+
+        const metricsUpdateData = await metricsUpdateResponse.json();
+        console.log('✅ Metrics update response:', metricsUpdateData);
+
         console.log('🎉 All steps completed successfully!');
         
         clearInterval(timerInterval);
         closeAddWalletModal();
         
-        const totalPositions = (lpData.data?.positions?.length || 0) + (avantisData.data?.positions?.length || 0);
-        alert(`✅ Wallet added successfully! Found ${totalPositions} position${totalPositions !== 1 ? 's' : ''}.`);
-        
-        // Reload dashboard
+        // Reload dashboard to show updated metrics
         location.reload();
 
     } catch (error) {
@@ -1585,6 +1648,7 @@ function displayPositions() {
         closeAddWalletModal();
     }
 }
+
 
         // Notes Modal
         function openNotesModal(field) {
