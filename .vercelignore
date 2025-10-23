@@ -1,0 +1,10 @@
+# Ignore old Python API folder (using Railway instead)
+api/
+
+# Local env files
+.env*.local
+.env
+
+# Development files
+*.log
+.DS_Store
