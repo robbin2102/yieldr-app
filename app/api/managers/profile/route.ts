@@ -121,7 +121,7 @@ export async function PATCH(request: NextRequest) {
     const updates: any = {
       updatedAt: new Date()
     };
-
+    if (data.wallets !== undefined) updates.wallets = data.wallets;
     if (data.fees !== undefined) updates.fees = data.fees;
     if (data.marketOutlook !== undefined) updates.marketOutlook = data.marketOutlook;
     if (data.investmentThesis !== undefined) updates.investmentThesis = data.investmentThesis;
