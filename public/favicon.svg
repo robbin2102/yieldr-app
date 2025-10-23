@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <style>
+    .leaf { fill: #10b981; }
+  </style>
+  <!-- Leaf shape -->
+  <path class="leaf" d="M50,10 Q70,30 70,50 Q70,70 50,90 Q30,70 30,50 Q30,30 50,10 Z M50,20 L50,80"/>
+</svg>
