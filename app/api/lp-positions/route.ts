@@ -15,8 +15,11 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // Correct DefiKrystal API endpoint
-    const krystalApiUrl = `https://api.krystal.app/all/v1/lp/userPositions?addresses=${walletAddress}&chainIds=8453,1`;
+    // Normalize address
+    const normalizedAddress = walletAddress.toLowerCase();
+
+    // Krystal API endpoint
+    const krystalApiUrl = `https://api.krystal.app/all/v1/lp/userPositions?addresses=${normalizedAddress}&chainIds=8453`;
     
     console.log('Fetching LP positions from Krystal:', krystalApiUrl);
     
@@ -24,10 +27,14 @@ export async function GET(request: NextRequest) {
       method: 'GET',
       headers: {
         'Accept': 'application/json',
+        'User-Agent': 'Mozilla/5.0 (compatible; Yieldr/1.0; +https://app.yieldr.org)',
+        'Origin': 'https://app.yieldr.org',
+        'Referer': 'https://app.yieldr.org/'
       }
     });
 
     if (!response.ok) {
+      console.error('Krystal API error:', response.status, response.statusText);
       throw new Error(`Krystal API error: ${response.statusText}`);
     }
 
@@ -48,59 +55,63 @@ export async function GET(request: NextRequest) {
         return sum + (amount.quotes?.usd?.value || 0);
       }, 0) || 0;
 
-      // FIXED: Extract platform from correct location
       const platform = pos.pool?.project || pos.pool?.projectKey || 'Unknown';
 
       return {
-        platform: platform, // Now correctly extracted
-        pool: `${token0?.symbol || '?'}-${token1?.symbol || '?'}`,
-        chain: pos.chainName || 'base',
+        platform: platform,
+        pair: `${token0?.symbol || '?'}/${token1?.symbol || '?'}`,
+        token0: {
+          symbol: token0?.symbol || '',
+          amount: pos.currentAmounts?.[0]?.balance || '0',
+          value: pos.currentAmounts?.[0]?.quotes?.usd?.value || 0
+        },
+        token1: {
+          symbol: token1?.symbol || '',
+          amount: pos.currentAmounts?.[1]?.balance || '0',
+          value: pos.currentAmounts?.[1]?.quotes?.usd?.value || 0
+        },
         liquidity: liquidity,
-        token0: token0?.symbol,
-        token1: token1?.symbol,
         pnl: pos.pnl || 0,
         roi: pos.returnOnInvestment || 0,
         apr: pos.apr || 0,
-        status: pos.status || 'active',
-        positionId: pos.id,
-        minPrice: pos.minPrice,
-        maxPrice: pos.maxPrice,
-        unclaimedFees: pos.unclaimedFees || 0
+        status: pos.status || 'UNKNOWN',
+        unclaimedFees: pos.feePending?.reduce((sum: number, fee: any) => 
+          sum + (fee.quotes?.usd?.value || 0), 0) || 0,
+        protocol: platform,
+        positionId: pos.id
       };
     });
-
-    const totalLiquidity = stats.currentLiquidityValue || formattedPositions.reduce((sum: number, pos: any) => sum + pos.liquidity, 0);
-    const totalPnL = stats.pnl || formattedPositions.reduce((sum: number, pos: any) => sum + pos.pnl, 0);
-    const avgROI = stats.returnOnInvestment || 0;
-
-    console.log('Formatted LP positions:', formattedPositions.length);
 
     return NextResponse.json({
       success: true,
       data: {
-        totalPositions: stats.openPositionCount || formattedPositions.length,
+        totalPositions: positions.length,
         positions: formattedPositions,
         summary: {
-          totalLiquidity,
-          totalPnL,
-          avgROI,
-          totalFeeEarned: stats.totalFeeEarned || 0,
+          totalLiquidity: stats.currentPositionValue || 0,
+          totalPnL: stats.pnl || 0,
+          avgROI: stats.returnOnInvestment || 0,
           unclaimedFees: stats.unclaimedFees || 0,
-          apr: stats.apr || 0
+          apr: stats.apr || 0,
+          openPositions: stats.openPositionCount || 0
         }
       }
     });
-    
+
   } catch (error: any) {
     console.error('Error fetching LP positions:', error);
     return NextResponse.json(
       { 
         success: false, 
-        error: error.message,
+        error: error.message || 'Failed to fetch LP positions',
         data: {
           totalPositions: 0,
           positions: [],
-          summary: { totalLiquidity: 0, totalPnL: 0, avgROI: 0 }
+          summary: {
+            totalLiquidity: 0,
+            totalPnL: 0,
+            avgROI: 0
+          }
         }
       },
       { status: 500 }
