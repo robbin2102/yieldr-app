@@ -1146,6 +1146,7 @@ loadDashboard();
         let totalPnL = 0;
         let totalAUM = 0;
         let refreshedCount = 0;
+        let winningPositions = 0;  // ← ADD: Track winning positions
 
         // Fetch fresh data for each wallet
         for (const wallet of allWallets) {
@@ -1195,6 +1196,14 @@ loadDashboard();
             totalPnL += walletPnL;
             totalAUM += walletAUM;
 
+            // ← ADD: Count winning positions
+            lpPositions.forEach(pos => {
+                if ((pos.pnl || 0) > 0) winningPositions++;
+            });
+            avantisPositions.forEach(pos => {
+                if ((pos.pnl || 0) > 0) winningPositions++;
+            });
+
             // Save fresh positions to MongoDB (this will replace old positions for this wallet)
             await fetch('/api/positions', {
                 method: 'POST',
@@ -1214,6 +1223,11 @@ loadDashboard();
             refreshedCount += lpPositions.length + avantisPositions.length;
         }
 
+        // ← ADD: Calculate win rate
+        const winRate = refreshedCount > 0 ? (winningPositions / refreshedCount * 100) : 0;
+        
+        console.log(`📊 Refresh metrics: ${winningPositions}/${refreshedCount} winning = ${winRate.toFixed(1)}% win rate`);
+
         // Update manager metrics
         await fetch('/api/managers/profile', {
             method: 'PATCH',
@@ -1225,6 +1239,7 @@ loadDashboard();
                     totalAUM: totalAUM,
                     roi30d: totalAUM > 0 ? (totalPnL / totalAUM * 100) : 0,
                     totalTrades: refreshedCount,
+                    winRate: winRate,  // ← ADD: Save win rate
                     lastUpdated: new Date()
                 }
             })
