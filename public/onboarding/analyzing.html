@@ -441,6 +441,11 @@
                 totalAUM = lpAUM + avantisAUM;
                 
                 totalROI = totalAUM > 0 ? (totalPnL / totalAUM * 100) : 0;
+
+                // Calculate win rate
+                const allPositions = [...lpPositions, ...avantisPositions];
+                const winningCount = allPositions.filter(pos => (pos.pnl || 0) > 0).length;
+                const winRate = allPositions.length > 0 ? (winningCount / allPositions.length * 100) : 0;
                 
                 const roiSign = totalROI >= 0 ? '+' : '';
                 completeStep(3, `${roiSign}${totalROI.toFixed(2)}% ROI`);
@@ -489,6 +494,7 @@
                     totalPnL,
                     totalAUM,
                     totalROI,
+                    winRate,
                     totalPositions: lpPositions.length + avantisPositions.length,
                     platforms: getPlatforms()
                 }));

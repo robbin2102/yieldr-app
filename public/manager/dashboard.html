@@ -1314,30 +1314,29 @@ function displayPositions() {
     }).join('');
 }
 
-        function updateAggregateMetrics() {
-            // Calculate total metrics across all wallets
-            const totalPnL = positions.reduce((sum, pos) => sum + (pos.pnl || 0), 0);
-            const totalAUM = positions.reduce((sum, pos) => {
-                return sum + (pos.liquidity || pos.margin || 0);
-            }, 0);
-            const totalROI = totalAUM > 0 ? (totalPnL / totalAUM * 100) : 0;
+function updateAggregateMetrics() {
+    // Calculate total metrics across all wallets
+    const totalPnL = positions.reduce((sum, pos) => sum + (pos.pnl || 0), 0);
+    const totalAUM = positions.reduce((sum, pos) => {
+        return sum + (pos.liquidity || pos.margin || 0);
+    }, 0);
+    const totalROI = totalAUM > 0 ? (totalPnL / totalAUM * 100) : 0;
 
-            // Calculate win rate (only for perp positions)
-            const perpPositions = positions.filter(p => p.type === 'PERP');
-            const winningPositions = perpPositions.filter(p => p.pnl > 0).length;
-            const winRate = perpPositions.length > 0 ? (winningPositions / perpPositions.length * 100) : 0;
+    // Calculate win rate for ALL positions (LP + PERP)
+    const winningPositions = positions.filter(p => (p.pnl || 0) > 0).length;
+    const winRate = positions.length > 0 ? (winningPositions / positions.length * 100) : 0;
 
-            document.getElementById('pnlMetric').textContent = formatCurrency(totalPnL);
-            document.getElementById('pnlMetric').className = 'metric-value ' + (totalPnL >= 0 ? 'positive' : 'negative');
-            
-            document.getElementById('aumMetric').textContent = formatCurrency(totalAUM);
-            
-            document.getElementById('roiMetric').textContent = formatPercent(totalROI);
-            document.getElementById('roiMetric').className = 'metric-value ' + (totalROI >= 0 ? 'positive' : 'negative');
-            
-            document.getElementById('positionsMetric').textContent = positions.length;
-            document.getElementById('winRateMetric').textContent = winRate.toFixed(1) + '%';
-        }
+    document.getElementById('pnlMetric').textContent = formatCurrency(totalPnL);
+    document.getElementById('pnlMetric').className = 'metric-value ' + (totalPnL >= 0 ? 'positive' : 'negative');
+    
+    document.getElementById('aumMetric').textContent = formatCurrency(totalAUM);
+    
+    document.getElementById('roiMetric').textContent = formatPercent(totalROI);
+    document.getElementById('roiMetric').className = 'metric-value ' + (totalROI >= 0 ? 'positive' : 'negative');
+    
+    document.getElementById('positionsMetric').textContent = positions.length;
+    document.getElementById('winRateMetric').textContent = winRate.toFixed(1) + '%';
+}
 
         function loadNotes() {
         const fields = ['marketOutlook', 'investmentThesis', 'positionStrategy'];
@@ -1574,6 +1573,7 @@ function displayPositions() {
         let totalPnL = 0;
         let totalAUM = 0;
         let totalPositions = 0;
+        let winningPositions = 0;  // ← ADD: Track winning positions
 
         // Fetch positions for ALL wallets and sum up
         for (const wallet of updatedWallets) {
@@ -1589,8 +1589,14 @@ function displayPositions() {
                     console.log(`Found ${lpPositions.length} LP + ${perpPositions.length} perp for ${wallet}`);
                     
                     // Sum PnL
-                    lpPositions.forEach(pos => totalPnL += (pos.pnl || 0));
-                    perpPositions.forEach(pos => totalPnL += (pos.pnl || 0));
+                    lpPositions.forEach(pos => {
+                        totalPnL += (pos.pnl || 0);
+                        if ((pos.pnl || 0) > 0) winningPositions++;  // ← ADD: Count winners
+                    });
+                    perpPositions.forEach(pos => {
+                        totalPnL += (pos.pnl || 0);
+                        if ((pos.pnl || 0) > 0) winningPositions++;  // ← ADD: Count winners
+                    });
                     
                     // Sum AUM
                     lpPositions.forEach(pos => totalAUM += (pos.liquidity || 0));
@@ -1606,12 +1612,15 @@ function displayPositions() {
         }
 
         const totalROI = totalAUM > 0 ? (totalPnL / totalAUM * 100) : 0;
+        const winRate = totalPositions > 0 ? (winningPositions / totalPositions * 100) : 0;  // ← ADD: Calculate win rate
 
         console.log('📊 Aggregate metrics calculated:', { 
             totalPnL, 
             totalAUM, 
             totalROI: totalROI.toFixed(2) + '%', 
-            totalPositions 
+            totalPositions,
+            winningPositions,  // ← ADD: Log winning count
+            winRate: winRate.toFixed(1) + '%'  // ← ADD: Log win rate
         });
 
         // Update manager metrics
@@ -1625,6 +1634,7 @@ function displayPositions() {
                     totalAUM: totalAUM,
                     roi30d: totalROI,
                     totalTrades: totalPositions,
+                    winRate: winRate,  // ← ADD: Save win rate
                     lastUpdated: new Date().toISOString()
                 }
             })
