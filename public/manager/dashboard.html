@@ -1177,7 +1177,7 @@ loadDashboard();
                     }
                 };
             }
-            
+
             // Fetch Avantis positions from API
             const avantisResponse = await fetch(`/api/avantis-positions?address=${wallet}`);
             const avantisData = await avantisResponse.json();
@@ -1485,33 +1485,57 @@ loadDashboard();
             console.warn('Failed to fetch LP positions from Krystal:', lpResponse.status);
         }
 
-        // Step 2: Fetch Avantis positions (unchanged - goes through Railway)
-        document.getElementById('verifyStatus').textContent = 'Scanning wallet for perpetual positions...';
+               // Step 2: Fetch Avantis positions (unchanged - goes through Railway)
+               document.getElementById('verifyStatus').textContent = 'Scanning wallet for perpetual positions...';
+        
+        console.log('🔵 Step 2: Fetching Avantis positions...');
         const avantisResponse = await fetch(`/api/avantis-positions?address=${walletAddress}`);
         const avantisData = await avantisResponse.json();
+        console.log('✅ Avantis response:', avantisData);
 
         // Step 3: Save positions to MongoDB
         document.getElementById('verifyStatus').textContent = 'Saving positions to database...';
-        await fetch('/api/positions', {
+        
+        console.log('🔵 Step 3: Preparing to save positions...');
+        console.log('LP data:', lpData);
+        console.log('Avantis data:', avantisData);
+        
+        // Create payload
+        const positionsPayload = {
+            walletAddress,
+            lpPositions: lpData.data?.positions || [],
+            avantisPositions: avantisData.data?.positions || [],
+            metrics: {
+                totalPnL: (lpData.data?.summary?.totalPnL || 0) + (avantisData.data?.summary?.totalPnL || 0),
+                totalAUM: (lpData.data?.summary?.totalLiquidity || 0) + (avantisData.data?.summary?.totalMargin || 0),
+                totalROI: 0
+            }
+        };
+        
+        console.log('📦 Positions payload:', positionsPayload);
+        
+        const savePositionsResponse = await fetch('/api/positions', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                walletAddress,
-                lpPositions: lpData.data?.positions || [],
-                avantisPositions: avantisData.data?.positions || [],
-                metrics: {
-                    totalPnL: (lpData.data?.summary?.totalPnL || 0) + (avantisData.data?.summary?.totalPnL || 0),
-                    totalAUM: (lpData.data?.summary?.totalLiquidity || 0) + (avantisData.data?.summary?.totalMargin || 0),
-                    totalROI: 0
-                }
-            })
+            body: JSON.stringify(positionsPayload)
         });
+        
+        const savePositionsData = await savePositionsResponse.json();
+        console.log('✅ Save positions response:', savePositionsData);
+        
+        if (!savePositionsData.success) {
+            console.error('❌ Failed to save positions:', savePositionsData);
+            throw new Error('Failed to save positions to database');
+        }
 
         // Step 4: Update manager profile with new wallet
         document.getElementById('verifyStatus').textContent = 'Updating profile...';
+        
+        console.log('🔵 Step 4: Updating manager profile...');
         const updatedWallets = [...existingWallets, walletAddress.toLowerCase()];
+        console.log('Updated wallets list:', updatedWallets);
 
-        await fetch('/api/managers/profile', {
+        const updateProfileResponse = await fetch('/api/managers/profile', {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -1519,7 +1543,17 @@ loadDashboard();
                 wallets: updatedWallets
             })
         });
+        
+        const updateProfileData = await updateProfileResponse.json();
+        console.log('✅ Update profile response:', updateProfileData);
+        
+        if (!updateProfileData.success) {
+            console.error('❌ Failed to update profile:', updateProfileData);
+            throw new Error('Failed to update manager profile');
+        }
 
+        console.log('🎉 All steps completed successfully!');
+        
         clearInterval(timerInterval);
         closeAddWalletModal();
         
@@ -1530,8 +1564,9 @@ loadDashboard();
         location.reload();
 
     } catch (error) {
-        console.error('Error adding wallet:', error);
-        alert('❌ Failed to add wallet. Please try again.');
+        console.error('❌ Error in addAndVerifyWallet:', error);
+        console.error('Error stack:', error.stack);
+        alert('❌ Failed to add wallet: ' + error.message);
         closeAddWalletModal();
     }
 }
