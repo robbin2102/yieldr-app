@@ -1,54 +1,25 @@
 'use client';
 
-import { RainbowKitProvider, getDefaultConfig, connectorsForWallets } from '@rainbow-me/rainbowkit';
+import '@rainbow-me/rainbowkit/styles.css';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { WagmiProvider } from 'wagmi';
-import { base } from 'wagmi/chains';
-import { QueryClientProvider, QueryClient } from '@tanstack/react-query';
-import {
-  rainbowWallet,
-  coinbaseWallet,
-  metaMaskWallet,
-  walletConnectWallet,
-  trustWallet,
-  phantomWallet,
-} from '@rainbow-me/rainbowkit/wallets';
-
-const connectors = connectorsForWallets(
-  [
-    {
-      groupName: 'Installed',
-      wallets: [
-        phantomWallet,
-        coinbaseWallet,
-        metaMaskWallet,
-        trustWallet,
-      ],
-    },
-    {
-      groupName: 'Popular',
-      wallets: [
-        rainbowWallet,
-        walletConnectWallet,
-      ],
-    },
-  ],
-  {
-    appName: 'Yieldr',
-    projectId: process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID || 'YOUR_PROJECT_ID',
-  }
-);
-
-const config = getDefaultConfig({
-  appName: 'Yieldr',
-  projectId: process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID || 'YOUR_PROJECT_ID',
-  chains: [base],
-  ssr: true,
-  connectors,
-});
-
-const queryClient = new QueryClient();
+import { RainbowKitProvider } from '@rainbow-me/rainbowkit';
+import { config } from '@/lib/wagmi';
+import { useState, useEffect } from 'react';
 
 export function Providers({ children }: { children: React.ReactNode }) {
+  const [queryClient] = useState(() => new QueryClient());
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  // Don't render anything until mounted to avoid SSR issues
+  if (!mounted) {
+    return <>{children}</>;
+  }
+
   return (
     <WagmiProvider config={config}>
       <QueryClientProvider client={queryClient}>

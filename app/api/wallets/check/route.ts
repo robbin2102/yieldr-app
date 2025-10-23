@@ -32,10 +32,10 @@ export async function POST(request: NextRequest) {
         success: false,
         inUse: true,
         message: 'This wallet is already connected to another account',
-        owner: {
+        owner: owner ? {
           username: owner.username,
           walletAddress: owner.walletAddress
-        }
+        } : null
       });
     }
 
