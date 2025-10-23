@@ -1151,9 +1151,32 @@ loadDashboard();
         for (const wallet of allWallets) {
             console.log('Refreshing wallet:', wallet);
 
-            // Fetch LP positions from API
-            const lpResponse = await fetch(`/api/lp-positions?address=${wallet}`);
-            const lpData = await lpResponse.json();
+            // Fetch LP positions DIRECTLY from Krystal API
+            const normalizedWallet = wallet.toLowerCase();
+            const krystalUrl = `https://api.krystal.app/all/v1/lp/userPositions?addresses=${normalizedWallet}&chainIds=8453`;
+            const lpResponse = await fetch(krystalUrl, { method: 'GET', headers: { 'Accept': 'application/json' } });
+            
+            let lpData = { success: false, data: { positions: [], summary: { totalPnL: 0, totalLiquidity: 0 } } };
+            if (lpResponse.ok) {
+                const krystalData = await lpResponse.json();
+                const krystalPositions = (krystalData.positions || []).map(pos => ({
+                    platform: pos.pool?.project || 'Unknown',
+                    pair: `${pos.currentAmounts?.[0]?.token?.symbol}/${pos.currentAmounts?.[1]?.token?.symbol}`,
+                    liquidity: pos.currentPositionValue || 0,
+                    pnl: pos.pnl || 0,
+                    roi: pos.returnOnInvestment || 0
+                }));
+                lpData = {
+                    success: true,
+                    data: {
+                        positions: krystalPositions,
+                        summary: {
+                            totalPnL: krystalData.statsByChain?.['8453']?.pnl || 0,
+                            totalLiquidity: krystalData.statsByChain?.['8453']?.currentPositionValue || 0
+                        }
+                    }
+                };
+            }
             
             // Fetch Avantis positions from API
             const avantisResponse = await fetch(`/api/avantis-positions?address=${wallet}`);
@@ -1383,12 +1406,86 @@ loadDashboard();
             if (timeLeft <= 0) clearInterval(timerInterval);
         }, 1000);
 
-        // Step 1: Fetch LP positions
+        // Step 1: Fetch LP positions DIRECTLY from Krystal API
         document.getElementById('verifyStatus').textContent = 'Scanning wallet for LP positions...';
-        const lpResponse = await fetch(`/api/lp-positions?address=${walletAddress}`);
-        const lpData = await lpResponse.json();
+        
+        const normalizedAddress = walletAddress.toLowerCase();
+        const krystalUrl = `https://api.krystal.app/all/v1/lp/userPositions?addresses=${normalizedAddress}&chainIds=8453`;
+        
+        console.log('Fetching LP positions from Krystal:', krystalUrl);
+        
+        const lpResponse = await fetch(krystalUrl, {
+            method: 'GET',
+            headers: {
+                'Accept': 'application/json'
+            }
+        });
 
-        // Step 2: Fetch Avantis positions
+        // Parse LP data
+        let lpData = { 
+            success: false, 
+            data: { 
+                positions: [], 
+                summary: { totalPnL: 0, totalLiquidity: 0, totalROI: 0 } 
+            } 
+        };
+
+        if (lpResponse.ok) {
+            const krystalData = await lpResponse.json();
+            console.log('Krystal API response:', krystalData);
+
+            const positions = krystalData.positions || [];
+            const baseStats = krystalData.statsByChain?.['8453'] || krystalData.statsByChain?.all || {};
+
+            // Format positions to match expected structure
+            const formattedPositions = positions.map(pos => {
+                const token0 = pos.currentAmounts?.[0]?.token;
+                const token1 = pos.currentAmounts?.[1]?.token;
+                
+                return {
+                    platform: pos.pool?.project || 'Unknown',
+                    pair: `${token0?.symbol || '?'}/${token1?.symbol || '?'}`,
+                    token0: {
+                        symbol: token0?.symbol || '',
+                        amount: pos.currentAmounts?.[0]?.balance || '0',
+                        value: pos.currentAmounts?.[0]?.quotes?.usd?.value || 0
+                    },
+                    token1: {
+                        symbol: token1?.symbol || '',
+                        amount: pos.currentAmounts?.[1]?.balance || '0',
+                        value: pos.currentAmounts?.[1]?.quotes?.usd?.value || 0
+                    },
+                    liquidity: pos.currentPositionValue || 0,
+                    pnl: pos.pnl || 0,
+                    roi: pos.returnOnInvestment || 0,
+                    apr: pos.apr || 0,
+                    status: pos.status || 'UNKNOWN',
+                    unclaimedFees: (pos.feePending || []).reduce((sum, fee) => 
+                        sum + (fee.quotes?.usd?.value || 0), 0),
+                    positionId: pos.id
+                };
+            });
+
+            lpData = {
+                success: true,
+                data: {
+                    positions: formattedPositions,
+                    summary: {
+                        totalPnL: baseStats.pnl || 0,
+                        totalLiquidity: baseStats.currentPositionValue || 0,
+                        totalROI: baseStats.returnOnInvestment || 0,
+                        unclaimedFees: baseStats.unclaimedFees || 0,
+                        apr: baseStats.apr || 0
+                    }
+                }
+            };
+
+            console.log('Formatted LP data:', lpData);
+        } else {
+            console.warn('Failed to fetch LP positions from Krystal:', lpResponse.status);
+        }
+
+        // Step 2: Fetch Avantis positions (unchanged - goes through Railway)
         document.getElementById('verifyStatus').textContent = 'Scanning wallet for perpetual positions...';
         const avantisResponse = await fetch(`/api/avantis-positions?address=${walletAddress}`);
         const avantisData = await avantisResponse.json();
@@ -1427,14 +1524,14 @@ loadDashboard();
         closeAddWalletModal();
         
         const totalPositions = (lpData.data?.positions?.length || 0) + (avantisData.data?.positions?.length || 0);
-        alert(`Wallet added successfully! Found ${totalPositions} position${totalPositions !== 1 ? 's' : ''}.`);
+        alert(`✅ Wallet added successfully! Found ${totalPositions} position${totalPositions !== 1 ? 's' : ''}.`);
         
         // Reload dashboard
         location.reload();
 
     } catch (error) {
         console.error('Error adding wallet:', error);
-        alert('Failed to add wallet. Please try again.');
+        alert('❌ Failed to add wallet. Please try again.');
         closeAddWalletModal();
     }
 }

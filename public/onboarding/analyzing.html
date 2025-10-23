@@ -376,8 +376,24 @@
                 activateStep(1, "Scanning DeFi protocols for LP positions...");
                 
                 try {
-                    const lpResponse = await fetch(`/api/lp-positions?address=${walletAddress}`);
-                    const lpData = await lpResponse.json();
+                    // Fetch LP positions DIRECTLY from Krystal API
+                    const normalizedAddress = walletAddress.toLowerCase();
+                    const krystalUrl = `https://api.krystal.app/all/v1/lp/userPositions?addresses=${normalizedAddress}&chainIds=8453`;
+                    console.log('Fetching LP positions from Krystal:', krystalUrl);
+                    
+                    const lpResponse = await fetch(krystalUrl, { method: 'GET', headers: { 'Accept': 'application/json' } });
+                    
+                    let lpData = { success: false, data: null };
+                    if (lpResponse.ok) {
+                        const krystalData = await lpResponse.json();
+                        const positions = (krystalData.positions || []).map(pos => ({
+                            platform: pos.pool?.project || 'Unknown',
+                            pair: `${pos.currentAmounts?.[0]?.token?.symbol}/${pos.currentAmounts?.[1]?.token?.symbol}`,
+                            liquidity: pos.currentPositionValue || 0,
+                            pnl: pos.pnl || 0
+                        }));
+                        lpData = { success: true, data: { positions: positions } };
+                    }
                     
                     if (lpData.success && lpData.data) {
                         lpPositions = lpData.data.positions || [];
