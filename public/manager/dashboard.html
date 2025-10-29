@@ -1060,8 +1060,14 @@ async function loadDashboard() {
         displayFeesAndEarnings();      // NEW
         await detectUserType();         // NEW
         await loadWallets();
-        await loadPositions();
+        await loadPositions();  // Load cached data from MongoDB instantly
         loadNotes();
+
+        // Auto-refresh positions in background (don't await - runs async)
+        console.log('🔄 Starting automatic position refresh in background...');
+        refreshPositions().catch(err => {
+            console.error('Auto-refresh failed:', err);
+        });
 
     } catch (error) {
         console.error('Error loading dashboard:', error);
