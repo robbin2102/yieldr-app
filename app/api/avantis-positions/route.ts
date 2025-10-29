@@ -22,9 +22,9 @@ export async function GET(request: NextRequest) {
     console.log('Using Python service:', pythonServiceUrl);
     console.log('Using RPC:', rpcUrl.substring(0, 50) + '...');
 
-    // Add 45 second timeout (Avantis can be slow)
+    // Add 90 second timeout (Avantis can be slow with many positions)
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 45000);
+    const timeoutId = setTimeout(() => controller.abort(), 90000);
 
     try {
       const response = await fetch(`${pythonServiceUrl}/fetch-positions`, {
@@ -53,10 +53,10 @@ export async function GET(request: NextRequest) {
       clearTimeout(timeoutId);
       
       if (fetchError.name === 'AbortError') {
-        console.error('⏱️ Avantis API timeout after 45s');
+        console.error('⏱️ Avantis API timeout after 90s');
         return NextResponse.json({
           success: false,
-          error: 'Request timeout - Avantis API taking too long',
+          error: 'Request timeout - Avantis API taking too long (>90s)',
           data: {
             totalPositions: 0,
             positions: [],
