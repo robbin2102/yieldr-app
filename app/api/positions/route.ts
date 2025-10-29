@@ -87,6 +87,8 @@ export async function POST(request: NextRequest) {
     );
 
     console.log(`Saved ${allPositions.length} positions for wallet:`, walletAddress);
+    console.log(`  ├─ LP positions: ${lpPositions.length}`);
+    console.log(`  └─ Perp positions: ${avantisPositions.length}`);
 
     return NextResponse.json({
       success: true,
