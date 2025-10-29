@@ -1165,11 +1165,15 @@ loadDashboard();
             // Fetch LP positions DIRECTLY from Krystal API
             const normalizedWallet = wallet.toLowerCase();
             const krystalUrl = `https://api.krystal.app/all/v1/lp/userPositions?addresses=${normalizedWallet}&chainIds=8453`;
+            console.log(`Fetching LP positions from Krystal for ${wallet}...`);
+
             const lpResponse = await fetch(krystalUrl, { method: 'GET', headers: { 'Accept': 'application/json' } });
-            
+
             let lpData = { success: false, data: { positions: [], summary: { totalPnL: 0, totalLiquidity: 0 } } };
             if (lpResponse.ok) {
                 const krystalData = await lpResponse.json();
+                console.log(`Krystal API returned ${krystalData.positions?.length || 0} LP positions`);
+
                 const krystalPositions = (krystalData.positions || []).map(pos => {
                 const token0 = pos.currentAmounts?.[0]?.token;
                 const token1 = pos.currentAmounts?.[1]?.token;
@@ -1205,6 +1209,8 @@ loadDashboard();
                         }
                     }
                 };
+            } else {
+                console.warn(`⚠️ Krystal API failed for ${wallet}: ${lpResponse.status} ${lpResponse.statusText}`);
             }
 
             // Fetch Avantis positions from API
