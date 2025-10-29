@@ -51,6 +51,7 @@ export async function POST(request: NextRequest) {
         positionSize: pos.positionSize,
         margin: pos.margin,
         entryPrice: pos.entryPrice,
+        currentPrice: pos.currentPrice,  // ADDED: Store current price from Python service
         liquidationPrice: pos.liquidationPrice,
         pnl: pos.pnl,
         roi: pos.roi,

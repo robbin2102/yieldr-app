@@ -916,6 +916,8 @@ button.remove-wallet-btn,
                             <th>Platform</th>
                             <th>Type</th>
                             <th>Size</th>
+                            <th>Margin</th>
+                            <th>Leverage</th>
                             <th>Entry</th>
                             <th>Current</th>
                             <th>PnL</th>
@@ -924,7 +926,7 @@ button.remove-wallet-btn,
                     </thead>
                     <tbody id="positionsTableBody">
                         <tr>
-                            <td colspan="8" style="text-align: center; color: #8A8A8A;">Loading positions...</td>
+                            <td colspan="10" style="text-align: center; color: #8A8A8A;">Loading positions...</td>
                         </tr>
                     </tbody>
                 </table>
@@ -1115,7 +1117,40 @@ loadDashboard();
                     const data = await response.json();
 
                     if (data.success && data.data) {
-                        allPositions.push(...data.data.lpPositions, ...data.data.perpPositions);
+                        // Get stored positions from MongoDB
+                        const storedLPPositions = data.data.lpPositions || [];
+                        const storedPerpPositions = data.data.perpPositions || [];
+
+                        // Fetch fresh Avantis current prices
+                        const avantisResponse = await fetch(`/api/avantis-positions?address=${wallet}`);
+                        const avantisData = await avantisResponse.json();
+                        const freshAvantisPositions = avantisData.data?.positions || [];
+
+                        // Create a map of fresh prices by tradeIndex
+                        const freshPriceMap = new Map();
+                        freshAvantisPositions.forEach(pos => {
+                            freshPriceMap.set(pos.tradeIndex, {
+                                currentPrice: pos.currentPrice,
+                                pnl: pos.pnl,
+                                roi: pos.roi
+                            });
+                        });
+
+                        // Update perp positions with fresh current prices
+                        const updatedPerpPositions = storedPerpPositions.map(pos => {
+                            const fresh = freshPriceMap.get(pos.positionId);
+                            if (fresh) {
+                                return {
+                                    ...pos,
+                                    currentPrice: fresh.currentPrice,
+                                    pnl: fresh.pnl,
+                                    roi: fresh.roi
+                                };
+                            }
+                            return pos;
+                        });
+
+                        allPositions.push(...storedLPPositions, ...updatedPerpPositions);
                     }
                 }
 
@@ -1304,13 +1339,13 @@ function displayPositions() {
     const tbody = document.getElementById('positionsTableBody');
 
     if (positions.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="8" style="text-align: center; color: #8A8A8A;">No positions found</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="10" style="text-align: center; color: #8A8A8A;">No positions found</td></tr>';
         return;
     }
 
     tbody.innerHTML = positions.map(pos => {
         const isLP = pos.type === 'LP';
-        
+
         // Fix: Build asset name from token symbols (works even when pair/pool is null)
         let asset;
         if (isLP) {
@@ -1325,12 +1360,14 @@ function displayPositions() {
             // For perpetual positions, use pair field
             asset = pos.pair || 'Unknown';
         }
-        
+
         const platform = pos.platform || (isLP ? 'Uniswap V3' : 'Avantis');
         const type = isLP ? 'LP' : pos.direction;
         const size = isLP ? pos.liquidity : pos.positionSize;
+        const margin = isLP ? 'N/A' : formatCurrency(pos.margin);
+        const leverage = isLP ? 'N/A' : `${pos.leverage}x`;
         const entry = isLP ? 'N/A' : formatPrice(pos.entryPrice);
-        const current = isLP ? 'N/A' : formatPrice(pos.currentPrice || pos.entryPrice);
+        const current = isLP ? 'N/A' : formatPrice(pos.currentPrice);
 
         return `
             <tr>
@@ -1338,6 +1375,8 @@ function displayPositions() {
                 <td><span class="platform-badge">${platform}</span></td>
                 <td><span class="type-badge ${isLP ? 'lp' : type.toLowerCase()}">${type}</span></td>
                 <td>${formatCurrency(size)}</td>
+                <td>${margin}</td>
+                <td>${leverage}</td>
                 <td>${entry}</td>
                 <td>${current}</td>
                 <td style="color: ${pos.pnl >= 0 ? '#00C805' : '#FF4444'}">${formatCurrency(pos.pnl)}</td>
