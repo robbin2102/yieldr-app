@@ -62,11 +62,17 @@ async def fetch_positions(request: FetchRequest):
         unique_assets = list(set([pair_map.get(trade.trade.pair_index) for trade in trades]))
         feed_client = FeedClient(pair_fetcher=trader_client.pairs_cache.get_pairs_info)
         price_data = await feed_client.get_latest_price_updates(unique_assets)
-        
+
+        print(f"📊 Unique assets: {unique_assets[:5]}... (total: {len(unique_assets)})")
+        print(f"📊 Price data parsed count: {len(price_data.parsed)}")
+
         price_map = {}
         for i, asset in enumerate(unique_assets):
             if i < len(price_data.parsed):
                 price_map[asset] = price_data.parsed[i].converted_price
+                print(f"✅ Price for {asset}: {price_data.parsed[i].converted_price}")
+            else:
+                print(f"⚠️  No price data for {asset} (index {i} >= {len(price_data.parsed)})")
         
         positions = []
         total_margin = 0
@@ -83,7 +89,11 @@ async def fetch_positions(request: FetchRequest):
             entry_price = trade_data.open_price
             is_long = trade_data.is_long
             current_price = price_map.get(asset, entry_price)
-            
+
+            # Debug: Check if we're using fallback price
+            if asset not in price_map:
+                print(f"⚠️  Using fallback price for {asset}: entry={entry_price}")
+
             if is_long:
                 pnl = ((current_price - entry_price) / entry_price) * position_size
             else:
