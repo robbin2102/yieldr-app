@@ -59,20 +59,23 @@ async def fetch_positions(request: FetchRequest):
         for pair_index, pair_data in pairs_info.items():
             pair_map[int(pair_index)] = f"{pair_data.from_}/{pair_data.to}"
         
-        unique_assets = list(set([pair_map.get(trade.trade.pair_index) for trade in trades]))
+        # Get unique assets - use sorted list to ensure consistent ordering
+        unique_assets = sorted(list(set([pair_map.get(trade.trade.pair_index) for trade in trades])))
         feed_client = FeedClient(pair_fetcher=trader_client.pairs_cache.get_pairs_info)
         price_data = await feed_client.get_latest_price_updates(unique_assets)
 
-        print(f"📊 Unique assets: {unique_assets[:5]}... (total: {len(unique_assets)})")
-        print(f"📊 Price data parsed count: {len(price_data.parsed)}")
+        print(f"📊 Fetching prices for {len(unique_assets)} unique assets")
+        print(f"📊 Price data received: {len(price_data.parsed)} prices")
 
+        # CRITICAL FIX: Map prices correctly by matching order
+        # The feed client returns prices in the SAME ORDER as requested
         price_map = {}
         for i, asset in enumerate(unique_assets):
             if i < len(price_data.parsed):
                 price_map[asset] = price_data.parsed[i].converted_price
-                print(f"✅ Price for {asset}: {price_data.parsed[i].converted_price}")
+                print(f"✅ {asset}: ${price_data.parsed[i].converted_price:.4f}")
             else:
-                print(f"⚠️  No price data for {asset} (index {i} >= {len(price_data.parsed)})")
+                print(f"⚠️  Missing price for {asset}")
         
         positions = []
         total_margin = 0
