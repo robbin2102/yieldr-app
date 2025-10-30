@@ -1238,6 +1238,13 @@ loadDashboard();
                 if ((pos.pnl || 0) > 0) winningPositions++;
             });
 
+            // PROTECTION: Don't save if both LP and Avantis are 0 (likely a fetch error/timeout)
+            // This prevents deleting all existing positions when refresh fails
+            if (lpPositions.length === 0 && avantisPositions.length === 0) {
+                console.warn(`⚠️ Skipping save for ${wallet}: Both LP and Avantis returned 0 positions (likely error/timeout)`);
+                continue; // Skip this wallet, keep existing MongoDB data
+            }
+
             // Save fresh positions to MongoDB (this will replace old positions for this wallet)
             await fetch('/api/positions', {
                 method: 'POST',
