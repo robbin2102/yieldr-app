@@ -1479,14 +1479,17 @@ loadDashboard();
             const lpResponse = await fetch(krystalUrl, { method: 'GET', headers: { 'Accept': 'application/json' } });
 
             let lpData = { success: false, data: { positions: [], summary: { totalPnL: 0, totalLiquidity: 0 } } };
+            let lpFetchSuccess = false;
+
             if (lpResponse.ok) {
+                lpFetchSuccess = true;
                 const krystalData = await lpResponse.json();
                 console.log(`Krystal API returned ${krystalData.positions?.length || 0} LP positions`);
 
                 const krystalPositions = (krystalData.positions || []).map(pos => {
                 const token0 = pos.currentAmounts?.[0]?.token;
                 const token1 = pos.currentAmounts?.[1]?.token;
-                
+
                 return {
                     platform: pos.pool?.project || 'Unknown',
                     pair: `${token0?.symbol || '?'}/${token1?.symbol || '?'}`,
@@ -1524,6 +1527,7 @@ loadDashboard();
 
             // Fetch Avantis positions from API
             const avantisResponse = await fetch(`/api/avantis-positions?address=${wallet}`);
+            let avantisFetchSuccess = avantisResponse.ok;
             const avantisData = await avantisResponse.json();
 
             // FIXED: Access data correctly
@@ -1547,11 +1551,17 @@ loadDashboard();
                 if ((pos.pnl || 0) > 0) winningPositions++;
             });
 
-            // PROTECTION: Don't save if both LP and Avantis are 0 (likely a fetch error/timeout)
-            // This prevents deleting all existing positions when refresh fails
+            // PROTECTION: Only skip save if APIs failed AND returned 0 positions
+            // If APIs succeeded with 0 positions, that means user genuinely has no positions (closed all)
             if (lpPositions.length === 0 && avantisPositions.length === 0) {
-                console.warn(`⚠️ Skipping save for ${wallet}: Both LP and Avantis returned 0 positions (likely error/timeout)`);
-                continue; // Skip this wallet, keep existing MongoDB data
+                if (!lpFetchSuccess || !avantisFetchSuccess) {
+                    // At least one API failed - don't overwrite existing data
+                    console.warn(`⚠️ Skipping save for ${wallet}: API fetch failed (LP: ${lpFetchSuccess}, Avantis: ${avantisFetchSuccess})`);
+                    continue;
+                } else {
+                    // Both APIs succeeded with 0 positions - user closed all positions, save 0
+                    console.log(`✅ Saving 0 positions for ${wallet} (user closed all positions)`);
+                }
             }
 
             // Save fresh positions to MongoDB (this will replace old positions for this wallet)
