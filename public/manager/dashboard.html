@@ -1201,14 +1201,12 @@ button.remove-wallet-btn,
         }
 
         function disconnectWallet() {
-            if (confirm('Are you sure you want to disconnect your wallet?')) {
-                // Clear localStorage
-                localStorage.removeItem('managerUsername');
-                localStorage.removeItem('connectedWallet');
+            // Clear localStorage
+            localStorage.removeItem('managerUsername');
+            localStorage.removeItem('connectedWallet');
 
-                // Redirect to discovery page
-                window.location.href = '/';
-            }
+            // Redirect to onboarding/connect page to properly disconnect wallet
+            window.location.href = '/onboarding/connect?disconnect=true';
         }
 
         // Close dropdown when clicking outside

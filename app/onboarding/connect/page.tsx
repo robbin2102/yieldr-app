@@ -1,13 +1,32 @@
 'use client';
 
 import { ConnectButton } from '@rainbow-me/rainbowkit';
-import { useAccount } from 'wagmi';
+import { useAccount, useDisconnect } from 'wagmi';
 import WalletHandler from './WalletHandler';
 import { useEffect, useState } from 'react';
+import { useSearchParams, useRouter } from 'next/navigation';
 
 export default function ConnectWallet() {
   const { address, isConnected } = useAccount();
+  const { disconnect } = useDisconnect();
+  const searchParams = useSearchParams();
+  const router = useRouter();
   const [isChecking, setIsChecking] = useState(true);
+  const shouldDisconnect = searchParams.get('disconnect') === 'true';
+
+  // Handle disconnect if requested
+  useEffect(() => {
+    if (shouldDisconnect) {
+      if (isConnected) {
+        console.log('🚪 Disconnecting wallet...');
+        disconnect();
+      }
+      // Redirect to discovery page after disconnect
+      setTimeout(() => {
+        router.push('/');
+      }, 500);
+    }
+  }, [shouldDisconnect, isConnected, disconnect, router]);
 
   // Wait a moment for wagmi to initialize
   useEffect(() => {

@@ -313,10 +313,10 @@
     <header class="header">
         <div class="header-content">
             <div class="logo">YIELDR</div>
-            <!-- Signup Button (shown when not logged in) -->
-            <a href="/onboarding/connect" id="signupBtn" class="become-manager-btn">Signup as Asset Manager</a>
-            <!-- Wallet Address Button (shown when logged in) -->
             <div style="position: relative;">
+                <!-- Signup Button (shown when not logged in) -->
+                <a href="/onboarding/connect" id="signupBtn" class="become-manager-btn">Signup as Asset Manager</a>
+                <!-- Wallet Address Button (shown when logged in) -->
                 <button id="walletAddressBtn" class="wallet-address-btn" onclick="toggleWalletMenu()" style="display: none;">
                     <span id="walletAddressText">0x0000...0000</span>
                 </button>
@@ -475,16 +475,12 @@
         }
 
         function disconnectWallet() {
-            if (confirm('Are you sure you want to disconnect your wallet?')) {
-                // Clear localStorage
-                localStorage.removeItem('managerUsername');
-                localStorage.removeItem('connectedWallet');
+            // Clear localStorage
+            localStorage.removeItem('managerUsername');
+            localStorage.removeItem('connectedWallet');
 
-                // Reset UI
-                connectedWalletAddress = null;
-                updateWalletButton();
-                toggleWalletMenu();
-            }
+            // Redirect to onboarding/connect page to properly disconnect wallet
+            window.location.href = '/onboarding/connect?disconnect=true';
         }
 
         // Close dropdown when clicking outside
