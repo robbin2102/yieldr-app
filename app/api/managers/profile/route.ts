@@ -130,6 +130,7 @@ export async function PATCH(request: NextRequest) {
     if (data.totalEarnings !== undefined) updates.totalEarnings = data.totalEarnings;
     if (data.coInvestorsCount !== undefined) updates.coInvestorsCount = data.coInvestorsCount;
     if (data.lastFeeUpdate !== undefined) updates.lastFeeUpdate = new Date(data.lastFeeUpdate);
+    if (data.profilePicture !== undefined) updates.profilePicture = data.profilePicture;
 
     const result = await db.collection('managers').updateOne(
       { username: data.username },

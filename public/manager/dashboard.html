@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Manager Dashboard | Yieldr</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
         * {
@@ -118,6 +119,50 @@
     }
 }
 
+/* Connect Wallet Button */
+.connect-wallet-btn {
+    background: #00C805;
+    color: #000000;
+    border: none;
+    padding: 10px 24px;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+    white-space: nowrap;
+}
+
+.connect-wallet-btn:hover {
+    background: #00E006;
+    transform: translateY(-1px);
+}
+
+.wallet-address-btn {
+    background: #1A1A1A;
+    color: #FFFFFF;
+    border: 1px solid #2A2A2A;
+    padding: 8px 16px;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+    font-family: monospace;
+}
+
+.wallet-address-btn:hover {
+    border-color: #00C805;
+    background: #0A0A0A;
+}
+
+@media (max-width: 768px) {
+    .connect-wallet-btn, .wallet-address-btn {
+        font-size: 12px;
+        padding: 8px 16px;
+    }
+}
+
     .profile-section {
         display: flex;
         align-items: center;
@@ -131,6 +176,30 @@
             height: 80px;
             border-radius: 50%;
             border: 3px solid #00C805;
+            cursor: pointer;
+            transition: all 0.3s;
+            position: relative;
+        }
+
+        .profile-pic:hover {
+            border-color: #00E006;
+            transform: scale(1.05);
+            box-shadow: 0 0 20px rgba(0, 200, 5, 0.5);
+        }
+
+        .profile-pic:hover::after {
+            content: 'Change';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0, 0, 0, 0.8);
+            color: #00C805;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 600;
+            white-space: nowrap;
         }
 
         .profile-info h1 {
@@ -790,6 +859,14 @@ button.remove-wallet-btn,
                 <div class="nav-links">
                     <a href="/" class="nav-link">Discover</a>
                     <a href="/manager/dashboard.html" class="nav-link active" id="dashboardLink">Dashboard</a>
+                    <!-- Connect Wallet Button (shown when not logged in) -->
+                    <button id="connectWalletBtn" class="connect-wallet-btn" onclick="redirectToConnect()" style="display: none;">
+                        Connect Wallet
+                    </button>
+                    <!-- Wallet Address Button (shown when logged in) -->
+                    <button id="walletAddressBtn" class="wallet-address-btn" onclick="showWalletMenu()" style="display: none;">
+                        <span id="walletAddressText">0x0000...0000</span>
+                    </button>
                 </div>
             </div>
         </nav>
@@ -799,7 +876,7 @@ button.remove-wallet-btn,
             <!-- Header -->
         <div class="header">
             <div class="profile-section">
-                <img id="profilePic" class="profile-pic" src="" alt="Profile">
+                <img id="profilePic" class="profile-pic" src="" alt="Profile" onclick="openProfilePicModal()" title="Click to change profile picture">
                 <div class="profile-info">
                     <h1 id="username">Loading...</h1>
                     <div class="profile-tags" id="tradingTypes"></div>
@@ -902,7 +979,7 @@ button.remove-wallet-btn,
             <div class="section-header">
                 <h2 class="section-title">Live Positions</h2>
                 <button class="refresh-btn" onclick="refreshPositions()" id="refreshBtn">
-                    <svg class="refresh-icon" id="refreshIcon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <svg class="refresh-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
                     </svg>
                     Refresh
@@ -1019,11 +1096,158 @@ button.remove-wallet-btn,
         </div>
     </div>
 
+    <!-- Change Profile Picture Modal -->
+    <div class="modal" id="changeProfilePicModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 class="modal-title">Change Profile Picture</h3>
+                <button class="close-btn" onclick="closeProfilePicModal()">×</button>
+            </div>
+            <div class="form-group">
+                <label style="color: #8A8A8A; font-size: 14px; margin-bottom: 8px; display: block;">Enter Image URL</label>
+                <input type="text" id="profilePicUrlInput" placeholder="https://example.com/image.jpg" style="width: 100%; padding: 12px; background: #0A0A0A; border: 1px solid #1A1A1A; border-radius: 8px; color: #FFFFFF; font-size: 14px;">
+                <div style="margin-top: 12px;">
+                    <img id="profilePicPreview" src="" alt="Preview" style="max-width: 150px; max-height: 150px; border-radius: 8px; display: none; border: 2px solid #00C805;">
+                </div>
+            </div>
+            <div style="display: flex; gap: 12px; margin-top: 16px;">
+                <button class="submit-btn" onclick="previewProfilePic()" style="flex: 1; background: #1A1A1A; color: #FFFFFF;">Preview</button>
+                <button class="submit-btn" onclick="saveProfilePic()" style="flex: 1;">Save</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         let managerData = null;
         let positions = [];
         let currentNotesField = null;
         let walletCount = 0;
+
+        // Wallet connection functions
+        function redirectToConnect() {
+            window.location.href = '/onboarding/connect';
+        }
+
+        function showWalletMenu() {
+            // For now, just show the full address in an alert
+            // Could be enhanced with a dropdown menu later
+            if (managerData && managerData.walletAddress) {
+                alert(`Wallet: ${managerData.walletAddress}\n\nClick OK to continue.`);
+            }
+        }
+
+        function updateWalletButton() {
+            const connectBtn = document.getElementById('connectWalletBtn');
+            const addressBtn = document.getElementById('walletAddressBtn');
+            const addressText = document.getElementById('walletAddressText');
+
+            const urlParams = new URLSearchParams(window.location.search);
+            const username = urlParams.get('username') || localStorage.getItem('managerUsername');
+
+            if (username && managerData && managerData.walletAddress) {
+                // User is logged in - show wallet address
+                connectBtn.style.display = 'none';
+                addressBtn.style.display = 'block';
+                const addr = managerData.walletAddress;
+                addressText.textContent = `${addr.slice(0, 6)}...${addr.slice(-4)}`;
+            } else {
+                // User is not logged in - show connect button
+                connectBtn.style.display = 'block';
+                addressBtn.style.display = 'none';
+            }
+        }
+
+        // Profile picture modal functions
+        function openProfilePicModal() {
+            // Only allow managers to change their profile pic
+            const urlParams = new URLSearchParams(window.location.search);
+            const username = urlParams.get('username') || localStorage.getItem('managerUsername');
+
+            if (!username || !managerData) {
+                alert('Please log in to change your profile picture');
+                return;
+            }
+
+            document.getElementById('changeProfilePicModal').style.display = 'flex';
+            document.getElementById('profilePicUrlInput').value = '';
+            document.getElementById('profilePicPreview').style.display = 'none';
+        }
+
+        function closeProfilePicModal() {
+            document.getElementById('changeProfilePicModal').style.display = 'none';
+        }
+
+        function previewProfilePic() {
+            const url = document.getElementById('profilePicUrlInput').value.trim();
+            const preview = document.getElementById('profilePicPreview');
+
+            if (!url) {
+                alert('Please enter an image URL');
+                return;
+            }
+
+            // Validate URL format
+            try {
+                new URL(url);
+            } catch (e) {
+                alert('Please enter a valid URL');
+                return;
+            }
+
+            // Show preview
+            preview.src = url;
+            preview.style.display = 'block';
+
+            // Check if image loads successfully
+            preview.onerror = () => {
+                alert('Failed to load image. Please check the URL and try again.');
+                preview.style.display = 'none';
+            };
+        }
+
+        async function saveProfilePic() {
+            const url = document.getElementById('profilePicUrlInput').value.trim();
+
+            if (!url) {
+                alert('Please enter an image URL');
+                return;
+            }
+
+            // Validate URL format
+            try {
+                new URL(url);
+            } catch (e) {
+                alert('Please enter a valid URL');
+                return;
+            }
+
+            try {
+                // Update manager profile
+                const response = await fetch('/api/managers/profile', {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        username: managerData.username,
+                        profilePicture: url
+                    })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    // Update local data and UI
+                    managerData.profilePicture = url;
+                    document.getElementById('profilePic').src = url;
+                    closeProfilePicModal();
+                    alert('Profile picture updated successfully!');
+                } else {
+                    alert('Failed to update profile picture: ' + data.error);
+                }
+            } catch (error) {
+                console.error('Error updating profile picture:', error);
+                alert('Failed to update profile picture. Please try again.');
+            }
+        }
 
         // Load dashboard data
 async function loadDashboard() {
@@ -1057,6 +1281,7 @@ async function loadDashboard() {
 
         // Display everything in order
         displayManagerInfo();
+        updateWalletButton();          // Update nav bar wallet button
         displayFeesAndEarnings();      // NEW
         await detectUserType();         // NEW
         await loadWallets();
@@ -1140,10 +1365,9 @@ loadDashboard();
 
         async function refreshPositions() {
     const refreshBtn = document.getElementById('refreshBtn');
-    const refreshIcon = document.getElementById('refreshIcon');
-    
+
+    // Disable button and show loading state
     refreshBtn.disabled = true;
-    refreshIcon.classList.add('spinning');
     refreshBtn.innerHTML = `
         <svg class="refresh-icon spinning" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
@@ -1457,7 +1681,7 @@ function updateAggregateMetrics() {
     try {
         // Step 0: Check if wallet is used by another user
         document.getElementById('verifyStatus').textContent = 'Checking wallet availability...';
-        
+
         const walletCheckResponse = await fetch('/api/wallets/check', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
