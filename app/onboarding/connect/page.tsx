@@ -1,66 +1,26 @@
 'use client';
 
 import { ConnectButton } from '@rainbow-me/rainbowkit';
-import { useAccount, useDisconnect } from 'wagmi';
+import { useAccount } from 'wagmi';
 import WalletHandler from './WalletHandler';
 import { useEffect, useState } from 'react';
-import { useSearchParams, useRouter } from 'next/navigation';
 
 export default function ConnectWallet() {
   const { address, isConnected } = useAccount();
-  const { disconnect } = useDisconnect();
-  const searchParams = useSearchParams();
-  const router = useRouter();
   const [isChecking, setIsChecking] = useState(true);
-  const shouldDisconnect = searchParams.get('disconnect') === 'true';
 
-  // Handle disconnect if requested
+  // Wait a moment for wagmi to initialize
   useEffect(() => {
-    if (shouldDisconnect) {
-      console.log('🚪 Disconnecting wallet...');
-      // Call disconnect regardless of connection state
-      disconnect();
-      // Redirect to discovery page after disconnect
-      const timer = setTimeout(() => {
-        router.push('/');
-      }, 1000);
-      return () => clearTimeout(timer);
-    }
-  }, [shouldDisconnect, disconnect, router]);
-
-  // Wait a moment for wagmi to initialize (skip if disconnecting)
-  useEffect(() => {
-    if (!shouldDisconnect) {
-      const timer = setTimeout(() => {
-        setIsChecking(false);
-      }, 500);
-      return () => clearTimeout(timer);
-    }
-  }, [shouldDisconnect]);
-
-  // If disconnecting, show disconnecting UI
-  if (shouldDisconnect) {
-    return (
-      <div className="min-h-screen bg-black flex items-center justify-center p-4">
-        <div className="max-w-md w-full">
-          <div className="text-center mb-8">
-            <div className="text-2xl font-extrabold tracking-[0.15em] text-white mb-6">YIELDR</div>
-          </div>
-          <div className="bg-[#0A0A0A] border border-[#1A1A1A] rounded-xl p-8">
-            <div className="text-center py-8">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#00C805] mx-auto"></div>
-              <p className="text-sm text-gray-400 mt-4">Disconnecting wallet...</p>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
+    const timer = setTimeout(() => {
+      setIsChecking(false);
+    }, 500);
+    return () => clearTimeout(timer);
+  }, []);
 
   return (
     <>
-      {/* Only handle wallet connection if connected and NOT disconnecting */}
-      {isConnected && !shouldDisconnect && <WalletHandler />}
+      {/* Only handle wallet connection if connected */}
+      {isConnected && <WalletHandler />}
       
       <div className="min-h-screen bg-black flex items-center justify-center p-4">
         <div className="max-w-md w-full">

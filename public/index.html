@@ -479,8 +479,8 @@
             localStorage.removeItem('managerUsername');
             localStorage.removeItem('connectedWallet');
 
-            // Redirect to onboarding/connect page to properly disconnect wallet
-            window.location.href = '/onboarding/connect?disconnect=true';
+            // Reload the page to reset UI
+            window.location.reload();
         }
 
         // Close dropdown when clicking outside
