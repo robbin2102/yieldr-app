@@ -149,11 +149,55 @@
     cursor: pointer;
     transition: all 0.2s;
     font-family: monospace;
+    position: relative;
 }
 
 .wallet-address-btn:hover {
     border-color: #00C805;
     background: #0A0A0A;
+}
+
+/* Wallet Dropdown Menu */
+.wallet-dropdown {
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 0;
+    background: #0A0A0A;
+    border: 1px solid #1A1A1A;
+    border-radius: 8px;
+    padding: 8px;
+    min-width: 200px;
+    display: none;
+    z-index: 1000;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+}
+
+.wallet-dropdown.show {
+    display: block;
+}
+
+.wallet-dropdown-item {
+    padding: 10px 12px;
+    color: #FFFFFF;
+    cursor: pointer;
+    border-radius: 6px;
+    transition: all 0.2s;
+    font-size: 14px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.wallet-dropdown-item:hover {
+    background: #1A1A1A;
+}
+
+.wallet-dropdown-item.danger {
+    color: #FF4444;
+}
+
+.wallet-dropdown-item.danger:hover {
+    background: rgba(255, 68, 68, 0.1);
 }
 
 @media (max-width: 768px) {
@@ -859,14 +903,25 @@ button.remove-wallet-btn,
                 <div class="nav-links">
                     <a href="/" class="nav-link">Discover</a>
                     <a href="/manager/dashboard.html" class="nav-link active" id="dashboardLink">Dashboard</a>
-                    <!-- Connect Wallet Button (shown when not logged in) -->
+                    <!-- Login Button (shown when not logged in) -->
                     <button id="connectWalletBtn" class="connect-wallet-btn" onclick="redirectToConnect()" style="display: none;">
-                        Connect Wallet
+                        Login
                     </button>
                     <!-- Wallet Address Button (shown when logged in) -->
-                    <button id="walletAddressBtn" class="wallet-address-btn" onclick="showWalletMenu()" style="display: none;">
-                        <span id="walletAddressText">0x0000...0000</span>
-                    </button>
+                    <div style="position: relative;">
+                        <button id="walletAddressBtn" class="wallet-address-btn" onclick="toggleWalletMenu()" style="display: none;">
+                            <span id="walletAddressText">0x0000...0000</span>
+                        </button>
+                        <!-- Wallet Dropdown -->
+                        <div id="walletDropdown" class="wallet-dropdown">
+                            <div class="wallet-dropdown-item" onclick="copyWalletAddress()">
+                                📋 Copy Address
+                            </div>
+                            <div class="wallet-dropdown-item danger" onclick="disconnectWallet()">
+                                🚪 Disconnect
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </nav>
@@ -1128,13 +1183,43 @@ button.remove-wallet-btn,
             window.location.href = '/onboarding/connect';
         }
 
-        function showWalletMenu() {
-            // For now, just show the full address in an alert
-            // Could be enhanced with a dropdown menu later
+        function toggleWalletMenu() {
+            const dropdown = document.getElementById('walletDropdown');
+            dropdown.classList.toggle('show');
+        }
+
+        function copyWalletAddress() {
             if (managerData && managerData.walletAddress) {
-                alert(`Wallet: ${managerData.walletAddress}\n\nClick OK to continue.`);
+                navigator.clipboard.writeText(managerData.walletAddress).then(() => {
+                    alert('✅ Wallet address copied to clipboard!');
+                    toggleWalletMenu(); // Close dropdown
+                }).catch(err => {
+                    console.error('Failed to copy:', err);
+                    alert('Failed to copy address');
+                });
             }
         }
+
+        function disconnectWallet() {
+            if (confirm('Are you sure you want to disconnect your wallet?')) {
+                // Clear localStorage
+                localStorage.removeItem('managerUsername');
+                localStorage.removeItem('connectedWallet');
+
+                // Redirect to discovery page
+                window.location.href = '/';
+            }
+        }
+
+        // Close dropdown when clicking outside
+        document.addEventListener('click', function(event) {
+            const dropdown = document.getElementById('walletDropdown');
+            const walletBtn = document.getElementById('walletAddressBtn');
+
+            if (dropdown && walletBtn && !walletBtn.contains(event.target) && !dropdown.contains(event.target)) {
+                dropdown.classList.remove('show');
+            }
+        });
 
         function updateWalletButton() {
             const connectBtn = document.getElementById('connectWalletBtn');
@@ -1151,7 +1236,7 @@ button.remove-wallet-btn,
                 const addr = managerData.walletAddress;
                 addressText.textContent = `${addr.slice(0, 6)}...${addr.slice(-4)}`;
             } else {
-                // User is not logged in - show connect button
+                // User is not logged in - show Login button
                 connectBtn.style.display = 'block';
                 addressBtn.style.display = 'none';
             }

@@ -67,6 +67,69 @@
             color: #000000;
         }
 
+        /* Wallet Address Button */
+        .wallet-address-btn {
+            background: #1A1A1A;
+            color: #FFFFFF;
+            border: 1px solid #2A2A2A;
+            padding: 0.75rem 1.5rem;
+            border-radius: 6px;
+            font-size: 0.9rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-family: monospace;
+            position: relative;
+        }
+
+        .wallet-address-btn:hover {
+            border-color: #00C805;
+            background: #0A0A0A;
+        }
+
+        /* Wallet Dropdown Menu */
+        .wallet-dropdown {
+            position: absolute;
+            top: calc(100% + 8px);
+            right: 0;
+            background: #0A0A0A;
+            border: 1px solid #1A1A1A;
+            border-radius: 8px;
+            padding: 8px;
+            min-width: 200px;
+            display: none;
+            z-index: 1000;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+        }
+
+        .wallet-dropdown.show {
+            display: block;
+        }
+
+        .wallet-dropdown-item {
+            padding: 10px 12px;
+            color: #FFFFFF;
+            cursor: pointer;
+            border-radius: 6px;
+            transition: all 0.2s;
+            font-size: 14px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .wallet-dropdown-item:hover {
+            background: #1A1A1A;
+        }
+
+        .wallet-dropdown-item.danger {
+            color: #FF4444;
+        }
+
+        .wallet-dropdown-item.danger:hover {
+            background: rgba(255, 68, 68, 0.1);
+        }
+
         /* Main Content */
         .container {
             max-width: 1400px;
@@ -250,7 +313,26 @@
     <header class="header">
         <div class="header-content">
             <div class="logo">YIELDR</div>
-            <a href="/onboarding/connect" class="become-manager-btn">Signup as Asset Manager</a>
+            <!-- Signup Button (shown when not logged in) -->
+            <a href="/onboarding/connect" id="signupBtn" class="become-manager-btn">Signup as Asset Manager</a>
+            <!-- Wallet Address Button (shown when logged in) -->
+            <div style="position: relative;">
+                <button id="walletAddressBtn" class="wallet-address-btn" onclick="toggleWalletMenu()" style="display: none;">
+                    <span id="walletAddressText">0x0000...0000</span>
+                </button>
+                <!-- Wallet Dropdown -->
+                <div id="walletDropdown" class="wallet-dropdown">
+                    <div class="wallet-dropdown-item" onclick="goToDashboard()">
+                        📊 My Dashboard
+                    </div>
+                    <div class="wallet-dropdown-item" onclick="copyWalletAddress()">
+                        📋 Copy Address
+                    </div>
+                    <div class="wallet-dropdown-item danger" onclick="disconnectWallet()">
+                        🚪 Disconnect
+                    </div>
+                </div>
+            </div>
         </div>
     </header>
 
@@ -363,6 +445,97 @@
             const sign = num >= 0 ? '+' : '';
             return `${sign}${num.toFixed(1)}%`;
         }
+
+        // Wallet connection functions
+        let connectedWalletAddress = null;
+
+        function toggleWalletMenu() {
+            const dropdown = document.getElementById('walletDropdown');
+            dropdown.classList.toggle('show');
+        }
+
+        function goToDashboard() {
+            const username = localStorage.getItem('managerUsername');
+            if (username) {
+                window.location.href = `/manager/dashboard.html?username=${username}`;
+            }
+            toggleWalletMenu();
+        }
+
+        function copyWalletAddress() {
+            if (connectedWalletAddress) {
+                navigator.clipboard.writeText(connectedWalletAddress).then(() => {
+                    alert('✅ Wallet address copied to clipboard!');
+                    toggleWalletMenu();
+                }).catch(err => {
+                    console.error('Failed to copy:', err);
+                    alert('Failed to copy address');
+                });
+            }
+        }
+
+        function disconnectWallet() {
+            if (confirm('Are you sure you want to disconnect your wallet?')) {
+                // Clear localStorage
+                localStorage.removeItem('managerUsername');
+                localStorage.removeItem('connectedWallet');
+
+                // Reset UI
+                connectedWalletAddress = null;
+                updateWalletButton();
+                toggleWalletMenu();
+            }
+        }
+
+        // Close dropdown when clicking outside
+        document.addEventListener('click', function(event) {
+            const dropdown = document.getElementById('walletDropdown');
+            const walletBtn = document.getElementById('walletAddressBtn');
+
+            if (dropdown && walletBtn && !walletBtn.contains(event.target) && !dropdown.contains(event.target)) {
+                dropdown.classList.remove('show');
+            }
+        });
+
+        async function updateWalletButton() {
+            const signupBtn = document.getElementById('signupBtn');
+            const addressBtn = document.getElementById('walletAddressBtn');
+            const addressText = document.getElementById('walletAddressText');
+
+            const username = localStorage.getItem('managerUsername');
+
+            if (username) {
+                // User is logged in - fetch wallet address and show it
+                try {
+                    const response = await fetch(`/api/managers/profile?username=${username}`);
+                    const data = await response.json();
+
+                    if (data.success && data.data && data.data.walletAddress) {
+                        connectedWalletAddress = data.data.walletAddress;
+                        signupBtn.style.display = 'none';
+                        addressBtn.style.display = 'block';
+                        const addr = connectedWalletAddress;
+                        addressText.textContent = `${addr.slice(0, 6)}...${addr.slice(-4)}`;
+                    } else {
+                        // User not found, clear localStorage
+                        localStorage.removeItem('managerUsername');
+                        signupBtn.style.display = 'inline-block';
+                        addressBtn.style.display = 'none';
+                    }
+                } catch (error) {
+                    console.error('Error fetching user data:', error);
+                    signupBtn.style.display = 'inline-block';
+                    addressBtn.style.display = 'none';
+                }
+            } else {
+                // User is not logged in - show signup button
+                signupBtn.style.display = 'inline-block';
+                addressBtn.style.display = 'none';
+            }
+        }
+
+        // Initialize wallet button on page load
+        updateWalletButton();
 
         // Load managers on page load
         loadManagers();
