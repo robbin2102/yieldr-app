@@ -390,7 +390,6 @@
             font-size: 11px;
             font-weight: 600;
             border-radius: 4px;
-            text-transform: uppercase;
             margin-left: 12px;
             display: inline-flex;
             align-items: center;
@@ -411,20 +410,19 @@
             transform: translateX(-50%);
             background: #1A1A1A;
             color: #FFFFFF;
-            padding: 8px 12px;
+            padding: 10px 14px;
             border-radius: 6px;
-            font-size: 12px;
+            font-size: 11px;
             font-weight: 400;
-            white-space: nowrap;
+            white-space: normal;
             margin-bottom: 8px;
             opacity: 0;
             pointer-events: none;
             transition: opacity 0.2s;
             z-index: 1000;
-            max-width: 300px;
-            white-space: normal;
-            text-align: center;
-            line-height: 1.4;
+            max-width: 280px;
+            text-align: left;
+            line-height: 1.5;
         }
 
         .info-icon:hover .tooltip {
@@ -1217,7 +1215,7 @@ button.remove-wallet-btn,
                 <button class="close-btn" onclick="closeProfilePicModal()">×</button>
             </div>
             <div class="form-group">
-                <label style="color: #8A8A8A; font-size: 14px; margin-bottom: 8px; display: block;">Upload Image (Max 1MB)</label>
+                <label style="color: #8A8A8A; font-size: 14px; margin-bottom: 8px; display: block;">Upload Image (Max 5MB)</label>
                 <input type="file" id="profilePicFileInput" accept="image/*" onchange="handleProfilePicUpload(event)" style="width: 100%; padding: 12px; background: #0A0A0A; border: 1px solid #1A1A1A; border-radius: 8px; color: #FFFFFF; font-size: 14px; cursor: pointer;">
                 <p style="color: #8A8A8A; font-size: 12px; margin-top: 8px;">Supported formats: JPG, PNG, GIF, WebP</p>
                 <div style="margin-top: 16px; text-align: center;">
@@ -1336,10 +1334,10 @@ button.remove-wallet-btn,
                 return;
             }
 
-            // Check file size (1MB = 1048576 bytes)
-            const maxSize = 1048576; // 1MB
+            // Check file size (5MB = 5242880 bytes)
+            const maxSize = 5242880; // 5MB
             if (file.size > maxSize) {
-                errorDiv.textContent = `File too large! Please upload an image under 1MB. Current size: ${(file.size / 1048576).toFixed(2)}MB`;
+                errorDiv.textContent = `File too large! Please upload an image under 5MB. Current size: ${(file.size / 1048576).toFixed(2)}MB`;
                 errorDiv.style.display = 'block';
                 preview.style.display = 'none';
                 saveBtn.disabled = true;
@@ -1494,12 +1492,12 @@ loadDashboard();
                         <span class="wallet-address">${wallet.slice(0, 6)}...${wallet.slice(-4)}</span>
                         ${index === 0 ? '<span class="wallet-badge">Primary</span>' : `
                             <span class="scout-badge">
-                                Scout
+                                Scouted
                                 <span class="info-icon">
                                     <svg fill="currentColor" viewBox="0 0 20 20" style="width: 14px; height: 14px;">
                                         <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/>
                                     </svg>
-                                    <span class="tooltip">Scout for top asset managers and earn performance & AUM fees until the wallet owner signs up on Yieldr. We support scouts who help investors track top traders!</span>
+                                    <span class="tooltip">Scout for top asset managers and earn performance & AUM fees until the wallet owner signs up on Yieldr. We support scouts who help investors track top traders.</span>
                                 </span>
                             </span>
                         `}
