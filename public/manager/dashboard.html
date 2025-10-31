@@ -383,6 +383,64 @@
             margin-left: 12px;
         }
 
+        .scout-badge {
+            padding: 4px 8px;
+            background: #FF9500;
+            color: #000000;
+            font-size: 11px;
+            font-weight: 600;
+            border-radius: 4px;
+            text-transform: uppercase;
+            margin-left: 12px;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .info-icon {
+            width: 14px;
+            height: 14px;
+            cursor: help;
+            position: relative;
+        }
+
+        .tooltip {
+            position: absolute;
+            bottom: 100%;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #1A1A1A;
+            color: #FFFFFF;
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 12px;
+            font-weight: 400;
+            white-space: nowrap;
+            margin-bottom: 8px;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.2s;
+            z-index: 1000;
+            max-width: 300px;
+            white-space: normal;
+            text-align: center;
+            line-height: 1.4;
+        }
+
+        .info-icon:hover .tooltip {
+            opacity: 1;
+        }
+
+        .tooltip::after {
+            content: '';
+            position: absolute;
+            top: 100%;
+            left: 50%;
+            transform: translateX(-50%);
+            border: 6px solid transparent;
+            border-top-color: #1A1A1A;
+        }
+
         .remove-btn {
             padding: 6px 12px;
             background: transparent;
@@ -1159,15 +1217,17 @@ button.remove-wallet-btn,
                 <button class="close-btn" onclick="closeProfilePicModal()">×</button>
             </div>
             <div class="form-group">
-                <label style="color: #8A8A8A; font-size: 14px; margin-bottom: 8px; display: block;">Enter Image URL</label>
-                <input type="text" id="profilePicUrlInput" placeholder="https://example.com/image.jpg" style="width: 100%; padding: 12px; background: #0A0A0A; border: 1px solid #1A1A1A; border-radius: 8px; color: #FFFFFF; font-size: 14px;">
-                <div style="margin-top: 12px;">
-                    <img id="profilePicPreview" src="" alt="Preview" style="max-width: 150px; max-height: 150px; border-radius: 8px; display: none; border: 2px solid #00C805;">
+                <label style="color: #8A8A8A; font-size: 14px; margin-bottom: 8px; display: block;">Upload Image (Max 1MB)</label>
+                <input type="file" id="profilePicFileInput" accept="image/*" onchange="handleProfilePicUpload(event)" style="width: 100%; padding: 12px; background: #0A0A0A; border: 1px solid #1A1A1A; border-radius: 8px; color: #FFFFFF; font-size: 14px; cursor: pointer;">
+                <p style="color: #8A8A8A; font-size: 12px; margin-top: 8px;">Supported formats: JPG, PNG, GIF, WebP</p>
+                <div style="margin-top: 16px; text-align: center;">
+                    <img id="profilePicPreview" src="" alt="Preview" style="max-width: 200px; max-height: 200px; border-radius: 50%; display: none; border: 3px solid #00C805; object-fit: cover;">
                 </div>
+                <div id="uploadError" style="color: #FF4444; font-size: 13px; margin-top: 12px; display: none;"></div>
             </div>
             <div style="display: flex; gap: 12px; margin-top: 16px;">
-                <button class="submit-btn" onclick="previewProfilePic()" style="flex: 1; background: #1A1A1A; color: #FFFFFF;">Preview</button>
-                <button class="submit-btn" onclick="saveProfilePic()" style="flex: 1;">Save</button>
+                <button class="submit-btn" onclick="closeProfilePicModal()" style="flex: 1; background: #1A1A1A; color: #FFFFFF;">Cancel</button>
+                <button class="submit-btn" id="saveProfilePicBtn" onclick="saveProfilePic()" style="flex: 1;" disabled>Upload</button>
             </div>
         </div>
     </div>
@@ -1241,6 +1301,8 @@ button.remove-wallet-btn,
         }
 
         // Profile picture modal functions
+        let uploadedImageData = null;
+
         function openProfilePicModal() {
             // Only allow managers to change their profile pic
             const urlParams = new URLSearchParams(window.location.search);
@@ -1252,66 +1314,86 @@ button.remove-wallet-btn,
             }
 
             document.getElementById('changeProfilePicModal').style.display = 'flex';
-            document.getElementById('profilePicUrlInput').value = '';
+            document.getElementById('profilePicFileInput').value = '';
             document.getElementById('profilePicPreview').style.display = 'none';
+            document.getElementById('uploadError').style.display = 'none';
+            document.getElementById('saveProfilePicBtn').disabled = true;
+            uploadedImageData = null;
         }
 
         function closeProfilePicModal() {
             document.getElementById('changeProfilePicModal').style.display = 'none';
+            uploadedImageData = null;
         }
 
-        function previewProfilePic() {
-            const url = document.getElementById('profilePicUrlInput').value.trim();
+        function handleProfilePicUpload(event) {
+            const file = event.target.files[0];
             const preview = document.getElementById('profilePicPreview');
+            const errorDiv = document.getElementById('uploadError');
+            const saveBtn = document.getElementById('saveProfilePicBtn');
 
-            if (!url) {
-                alert('Please enter an image URL');
+            if (!file) {
                 return;
             }
 
-            // Validate URL format
-            try {
-                new URL(url);
-            } catch (e) {
-                alert('Please enter a valid URL');
-                return;
-            }
-
-            // Show preview
-            preview.src = url;
-            preview.style.display = 'block';
-
-            // Check if image loads successfully
-            preview.onerror = () => {
-                alert('Failed to load image. Please check the URL and try again.');
+            // Check file size (1MB = 1048576 bytes)
+            const maxSize = 1048576; // 1MB
+            if (file.size > maxSize) {
+                errorDiv.textContent = `File too large! Please upload an image under 1MB. Current size: ${(file.size / 1048576).toFixed(2)}MB`;
+                errorDiv.style.display = 'block';
                 preview.style.display = 'none';
+                saveBtn.disabled = true;
+                uploadedImageData = null;
+                return;
+            }
+
+            // Check if it's an image
+            if (!file.type.startsWith('image/')) {
+                errorDiv.textContent = 'Please upload an image file (JPG, PNG, GIF, WebP)';
+                errorDiv.style.display = 'block';
+                preview.style.display = 'none';
+                saveBtn.disabled = true;
+                uploadedImageData = null;
+                return;
+            }
+
+            // Read file and convert to base64
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                uploadedImageData = e.target.result; // This is the base64 data URL
+                preview.src = uploadedImageData;
+                preview.style.display = 'block';
+                errorDiv.style.display = 'none';
+                saveBtn.disabled = false;
             };
+            reader.onerror = function() {
+                errorDiv.textContent = 'Failed to read file. Please try again.';
+                errorDiv.style.display = 'block';
+                preview.style.display = 'none';
+                saveBtn.disabled = true;
+                uploadedImageData = null;
+            };
+            reader.readAsDataURL(file);
         }
 
         async function saveProfilePic() {
-            const url = document.getElementById('profilePicUrlInput').value.trim();
-
-            if (!url) {
-                alert('Please enter an image URL');
+            if (!uploadedImageData) {
+                alert('Please select an image first');
                 return;
             }
 
-            // Validate URL format
-            try {
-                new URL(url);
-            } catch (e) {
-                alert('Please enter a valid URL');
-                return;
-            }
+            const saveBtn = document.getElementById('saveProfilePicBtn');
+            saveBtn.disabled = true;
+            saveBtn.textContent = 'Uploading...';
 
             try {
-                // Update manager profile
+                // Update manager profile with base64 image
                 const response = await fetch('/api/managers/profile', {
                     method: 'PATCH',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         username: managerData.username,
-                        profilePicture: url
+                        profilePicture: uploadedImageData
                     })
                 });
 
@@ -1319,16 +1401,20 @@ button.remove-wallet-btn,
 
                 if (data.success) {
                     // Update local data and UI
-                    managerData.profilePicture = url;
-                    document.getElementById('profilePic').src = url;
+                    managerData.profilePicture = uploadedImageData;
+                    document.getElementById('profilePic').src = uploadedImageData;
                     closeProfilePicModal();
                     alert('Profile picture updated successfully!');
                 } else {
                     alert('Failed to update profile picture: ' + data.error);
+                    saveBtn.disabled = false;
+                    saveBtn.textContent = 'Upload';
                 }
             } catch (error) {
                 console.error('Error updating profile picture:', error);
                 alert('Failed to update profile picture. Please try again.');
+                saveBtn.disabled = false;
+                saveBtn.textContent = 'Upload';
             }
         }
 
@@ -1406,7 +1492,17 @@ loadDashboard();
                 <div class="wallet-item ${index === 0 ? 'primary' : ''}">
                     <div>
                         <span class="wallet-address">${wallet.slice(0, 6)}...${wallet.slice(-4)}</span>
-                        ${index === 0 ? '<span class="wallet-badge">Primary</span>' : ''}
+                        ${index === 0 ? '<span class="wallet-badge">Primary</span>' : `
+                            <span class="scout-badge">
+                                Scout
+                                <span class="info-icon">
+                                    <svg fill="currentColor" viewBox="0 0 20 20" style="width: 14px; height: 14px;">
+                                        <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/>
+                                    </svg>
+                                    <span class="tooltip">Scout for top asset managers and earn performance & AUM fees until the wallet owner signs up on Yieldr. We support scouts who help investors track top traders!</span>
+                                </span>
+                            </span>
+                        `}
                     </div>
                     ${index > 0 ? `<button class="remove-btn" onclick="removeWallet('${wallet}')">Remove</button>` : ''}
                 </div>
@@ -1784,8 +1880,32 @@ function updateAggregateMetrics() {
         const walletCheckData = await walletCheckResponse.json();
 
         if (walletCheckData.inUse) {
-            alert(`❌ This wallet is already connected to @${walletCheckData.owner.username}'s account. Each wallet can only belong to one user.`);
-            closeAddWalletModal();
+            // Show a nice UI alert with styling
+            const modal = document.getElementById('addWalletModal');
+            const modalContent = modal.querySelector('.modal-content');
+
+            modalContent.innerHTML = `
+                <div class="modal-header">
+                    <h3 class="modal-title">⚠️ Wallet Already Scouted</h3>
+                    <button class="close-btn" onclick="closeAddWalletModal()">×</button>
+                </div>
+                <div style="padding: 24px;">
+                    <div style="background: #FF9500; padding: 16px; border-radius: 8px; margin-bottom: 16px;">
+                        <p style="color: #000000; font-weight: 600; margin-bottom: 8px;">This wallet has already been scouted & added by another user.</p>
+                        <p style="color: #000000; font-size: 14px;">Connected to: <strong>@${walletCheckData.owner.username}</strong></p>
+                    </div>
+                    <div style="background: #1A1A1A; padding: 16px; border-radius: 8px; margin-bottom: 16px;">
+                        <p style="color: #FFFFFF; font-size: 14px; line-height: 1.6;">
+                            <strong>Do you own this wallet?</strong><br>
+                            If this is your wallet, you can sign up to authenticate and take ownership.
+                            Once verified, it will be removed from the scout's account and added to yours.
+                        </p>
+                    </div>
+                    <button class="submit-btn" onclick="window.location.href='/onboarding/connect'" style="width: 100%;">
+                        Sign Up to Claim Wallet
+                    </button>
+                </div>
+            `;
             return;
         }
 
