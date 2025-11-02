@@ -1995,29 +1995,56 @@ function updateAggregateMetrics() {
             console.warn('Failed to fetch LP positions from Krystal:', lpResponse.status);
         }
 
-               // Step 2: Fetch Avantis positions (unchanged - goes through Railway)
-               document.getElementById('verifyStatus').textContent = 'Scanning wallet for perpetual positions...';
-        
-        console.log('🔵 Step 2: Fetching Avantis positions...');
-        const avantisResponse = await fetch(`/api/avantis-positions?address=${walletAddress}`);
-        const avantisData = await avantisResponse.json();
-        console.log('✅ Avantis response:', avantisData);
+               // Step 2: Fetch perpetual positions from BOTH Avantis and Hyperliquid in parallel
+               document.getElementById('verifyStatus').textContent = 'Scanning wallet for perpetual positions (Avantis & Hyperliquid)...';
+
+        console.log('🔵 Step 2: Fetching perpetual positions from Avantis & Hyperliquid...');
+
+        // Fetch both APIs in parallel using Promise.allSettled
+        const [avantisResult, hyperliquidResult] = await Promise.allSettled([
+            fetch(`/api/avantis-positions?address=${walletAddress}`),
+            fetch(`/api/hyperliquid-positions?address=${walletAddress}`)
+        ]);
+
+        // Process Avantis response
+        let avantisData = { success: false, data: { positions: [], summary: { totalPnL: 0, totalMargin: 0 } } };
+        if (avantisResult.status === 'fulfilled' && avantisResult.value.ok) {
+            avantisData = await avantisResult.value.json();
+            console.log('✅ Avantis response:', avantisData);
+        } else {
+            console.error('Avantis fetch error:',
+                avantisResult.status === 'rejected' ? avantisResult.reason : 'API error');
+        }
+
+        // Process Hyperliquid response
+        let hyperliquidData = { success: false, data: { positions: [], summary: { totalPnL: 0, totalMargin: 0 } } };
+        if (hyperliquidResult.status === 'fulfilled' && hyperliquidResult.value.ok) {
+            hyperliquidData = await hyperliquidResult.value.json();
+            console.log('✅ Hyperliquid response:', hyperliquidData);
+        } else {
+            console.error('Hyperliquid fetch error:',
+                hyperliquidResult.status === 'rejected' ? hyperliquidResult.reason : 'API error');
+        }
+
+        console.log(`📊 Found ${(avantisData.data?.positions || []).length} Avantis + ${(hyperliquidData.data?.positions || []).length} Hyperliquid positions`);
 
         // Step 3: Save positions to MongoDB
         document.getElementById('verifyStatus').textContent = 'Saving positions to database...';
-        
+
         console.log('🔵 Step 3: Preparing to save positions...');
         console.log('LP data:', lpData);
         console.log('Avantis data:', avantisData);
-        
+        console.log('Hyperliquid data:', hyperliquidData);
+
         // Create payload
         const positionsPayload = {
             walletAddress,
             lpPositions: lpData.data?.positions || [],
             avantisPositions: avantisData.data?.positions || [],
+            hyperliquidPositions: hyperliquidData.data?.positions || [],
             metrics: {
-                totalPnL: (lpData.data?.summary?.totalPnL || 0) + (avantisData.data?.summary?.totalPnL || 0),
-                totalAUM: (lpData.data?.summary?.totalLiquidity || 0) + (avantisData.data?.summary?.totalMargin || 0),
+                totalPnL: (lpData.data?.summary?.totalPnL || 0) + (avantisData.data?.summary?.totalPnL || 0) + (hyperliquidData.data?.summary?.totalPnL || 0),
+                totalAUM: (lpData.data?.summary?.totalLiquidity || 0) + (avantisData.data?.summary?.totalMargin || 0) + (hyperliquidData.data?.summary?.totalMargin || 0),
                 totalROI: 0
             }
         };
