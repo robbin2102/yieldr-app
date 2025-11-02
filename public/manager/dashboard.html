@@ -615,14 +615,6 @@
     line-height: 1.5;
 }
 
-/* Hide all remove buttons in wallets section */
-.wallets-list button,
-.wallet-item button,
-button.remove-wallet-btn,
-.remove-btn {
-    display: none !important;
-}
-
 .discord-btn {
     display: inline-flex;
     align-items: center;
@@ -2539,7 +2531,11 @@ async function detectUserType() {
         document.getElementById('editAumFee').style.display = 'block';
         document.getElementById('investCTA').style.display = 'none';
         document.getElementById('addWalletBtn').style.display = 'inline-block';
-        
+
+        // Show remove buttons for secondary wallets
+        const removeBtns = document.querySelectorAll('.remove-btn');
+        removeBtns.forEach(btn => btn.style.display = 'inline-block');
+
         // Hide other manager-only features from investors
         const addNoteBtns = document.querySelectorAll('.notes-label button');
         addNoteBtns.forEach(btn => btn.style.display = 'block');
@@ -2550,6 +2546,10 @@ async function detectUserType() {
         document.getElementById('investCTA').style.display = 'flex';  // Changed to flex
         document.getElementById('investManagerName').textContent = managerData.username;
         document.getElementById('addWalletBtn').style.display = 'none';
+
+        // Hide remove buttons for investors
+        const removeBtns = document.querySelectorAll('.remove-btn');
+        removeBtns.forEach(btn => btn.style.display = 'none');
         
         // Hide manager-only features
         const addNoteBtns = document.querySelectorAll('.notes-label button');
