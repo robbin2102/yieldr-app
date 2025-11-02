@@ -1574,6 +1574,9 @@ loadDashboard();
         let totalAUM = 0;
         let refreshedCount = 0;
         let winningPositions = 0;  // ← ADD: Track winning positions
+        let totalHyperliquidCount = 0;
+        let totalAvantisCount = 0;
+        let totalLpCount = 0;
 
         // Fetch fresh data for each wallet
         for (const wallet of allWallets) {
@@ -1675,7 +1678,11 @@ loadDashboard();
             totalPnL += walletPnL;
             totalAUM += walletAUM;
 
-            // Count winning positions
+            // Count positions by platform and winning positions
+            totalLpCount += lpPositions.length;
+            totalAvantisCount += avantisPositions.length;
+            totalHyperliquidCount += hyperliquidPositions.length;
+
             lpPositions.forEach(pos => {
                 if ((pos.pnl || 0) > 0) winningPositions++;
             });
@@ -1737,7 +1744,10 @@ loadDashboard();
                     totalAUM: totalAUM,
                     roi30d: totalAUM > 0 ? (totalPnL / totalAUM * 100) : 0,
                     totalTrades: refreshedCount,
-                    winRate: winRate,  // ← ADD: Save win rate
+                    winRate: winRate,
+                    hyperliquidPositions: totalHyperliquidCount,
+                    avantisPositions: totalAvantisCount,
+                    lpPositions: totalLpCount,
                     lastUpdated: new Date()
                 }
             })
@@ -1898,6 +1908,133 @@ function updateAggregateMetrics() {
             document.getElementById('addWalletForm').style.display = 'block';
             document.getElementById('verifyingState').style.display = 'none';
             document.getElementById('newWalletAddress').value = '';
+        }
+
+        async function removeWallet(walletAddress) {
+            // Prevent removing the primary wallet
+            if (walletAddress.toLowerCase() === managerData.walletAddress.toLowerCase()) {
+                alert('Cannot remove your primary wallet');
+                return;
+            }
+
+            // Confirm removal
+            if (!confirm(`Are you sure you want to remove wallet ${walletAddress.slice(0, 6)}...${walletAddress.slice(-4)}?\n\nAll positions from this wallet will be hidden from your dashboard.`)) {
+                return;
+            }
+
+            try {
+                const connectedWallet = localStorage.getItem('connectedWallet');
+                if (!connectedWallet) {
+                    alert('Please connect your wallet first');
+                    return;
+                }
+
+                // Get current wallets and remove the specified one
+                const currentWallets = managerData.wallets || [managerData.walletAddress];
+                const updatedWallets = currentWallets.filter(w => w.toLowerCase() !== walletAddress.toLowerCase());
+
+                console.log('Removing wallet:', walletAddress);
+                console.log('Updated wallets:', updatedWallets);
+
+                // Update manager profile
+                const response = await fetch('/api/managers/profile', {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        username: managerData.username,
+                        connectedWallet: connectedWallet,
+                        wallets: updatedWallets
+                    })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    alert('Wallet removed successfully! Recalculating metrics...');
+
+                    // Recalculate metrics across remaining wallets
+                    await recalculateMetrics(updatedWallets);
+
+                    // Reload dashboard
+                    location.reload();
+                } else {
+                    alert('Failed to remove wallet: ' + data.error);
+                }
+            } catch (error) {
+                console.error('Error removing wallet:', error);
+                alert('Failed to remove wallet. Please try again.');
+            }
+        }
+
+        async function recalculateMetrics(wallets) {
+            let totalPnL = 0;
+            let totalAUM = 0;
+            let totalPositions = 0;
+            let winningPositions = 0;
+            let hyperliquidCount = 0;
+            let avantisCount = 0;
+            let lpCount = 0;
+
+            // Fetch positions for remaining wallets
+            for (const wallet of wallets) {
+                try {
+                    const posResponse = await fetch(`/api/positions?address=${wallet}`);
+                    const posData = await posResponse.json();
+
+                    if (posData.success && posData.data) {
+                        const lpPositions = posData.data.lpPositions || [];
+                        const perpPositions = posData.data.perpPositions || [];
+
+                        // Count by platform
+                        lpCount += lpPositions.length;
+                        perpPositions.forEach(pos => {
+                            if (pos.platform === 'Hyperliquid') hyperliquidCount++;
+                            else if (pos.platform === 'Avantis') avantisCount++;
+                        });
+
+                        // Sum PnL and AUM
+                        lpPositions.forEach(pos => {
+                            totalPnL += (pos.pnl || 0);
+                            totalAUM += (pos.liquidity || 0);
+                            if ((pos.pnl || 0) > 0) winningPositions++;
+                        });
+                        perpPositions.forEach(pos => {
+                            totalPnL += (pos.pnl || 0);
+                            totalAUM += (pos.margin || pos.positionSize || 0);
+                            if ((pos.pnl || 0) > 0) winningPositions++;
+                        });
+
+                        totalPositions += lpPositions.length + perpPositions.length;
+                    }
+                } catch (err) {
+                    console.error('Error fetching positions for', wallet, err);
+                }
+            }
+
+            const totalROI = totalAUM > 0 ? (totalPnL / totalAUM * 100) : 0;
+            const winRate = totalPositions > 0 ? (winningPositions / totalPositions * 100) : 0;
+
+            // Update metrics
+            const connectedWallet = localStorage.getItem('connectedWallet');
+            await fetch('/api/managers/profile', {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    username: managerData.username,
+                    connectedWallet: connectedWallet,
+                    metrics: {
+                        totalPnL30d: totalPnL,
+                        totalAUM: totalAUM,
+                        roi30d: totalROI,
+                        totalTrades: totalPositions,
+                        winRate: winRate,
+                        hyperliquidPositions: hyperliquidCount,
+                        avantisPositions: avantisCount,
+                        lpPositions: lpCount,
+                        lastUpdated: new Date().toISOString()
+                    }
+                })
+            });
         }
 
         async function addAndVerifyWallet() {
@@ -2158,6 +2295,9 @@ function updateAggregateMetrics() {
         let totalAUM = 0;
         let totalPositions = 0;
         let winningPositions = 0;  // ← ADD: Track winning positions
+        let hyperliquidCount = 0;  // ← ADD: Track Hyperliquid positions
+        let avantisCount = 0;      // ← ADD: Track Avantis positions
+        let lpCount = 0;           // ← ADD: Track LP positions
 
         // Fetch positions for ALL wallets and sum up
         for (const wallet of updatedWallets) {
@@ -2165,13 +2305,23 @@ function updateAggregateMetrics() {
                 console.log(`📊 Fetching positions for wallet: ${wallet}`);
                 const posResponse = await fetch(`/api/positions?address=${wallet}`);
                 const posData = await posResponse.json();
-                
+
                 if (posData.success && posData.data) {
                     const lpPositions = posData.data.lpPositions || [];
                     const perpPositions = posData.data.perpPositions || [];
-                    
+
                     console.log(`Found ${lpPositions.length} LP + ${perpPositions.length} perp for ${wallet}`);
-                    
+
+                    // Count positions by platform
+                    lpCount += lpPositions.length;
+                    perpPositions.forEach(pos => {
+                        if (pos.platform === 'Hyperliquid') {
+                            hyperliquidCount++;
+                        } else if (pos.platform === 'Avantis') {
+                            avantisCount++;
+                        }
+                    });
+
                     // Sum PnL
                     lpPositions.forEach(pos => {
                         totalPnL += (pos.pnl || 0);
@@ -2181,11 +2331,11 @@ function updateAggregateMetrics() {
                         totalPnL += (pos.pnl || 0);
                         if ((pos.pnl || 0) > 0) winningPositions++;  // ← ADD: Count winners
                     });
-                    
+
                     // Sum AUM
                     lpPositions.forEach(pos => totalAUM += (pos.liquidity || 0));
                     perpPositions.forEach(pos => totalAUM += (pos.margin || pos.positionSize || 0));
-                    
+
                     totalPositions += lpPositions.length + perpPositions.length;
                 } else {
                     console.warn(`No positions found for ${wallet}`);
@@ -2219,7 +2369,10 @@ function updateAggregateMetrics() {
                     totalAUM: totalAUM,
                     roi30d: totalROI,
                     totalTrades: totalPositions,
-                    winRate: winRate,  // ← ADD: Save win rate
+                    winRate: winRate,
+                    hyperliquidPositions: hyperliquidCount,
+                    avantisPositions: avantisCount,
+                    lpPositions: lpCount,
                     lastUpdated: new Date().toISOString()
                 }
             })
