@@ -389,11 +389,27 @@
                 const platformTags = [];
                 const metrics = manager.metrics || {};
 
-                if (metrics.hyperliquidPositions > 0) platformTags.push('Hyperliquid');
-                if (metrics.avantisPositions > 0) platformTags.push('Avantis');
-                if (metrics.lpPositions > 0) {
+                // Debug: Log first manager's complete data
+                if (managers.indexOf(manager) === 0) {
+                    console.log('📊 First manager full data:', manager);
+                    console.log('📊 Metrics object:', metrics);
+                    console.log('📊 Position counts:', {
+                        hyperliquid: metrics.hyperliquidPositions,
+                        avantis: metrics.avantisPositions,
+                        lp: metrics.lpPositions
+                    });
+                }
+
+                if ((metrics.hyperliquidPositions || 0) > 0) platformTags.push('Hyperliquid');
+                if ((metrics.avantisPositions || 0) > 0) platformTags.push('Avantis');
+                if ((metrics.lpPositions || 0) > 0) {
                     // Add LP platform (Aerodrome or Uniswap based on what's most common)
                     platformTags.push('Aerodrome');
+                }
+
+                // Debug: Log platform tags for first manager
+                if (managers.indexOf(manager) === 0) {
+                    console.log('📊 Platform tags extracted:', platformTags);
                 }
 
                 // Calculate tag distribution:
