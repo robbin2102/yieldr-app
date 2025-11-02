@@ -1510,7 +1510,7 @@ loadDashboard();
                             </span>
                         `}
                     </div>
-                    ${index > 0 ? `<button class="remove-btn" onclick="removeWallet('${wallet}')">Remove</button>` : ''}
+                    ${index > 0 ? `<button class="remove-btn" onclick="removeWallet('${wallet}')" style="display: none;">Remove</button>` : ''}
                 </div>
             `).join('');
 
@@ -1520,6 +1520,21 @@ loadDashboard();
             if (walletCount >= 5) {
                 addBtn.textContent = 'Max 5 Wallets';
             }
+
+            // After rendering wallets, update button visibility based on ownership
+            updateWalletButtonsVisibility();
+        }
+
+        function updateWalletButtonsVisibility() {
+            const connectedWallet = localStorage.getItem('connectedWallet');
+            const isOwner = connectedWallet && managerData.walletAddress &&
+                            connectedWallet.toLowerCase() === managerData.walletAddress.toLowerCase();
+
+            // Only show remove buttons if viewing own dashboard
+            const removeBtns = document.querySelectorAll('.remove-btn');
+            removeBtns.forEach(btn => {
+                btn.style.display = isOwner ? 'inline-block' : 'none';
+            });
         }
 
         async function loadPositions() {
@@ -2532,10 +2547,6 @@ async function detectUserType() {
         document.getElementById('investCTA').style.display = 'none';
         document.getElementById('addWalletBtn').style.display = 'inline-block';
 
-        // Show remove buttons for secondary wallets
-        const removeBtns = document.querySelectorAll('.remove-btn');
-        removeBtns.forEach(btn => btn.style.display = 'inline-block');
-
         // Hide other manager-only features from investors
         const addNoteBtns = document.querySelectorAll('.notes-label button');
         addNoteBtns.forEach(btn => btn.style.display = 'block');
@@ -2546,10 +2557,6 @@ async function detectUserType() {
         document.getElementById('investCTA').style.display = 'flex';  // Changed to flex
         document.getElementById('investManagerName').textContent = managerData.username;
         document.getElementById('addWalletBtn').style.display = 'none';
-
-        // Hide remove buttons for investors
-        const removeBtns = document.querySelectorAll('.remove-btn');
-        removeBtns.forEach(btn => btn.style.display = 'none');
         
         // Hide manager-only features
         const addNoteBtns = document.querySelectorAll('.notes-label button');
