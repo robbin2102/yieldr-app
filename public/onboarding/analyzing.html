@@ -264,7 +264,7 @@
             </div>
             <div class="step" id="step2">
                 <div class="step-icon">2</div>
-                <div class="step-text">Fetching perpetual positions from Avantis</div>
+                <div class="step-text">Fetching perpetual positions from Avantis & Hyperliquid</div>
                 <div class="step-result" id="result2"></div>
             </div>
             <div class="step" id="step3">
@@ -310,6 +310,7 @@
 
         let lpPositions = [];
         let avantisPositions = [];
+        let hyperliquidPositions = [];
         let totalPnL = 0;
         let totalAUM = 0;
         let totalROI = 0;
@@ -361,7 +362,7 @@
                 totalPnL,
                 totalAUM,
                 totalROI,
-                totalPositions: lpPositions.length + avantisPositions.length,
+                totalPositions: lpPositions.length + avantisPositions.length + hyperliquidPositions.length,
                 platforms: getPlatforms()
             }));
             
@@ -408,25 +409,54 @@
                 
                 await sleep(500);
 
-                // Step 2: Fetch Avantis positions
-                activateStep(2, "Fetching perpetual positions from Avantis...");
-                
+                await sleep(500);
+
+                // Step 2: Fetch perpetual positions from BOTH Avantis and Hyperliquid in parallel
+                activateStep(2, "Fetching perpetual positions from Avantis & Hyperliquid...");
+
                 try {
-                    const avantisResponse = await fetch(`/api/avantis-positions?address=${walletAddress}`);
-                    const avantisData = await avantisResponse.json();
-                    
-                    if (avantisData.success && avantisData.data) {
-                        avantisPositions = avantisData.data.positions || [];
-                        const count = avantisData.data.totalPositions || avantisPositions.length;
-                        completeStep(2, `${count} active trade${count !== 1 ? 's' : ''}`);
+                    // Fetch both APIs in parallel using Promise.allSettled
+                    const [avantisResult, hyperliquidResult] = await Promise.allSettled([
+                        fetch(`/api/avantis-positions?address=${walletAddress}`),
+                        fetch(`/api/hyperliquid-positions?address=${walletAddress}`)
+                    ]);
+
+                    // Process Avantis response
+                    if (avantisResult.status === 'fulfilled' && avantisResult.value.ok) {
+                        const avantisData = await avantisResult.value.json();
+                        if (avantisData.success && avantisData.data) {
+                            avantisPositions = avantisData.data.positions || [];
+                        }
                     } else {
-                        completeStep(2, "0 active trades");
+                        console.error('Avantis fetch error:',
+                            avantisResult.status === 'rejected' ? avantisResult.reason : 'API error');
                     }
+
+                    // Process Hyperliquid response
+                    if (hyperliquidResult.status === 'fulfilled' && hyperliquidResult.value.ok) {
+                        const hyperliquidData = await hyperliquidResult.value.json();
+                        if (hyperliquidData.success && hyperliquidData.data) {
+                            hyperliquidPositions = hyperliquidData.data.positions || [];
+                        }
+                    } else {
+                        console.error('Hyperliquid fetch error:',
+                            hyperliquidResult.status === 'rejected' ? hyperliquidResult.reason : 'API error');
+                    }
+
+                    // Combine results for display
+                    const totalPerpPositions = avantisPositions.length + hyperliquidPositions.length;
+                    const resultText = totalPerpPositions === 0
+                        ? "0 active trades"
+                        : `${totalPerpPositions} active trade${totalPerpPositions !== 1 ? 's' : ''} ` +
+                        `(${avantisPositions.length} Avantis, ${hyperliquidPositions.length} Hyperliquid)`;
+
+                    completeStep(2, resultText);
+
                 } catch (error) {
-                    console.error('Avantis fetch error:', error);
+                    console.error('Perpetual positions fetch error:', error);
                     completeStep(2, "0 active trades");
                 }
-                
+
                 await sleep(500);
 
                 // Step 3: Calculate metrics
@@ -434,16 +464,18 @@
                 
                 const lpPnL = lpPositions.reduce((sum, pos) => sum + (pos.pnl || 0), 0);
                 const avantisPnL = avantisPositions.reduce((sum, pos) => sum + (pos.pnl || 0), 0);
-                totalPnL = lpPnL + avantisPnL;
-                
+                const hyperliquidPnL = hyperliquidPositions.reduce((sum, pos) => sum + (pos.pnl || 0), 0);
+                totalPnL = lpPnL + avantisPnL + hyperliquidPnL;
+
                 const lpAUM = lpPositions.reduce((sum, pos) => sum + (pos.liquidity || 0), 0);
                 const avantisAUM = avantisPositions.reduce((sum, pos) => sum + (pos.margin || 0), 0);
-                totalAUM = lpAUM + avantisAUM;
-                
+                const hyperliquidAUM = hyperliquidPositions.reduce((sum, pos) => sum + (pos.margin || 0), 0);
+                totalAUM = lpAUM + avantisAUM + hyperliquidAUM;
+
                 totalROI = totalAUM > 0 ? (totalPnL / totalAUM * 100) : 0;
 
                 // Calculate win rate
-                const allPositions = [...lpPositions, ...avantisPositions];
+                const allPositions = [...lpPositions, ...avantisPositions, ...hyperliquidPositions];
                 const winningCount = allPositions.filter(pos => (pos.pnl || 0) > 0).length;
                 const winRate = allPositions.length > 0 ? (winningCount / allPositions.length * 100) : 0;
                 
@@ -463,6 +495,7 @@
                             walletAddress,
                             lpPositions,
                             avantisPositions,
+                            hyperliquidPositions,
                             metrics: {
                                 totalPnL,
                                 totalAUM,
@@ -495,7 +528,7 @@
                     totalAUM,
                     totalROI,
                     winRate,
-                    totalPositions: lpPositions.length + avantisPositions.length,
+                    totalPositions: lpPositions.length + avantisPositions.length + hyperliquidPositions.length,
                     platforms: getPlatforms()
                 }));
                 

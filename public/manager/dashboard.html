@@ -1097,6 +1097,14 @@ button.remove-wallet-btn,
                     Refresh
                 </button>
             </div>
+
+            <!-- Hyperliquid Mirror Notice (conditionally shown) -->
+            <div id="hyperliquidNotice" style="display: none; background: rgba(0, 200, 5, 0.05); border: 1px solid rgba(0, 200, 5, 0.2); border-radius: 8px; padding: 12px 16px; margin-bottom: 16px;">
+                <p style="color: #00C805; font-size: 13px; margin: 0; line-height: 1.5;">
+                    ℹ️ <strong>Co-Investment Notice:</strong> If you co-invest with this manager, Hyperliquid positions will be automatically mirrored on Avantis DEX for asset pairs available on both platforms.
+                </p>
+            </div>
+
             <div style="overflow-x: auto;">
                 <table class="positions-table">
                     <thead>
@@ -1564,46 +1572,53 @@ loadDashboard();
         for (const wallet of allWallets) {
             console.log('Refreshing wallet:', wallet);
 
-            // Fetch LP positions DIRECTLY from Krystal API
+            // Fetch ALL 3 position types in parallel for maximum performance
             const normalizedWallet = wallet.toLowerCase();
             const krystalUrl = `https://api.krystal.app/all/v1/lp/userPositions?addresses=${normalizedWallet}&chainIds=8453`;
-            console.log(`Fetching LP positions from Krystal for ${wallet}...`);
 
-            const lpResponse = await fetch(krystalUrl, { method: 'GET', headers: { 'Accept': 'application/json' } });
+            console.log(`Fetching LP, Avantis, and Hyperliquid positions in parallel for ${wallet}...`);
 
+            const [lpResult, avantisResult, hyperliquidResult] = await Promise.allSettled([
+                fetch(krystalUrl, { method: 'GET', headers: { 'Accept': 'application/json' } }),
+                fetch(`/api/avantis-positions?address=${wallet}`),
+                fetch(`/api/hyperliquid-positions?address=${wallet}`)
+            ]);
+
+            // Process LP response
             let lpData = { success: false, data: { positions: [], summary: { totalPnL: 0, totalLiquidity: 0 } } };
             let lpFetchSuccess = false;
 
-            if (lpResponse.ok) {
+            if (lpResult.status === 'fulfilled' && lpResult.value.ok) {
                 lpFetchSuccess = true;
-                const krystalData = await lpResponse.json();
+                const krystalData = await lpResult.value.json();
                 console.log(`Krystal API returned ${krystalData.positions?.length || 0} LP positions`);
 
                 const krystalPositions = (krystalData.positions || []).map(pos => {
-                const token0 = pos.currentAmounts?.[0]?.token;
-                const token1 = pos.currentAmounts?.[1]?.token;
+                    const token0 = pos.currentAmounts?.[0]?.token;
+                    const token1 = pos.currentAmounts?.[1]?.token;
 
-                return {
-                    platform: pos.pool?.project || 'Unknown',
-                    pair: `${token0?.symbol || '?'}/${token1?.symbol || '?'}`,
-                    token0: {
-                        symbol: token0?.symbol || '',
-                        amount: pos.currentAmounts?.[0]?.balance || '0',
-                        value: pos.currentAmounts?.[0]?.quotes?.usd?.value || 0
-                    },
-                    token1: {
-                        symbol: token1?.symbol || '',
-                        amount: pos.currentAmounts?.[1]?.balance || '0',
-                        value: pos.currentAmounts?.[1]?.quotes?.usd?.value || 0
-                    },
-                    liquidity: pos.currentPositionValue || 0,
-                    pnl: pos.pnl || 0,
-                    roi: pos.returnOnInvestment || 0,
-                    apr: pos.apr || 0,
-                    status: pos.status || 'UNKNOWN',
-                    positionId: pos.id
-                };
-            });
+                    return {
+                        platform: pos.pool?.project || 'Unknown',
+                        pair: `${token0?.symbol || '?'}/${token1?.symbol || '?'}`,
+                        token0: {
+                            symbol: token0?.symbol || '',
+                            amount: pos.currentAmounts?.[0]?.balance || '0',
+                            value: pos.currentAmounts?.[0]?.quotes?.usd?.value || 0
+                        },
+                        token1: {
+                            symbol: token1?.symbol || '',
+                            amount: pos.currentAmounts?.[1]?.balance || '0',
+                            value: pos.currentAmounts?.[1]?.quotes?.usd?.value || 0
+                        },
+                        liquidity: pos.currentPositionValue || 0,
+                        pnl: pos.pnl || 0,
+                        roi: pos.returnOnInvestment || 0,
+                        apr: pos.apr || 0,
+                        status: pos.status || 'UNKNOWN',
+                        positionId: pos.id
+                    };
+                });
+
                 lpData = {
                     success: true,
                     data: {
@@ -1615,44 +1630,64 @@ loadDashboard();
                     }
                 };
             } else {
-                console.warn(`⚠️ Krystal API failed for ${wallet}: ${lpResponse.status} ${lpResponse.statusText}`);
+                const status = lpResult.status === 'fulfilled' ? lpResult.value.status : 'network error';
+                console.warn(`⚠️ Krystal API failed for ${wallet}: ${status}`);
             }
 
-            // Fetch Avantis positions from API
-            const avantisResponse = await fetch(`/api/avantis-positions?address=${wallet}`);
-            let avantisFetchSuccess = avantisResponse.ok;
-            const avantisData = await avantisResponse.json();
+            // Process Avantis response
+            let avantisFetchSuccess = false;
+            let avantisData = { success: false, data: { positions: [], summary: { totalPnL: 0, totalMargin: 0 } } };
+            if (avantisResult.status === 'fulfilled' && avantisResult.value.ok) {
+                avantisFetchSuccess = true;
+                avantisData = await avantisResult.value.json();
+            } else {
+                console.warn(`⚠️ Avantis API failed for ${wallet}`);
+            }
 
-            // FIXED: Access data correctly
+            // Process Hyperliquid response
+            let hyperliquidFetchSuccess = false;
+            let hyperliquidData = { success: false, data: { positions: [], summary: { totalPnL: 0, totalMargin: 0 } } };
+            if (hyperliquidResult.status === 'fulfilled' && hyperliquidResult.value.ok) {
+                hyperliquidFetchSuccess = true;
+                hyperliquidData = await hyperliquidResult.value.json();
+            } else {
+                console.warn(`⚠️ Hyperliquid API failed for ${wallet}`);
+            }
+
+            // Extract positions
             const lpPositions = lpData.data?.positions || [];
             const avantisPositions = avantisData.data?.positions || [];
-            
-            console.log(`Wallet ${wallet}: ${lpPositions.length} LP + ${avantisPositions.length} perp positions`);
+            const hyperliquidPositions = hyperliquidData.data?.positions || [];
+
+            console.log(`Wallet ${wallet}: ${lpPositions.length} LP + ${avantisPositions.length} Avantis + ${hyperliquidPositions.length} Hyperliquid positions`);
 
             // Calculate metrics for this wallet
-            const walletPnL = (lpData.data?.summary?.totalPnL || 0) + (avantisData.data?.summary?.totalPnL || 0);
-            const walletAUM = (lpData.data?.summary?.totalLiquidity || 0) + (avantisData.data?.summary?.totalMargin || 0);
-            
+            const walletPnL = (lpData.data?.summary?.totalPnL || 0) + (avantisData.data?.summary?.totalPnL || 0) + (hyperliquidData.data?.summary?.totalPnL || 0);
+            const walletAUM = (lpData.data?.summary?.totalLiquidity || 0) + (avantisData.data?.summary?.totalMargin || 0) + (hyperliquidData.data?.summary?.totalMargin || 0);
+
             totalPnL += walletPnL;
             totalAUM += walletAUM;
 
-            // ← ADD: Count winning positions
+            // Count winning positions
             lpPositions.forEach(pos => {
                 if ((pos.pnl || 0) > 0) winningPositions++;
             });
             avantisPositions.forEach(pos => {
                 if ((pos.pnl || 0) > 0) winningPositions++;
             });
+            hyperliquidPositions.forEach(pos => {
+                if ((pos.pnl || 0) > 0) winningPositions++;
+            });
 
             // PROTECTION: Only skip save if APIs failed AND returned 0 positions
             // If APIs succeeded with 0 positions, that means user genuinely has no positions (closed all)
-            if (lpPositions.length === 0 && avantisPositions.length === 0) {
-                if (!lpFetchSuccess || !avantisFetchSuccess) {
+            if (lpPositions.length === 0 && avantisPositions.length === 0 && hyperliquidPositions.length === 0) {
+                if (!lpFetchSuccess || !avantisFetchSuccess || !hyperliquidFetchSuccess) {
                     // At least one API failed - don't overwrite existing data
-                    console.warn(`⚠️ Skipping save for ${wallet}: API fetch failed (LP: ${lpFetchSuccess}, Avantis: ${avantisFetchSuccess})`);
+                    console.warn(`⚠️ Skipping save for ${wallet}: API fetch failed (LP: ${lpFetchSuccess}, Avantis: ${avantisFetchSuccess}, Hyperliquid: ${hyperliquidFetchSuccess})`);
                     continue;
                 } else {
-                    // Both APIs succeeded with 0 positions - user closed all positions, save 0
+                    // All APIs succeeded with 0 positions - user closed all positions, save 0
                     console.log(`✅ Saving 0 positions for ${wallet} (user closed all positions)`);
                 }
             }
@@ -1665,6 +1700,7 @@ loadDashboard();
                     walletAddress: wallet,
                     lpPositions: lpPositions,
                     avantisPositions: avantisPositions,
+                    hyperliquidPositions: hyperliquidPositions,
                     metrics: {
                         totalPnL: walletPnL,
                         totalAUM: walletAUM,
@@ -1673,7 +1709,7 @@ loadDashboard();
                 })
             });
 
-            refreshedCount += lpPositions.length + avantisPositions.length;
+            refreshedCount += lpPositions.length + avantisPositions.length + hyperliquidPositions.length;
         }
 
         // ← ADD: Calculate win rate
@@ -1740,7 +1776,21 @@ function displayPositions() {
 
     if (positions.length === 0) {
         tbody.innerHTML = '<tr><td colspan="10" style="text-align: center; color: #8A8A8A;">No positions found</td></tr>';
+        // Hide Hyperliquid notice if no positions
+        document.getElementById('hyperliquidNotice').style.display = 'none';
         return;
+    }
+
+    // Check if Hyperliquid positions are the majority (>50%)
+    const hyperliquidCount = positions.filter(pos => pos.platform === 'Hyperliquid').length;
+    const hyperliquidPercentage = (hyperliquidCount / positions.length) * 100;
+
+    // Show notice if Hyperliquid positions are majority
+    const noticeElement = document.getElementById('hyperliquidNotice');
+    if (hyperliquidPercentage > 50) {
+        noticeElement.style.display = 'block';
+    } else {
+        noticeElement.style.display = 'none';
     }
 
     tbody.innerHTML = positions.map(pos => {
@@ -1995,29 +2045,56 @@ function updateAggregateMetrics() {
             console.warn('Failed to fetch LP positions from Krystal:', lpResponse.status);
         }
 
-               // Step 2: Fetch Avantis positions (unchanged - goes through Railway)
-               document.getElementById('verifyStatus').textContent = 'Scanning wallet for perpetual positions...';
-        
-        console.log('🔵 Step 2: Fetching Avantis positions...');
-        const avantisResponse = await fetch(`/api/avantis-positions?address=${walletAddress}`);
-        const avantisData = await avantisResponse.json();
-        console.log('✅ Avantis response:', avantisData);
+               // Step 2: Fetch perpetual positions from BOTH Avantis and Hyperliquid in parallel
+               document.getElementById('verifyStatus').textContent = 'Scanning wallet for perpetual positions (Avantis & Hyperliquid)...';
+
+        console.log('🔵 Step 2: Fetching perpetual positions from Avantis & Hyperliquid...');
+
+        // Fetch both APIs in parallel using Promise.allSettled
+        const [avantisResult, hyperliquidResult] = await Promise.allSettled([
+            fetch(`/api/avantis-positions?address=${walletAddress}`),
+            fetch(`/api/hyperliquid-positions?address=${walletAddress}`)
+        ]);
+
+        // Process Avantis response
+        let avantisData = { success: false, data: { positions: [], summary: { totalPnL: 0, totalMargin: 0 } } };
+        if (avantisResult.status === 'fulfilled' && avantisResult.value.ok) {
+            avantisData = await avantisResult.value.json();
+            console.log('✅ Avantis response:', avantisData);
+        } else {
+            console.error('Avantis fetch error:',
+                avantisResult.status === 'rejected' ? avantisResult.reason : 'API error');
+        }
+
+        // Process Hyperliquid response
+        let hyperliquidData = { success: false, data: { positions: [], summary: { totalPnL: 0, totalMargin: 0 } } };
+        if (hyperliquidResult.status === 'fulfilled' && hyperliquidResult.value.ok) {
+            hyperliquidData = await hyperliquidResult.value.json();
+            console.log('✅ Hyperliquid response:', hyperliquidData);
+        } else {
+            console.error('Hyperliquid fetch error:',
+                hyperliquidResult.status === 'rejected' ? hyperliquidResult.reason : 'API error');
+        }
+
+        console.log(`📊 Found ${(avantisData.data?.positions || []).length} Avantis + ${(hyperliquidData.data?.positions || []).length} Hyperliquid positions`);
 
         // Step 3: Save positions to MongoDB
         document.getElementById('verifyStatus').textContent = 'Saving positions to database...';
-        
+
         console.log('🔵 Step 3: Preparing to save positions...');
         console.log('LP data:', lpData);
         console.log('Avantis data:', avantisData);
-        
+        console.log('Hyperliquid data:', hyperliquidData);
+
         // Create payload
         const positionsPayload = {
             walletAddress,
             lpPositions: lpData.data?.positions || [],
             avantisPositions: avantisData.data?.positions || [],
+            hyperliquidPositions: hyperliquidData.data?.positions || [],
             metrics: {
-                totalPnL: (lpData.data?.summary?.totalPnL || 0) + (avantisData.data?.summary?.totalPnL || 0),
-                totalAUM: (lpData.data?.summary?.totalLiquidity || 0) + (avantisData.data?.summary?.totalMargin || 0),
+                totalPnL: (lpData.data?.summary?.totalPnL || 0) + (avantisData.data?.summary?.totalPnL || 0) + (hyperliquidData.data?.summary?.totalPnL || 0),
+                totalAUM: (lpData.data?.summary?.totalLiquidity || 0) + (avantisData.data?.summary?.totalMargin || 0) + (hyperliquidData.data?.summary?.totalMargin || 0),
                 totalROI: 0
             }
         };

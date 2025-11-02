@@ -4,7 +4,7 @@ import clientPromise from '@/lib/mongodb';
 export async function POST(request: NextRequest) {
   try {
     const data = await request.json();
-    const { walletAddress, lpPositions, avantisPositions, metrics } = data;
+    const { walletAddress, lpPositions, avantisPositions, hyperliquidPositions, metrics } = data;
 
     if (!walletAddress) {
       return NextResponse.json(
@@ -59,7 +59,27 @@ export async function POST(request: NextRequest) {
         positionId: pos.tradeIndex,
         createdAt: new Date(),
         updatedAt: new Date()
-      }))
+      })),
+
+    ...(hyperliquidPositions || []).map((pos: any) => ({
+      walletAddress: walletAddress.toLowerCase(),
+      type: 'PERP',
+      platform: 'Hyperliquid',
+      pair: pos.pair,
+      direction: pos.direction,
+      leverage: pos.leverage,
+      positionSize: pos.positionSize,
+      margin: pos.margin,
+      entryPrice: pos.entryPrice,
+      currentPrice: pos.currentPrice,
+      liquidationPrice: pos.liquidationPrice,
+      pnl: pos.pnl,
+      roi: pos.roi,
+      status: pos.status || 'active',
+      positionId: pos.positionId,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    }))
     ];
 
     // Insert all positions
@@ -78,7 +98,10 @@ export async function POST(request: NextRequest) {
             totalAUM: metrics.totalAUM,
             totalPositions: allPositions.length,
             lpPositions: lpPositions.length,
-            perpPositions: avantisPositions.length,
+            perpPositions: avantisPositions.length + (hyperliquidPositions || []).length,
+            avantisPositions: avantisPositions.length,
+            hyperliquidPositions: (hyperliquidPositions || []).length,
+
             lastUpdated: new Date()
           },
           updatedAt: new Date()
@@ -88,7 +111,8 @@ export async function POST(request: NextRequest) {
 
     console.log(`Saved ${allPositions.length} positions for wallet:`, walletAddress);
     console.log(`  ├─ LP positions: ${lpPositions.length}`);
-    console.log(`  └─ Perp positions: ${avantisPositions.length}`);
+    console.log(`  ├─ Avantis positions: ${avantisPositions.length}`);
+    console.log(`  └─ Hyperliquid positions: ${(hyperliquidPositions || []).length}`);
 
     return NextResponse.json({
       success: true,
