@@ -115,8 +115,35 @@ export async function PATCH(request: NextRequest) {
       );
     }
 
+    if (!data.connectedWallet) {
+      return NextResponse.json(
+        { success: false, error: 'Wallet authentication required' },
+        { status: 401 }
+      );
+    }
+
     const client = await clientPromise;
     const db = client.db('yieldr');
+
+    // First, fetch the manager to verify wallet ownership
+    const manager = await db.collection('managers').findOne({
+      username: data.username.toLowerCase()
+    });
+
+    if (!manager) {
+      return NextResponse.json(
+        { success: false, error: 'Manager not found' },
+        { status: 404 }
+      );
+    }
+
+    // Verify that the connected wallet matches the manager's primary wallet
+    if (manager.walletAddress.toLowerCase() !== data.connectedWallet.toLowerCase()) {
+      return NextResponse.json(
+        { success: false, error: 'Unauthorized: You can only update your own profile' },
+        { status: 403 }
+      );
+    }
 
     const updates: any = {
       updatedAt: new Date()

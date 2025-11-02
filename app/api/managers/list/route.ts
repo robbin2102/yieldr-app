@@ -31,7 +31,10 @@ export async function GET(request: NextRequest) {
         roi30d: manager.metrics?.roi30d || 0,
         totalAUM: manager.metrics?.totalAUM || 0,
         winRate: manager.metrics?.winRate || 0,
-        totalTrades: manager.metrics?.totalTrades || 0
+        totalTrades: manager.metrics?.totalTrades || 0,
+        hyperliquidPositions: manager.metrics?.hyperliquidPositions || 0,
+        avantisPositions: manager.metrics?.avantisPositions || 0,
+        lpPositions: manager.metrics?.lpPositions || 0
       }
     }));
 
