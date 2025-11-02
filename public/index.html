@@ -248,11 +248,11 @@
         }
 
         .platform-tag {
-            padding: 4px 10px;
+            padding: 4px 8px;
             background: rgba(0, 200, 5, 0.1);
             border: 1px solid rgba(0, 200, 5, 0.3);
             border-radius: 6px;
-            font-size: 11px;
+            font-size: 10px;
             color: #00C805;
             text-transform: capitalize;
         }
@@ -384,7 +384,28 @@
                 const winRate = manager.metrics.winRate || 0;
                 const performanceFee = manager.fees?.performanceFee || 0;
                 const tradingTypes = manager.tradingTypes || [];
-                
+
+                // Extract platform tags from metrics
+                const platformTags = [];
+                const metrics = manager.metrics || {};
+
+                if (metrics.hyperliquidPositions > 0) platformTags.push('Hyperliquid');
+                if (metrics.avantisPositions > 0) platformTags.push('Avantis');
+                if (metrics.lpPositions > 0) {
+                    // Add LP platform (Aerodrome or Uniswap based on what's most common)
+                    platformTags.push('Aerodrome');
+                }
+
+                // Calculate tag distribution:
+                // - Max 2 trading type tags
+                // - Max 2 platform tags
+                // - Total 2-4 tags
+                const maxTradingTags = tradingTypes.length >= 2 ? 2 : tradingTypes.length;
+                const maxPlatformTags = 4 - maxTradingTags; // Remaining slots for platforms (max 2)
+
+                const selectedTradingTags = tradingTypes.slice(0, maxTradingTags);
+                const selectedPlatformTags = platformTags.slice(0, Math.min(maxPlatformTags, 2));
+
                 return `
                     <div class="manager-card" onclick="viewManager('${manager.username}')">
                         <div class="card-header">
@@ -399,7 +420,7 @@
                                 </div>
                             </div>
                         </div>
-                        
+
                         <div class="metrics">
                             <div class="metric">
                                 <span class="metric-label">AUM</span>
@@ -420,8 +441,11 @@
                         </div>
 
                         <div class="platforms">
-                            ${tradingTypes.slice(0, 3).map(type => 
+                            ${selectedTradingTags.map(type =>
                                 `<span class="platform-tag">${type.replace(/-/g, ' ')}</span>`
+                            ).join('')}
+                            ${selectedPlatformTags.map(platform =>
+                                `<span class="platform-tag" style="background: rgba(100, 150, 255, 0.1); border-color: rgba(100, 150, 255, 0.3); color: #6496FF;">${platform}</span>`
                             ).join('')}
                         </div>
                     </div>

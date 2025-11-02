@@ -1097,6 +1097,14 @@ button.remove-wallet-btn,
                     Refresh
                 </button>
             </div>
+
+            <!-- Hyperliquid Mirror Notice (conditionally shown) -->
+            <div id="hyperliquidNotice" style="display: none; background: rgba(0, 200, 5, 0.05); border: 1px solid rgba(0, 200, 5, 0.2); border-radius: 8px; padding: 12px 16px; margin-bottom: 16px;">
+                <p style="color: #00C805; font-size: 13px; margin: 0; line-height: 1.5;">
+                    ℹ️ <strong>Co-Investment Notice:</strong> If you co-invest with this manager, Hyperliquid positions will be automatically mirrored on Avantis DEX for asset pairs available on both platforms.
+                </p>
+            </div>
+
             <div style="overflow-x: auto;">
                 <table class="positions-table">
                     <thead>
@@ -1768,7 +1776,21 @@ function displayPositions() {
 
     if (positions.length === 0) {
         tbody.innerHTML = '<tr><td colspan="10" style="text-align: center; color: #8A8A8A;">No positions found</td></tr>';
+        // Hide Hyperliquid notice if no positions
+        document.getElementById('hyperliquidNotice').style.display = 'none';
         return;
+    }
+
+    // Check if Hyperliquid positions are the majority (>50%)
+    const hyperliquidCount = positions.filter(pos => pos.platform === 'Hyperliquid').length;
+    const hyperliquidPercentage = (hyperliquidCount / positions.length) * 100;
+
+    // Show notice if Hyperliquid positions are majority
+    const noticeElement = document.getElementById('hyperliquidNotice');
+    if (hyperliquidPercentage > 50) {
+        noticeElement.style.display = 'block';
+    } else {
+        noticeElement.style.display = 'none';
     }
 
     tbody.innerHTML = positions.map(pos => {
