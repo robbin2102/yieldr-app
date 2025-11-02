@@ -1389,6 +1389,12 @@ button.remove-wallet-btn,
                 return;
             }
 
+            const connectedWallet = localStorage.getItem('connectedWallet');
+            if (!connectedWallet) {
+                alert('Please connect your wallet first');
+                return;
+            }
+
             const saveBtn = document.getElementById('saveProfilePicBtn');
             saveBtn.disabled = true;
             saveBtn.textContent = 'Uploading...';
@@ -1400,7 +1406,8 @@ button.remove-wallet-btn,
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         username: managerData.username,
-                        profilePicture: uploadedImageData
+                        profilePicture: uploadedImageData,
+                        connectedWallet: connectedWallet
                     })
                 });
 
@@ -1718,11 +1725,13 @@ loadDashboard();
         console.log(`📊 Refresh metrics: ${winningPositions}/${refreshedCount} winning = ${winRate.toFixed(1)}% win rate`);
 
         // Update manager metrics
+        const connectedWallet = localStorage.getItem('connectedWallet');
         await fetch('/api/managers/profile', {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 username: managerData.username,
+                connectedWallet: connectedWallet,
                 metrics: {
                     totalPnL30d: totalPnL,
                     totalAUM: totalAUM,
@@ -2122,12 +2131,14 @@ function updateAggregateMetrics() {
         const updatedWallets = [...existingWallets, walletAddress.toLowerCase()];
         console.log('Updated wallets list:', updatedWallets);
 
+        const connectedWallet = localStorage.getItem('connectedWallet');
         const updateProfileResponse = await fetch('/api/managers/profile', {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 username: managerData.username,
-                wallets: updatedWallets
+                wallets: updatedWallets,
+                connectedWallet: connectedWallet
             })
         });
         
@@ -2202,6 +2213,7 @@ function updateAggregateMetrics() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 username: managerData.username,
+                connectedWallet: connectedWallet,
                 metrics: {
                     totalPnL30d: totalPnL,
                     totalAUM: totalAUM,
@@ -2287,12 +2299,14 @@ function updateAggregateMetrics() {
 
         try {
             const updates = { [currentNotesField]: textarea.value };
-            
+            const connectedWallet = localStorage.getItem('connectedWallet');
+
             const response = await fetch('/api/managers/profile', {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     username: managerData.username,
+                    connectedWallet: connectedWallet,
                     ...updates
                 })
             });
@@ -2439,11 +2453,13 @@ async function saveFeesUpdate() {
     }
     
     try {
+        const connectedWallet = localStorage.getItem('connectedWallet');
         const response = await fetch('/api/managers/profile', {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 username: managerData.username,
+                connectedWallet: connectedWallet,
                 fees: {
                     performanceFee,
                     aumFee  // CHANGED
