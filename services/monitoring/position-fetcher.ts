@@ -3,6 +3,8 @@
  *
  * Fetches live positions from all platforms for a given manager's wallets.
  * Handles errors gracefully and returns standardized position data.
+ *
+ * NOTE: Calls external APIs directly (not Next.js API routes) for standalone operation.
  */
 
 interface PositionFetchResult {
@@ -20,6 +22,7 @@ interface ManagerWallets {
 
 /**
  * Fetches Avantis positions for all manager wallets
+ * Calls Railway Python service directly
  */
 export async function fetchAvantisPositions(
   wallets: ManagerWallets
@@ -33,8 +36,9 @@ export async function fetchAvantisPositions(
     // Fetch positions for each wallet
     for (const wallet of allWallets) {
       try {
+        const serviceUrl = process.env.AVANTIS_SERVICE_URL || process.env.PYTHON_SERVICE_URL || 'http://localhost:8000';
         const response = await fetch(
-          `${process.env.AVANTIS_SERVICE_URL || 'http://localhost:8000'}/api/avantis-positions?address=${wallet}`,
+          `${serviceUrl}/positions/${wallet}`,
           {
             method: 'GET',
             headers: { 'Content-Type': 'application/json' },
@@ -49,19 +53,20 @@ export async function fetchAvantisPositions(
 
         const data = await response.json();
 
-        if (data.success && data.data?.positions) {
+        if (data && Array.isArray(data)) {
           // Add wallet metadata to each position
-          const positionsWithWallet = data.data.positions.map((pos: any) => ({
+          const positionsWithWallet = data.map((pos: any) => ({
             ...pos,
             walletAddress: wallet.toLowerCase(),
             platform: 'avantis',
             type: 'PERP',
-            positionId: `avantis-${wallet}-${pos.tradeIndex}`,
+            positionId: `avantis-${wallet}-${pos.tradeIndex || Date.now()}`,
+            openedAt: pos.openedAt || new Date(),
           }));
           allPositions.push(...positionsWithWallet);
         }
-      } catch (walletError) {
-        console.error(`[Avantis] Error fetching wallet ${wallet}:`, walletError);
+      } catch (walletError: any) {
+        console.error(`[Avantis] Error fetching wallet ${wallet}:`, walletError.message);
       }
     }
 
@@ -85,6 +90,7 @@ export async function fetchAvantisPositions(
 
 /**
  * Fetches Hyperliquid positions for all manager wallets
+ * Calls Hyperliquid API directly
  */
 export async function fetchHyperliquidPositions(
   wallets: ManagerWallets
@@ -98,29 +104,70 @@ export async function fetchHyperliquidPositions(
     // Fetch positions for each wallet in parallel
     const results = await Promise.allSettled(
       allWallets.map(async (wallet) => {
-        const response = await fetch(
-          `/api/hyperliquid-positions?address=${wallet}`,
-          {
-            method: 'GET',
-            headers: { 'Content-Type': 'application/json' },
-            signal: AbortSignal.timeout(30000), // 30s timeout
-          }
-        );
+        // Call Hyperliquid API directly
+        const response = await fetch('https://api.hyperliquid.xyz/info', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            type: 'clearinghouseState',
+            user: wallet,
+          }),
+          signal: AbortSignal.timeout(30000), // 30s timeout
+        });
 
         if (!response.ok) {
           throw new Error(`HTTP ${response.status}`);
         }
 
         const data = await response.json();
-        if (data.success && data.data?.positions) {
-          return data.data.positions.map((pos: any) => ({
-            ...pos,
+
+        // Parse Hyperliquid response
+        const assetPositions = data.assetPositions || [];
+
+        return assetPositions.map((assetPos: any) => {
+          const pos = assetPos.position;
+          const szi = parseFloat(pos.szi);
+          const entryPrice = parseFloat(pos.entryPx);
+          const marginUsed = parseFloat(pos.marginUsed);
+          const unrealizedPnl = parseFloat(pos.unrealizedPnl);
+          const positionValue = parseFloat(pos.positionValue);
+          const liquidationPrice = pos.liquidationPx ? parseFloat(pos.liquidationPx) : null;
+
+          const direction = szi > 0 ? 'LONG' : 'SHORT';
+          const size = Math.abs(szi);
+          const positionSizeUSD = Math.abs(positionValue);
+
+          let currentPrice = entryPrice;
+          if (size > 0) {
+            if (direction === 'LONG') {
+              currentPrice = entryPrice + (unrealizedPnl / size);
+            } else {
+              currentPrice = entryPrice - (unrealizedPnl / size);
+            }
+          }
+
+          const roi = marginUsed > 0 ? (unrealizedPnl / marginUsed) * 100 : 0;
+
+          return {
             walletAddress: wallet.toLowerCase(),
             platform: 'hyperliquid',
-            positionId: `hyperliquid-${wallet}-${pos.pair}-${Date.now()}`,
-          }));
-        }
-        return [];
+            type: 'PERP',
+            pair: `${pos.coin}/USD`,
+            asset: pos.coin,
+            direction,
+            leverage: pos.leverage?.value || 1,
+            positionSize: positionSizeUSD,
+            margin: marginUsed,
+            entryPrice,
+            currentPrice,
+            liquidationPrice,
+            pnl: unrealizedPnl,
+            roi,
+            status: 'active',
+            positionId: `hyperliquid-${wallet}-${pos.coin}-${Date.now()}`,
+            openedAt: new Date(), // Hyperliquid doesn't provide open time
+          };
+        });
       })
     );
 
@@ -129,7 +176,7 @@ export async function fetchHyperliquidPositions(
       if (result.status === 'fulfilled') {
         allPositions.push(...result.value);
       } else {
-        console.warn('[Hyperliquid] Wallet fetch failed:', result.reason);
+        console.warn('[Hyperliquid] Wallet fetch failed:', result.reason?.message || result.reason);
       }
     }
 
@@ -153,6 +200,7 @@ export async function fetchHyperliquidPositions(
 
 /**
  * Fetches LP positions for all manager wallets
+ * Calls Krystal API directly
  * NOTE: Should only be called every 300s (5 minutes)
  */
 export async function fetchLPPositions(
@@ -167,11 +215,15 @@ export async function fetchLPPositions(
     // Fetch LP positions for each wallet
     for (const wallet of allWallets) {
       try {
+        // Call Krystal API directly
         const response = await fetch(
-          `/api/lp-positions?address=${wallet}`,
+          `https://api.krystal.app/v1/liquidity-positions?address=${wallet}&chain=base`,
           {
             method: 'GET',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+              'Content-Type': 'application/json',
+              'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+            },
             signal: AbortSignal.timeout(60000), // 60s timeout (LP API can be slow)
           }
         );
@@ -183,17 +235,29 @@ export async function fetchLPPositions(
 
         const data = await response.json();
 
-        if (data.success && data.data?.positions) {
-          const positionsWithWallet = data.data.positions.map((pos: any) => ({
-            ...pos,
+        if (data && data.data && Array.isArray(data.data)) {
+          const positionsWithWallet = data.data.map((pos: any) => ({
             walletAddress: wallet.toLowerCase(),
+            platform: pos.platform || 'aerodrome',
             type: 'LP',
-            positionId: `lp-${wallet}-${pos.positionId}`,
+            pair: `${pos.token0?.symbol || ''}/${pos.token1?.symbol || ''}`,
+            pool: pos.pool,
+            chain: 'base',
+            liquidity: pos.liquidity || 0,
+            token0: pos.token0?.symbol || '',
+            token1: pos.token1?.symbol || '',
+            pnl: pos.pnl || 0,
+            roi: pos.roi || 0,
+            apr: pos.apr || 0,
+            status: 'active',
+            positionId: `lp-${wallet}-${pos.positionId || Date.now()}`,
+            unclaimedFees: pos.unclaimedFees || 0,
+            openedAt: pos.createdAt ? new Date(pos.createdAt) : new Date(),
           }));
           allPositions.push(...positionsWithWallet);
         }
-      } catch (walletError) {
-        console.error(`[LP] Error fetching wallet ${wallet}:`, walletError);
+      } catch (walletError: any) {
+        console.error(`[LP] Error fetching wallet ${wallet}:`, walletError.message);
       }
     }
 
