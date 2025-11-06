@@ -36,13 +36,19 @@ export async function fetchAvantisPositions(
     // Fetch positions for each wallet
     for (const wallet of allWallets) {
       try {
-        const serviceUrl = process.env.AVANTIS_SERVICE_URL || process.env.PYTHON_SERVICE_URL || 'http://localhost:8000';
+        const serviceUrl = process.env.AVANTIS_SERVICE_URL || process.env.PYTHON_SERVICE_URL || 'https://yieldr-app-production.up.railway.app';
+        const rpcUrl = process.env.QUICKNODE_BASE_RPC_URL || 'https://mainnet.base.org';
+
         const response = await fetch(
-          `${serviceUrl}/positions/${wallet}`,
+          `${serviceUrl}/fetch-positions`,
           {
-            method: 'GET',
+            method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            signal: AbortSignal.timeout(45000), // 45s timeout
+            body: JSON.stringify({
+              walletAddress: wallet,
+              rpcUrl: rpcUrl
+            }),
+            signal: AbortSignal.timeout(90000), // 90s timeout
           }
         );
 
@@ -53,9 +59,9 @@ export async function fetchAvantisPositions(
 
         const data = await response.json();
 
-        if (data && Array.isArray(data)) {
+        if (data.success && data.data?.positions && Array.isArray(data.data.positions)) {
           // Add wallet metadata to each position
-          const positionsWithWallet = data.map((pos: any) => ({
+          const positionsWithWallet = data.data.positions.map((pos: any) => ({
             ...pos,
             walletAddress: wallet.toLowerCase(),
             platform: 'avantis',
@@ -215,14 +221,18 @@ export async function fetchLPPositions(
     // Fetch LP positions for each wallet
     for (const wallet of allWallets) {
       try {
-        // Call Krystal API directly
+        const normalizedAddress = wallet.toLowerCase();
+
+        // Call Krystal API directly (correct endpoint)
         const response = await fetch(
-          `https://api.krystal.app/v1/liquidity-positions?address=${wallet}&chain=base`,
+          `https://api.krystal.app/all/v1/lp/userPositions?addresses=${normalizedAddress}&chainIds=8453`,
           {
             method: 'GET',
             headers: {
-              'Content-Type': 'application/json',
-              'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+              'Accept': 'application/json',
+              'User-Agent': 'Mozilla/5.0 (compatible; Yieldr/1.0; +https://app.yieldr.org)',
+              'Origin': 'https://app.yieldr.org',
+              'Referer': 'https://app.yieldr.org/'
             },
             signal: AbortSignal.timeout(60000), // 60s timeout (LP API can be slow)
           }
@@ -235,25 +245,38 @@ export async function fetchLPPositions(
 
         const data = await response.json();
 
-        if (data && data.data && Array.isArray(data.data)) {
-          const positionsWithWallet = data.data.map((pos: any) => ({
-            walletAddress: wallet.toLowerCase(),
-            platform: pos.platform || 'aerodrome',
-            type: 'LP',
-            pair: `${pos.token0?.symbol || ''}/${pos.token1?.symbol || ''}`,
-            pool: pos.pool,
-            chain: 'base',
-            liquidity: pos.liquidity || 0,
-            token0: pos.token0?.symbol || '',
-            token1: pos.token1?.symbol || '',
-            pnl: pos.pnl || 0,
-            roi: pos.roi || 0,
-            apr: pos.apr || 0,
-            status: 'active',
-            positionId: `lp-${wallet}-${pos.positionId || Date.now()}`,
-            unclaimedFees: pos.unclaimedFees || 0,
-            openedAt: pos.createdAt ? new Date(pos.createdAt) : new Date(),
-          }));
+        // Krystal API returns positions array directly
+        if (data && data.positions && Array.isArray(data.positions)) {
+          const positionsWithWallet = data.positions.map((pos: any) => {
+            const token0 = pos.currentAmounts?.[0]?.token;
+            const token1 = pos.currentAmounts?.[1]?.token;
+
+            const liquidity = pos.currentAmounts?.reduce((sum: number, amount: any) => {
+              return sum + (amount.quotes?.usd?.value || 0);
+            }, 0) || 0;
+
+            const platform = pos.pool?.project || pos.pool?.projectKey || 'aerodrome';
+
+            return {
+              walletAddress: wallet.toLowerCase(),
+              platform: platform.toLowerCase(),
+              type: 'LP',
+              pair: `${token0?.symbol || '?'}/${token1?.symbol || '?'}`,
+              pool: pos.pool?.address || '',
+              chain: 'base',
+              liquidity: liquidity,
+              token0: token0?.symbol || '',
+              token1: token1?.symbol || '',
+              pnl: pos.pnl || 0,
+              roi: pos.returnOnInvestment || 0,
+              apr: pos.apr || 0,
+              status: pos.status || 'active',
+              positionId: `lp-${wallet}-${pos.id || Date.now()}`,
+              unclaimedFees: pos.feePending?.reduce((sum: number, fee: any) =>
+                sum + (fee.quotes?.usd?.value || 0), 0) || 0,
+              openedAt: new Date(), // Krystal doesn't provide open time
+            };
+          });
           allPositions.push(...positionsWithWallet);
         }
       } catch (walletError: any) {
