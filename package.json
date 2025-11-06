@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "backend": "node backend-src/server.js"
+    "backend": "node backend-src/server.js",
+    "test:monitor": "ts-node -r dotenv/config scripts/test-monitor.ts"
   },
   "dependencies": {
     "@rainbow-me/rainbowkit": "^2.1.3",
