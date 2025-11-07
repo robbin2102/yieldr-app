@@ -16,6 +16,7 @@ import { detectPositionChanges } from './change-detector';
 import { createSnapshot, getLastSnapshot, getLastSnapshotPositions } from './snapshot-service';
 import { bulkLogClosedPositions } from './closed-position-logger';
 import { computeAndSaveAnalytics } from '../analytics/compute-analytics';
+import { decidePlatformFetches, formatInterval } from './interval-manager';
 
 interface Manager {
   _id: string;
@@ -132,43 +133,49 @@ async function processManager(manager: Manager): Promise<{
       scouted: manager.wallets || [],
     };
 
-    // Step 1: Fetch all current positions
+    // Step 1: Determine which platforms need fetching based on intervals
+    const fetchDecisions = await decidePlatformFetches(manager._id);
+
+    console.log(`    ├─ Fetch plan: Avantis=${fetchDecisions.shouldFetchAvantis} (${formatInterval(fetchDecisions.avantisInterval)}), Hyperliquid=${fetchDecisions.shouldFetchHyperliquid} (${formatInterval(fetchDecisions.hyperliquidInterval)}), LP=${fetchDecisions.shouldFetchLP} (${formatInterval(fetchDecisions.lpInterval)})`);
+
+    // Step 2: Fetch positions for selected platforms
     const { avantis, hyperliquid, lp, summary } = await fetchAllPositions(
       wallets,
-      manager.lastLPFetch
+      {
+        fetchAvantis: fetchDecisions.shouldFetchAvantis,
+        fetchHyperliquid: fetchDecisions.shouldFetchHyperliquid,
+        fetchLP: fetchDecisions.shouldFetchLP,
+      }
     );
 
     const allPositions = [...avantis, ...hyperliquid, ...lp];
 
     console.log(`    ├─ Fetched ${allPositions.length} positions (${summary.duration}ms)`);
 
-    // Step 2: Create snapshots for each platform
+    // Step 3: Create snapshots for platforms that were fetched
     const snapshotPromises = [];
 
-    if (avantis.length > 0) {
+    if (fetchDecisions.shouldFetchAvantis && avantis.length > 0) {
       snapshotPromises.push(
         createSnapshot(manager._id, manager.walletAddress, 'avantis', avantis)
       );
     }
 
-    if (hyperliquid.length > 0) {
+    if (fetchDecisions.shouldFetchHyperliquid && hyperliquid.length > 0) {
       snapshotPromises.push(
         createSnapshot(manager._id, manager.walletAddress, 'hyperliquid', hyperliquid)
       );
     }
 
-    if (lp.length > 0) {
-      // Only create LP snapshot if we actually fetched LP data
-      if (summary.duration > 0) {
-        snapshotPromises.push(
-          createSnapshot(manager._id, manager.walletAddress, 'aerodrome', lp)
-        );
-      }
+    if (fetchDecisions.shouldFetchLP && lp.length > 0) {
+      snapshotPromises.push(
+        createSnapshot(manager._id, manager.walletAddress, 'aerodrome', lp)
+      );
     }
 
     await Promise.all(snapshotPromises);
 
-    // Step 3: Detect changes by comparing with previous snapshot
+    // Step 4: Detect changes by comparing with previous snapshot
     const previousPositions = await getLastSnapshotPositions(manager._id);
     const changes = detectPositionChanges(previousPositions, allPositions);
 
@@ -176,14 +183,14 @@ async function processManager(manager: Manager): Promise<{
       `    ├─ Changes: ${changes.summary.new} new, ${changes.summary.closed} closed, ${changes.summary.modified} modified`
     );
 
-    // Step 4: Log closed positions
+    // Step 5: Log closed positions
     let closedCount = 0;
     if (changes.closedPositions.length > 0) {
       closedCount = await bulkLogClosedPositions(changes.closedPositions, manager._id);
       console.log(`    ├─ Logged ${closedCount} closed positions`);
     }
 
-    // Step 5: Update analytics if positions changed
+    // Step 6: Update analytics if positions changed
     let analyticsUpdated = false;
     if (changes.hasChanges || allPositions.length > 0) {
       analyticsUpdated = await computeAndSaveAnalytics(manager._id, manager.username);

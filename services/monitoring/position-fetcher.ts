@@ -7,6 +7,13 @@
  * NOTE: Calls external APIs directly (not Next.js API routes) for standalone operation.
  */
 
+/**
+ * Rate limiting helper - adds delay between API calls
+ */
+function delay(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 interface PositionFetchResult {
   success: boolean;
   platform: 'avantis' | 'hyperliquid' | 'lp';
@@ -107,9 +114,16 @@ export async function fetchHyperliquidPositions(
     const allWallets = [wallets.primary, ...wallets.scouted];
     const allPositions = [];
 
-    // Fetch positions for each wallet in parallel
+    // Fetch positions for each wallet with rate limiting (100ms between calls)
+    // Hyperliquid API limit: 1200/min = 20 req/sec
+    // 100ms = 10 req/sec = 50% headroom for scale
     const results = await Promise.allSettled(
-      allWallets.map(async (wallet) => {
+      allWallets.map(async (wallet, index) => {
+        // Add 100ms delay between requests for rate limiting
+        if (index > 0) {
+          await delay(100);
+        }
+
         // Call Hyperliquid API directly
         const response = await fetch('https://api.hyperliquid.xyz/info', {
           method: 'POST',
@@ -218,8 +232,16 @@ export async function fetchLPPositions(
     const allWallets = [wallets.primary, ...wallets.scouted];
     const allPositions = [];
 
-    // Fetch LP positions for each wallet
-    for (const wallet of allWallets) {
+    // Fetch LP positions for each wallet with rate limiting (500ms between calls)
+    // Krystal API rate limit unknown, so using conservative 500ms = 2 req/sec
+    for (let i = 0; i < allWallets.length; i++) {
+      const wallet = allWallets[i];
+
+      // Add 500ms delay between requests for rate limiting
+      if (i > 0) {
+        await delay(500);
+      }
+
       try {
         const normalizedAddress = wallet.toLowerCase();
 
@@ -303,12 +325,16 @@ export async function fetchLPPositions(
 }
 
 /**
- * Fetches all positions for a manager
- * Intelligently decides whether to fetch LP based on last fetch time
+ * Fetches positions for specified platforms
+ * Supports selective fetching based on intervals
  */
 export async function fetchAllPositions(
   wallets: ManagerWallets,
-  lastLPFetch?: Date
+  options?: {
+    fetchAvantis?: boolean;
+    fetchHyperliquid?: boolean;
+    fetchLP?: boolean;
+  }
 ): Promise<{
   avantis: any[];
   hyperliquid: any[];
@@ -322,16 +348,26 @@ export async function fetchAllPositions(
   const startTime = Date.now();
   const errors: string[] = [];
 
-  // Determine if we should fetch LP positions (every 300s)
-  const shouldFetchLP =
-    !lastLPFetch ||
-    Date.now() - lastLPFetch.getTime() > 300000; // 5 minutes
+  // Default: fetch all platforms
+  const fetchAvantis = options?.fetchAvantis !== false;
+  const fetchHyperliquid = options?.fetchHyperliquid !== false;
+  const fetchLP = options?.fetchLP !== false;
 
-  // Fetch positions in parallel
+  // Fetch positions in parallel for enabled platforms
   const [avantisResult, hyperliquidResult, lpResult] = await Promise.all([
-    fetchAvantisPositions(wallets),
-    fetchHyperliquidPositions(wallets),
-    shouldFetchLP ? fetchLPPositions(wallets) : Promise.resolve({
+    fetchAvantis ? fetchAvantisPositions(wallets) : Promise.resolve({
+      success: true,
+      platform: 'avantis' as const,
+      positions: [],
+      duration: 0,
+    }),
+    fetchHyperliquid ? fetchHyperliquidPositions(wallets) : Promise.resolve({
+      success: true,
+      platform: 'hyperliquid' as const,
+      positions: [],
+      duration: 0,
+    }),
+    fetchLP ? fetchLPPositions(wallets) : Promise.resolve({
       success: true,
       platform: 'lp' as const,
       positions: [],
