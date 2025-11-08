@@ -415,25 +415,19 @@ async function updateLastFillsFetchTime(managerId: string, timestamp: number): P
 /**
  * Save Hyperliquid fills to closed-positions collection
  * Returns count of new fills saved
+ * Uses BULK operations to avoid MongoDB timeout with 2000+ fills
  */
 async function saveHyperliquidFills(fills: any[], managerId: string): Promise<number> {
   try {
+    if (fills.length === 0) return 0;
+
     const client = await clientPromise;
     const db = client.db('yieldr');
-    const ClosedPosition = (await import('@/models/closed-position')).default;
 
-    let savedCount = 0;
-
-    for (const fill of fills) {
-      // Generate unique position ID from fill data
+    // Step 1: Prepare all fill documents with their positionIds
+    const fillDocs = fills.map(fill => {
       const positionId = `hyperliquid-${fill.walletAddress}-${fill.coin}-${fill.time}`;
-
-      // Check if already exists
-      const existing = await db.collection('closedpositions').findOne({ positionId });
-      if (existing) continue;
-
-      // Create closed position document
-      const closedPosition = new ClosedPosition({
+      return {
         positionId,
         walletAddress: fill.walletAddress.toLowerCase(),
         managerId,
@@ -452,14 +446,37 @@ async function saveHyperliquidFills(fills: any[], managerId: string): Promise<nu
         holdDuration: 0, // Unknown from fill data alone
         exitReason: 'manual', // Default, could be refined
         rawData: fill, // Store raw fill data
-      });
+        createdAt: new Date(),
+      };
+    });
 
-      await closedPosition.save();
-      savedCount++;
+    // Step 2: Check which positionIds already exist (ONE query for ALL)
+    const positionIds = fillDocs.map(doc => doc.positionId);
+    const existingDocs = await db
+      .collection('closedpositions')
+      .find({ positionId: { $in: positionIds } })
+      .project({ positionId: 1 })
+      .toArray();
+
+    const existingIds = new Set(existingDocs.map(doc => doc.positionId));
+
+    // Step 3: Filter out duplicates
+    const newFills = fillDocs.filter(doc => !existingIds.has(doc.positionId));
+
+    if (newFills.length === 0) {
+      return 0;
     }
 
-    return savedCount;
-  } catch (error) {
+    // Step 4: Bulk insert ALL new fills in ONE operation
+    const result = await db.collection('closedpositions').insertMany(newFills, { ordered: false });
+
+    return result.insertedCount;
+  } catch (error: any) {
+    // insertMany with ordered:false can throw on partial success
+    if (error.code === 11000) {
+      // Duplicate key errors - some fills already existed
+      return error.result?.nInserted || 0;
+    }
     console.error('[Orchestrator] Error saving Hyperliquid fills:', error);
     return 0;
   }
@@ -468,47 +485,49 @@ async function saveHyperliquidFills(fills: any[], managerId: string): Promise<nu
 /**
  * Save/update Hyperliquid open orders
  * Returns count of orders processed
+ * Uses BULK operations to avoid MongoDB timeout with many orders
  */
 async function saveHyperliquidOrders(orders: any[], managerId: string): Promise<number> {
   try {
+    if (orders.length === 0) return 0;
+
     const client = await clientPromise;
     const db = client.db('yieldr');
-    const OpenOrder = (await import('@/models/open-order')).default;
 
-    let processedCount = 0;
-
-    for (const order of orders) {
-      // Generate unique order ID
+    // Build bulk upsert operations
+    const bulkOps = orders.map(order => {
       const orderId = `hyperliquid-${order.walletAddress}-${order.oid || order.coin}-${order.timestamp || Date.now()}`;
 
-      // Upsert order (create or update)
-      await OpenOrder.updateOne(
-        { orderId },
-        {
-          $set: {
-            orderId,
-            walletAddress: order.walletAddress.toLowerCase(),
-            managerId,
-            platform: 'hyperliquid',
-            asset: order.coin,
-            pair: order.coin,
-            orderType: 'limit', // Hyperliquid returns limit orders
-            direction: order.side === 'B' ? 'BUY' : 'SELL',
-            size: parseFloat(order.sz),
-            price: parseFloat(order.limitPx),
-            status: 'open',
-            placedAt: new Date(order.timestamp || Date.now()),
-            lastUpdatedAt: new Date(),
-            rawData: order,
-          }
-        },
-        { upsert: true }
-      );
+      return {
+        updateOne: {
+          filter: { orderId },
+          update: {
+            $set: {
+              orderId,
+              walletAddress: order.walletAddress.toLowerCase(),
+              managerId,
+              platform: 'hyperliquid',
+              asset: order.coin,
+              pair: order.coin,
+              orderType: 'limit', // Hyperliquid returns limit orders
+              direction: order.side === 'B' ? 'BUY' : 'SELL',
+              size: parseFloat(order.sz),
+              price: parseFloat(order.limitPx),
+              status: 'open',
+              placedAt: new Date(order.timestamp || Date.now()),
+              lastUpdatedAt: new Date(),
+              rawData: order,
+            }
+          },
+          upsert: true
+        }
+      };
+    });
 
-      processedCount++;
-    }
+    // Execute ALL upserts in ONE bulk operation
+    const result = await db.collection('openorders').bulkWrite(bulkOps, { ordered: false });
 
-    return processedCount;
+    return result.upsertedCount + result.modifiedCount;
   } catch (error) {
     console.error('[Orchestrator] Error saving Hyperliquid orders:', error);
     return 0;
