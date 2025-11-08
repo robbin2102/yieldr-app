@@ -92,12 +92,12 @@ export async function runMonitoringCycle(): Promise<MonitoringResult> {
 
     console.log(`📊 Total API calls to make: ${allCalls.length}\n`);
 
-    // Fire all calls with 100ms stagger, process as data arrives
+    // Fire all calls with 300ms stagger to avoid overwhelming connection pool
     await Promise.all(
       allCalls.map(async (call, index) => {
-        // 100ms stagger between each API call
+        // 300ms stagger between each API call (prevents connection pool exhaustion)
         if (index > 0) {
-          await new Promise(resolve => setTimeout(resolve, 100));
+          await new Promise(resolve => setTimeout(resolve, 300));
         }
 
         try {
