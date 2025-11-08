@@ -66,27 +66,84 @@ export async function runMonitoringCycle(): Promise<MonitoringResult> {
       return result;
     }
 
-    // Step 2: Process ALL managers in parallel with 100ms stagger
-    console.log(`\n🚀 Processing all ${managers.length} managers in parallel...\n`);
+    // Step 2: Fire ALL API calls independently (manager × platform)
+    console.log(`\n🚀 Firing all API calls independently...\n`);
 
+    // Build list of all API calls to make
+    type PlatformCall = {
+      manager: Manager;
+      platform: 'avantis' | 'hyperliquid' | 'lp';
+    };
+
+    const allCalls: PlatformCall[] = [];
+    for (const manager of managers) {
+      const fetchDecisions = await decidePlatformFetches(manager._id);
+
+      if (fetchDecisions.shouldFetchAvantis) {
+        allCalls.push({ manager, platform: 'avantis' });
+      }
+      if (fetchDecisions.shouldFetchHyperliquid) {
+        allCalls.push({ manager, platform: 'hyperliquid' });
+      }
+      if (fetchDecisions.shouldFetchLP) {
+        allCalls.push({ manager, platform: 'lp' });
+      }
+    }
+
+    console.log(`📊 Total API calls to make: ${allCalls.length}\n`);
+
+    // Fire all calls with 100ms stagger, process as data arrives
     await Promise.all(
-      managers.map(async (manager, index) => {
-        // Add 100ms stagger between starting each manager
+      allCalls.map(async (call, index) => {
+        // 100ms stagger between each API call
         if (index > 0) {
           await new Promise(resolve => setTimeout(resolve, 100));
         }
 
         try {
-          const managerResult = await processManager(manager);
-          result.totalPositions += managerResult.totalPositions;
-          result.closedPositions += managerResult.closedPositions;
-          if (managerResult.analyticsUpdated) {
-            result.analyticsUpdated++;
-          }
-          result.managersProcessed++;
+          await processSinglePlatformCall(call.manager, call.platform, result);
         } catch (error: any) {
-          console.error(`❌ Error processing manager ${manager.username}:`, error.message);
-          result.errors.push(`${manager.username}: ${error.message}`);
+          console.error(`❌ ${call.manager.username}/${call.platform}: ${error.message}`);
+          result.errors.push(`${call.manager.username}/${call.platform}: ${error.message}`);
+        }
+      })
+    );
+
+    // Step 3: Compute analytics for all managers (after all data is in)
+    console.log(`\n📊 Computing analytics for ${managers.length} managers...\n`);
+
+    await Promise.all(
+      managers.map(async (manager) => {
+        try {
+          // Detect changes and log closed positions
+          const previousPositions = await getLastSnapshotPositions(manager._id);
+          const currentSnapshots = await Promise.all([
+            getLastSnapshot(manager._id, 'avantis'),
+            getLastSnapshot(manager._id, 'hyperliquid'),
+            getLastSnapshot(manager._id, 'aerodrome'),
+          ]);
+
+          const currentPositions = currentSnapshots
+            .filter(s => s !== null)
+            .flatMap(s => s!.positions || []);
+
+          const changes = detectPositionChanges(previousPositions, currentPositions);
+
+          // Log closed positions
+          if (changes.closedPositions.length > 0) {
+            const closedCount = await bulkLogClosedPositions(changes.closedPositions, manager._id);
+            result.closedPositions += closedCount;
+          }
+
+          // Update analytics
+          if (changes.hasChanges || currentPositions.length > 0) {
+            const analyticsUpdated = await computeAndSaveAnalytics(manager._id, manager.username);
+            if (analyticsUpdated) {
+              result.analyticsUpdated++;
+            }
+          }
+        } catch (error: any) {
+          console.error(`❌ Analytics for ${manager.username}: ${error.message}`);
         }
       })
     );
@@ -96,7 +153,8 @@ export async function runMonitoringCycle(): Promise<MonitoringResult> {
     console.log('\n==================================================');
     console.log('✅ Monitoring cycle completed');
     console.log('==================================================');
-    console.log(`   Managers processed: ${result.managersProcessed}`);
+    console.log(`   Managers: ${managers.length}`);
+    console.log(`   API calls made: ${allCalls.length}`);
     console.log(`   Total positions: ${result.totalPositions}`);
     console.log(`   Closed positions: ${result.closedPositions}`);
     console.log(`   Analytics updated: ${result.analyticsUpdated}`);
@@ -115,88 +173,58 @@ export async function runMonitoringCycle(): Promise<MonitoringResult> {
 }
 
 /**
- * Processes a single manager
+ * Processes a single platform call for a manager
+ * This is the atomic unit - one API call, immediate processing
  */
-async function processManager(manager: Manager): Promise<{
-  totalPositions: number;
-  closedPositions: number;
-  analyticsUpdated: boolean;
-}> {
-  const startTime = Date.now();
-
-  console.log(`  ↳ ${manager.username}...`);
+async function processSinglePlatformCall(
+  manager: Manager,
+  platform: 'avantis' | 'hyperliquid' | 'lp',
+  result: MonitoringResult
+): Promise<void> {
+  const callStart = Date.now();
 
   try {
-    // Build wallet list (primary + scouted wallets)
+    // Build wallet list
     const wallets = {
       primary: manager.walletAddress,
       scouted: manager.wallets || [],
     };
 
-    // Step 1: Determine which platforms need fetching based on intervals
-    const fetchDecisions = await decidePlatformFetches(manager._id);
+    // Fetch positions from this ONE platform
+    let positions: any[] = [];
+    let fetchResult;
 
-    // Step 2: Fetch positions for selected platforms (in parallel)
-    const { avantis, hyperliquid, lp, summary } = await fetchAllPositions(
-      wallets,
-      {
-        fetchAvantis: fetchDecisions.shouldFetchAvantis,
-        fetchHyperliquid: fetchDecisions.shouldFetchHyperliquid,
-        fetchLP: fetchDecisions.shouldFetchLP,
-      }
-    );
-
-    const allPositions = [...avantis, ...hyperliquid, ...lp];
-
-    // Step 3: Create snapshots for platforms that were fetched
-    const snapshotPromises = [];
-
-    if (fetchDecisions.shouldFetchAvantis && avantis.length > 0) {
-      snapshotPromises.push(
-        createSnapshot(manager._id, manager.walletAddress, 'avantis', avantis)
-      );
+    if (platform === 'avantis') {
+      const { fetchAvantisPositions } = await import('./position-fetcher');
+      fetchResult = await fetchAvantisPositions(wallets);
+      positions = fetchResult.positions;
+    } else if (platform === 'hyperliquid') {
+      const { fetchHyperliquidPositions } = await import('./position-fetcher');
+      fetchResult = await fetchHyperliquidPositions(wallets);
+      positions = fetchResult.positions;
+    } else if (platform === 'lp') {
+      const { fetchLPPositions } = await import('./position-fetcher');
+      fetchResult = await fetchLPPositions(wallets);
+      positions = fetchResult.positions;
     }
 
-    if (fetchDecisions.shouldFetchHyperliquid && hyperliquid.length > 0) {
-      snapshotPromises.push(
-        createSnapshot(manager._id, manager.walletAddress, 'hyperliquid', hyperliquid)
-      );
+    const callDuration = Date.now() - callStart;
+
+    // Create snapshot immediately (if we got positions)
+    if (positions.length > 0) {
+      const snapshotPlatform = platform === 'lp' ? 'aerodrome' : platform;
+      await createSnapshot(manager._id, manager.walletAddress, snapshotPlatform, positions);
     }
 
-    if (fetchDecisions.shouldFetchLP && lp.length > 0) {
-      snapshotPromises.push(
-        createSnapshot(manager._id, manager.walletAddress, 'aerodrome', lp)
-      );
-    }
+    console.log(`✓ ${manager.username}/${platform}: ${positions.length} positions (${callDuration}ms)`);
 
-    await Promise.all(snapshotPromises);
+    // Update result
+    result.totalPositions += positions.length;
+    result.managersProcessed++; // Count each platform call
 
-    // Step 4: Detect changes by comparing with previous snapshot
-    const previousPositions = await getLastSnapshotPositions(manager._id);
-    const changes = detectPositionChanges(previousPositions, allPositions);
-
-    // Step 5: Log closed positions
-    let closedCount = 0;
-    if (changes.closedPositions.length > 0) {
-      closedCount = await bulkLogClosedPositions(changes.closedPositions, manager._id);
-    }
-
-    // Step 6: Update analytics if positions changed
-    let analyticsUpdated = false;
-    if (changes.hasChanges || allPositions.length > 0) {
-      analyticsUpdated = await computeAndSaveAnalytics(manager._id, manager.username);
-    }
-
-    const duration = Date.now() - startTime;
-    console.log(`    └─ ${manager.username} TOTAL: ${duration}ms\n`);
-
-    return {
-      totalPositions: allPositions.length,
-      closedPositions: closedCount,
-      analyticsUpdated,
-    };
   } catch (error: any) {
-    console.error(`    ❌ Error: ${error.message}`);
+    const callDuration = Date.now() - callStart;
+    console.error(`✗ ${manager.username}/${platform}: ${error.message} (${callDuration}ms)`);
     throw error;
   }
 }
