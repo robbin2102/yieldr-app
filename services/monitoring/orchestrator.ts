@@ -66,30 +66,30 @@ export async function runMonitoringCycle(): Promise<MonitoringResult> {
       return result;
     }
 
-    // Step 2: Process managers in batches (10 at a time for optimal performance)
-    const BATCH_SIZE = 10;
-    for (let i = 0; i < managers.length; i += BATCH_SIZE) {
-      const batch = managers.slice(i, i + BATCH_SIZE);
+    // Step 2: Process ALL managers in parallel with 100ms stagger
+    console.log(`\n🚀 Processing all ${managers.length} managers in parallel...\n`);
 
-      console.log(`\n📦 Processing batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(managers.length / BATCH_SIZE)} (${batch.length} managers)`);
+    await Promise.all(
+      managers.map(async (manager, index) => {
+        // Add 100ms stagger between starting each manager
+        if (index > 0) {
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
 
-      await Promise.all(
-        batch.map(async (manager) => {
-          try {
-            const managerResult = await processManager(manager);
-            result.totalPositions += managerResult.totalPositions;
-            result.closedPositions += managerResult.closedPositions;
-            if (managerResult.analyticsUpdated) {
-              result.analyticsUpdated++;
-            }
-            result.managersProcessed++;
-          } catch (error: any) {
-            console.error(`❌ Error processing manager ${manager.username}:`, error.message);
-            result.errors.push(`${manager.username}: ${error.message}`);
+        try {
+          const managerResult = await processManager(manager);
+          result.totalPositions += managerResult.totalPositions;
+          result.closedPositions += managerResult.closedPositions;
+          if (managerResult.analyticsUpdated) {
+            result.analyticsUpdated++;
           }
-        })
-      );
-    }
+          result.managersProcessed++;
+        } catch (error: any) {
+          console.error(`❌ Error processing manager ${manager.username}:`, error.message);
+          result.errors.push(`${manager.username}: ${error.message}`);
+        }
+      })
+    );
 
     result.duration = Date.now() - startTime;
 
@@ -136,9 +136,7 @@ async function processManager(manager: Manager): Promise<{
     // Step 1: Determine which platforms need fetching based on intervals
     const fetchDecisions = await decidePlatformFetches(manager._id);
 
-    console.log(`    ├─ Fetch plan: Avantis=${fetchDecisions.shouldFetchAvantis} (${formatInterval(fetchDecisions.avantisInterval)}), Hyperliquid=${fetchDecisions.shouldFetchHyperliquid} (${formatInterval(fetchDecisions.hyperliquidInterval)}), LP=${fetchDecisions.shouldFetchLP} (${formatInterval(fetchDecisions.lpInterval)})`);
-
-    // Step 2: Fetch positions for selected platforms
+    // Step 2: Fetch positions for selected platforms (in parallel)
     const { avantis, hyperliquid, lp, summary } = await fetchAllPositions(
       wallets,
       {
@@ -149,8 +147,6 @@ async function processManager(manager: Manager): Promise<{
     );
 
     const allPositions = [...avantis, ...hyperliquid, ...lp];
-
-    console.log(`    ├─ Fetched ${allPositions.length} positions (${summary.duration}ms)`);
 
     // Step 3: Create snapshots for platforms that were fetched
     const snapshotPromises = [];
@@ -179,28 +175,20 @@ async function processManager(manager: Manager): Promise<{
     const previousPositions = await getLastSnapshotPositions(manager._id);
     const changes = detectPositionChanges(previousPositions, allPositions);
 
-    console.log(
-      `    ├─ Changes: ${changes.summary.new} new, ${changes.summary.closed} closed, ${changes.summary.modified} modified`
-    );
-
     // Step 5: Log closed positions
     let closedCount = 0;
     if (changes.closedPositions.length > 0) {
       closedCount = await bulkLogClosedPositions(changes.closedPositions, manager._id);
-      console.log(`    ├─ Logged ${closedCount} closed positions`);
     }
 
     // Step 6: Update analytics if positions changed
     let analyticsUpdated = false;
     if (changes.hasChanges || allPositions.length > 0) {
       analyticsUpdated = await computeAndSaveAnalytics(manager._id, manager.username);
-      if (analyticsUpdated) {
-        console.log(`    ✓ Analytics updated`);
-      }
     }
 
     const duration = Date.now() - startTime;
-    console.log(`    └─ Completed in ${duration}ms`);
+    console.log(`    └─ ${manager.username} TOTAL: ${duration}ms\n`);
 
     return {
       totalPositions: allPositions.length,

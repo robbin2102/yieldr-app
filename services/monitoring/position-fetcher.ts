@@ -29,7 +29,7 @@ interface ManagerWallets {
 
 /**
  * Fetches Avantis positions for all manager wallets
- * Calls Railway Python service directly
+ * Calls Railway Python batch service - ONE call with all wallets
  */
 export async function fetchAvantisPositions(
   wallets: ManagerWallets
@@ -38,65 +38,83 @@ export async function fetchAvantisPositions(
 
   try {
     const allWallets = [wallets.primary, ...wallets.scouted];
-    const allPositions = [];
+    const serviceUrl = process.env.AVANTIS_SERVICE_URL || process.env.PYTHON_SERVICE_URL || 'https://yieldr-app-production.up.railway.app';
+    const rpcUrl = process.env.QUICKNODE_BASE_RPC_URL || 'https://mainnet.base.org';
 
-    // Fetch positions for each wallet
-    for (const wallet of allWallets) {
-      try {
-        const serviceUrl = process.env.AVANTIS_SERVICE_URL || process.env.PYTHON_SERVICE_URL || 'https://yieldr-app-production.up.railway.app';
-        const rpcUrl = process.env.QUICKNODE_BASE_RPC_URL || 'https://mainnet.base.org';
+    console.log(`[Avantis] Fetching ${allWallets.length} wallets in batch...`);
 
-        const response = await fetch(
-          `${serviceUrl}/fetch-positions`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              walletAddress: wallet,
-              rpcUrl: rpcUrl
-            }),
-            signal: AbortSignal.timeout(90000), // 90s timeout
-          }
-        );
-
-        if (!response.ok) {
-          console.warn(`[Avantis] Failed for wallet ${wallet}: ${response.status}`);
-          continue;
-        }
-
-        const data = await response.json();
-
-        if (data.success && data.data?.positions && Array.isArray(data.data.positions)) {
-          // Add wallet metadata to each position
-          const positionsWithWallet = data.data.positions.map((pos: any) => ({
-            ...pos,
-            walletAddress: wallet.toLowerCase(),
-            platform: 'avantis',
-            type: 'PERP',
-            positionId: `avantis-${wallet}-${pos.tradeIndex || Date.now()}`,
-            openedAt: pos.openedAt || new Date(),
-          }));
-          allPositions.push(...positionsWithWallet);
-        }
-      } catch (walletError: any) {
-        console.error(`[Avantis] Error fetching wallet ${wallet}:`, walletError.message);
+    // Call batch endpoint with ALL wallets
+    const response = await fetch(
+      `${serviceUrl}/fetch-positions-batch`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          walletAddresses: allWallets,
+          rpcUrl: rpcUrl
+        }),
+        signal: AbortSignal.timeout(30000), // 30s timeout (much faster with batch)
       }
+    );
+
+    if (!response.ok) {
+      const duration = Date.now() - startTime;
+      console.warn(`[Avantis] Batch request failed: ${response.status} (${duration}ms)`);
+      return {
+        success: false,
+        platform: 'avantis',
+        positions: [],
+        error: `HTTP ${response.status}`,
+        duration,
+      };
     }
+
+    const data = await response.json();
+    const duration = Date.now() - startTime;
+
+    if (!data.success || !data.data?.positionsByWallet) {
+      console.warn(`[Avantis] Invalid response (${duration}ms)`);
+      return {
+        success: false,
+        platform: 'avantis',
+        positions: [],
+        error: 'Invalid response format',
+        duration,
+      };
+    }
+
+    // Extract all positions from batch response
+    const allPositions = [];
+    for (const [walletAddress, walletData] of Object.entries(data.data.positionsByWallet)) {
+      const positions = (walletData as any).positions || [];
+      const positionsWithWallet = positions.map((pos: any) => ({
+        ...pos,
+        walletAddress: walletAddress.toLowerCase(),
+        platform: 'avantis',
+        type: 'PERP',
+        positionId: `avantis-${walletAddress}-${pos.tradeIndex || Date.now()}`,
+        openedAt: pos.openedAt || new Date(),
+      }));
+      allPositions.push(...positionsWithWallet);
+    }
+
+    console.log(`[Avantis] ✓ ${allPositions.length} positions (${duration}ms)`);
 
     return {
       success: true,
       platform: 'avantis',
       positions: allPositions,
-      duration: Date.now() - startTime,
+      duration,
     };
   } catch (error: any) {
-    console.error('[Avantis] Fetch error:', error);
+    const duration = Date.now() - startTime;
+    console.error(`[Avantis] Error: ${error.message} (${duration}ms)`);
     return {
       success: false,
       platform: 'avantis',
       positions: [],
       error: error.message,
-      duration: Date.now() - startTime,
+      duration,
     };
   }
 }
@@ -114,16 +132,13 @@ export async function fetchHyperliquidPositions(
     const allWallets = [wallets.primary, ...wallets.scouted];
     const allPositions = [];
 
-    // Fetch positions for each wallet with rate limiting (100ms between calls)
-    // Hyperliquid API limit: 1200/min = 20 req/sec
-    // 100ms = 10 req/sec = 50% headroom for scale
-    const results = await Promise.allSettled(
-      allWallets.map(async (wallet, index) => {
-        // Add 100ms delay between requests for rate limiting
-        if (index > 0) {
-          await delay(100);
-        }
+    console.log(`[Hyperliquid] Fetching ${allWallets.length} wallets in parallel...`);
 
+    // Fetch positions for all wallets in parallel
+    // Hyperliquid API limit: 1200/min = 20 req/sec (plenty of headroom)
+    // Manager staggering (100ms) provides natural rate limiting
+    const results = await Promise.allSettled(
+      allWallets.map(async (wallet) => {
         // Call Hyperliquid API directly
         const response = await fetch('https://api.hyperliquid.xyz/info', {
           method: 'POST',
@@ -200,14 +215,18 @@ export async function fetchHyperliquidPositions(
       }
     }
 
+    const duration = Date.now() - startTime;
+    console.log(`[Hyperliquid] ✓ ${allPositions.length} positions (${duration}ms)`);
+
     return {
       success: true,
       platform: 'hyperliquid',
       positions: allPositions,
-      duration: Date.now() - startTime,
+      duration,
     };
   } catch (error: any) {
-    console.error('[Hyperliquid] Fetch error:', error);
+    const duration = Date.now() - startTime;
+    console.error(`[Hyperliquid] Error: ${error.message} (${duration}ms)`);
     return {
       success: false,
       platform: 'hyperliquid',
@@ -232,17 +251,12 @@ export async function fetchLPPositions(
     const allWallets = [wallets.primary, ...wallets.scouted];
     const allPositions = [];
 
-    // Fetch LP positions for each wallet with rate limiting (500ms between calls)
-    // Krystal API rate limit unknown, so using conservative 500ms = 2 req/sec
-    for (let i = 0; i < allWallets.length; i++) {
-      const wallet = allWallets[i];
+    console.log(`[LP] Fetching ${allWallets.length} wallets in parallel...`);
 
-      // Add 500ms delay between requests for rate limiting
-      if (i > 0) {
-        await delay(500);
-      }
-
-      try {
+    // Fetch LP positions for all wallets in parallel
+    // Manager staggering provides natural rate limiting
+    const results = await Promise.allSettled(
+      allWallets.map(async (wallet) => {
         const normalizedAddress = wallet.toLowerCase();
 
         // Call Krystal API directly (correct endpoint)
@@ -256,61 +270,71 @@ export async function fetchLPPositions(
               'Origin': 'https://app.yieldr.org',
               'Referer': 'https://app.yieldr.org/'
             },
-            signal: AbortSignal.timeout(60000), // 60s timeout (LP API can be slow)
+            signal: AbortSignal.timeout(15000), // 15s timeout (should be fast)
           }
         );
 
         if (!response.ok) {
-          console.warn(`[LP] Failed for wallet ${wallet}: ${response.status}`);
-          continue;
+          throw new Error(`HTTP ${response.status}`);
         }
 
         const data = await response.json();
 
         // Krystal API returns positions array directly
-        if (data && data.positions && Array.isArray(data.positions)) {
-          const positionsWithWallet = data.positions.map((pos: any) => {
-            const token0 = pos.currentAmounts?.[0]?.token;
-            const token1 = pos.currentAmounts?.[1]?.token;
-
-            const liquidity = pos.currentAmounts?.reduce((sum: number, amount: any) => {
-              return sum + (amount.quotes?.usd?.value || 0);
-            }, 0) || 0;
-
-            const platform = pos.pool?.project || pos.pool?.projectKey || 'aerodrome';
-
-            return {
-              walletAddress: wallet.toLowerCase(),
-              platform: platform.toLowerCase(),
-              type: 'LP',
-              pair: `${token0?.symbol || '?'}/${token1?.symbol || '?'}`,
-              pool: pos.pool?.address || '',
-              chain: 'base',
-              liquidity: liquidity,
-              token0: token0?.symbol || '',
-              token1: token1?.symbol || '',
-              pnl: pos.pnl || 0,
-              roi: pos.returnOnInvestment || 0,
-              apr: pos.apr || 0,
-              status: pos.status || 'active',
-              positionId: `lp-${wallet}-${pos.id || Date.now()}`,
-              unclaimedFees: pos.feePending?.reduce((sum: number, fee: any) =>
-                sum + (fee.quotes?.usd?.value || 0), 0) || 0,
-              openedAt: new Date(), // Krystal doesn't provide open time
-            };
-          });
-          allPositions.push(...positionsWithWallet);
+        if (!data || !data.positions || !Array.isArray(data.positions)) {
+          return [];
         }
-      } catch (walletError: any) {
-        console.error(`[LP] Error fetching wallet ${wallet}:`, walletError.message);
+
+        return data.positions.map((pos: any) => {
+          const token0 = pos.currentAmounts?.[0]?.token;
+          const token1 = pos.currentAmounts?.[1]?.token;
+
+          const liquidity = pos.currentAmounts?.reduce((sum: number, amount: any) => {
+            return sum + (amount.quotes?.usd?.value || 0);
+          }, 0) || 0;
+
+          const platform = pos.pool?.project || pos.pool?.projectKey || 'aerodrome';
+
+          return {
+            walletAddress: wallet.toLowerCase(),
+            platform: platform.toLowerCase(),
+            type: 'LP',
+            pair: `${token0?.symbol || '?'}/${token1?.symbol || '?'}`,
+            pool: pos.pool?.address || '',
+            chain: 'base',
+            liquidity: liquidity,
+            token0: token0?.symbol || '',
+            token1: token1?.symbol || '',
+            pnl: pos.pnl || 0,
+            roi: pos.returnOnInvestment || 0,
+            apr: pos.apr || 0,
+            status: pos.status || 'active',
+            positionId: `lp-${wallet}-${pos.id || Date.now()}`,
+            unclaimedFees: pos.feePending?.reduce((sum: number, fee: any) =>
+              sum + (fee.quotes?.usd?.value || 0), 0) || 0,
+            openedAt: new Date(), // Krystal doesn't provide open time
+          };
+        });
+      })
+    );
+
+    // Collect successful results
+    for (const result of results) {
+      if (result.status === 'fulfilled') {
+        allPositions.push(...result.value);
+      } else {
+        console.warn('[LP] Wallet fetch failed:', result.reason?.message || result.reason);
       }
     }
+
+    const duration = Date.now() - startTime;
+    console.log(`[LP] ✓ ${allPositions.length} positions (${duration}ms)`);
 
     return {
       success: true,
       platform: 'lp',
       positions: allPositions,
-      duration: Date.now() - startTime,
+      duration,
     };
   } catch (error: any) {
     console.error('[LP] Fetch error:', error);
