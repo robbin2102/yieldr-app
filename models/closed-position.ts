@@ -40,6 +40,16 @@ const ClosedPositionSchema = new mongoose.Schema({
     enum: ['avantis', 'hyperliquid', 'aerodrome', 'uniswap'],
     index: true
   },
+
+  // Data source (how we detected this close)
+  dataSource: {
+    type: String,
+    required: true,
+    enum: ['api_fills', 'snapshot_detection'],
+    index: true,
+    // api_fills: Real data from platform API (Hyperliquid userFills)
+    // snapshot_detection: Inferred from snapshot comparison (Avantis, LP)
+  },
   asset: {
     type: String,
     required: true,

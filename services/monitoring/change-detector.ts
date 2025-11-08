@@ -195,6 +195,7 @@ export function enrichClosedPosition(position: Position, closedAt: Date): any {
     positionId: position.positionId,
     walletAddress: position.walletAddress,
     platform: position.platform,
+    dataSource: 'snapshot_detection', // Detected via snapshot comparison
     asset: position.asset,
     pair: position.pair,
     type: position.type,

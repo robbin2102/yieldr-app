@@ -431,3 +431,177 @@ export async function fetchAllPositions(
     },
   };
 }
+
+/**
+ * Fetches Hyperliquid userFills (closed positions)
+ * Returns last 30 days of fills on first run, then incremental
+ */
+export async function fetchHyperliquidUserFills(
+  wallets: ManagerWallets,
+  lastFetchTime?: number
+): Promise<PositionFetchResult> {
+  const startTime = Date.now();
+
+  try {
+    const allWallets = [wallets.primary, ...wallets.scouted];
+    const allFills = [];
+
+    console.log(`[Hyperliquid] Fetching fills for ${allWallets.length} wallets...`);
+
+    // Fetch fills for all wallets in parallel
+    const results = await Promise.allSettled(
+      allWallets.map(async (wallet) => {
+        let fillsData;
+
+        if (lastFetchTime) {
+          // Incremental: Fetch fills since last fetch
+          const response = await fetch('https://api.hyperliquid.xyz/info', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              type: 'userFillsByTime',
+              user: wallet,
+              startTime: lastFetchTime,
+              endTime: Date.now(),
+            }),
+            signal: AbortSignal.timeout(30000),
+          });
+
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+          }
+
+          fillsData = await response.json();
+        } else {
+          // First run: Fetch last 30 days
+          const thirtyDaysAgo = Date.now() - (30 * 24 * 60 * 60 * 1000);
+          const response = await fetch('https://api.hyperliquid.xyz/info', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              type: 'userFillsByTime',
+              user: wallet,
+              startTime: thirtyDaysAgo,
+              endTime: Date.now(),
+            }),
+            signal: AbortSignal.timeout(30000),
+          });
+
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+          }
+
+          fillsData = await response.json();
+        }
+
+        // Add wallet address to each fill
+        return fillsData.map((fill: any) => ({
+          ...fill,
+          walletAddress: wallet.toLowerCase(),
+        }));
+      })
+    );
+
+    // Collect successful results
+    for (const result of results) {
+      if (result.status === 'fulfilled') {
+        allFills.push(...result.value);
+      } else {
+        console.warn('[Hyperliquid] Wallet fills fetch failed:', result.reason?.message);
+      }
+    }
+
+    const duration = Date.now() - startTime;
+    console.log(`[Hyperliquid] ✓ ${allFills.length} fills (${duration}ms)`);
+
+    return {
+      success: true,
+      platform: 'hyperliquid',
+      positions: allFills, // Using positions array for fills
+      duration,
+    };
+  } catch (error: any) {
+    const duration = Date.now() - startTime;
+    console.error(`[Hyperliquid] Error fetching fills: ${error.message} (${duration}ms)`);
+    return {
+      success: false,
+      platform: 'hyperliquid',
+      positions: [],
+      error: error.message,
+      duration,
+    };
+  }
+}
+
+/**
+ * Fetches Hyperliquid open orders
+ */
+export async function fetchHyperliquidOpenOrders(
+  wallets: ManagerWallets
+): Promise<PositionFetchResult> {
+  const startTime = Date.now();
+
+  try {
+    const allWallets = [wallets.primary, ...wallets.scouted];
+    const allOrders = [];
+
+    console.log(`[Hyperliquid] Fetching open orders for ${allWallets.length} wallets...`);
+
+    // Fetch open orders for all wallets in parallel
+    const results = await Promise.allSettled(
+      allWallets.map(async (wallet) => {
+        const response = await fetch('https://api.hyperliquid.xyz/info', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            type: 'openOrders',
+            user: wallet,
+          }),
+          signal: AbortSignal.timeout(15000),
+        });
+
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+
+        const ordersData = await response.json();
+
+        // Add wallet address to each order
+        return ordersData.map((order: any) => ({
+          ...order,
+          walletAddress: wallet.toLowerCase(),
+          platform: 'hyperliquid',
+        }));
+      })
+    );
+
+    // Collect successful results
+    for (const result of results) {
+      if (result.status === 'fulfilled') {
+        allOrders.push(...result.value);
+      } else {
+        console.warn('[Hyperliquid] Wallet orders fetch failed:', result.reason?.message);
+      }
+    }
+
+    const duration = Date.now() - startTime;
+    console.log(`[Hyperliquid] ✓ ${allOrders.length} open orders (${duration}ms)`);
+
+    return {
+      success: true,
+      platform: 'hyperliquid',
+      positions: allOrders, // Using positions array for orders
+      duration,
+    };
+  } catch (error: any) {
+    const duration = Date.now() - startTime;
+    console.error(`[Hyperliquid] Error fetching orders: ${error.message} (${duration}ms)`);
+    return {
+      success: false,
+      platform: 'hyperliquid',
+      positions: [],
+      error: error.message,
+      duration,
+    };
+  }
+}
