@@ -607,3 +607,105 @@ export async function fetchHyperliquidOpenOrders(
     };
   }
 }
+
+/**
+ * Fetches Hyperliquid portfolio data (account value and PnL history)
+ * Used for computing time-based metrics and historical data
+ */
+export async function fetchHyperliquidPortfolio(
+  wallets: ManagerWallets
+): Promise<{
+  success: boolean;
+  platform: 'hyperliquid';
+  portfolios: any[];
+  duration: number;
+  error?: string;
+}> {
+  const startTime = Date.now();
+
+  try {
+    const allWallets = [wallets.primary, ...wallets.scouted];
+    const allPortfolios = [];
+
+    console.log(`[Hyperliquid] Fetching portfolio data for ${allWallets.length} wallets...`);
+
+    // Fetch portfolio data for all wallets in parallel
+    const results = await Promise.allSettled(
+      allWallets.map(async (wallet) => {
+        const response = await fetch('https://api.hyperliquid.xyz/info', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            type: 'portfolio',
+            user: wallet,
+          }),
+          signal: AbortSignal.timeout(15000),
+        });
+
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+
+        const portfolioData = await response.json();
+
+        // Parse portfolio data structure
+        // Format: [["day", {...}], ["week", {...}], ...]
+        const parsed: any = {
+          walletAddress: wallet.toLowerCase(),
+          platform: 'hyperliquid',
+          timestamp: new Date(),
+        };
+
+        for (const [period, data] of portfolioData) {
+          const key = `${period}Data`;
+          parsed[key] = data;
+
+          // Extract latest values for quick access
+          if (period === 'day') {
+            const pnlHistory = data.pnlHistory || [];
+            const accountValueHistory = data.accountValueHistory || [];
+
+            if (pnlHistory.length > 0) {
+              parsed.pnl = parseFloat(pnlHistory[pnlHistory.length - 1][1] || '0');
+            }
+
+            if (accountValueHistory.length > 0) {
+              parsed.accountValue = parseFloat(accountValueHistory[accountValueHistory.length - 1][1] || '0');
+            }
+          }
+        }
+
+        return parsed;
+      })
+    );
+
+    // Collect successful results
+    for (const result of results) {
+      if (result.status === 'fulfilled') {
+        allPortfolios.push(result.value);
+      } else {
+        console.warn('[Hyperliquid] Wallet portfolio fetch failed:', result.reason?.message);
+      }
+    }
+
+    const duration = Date.now() - startTime;
+    console.log(`[Hyperliquid] ✓ ${allPortfolios.length} portfolio snapshots (${duration}ms)`);
+
+    return {
+      success: true,
+      platform: 'hyperliquid',
+      portfolios: allPortfolios,
+      duration,
+    };
+  } catch (error: any) {
+    const duration = Date.now() - startTime;
+    console.error(`[Hyperliquid] Error fetching portfolio: ${error.message} (${duration}ms)`);
+    return {
+      success: false,
+      platform: 'hyperliquid',
+      portfolios: [],
+      error: error.message,
+      duration,
+    };
+  }
+}
