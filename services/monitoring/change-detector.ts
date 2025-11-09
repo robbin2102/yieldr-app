@@ -45,11 +45,189 @@ interface ChangeDetectionResult {
 
 /**
  * Compares two snapshots and detects position changes
+ *
+ * For Hyperliquid: Uses per-asset comparison with size variance detection
+ * For Avantis/LP: Uses traditional positionId-based comparison
  */
 export function detectPositionChanges(
   previousPositions: Position[],
   currentPositions: Position[]
 ): ChangeDetectionResult {
+  // Separate Hyperliquid positions from others
+  const prevHyperliquid = previousPositions.filter(p => p.platform === 'hyperliquid');
+  const currHyperliquid = currentPositions.filter(p => p.platform === 'hyperliquid');
+  const prevOthers = previousPositions.filter(p => p.platform !== 'hyperliquid');
+  const currOthers = currentPositions.filter(p => p.platform !== 'hyperliquid');
+
+  // Process Hyperliquid positions using per-asset comparison
+  const hyperliquidChanges = detectHyperliquidAssetChanges(prevHyperliquid, currHyperliquid);
+
+  // Process other platforms using traditional positionId comparison
+  const otherChanges = detectPositionIdChanges(prevOthers, currOthers);
+
+  // Merge results
+  const newPositions = [...hyperliquidChanges.newPositions, ...otherChanges.newPositions];
+  const closedPositions = [...hyperliquidChanges.closedPositions, ...otherChanges.closedPositions];
+  const modifiedPositions = [...hyperliquidChanges.modifiedPositions, ...otherChanges.modifiedPositions];
+
+  const hasChanges =
+    newPositions.length > 0 ||
+    closedPositions.length > 0 ||
+    modifiedPositions.length > 0;
+
+  return {
+    hasChanges,
+    newPositions,
+    closedPositions,
+    modifiedPositions,
+    summary: {
+      new: newPositions.length,
+      closed: closedPositions.length,
+      modified: modifiedPositions.length,
+    },
+  };
+}
+
+/**
+ * Detects changes for Hyperliquid using per-asset comparison
+ * Compares asset quantities between snapshots to detect opens/closes
+ */
+function detectHyperliquidAssetChanges(
+  previousPositions: Position[],
+  currentPositions: Position[]
+): Omit<ChangeDetectionResult, 'hasChanges'> {
+  // Group positions by wallet + asset + direction
+  const prevByAsset = groupHyperliquidPositions(previousPositions);
+  const currByAsset = groupHyperliquidPositions(currentPositions);
+
+  const newPositions: Position[] = [];
+  const closedPositions: Position[] = [];
+  const modifiedPositions: { position: Position; changes: any[] }[] = [];
+
+  // Detect new and modified positions
+  for (const [key, currGroup] of currByAsset) {
+    const prevGroup = prevByAsset.get(key);
+
+    if (!prevGroup) {
+      // New position opened
+      newPositions.push(...currGroup.positions);
+    } else {
+      // Position exists - check for size changes
+      const prevSize = prevGroup.totalSize;
+      const currSize = currGroup.totalSize;
+      const sizeChange = Math.abs(currSize - prevSize);
+
+      // If size changed significantly (>1%), mark as modified
+      if (sizeChange > Math.max(prevSize, currSize) * 0.01) {
+        const changes = detectFieldChanges(prevGroup.positions[0], currGroup.positions[0]);
+        if (changes.length > 0) {
+          modifiedPositions.push({
+            position: currGroup.positions[0],
+            changes,
+          });
+        }
+      }
+    }
+  }
+
+  // Detect closed positions
+  for (const [key, prevGroup] of prevByAsset) {
+    const currGroup = currByAsset.get(key);
+
+    if (!currGroup) {
+      // Position fully closed - create closed position record
+      const prevPos = prevGroup.positions[0]; // Use first position as reference
+      const avgMarkPrice = prevPos.currentPrice || prevPos.markPrice || 0;
+
+      // Calculate PnL based on position close
+      // Since we don't have current snapshot, we'll use the previous snapshot's data
+      closedPositions.push({
+        ...prevPos,
+        exitPrice: avgMarkPrice,
+        closedAt: new Date(),
+      });
+    } else {
+      // Check for partial closes (size reduction)
+      const prevSize = prevGroup.totalSize;
+      const currSize = currGroup.totalSize;
+
+      if (currSize < prevSize * 0.99) { // >1% reduction
+        // Partial close detected
+        const prevPos = prevGroup.positions[0];
+        const currPos = currGroup.positions[0];
+
+        // Calculate avg close price from mark prices
+        const prevMarkPrice = prevPos.currentPrice || prevPos.markPrice || 0;
+        const currMarkPrice = currPos.currentPrice || currPos.markPrice || 0;
+        const avgClosePrice = (prevMarkPrice + currMarkPrice) / 2;
+
+        const closedSize = prevSize - currSize;
+        const closedPercentage = closedSize / prevSize;
+
+        // Create partial close record
+        const partialClose = {
+          ...prevPos,
+          positionId: `${prevPos.positionId}-partial-${Date.now()}`,
+          positionSize: prevPos.positionSize * closedPercentage,
+          exitPrice: avgClosePrice,
+          pnl: (prevPos.pnl || 0) * closedPercentage,
+          closedAt: new Date(),
+        };
+
+        closedPositions.push(partialClose);
+      }
+    }
+  }
+
+  return {
+    newPositions,
+    closedPositions,
+    modifiedPositions,
+    summary: {
+      new: newPositions.length,
+      closed: closedPositions.length,
+      modified: modifiedPositions.length,
+    },
+  };
+}
+
+/**
+ * Groups Hyperliquid positions by wallet + asset + direction
+ * Returns aggregated size for comparison
+ */
+function groupHyperliquidPositions(positions: Position[]): Map<string, {
+  positions: Position[];
+  totalSize: number;
+}> {
+  const grouped = new Map<string, { positions: Position[]; totalSize: number }>();
+
+  for (const pos of positions) {
+    const key = `${pos.walletAddress}-${pos.asset}-${pos.direction}`;
+
+    if (!grouped.has(key)) {
+      grouped.set(key, { positions: [], totalSize: 0 });
+    }
+
+    const group = grouped.get(key)!;
+    group.positions.push(pos);
+
+    // Sum up position sizes (could use sz field if available)
+    const size = typeof pos.sz === 'number' ? pos.sz :
+                 typeof pos.sz === 'string' ? parseFloat(pos.sz) :
+                 pos.positionSize || 0;
+    group.totalSize += size;
+  }
+
+  return grouped;
+}
+
+/**
+ * Traditional positionId-based change detection (for Avantis, LP, etc.)
+ */
+function detectPositionIdChanges(
+  previousPositions: Position[],
+  currentPositions: Position[]
+): Omit<ChangeDetectionResult, 'hasChanges'> {
   // Create maps for efficient lookup
   const prevMap = new Map<string, Position>();
   const currMap = new Map<string, Position>();
@@ -88,13 +266,7 @@ export function detectPositionChanges(
     }
   }
 
-  const hasChanges =
-    newPositions.length > 0 ||
-    closedPositions.length > 0 ||
-    modifiedPositions.length > 0;
-
   return {
-    hasChanges,
     newPositions,
     closedPositions,
     modifiedPositions,
