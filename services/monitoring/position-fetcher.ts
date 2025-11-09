@@ -463,6 +463,7 @@ export async function fetchHyperliquidUserFills(
               user: wallet,
               startTime: lastFetchTime,
               endTime: Date.now(),
+              aggregateByTime: true, // Combine partial fills from same order
             }),
             signal: AbortSignal.timeout(30000),
           });
@@ -483,6 +484,7 @@ export async function fetchHyperliquidUserFills(
               user: wallet,
               startTime: thirtyDaysAgo,
               endTime: Date.now(),
+              aggregateByTime: true, // Combine partial fills from same order
             }),
             signal: AbortSignal.timeout(30000),
           });

@@ -26,8 +26,9 @@ export async function computeAndSaveAnalytics(
     console.log(`[Analytics] Computing analytics for ${username}...`);
 
     // Fetch required data
+    // Note: No limit on closed positions since we now only save actual closes (not opens)
     const [closedPositions, livePositions] = await Promise.all([
-      getClosedPositions(managerId, { limit: 1000 }), // Last 1000 closed positions
+      getClosedPositions(managerId), // All closed positions
       getLastSnapshotPositions(managerId),
     ]);
 

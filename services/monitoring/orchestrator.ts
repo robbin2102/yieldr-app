@@ -120,10 +120,11 @@ export async function runMonitoringCycle(): Promise<MonitoringResult> {
       managers.map(async (manager) => {
         try {
           // Detect changes and log closed positions
+          // NOTE: Hyperliquid uses fills API for closed positions, not snapshot detection
           const previousPositions = await getLastSnapshotPositions(manager._id);
           const currentSnapshots = await Promise.all([
             getLastSnapshot(manager._id, 'avantis'),
-            getLastSnapshot(manager._id, 'hyperliquid'),
+            // Skip hyperliquid - we use fills API for exact closed position data
             getLastSnapshot(manager._id, 'aerodrome'),
           ]);
 
@@ -131,7 +132,10 @@ export async function runMonitoringCycle(): Promise<MonitoringResult> {
             .filter(s => s !== null)
             .flatMap(s => s!.positions || []);
 
-          const changes = detectPositionChanges(previousPositions, currentPositions);
+          // Filter out Hyperliquid from previous positions (we have fills API for that)
+          const previousPositionsFiltered = previousPositions.filter(p => p.platform !== 'hyperliquid');
+
+          const changes = detectPositionChanges(previousPositionsFiltered, currentPositions);
 
           // Log closed positions
           if (changes.closedPositions.length > 0) {
@@ -416,6 +420,9 @@ async function updateLastFillsFetchTime(managerId: string, timestamp: number): P
  * Save Hyperliquid fills to closed-positions collection
  * Returns count of new fills saved
  * Uses BULK operations to avoid MongoDB timeout with 2000+ fills
+ *
+ * IMPORTANT: Only saves fills that CLOSE positions (dir contains "Close")
+ * Ignores fills that open positions (closedPnl = 0)
  */
 async function saveHyperliquidFills(fills: any[], managerId: string): Promise<number> {
   try {
@@ -424,9 +431,40 @@ async function saveHyperliquidFills(fills: any[], managerId: string): Promise<nu
     const client = await clientPromise;
     const db = client.db('yieldr');
 
-    // Step 1: Prepare all fill documents with their positionIds
-    const fillDocs = fills.map(fill => {
-      const positionId = `hyperliquid-${fill.walletAddress}-${fill.coin}-${fill.time}`;
+    // Step 1: Filter to only include fills that CLOSE positions
+    // dir: "Close Long" or "Close Short" (has actual closedPnl)
+    // Exclude: "Open Long", "Open Short" (closedPnl = 0)
+    const closeFills = fills.filter(fill => {
+      // Only save fills that actually close a position
+      const dir = fill.dir || '';
+      const isClose = dir.includes('Close');
+      const hasPnl = parseFloat(fill.closedPnl || '0') !== 0;
+
+      return isClose || hasPnl; // Close fills OR any fill with non-zero PnL
+    });
+
+    if (closeFills.length === 0) {
+      console.log(`[Orchestrator] No closing fills found (${fills.length} total fills were opens)`);
+      return 0;
+    }
+
+    console.log(`[Orchestrator] Processing ${closeFills.length} closing fills (filtered from ${fills.length} total)`);
+
+    // Step 2: Prepare fill documents
+    const fillDocs = closeFills.map(fill => {
+      const positionId = `hyperliquid-${fill.walletAddress}-${fill.coin}-${fill.oid}-${fill.time}`;
+
+      // Determine direction from dir field
+      let direction = 'UNKNOWN';
+      if (fill.dir) {
+        if (fill.dir.includes('Long')) direction = 'LONG';
+        else if (fill.dir.includes('Short')) direction = 'SHORT';
+      }
+      // Fallback to side if dir not available
+      if (direction === 'UNKNOWN') {
+        direction = fill.side === 'B' ? 'LONG' : 'SHORT';
+      }
+
       return {
         positionId,
         walletAddress: fill.walletAddress.toLowerCase(),
@@ -436,10 +474,10 @@ async function saveHyperliquidFills(fills: any[], managerId: string): Promise<nu
         asset: fill.coin,
         pair: fill.coin, // Hyperliquid uses coin name
         type: 'PERP',
-        direction: fill.side === 'B' ? 'LONG' : 'SHORT',
+        direction,
         exitPrice: parseFloat(fill.px),
         positionSize: parseFloat(fill.sz) * parseFloat(fill.px), // size * price
-        pnl: parseFloat(fill.closedPnl),
+        pnl: parseFloat(fill.closedPnl || '0'),
         roi: 0, // Will be calculated in analytics
         closedAt: new Date(fill.time),
         openedAt: new Date(fill.time), // Approximate, actual open time unknown
@@ -450,7 +488,7 @@ async function saveHyperliquidFills(fills: any[], managerId: string): Promise<nu
       };
     });
 
-    // Step 2: Check which positionIds already exist (ONE query for ALL)
+    // Step 3: Check which positionIds already exist (ONE query for ALL)
     const positionIds = fillDocs.map(doc => doc.positionId);
     const existingDocs = await db
       .collection('closedpositions')
@@ -460,14 +498,15 @@ async function saveHyperliquidFills(fills: any[], managerId: string): Promise<nu
 
     const existingIds = new Set(existingDocs.map(doc => doc.positionId));
 
-    // Step 3: Filter out duplicates
+    // Step 4: Filter out duplicates
     const newFills = fillDocs.filter(doc => !existingIds.has(doc.positionId));
 
     if (newFills.length === 0) {
+      console.log(`[Orchestrator] All ${fillDocs.length} fills already exist in database`);
       return 0;
     }
 
-    // Step 4: Bulk insert ALL new fills in ONE operation
+    // Step 5: Bulk insert ALL new fills in ONE operation
     const result = await db.collection('closedpositions').insertMany(newFills, { ordered: false });
 
     return result.insertedCount;
