@@ -60,30 +60,66 @@ interface MetricsData {
 
 async function fetchUserFills(walletAddress: string, days: number = 30): Promise<any[]> {
   const now = Date.now();
-  const startTime = now - (days * 24 * 60 * 60 * 1000);
+  const targetStartTime = now - (days * 24 * 60 * 60 * 1000);
 
-  console.log(`   Fetching fills from ${new Date(startTime).toISOString()} to ${new Date(now).toISOString()}...`);
+  console.log(`   Fetching fills from ${new Date(targetStartTime).toISOString()} to ${new Date(now).toISOString()}...`);
 
-  const response = await fetch(HYPERLIQUID_API, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      type: 'userFillsByTime',
-      user: walletAddress,
-      startTime,
-      endTime: now,
-      aggregateByTime: true,
-    }),
-  });
+  let allFills: any[] = [];
+  let currentEndTime = now;
+  let iterations = 0;
+  const maxIterations = 10; // Prevent infinite loops
 
-  if (!response.ok) {
-    throw new Error(`HTTP ${response.status}`);
+  while (iterations < maxIterations) {
+    iterations++;
+
+    const response = await fetch(HYPERLIQUID_API, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        type: 'userFillsByTime',
+        user: walletAddress,
+        startTime: targetStartTime,
+        endTime: currentEndTime,
+        aggregateByTime: true,
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    const fills = await response.json();
+    const closingFills = fills.filter((f: any) => parseFloat(f.closedPnl || '0') !== 0);
+
+    if (closingFills.length === 0) {
+      break; // No more fills
+    }
+
+    console.log(`   ✓ Batch ${iterations}: Fetched ${fills.length} fills (${closingFills.length} with PnL)`);
+
+    allFills = [...closingFills, ...allFills]; // Prepend older fills
+
+    // Check if we hit the 2000 limit
+    if (fills.length < 2000) {
+      break; // Got all fills in range
+    }
+
+    // If we got exactly 2000, there might be more
+    // Set endTime to the oldest fill's timestamp minus 1ms
+    const oldestFillTime = Math.min(...fills.map((f: any) => f.time));
+    if (oldestFillTime <= targetStartTime) {
+      break; // Reached the target start time
+    }
+
+    currentEndTime = oldestFillTime - 1;
+    console.log(`   ⚠️  Hit 2000 fills limit, fetching older data...`);
+
+    // Rate limit
+    await new Promise(resolve => setTimeout(resolve, 200));
   }
 
-  const fills = await response.json();
-  const closingFills = fills.filter((f: any) => parseFloat(f.closedPnl || '0') !== 0);
-  console.log(`   ✓ Fetched ${fills.length} fills (${closingFills.length} with PnL)\n`);
-  return closingFills;
+  console.log(`   ✓ Total: ${allFills.length} fills with PnL\n`);
+  return allFills;
 }
 
 async function fetchPortfolio(walletAddress: string): Promise<any> {
@@ -165,8 +201,19 @@ function computeMetrics(
     ? parseFloat(allTimeData.pnlHistory[allTimeData.pnlHistory.length - 1][1])
     : 0;
 
-  // ROI calculations (using account value as base)
-  const initialValue = aum - pnlAllTime;
+  // ROI calculations
+  // Get initial account value from portfolio history (first data point)
+  const initialAccountValue = allTimeData?.accountValueHistory?.length > 0
+    ? parseFloat(allTimeData.accountValueHistory[0][1])
+    : 0;
+
+  // If we have historical data, use it. Otherwise, estimate from current AUM - PnL
+  let initialValue = initialAccountValue;
+  if (initialValue <= 0) {
+    // Fallback: estimate initial value (may be negative if profits were withdrawn)
+    initialValue = Math.max(aum - pnlAllTime, 1); // Use max 1 to avoid division by zero
+  }
+
   const roi24h = initialValue > 0 ? (pnl24h / initialValue) * 100 : 0;
   const roi7d = initialValue > 0 ? (pnl7d / initialValue) * 100 : 0;
   const roi30d = initialValue > 0 ? (pnl30d / initialValue) * 100 : 0;
@@ -385,6 +432,28 @@ async function main() {
     console.log(`   Unprofitable Days:      ${metrics.unprofitableDays}`);
     console.log(`   Break Even Days:        ${metrics.breakEvenDays}`);
     console.log(`   Active Days:            ${metrics.activeDays}`);
+
+    // Data coverage info
+    const oldestFill30d = fills30d.length > 0 ? new Date(Math.min(...fills30d.map((f: any) => f.time))) : null;
+    const newestFill30d = fills30d.length > 0 ? new Date(Math.max(...fills30d.map((f: any) => f.time))) : null;
+    const daysCovered30d = oldestFill30d && newestFill30d
+      ? Math.ceil((newestFill30d.getTime() - oldestFill30d.getTime()) / (1000 * 60 * 60 * 24))
+      : 0;
+
+    console.log('\n╔════════════════════════════════════════════════════════════╗');
+    console.log('║  📅 DATA COVERAGE                                          ║');
+    console.log('╚════════════════════════════════════════════════════════════╝');
+    console.log(`   30d Fills Fetched:      ${fills30d.length}`);
+    console.log(`   90d Fills Fetched:      ${fillsAllTime.length}`);
+    console.log(`   Oldest Fill (30d):      ${oldestFill30d?.toISOString() || 'N/A'}`);
+    console.log(`   Newest Fill (30d):      ${newestFill30d?.toISOString() || 'N/A'}`);
+    console.log(`   Days Covered (30d):     ${daysCovered30d}`);
+    if (daysCovered30d < 30 && fills30d.length > 0) {
+      console.log(`   ⚠️  Warning:             Only ${daysCovered30d} days of data (expected 30)`);
+    }
+    if (fills30d.length === 2000 || fillsAllTime.length === 2000) {
+      console.log(`   ⚠️  API Limit:           Hit 2000 fills limit per request`);
+    }
 
     console.log('\n╔════════════════════════════════════════════════════════════╗');
     console.log('║  ⚠️  RISK METRICS                                          ║');
