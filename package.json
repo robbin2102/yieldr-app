@@ -10,7 +10,8 @@
     "test:monitor": "tsx --env-file=.env.local scripts/test-monitor.ts",
     "test:pnl-accuracy": "tsx --env-file=.env.local scripts/test-hyperliquid-pnl-accuracy.ts",
     "test:metrics": "tsx --env-file=.env.local scripts/test-hyperliquid-metrics.ts",
-    "test:single-wallet": "tsx --env-file=.env.local scripts/test-single-wallet.ts"
+    "test:single-wallet": "tsx --env-file=.env.local scripts/test-single-wallet.ts",
+    "test:7d-metrics": "tsx --env-file=.env.local scripts/test-7d-metrics.ts"
   },
   "dependencies": {
     "@rainbow-me/rainbowkit": "^2.1.3",
