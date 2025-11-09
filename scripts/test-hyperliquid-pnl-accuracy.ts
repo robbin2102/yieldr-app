@@ -184,12 +184,15 @@ async function main() {
           // Fetch fills for last 24h
           const { fills, analysis } = await fetchUserFills24h(wallet);
 
+          const winRate = analysis.totalFills > 0 ? ((analysis.winTrades / analysis.totalFills) * 100) : 0;
+          const lossRate = analysis.totalFills > 0 ? ((analysis.lossTrades / analysis.totalFills) * 100) : 0;
+
           console.log('📈 User Fills Analysis (Last 24h):');
           console.log(`   Start Time:  ${new Date(analysis.startTime).toISOString()}`);
           console.log(`   End Time:    ${new Date(analysis.endTime).toISOString()}`);
           console.log(`   Total Fills: ${analysis.totalFills}`);
-          console.log(`   Win Trades:  ${analysis.winTrades} (${analysis.totalFills > 0 ? ((analysis.winTrades / analysis.totalFills) * 100).toFixed(1) : 0}%)`);
-          console.log(`   Loss Trades: ${analysis.lossTrades} (${analysis.totalFills > 0 ? ((analysis.lossTrades / analysis.lossTrades) * 100).toFixed(1) : 0}%)`);
+          console.log(`   Win Trades:  ${analysis.winTrades} (${winRate.toFixed(1)}%)`);
+          console.log(`   Loss Trades: ${analysis.lossTrades} (${lossRate.toFixed(1)}%)`);
           console.log(`   Total PnL:   $${analysis.totalPnL.toFixed(2)}`);
 
           // Fetch portfolio data

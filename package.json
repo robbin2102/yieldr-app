@@ -8,7 +8,8 @@
     "start": "next start",
     "backend": "node backend-src/server.js",
     "test:monitor": "tsx --env-file=.env.local scripts/test-monitor.ts",
-    "test:pnl-accuracy": "tsx --env-file=.env.local scripts/test-hyperliquid-pnl-accuracy.ts"
+    "test:pnl-accuracy": "tsx --env-file=.env.local scripts/test-hyperliquid-pnl-accuracy.ts",
+    "test:metrics": "tsx --env-file=.env.local scripts/test-hyperliquid-metrics.ts"
   },
   "dependencies": {
     "@rainbow-me/rainbowkit": "^2.1.3",
