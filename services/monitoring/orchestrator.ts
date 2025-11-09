@@ -418,11 +418,13 @@ async function updateLastFillsFetchTime(managerId: string, timestamp: number): P
 
 /**
  * Save Hyperliquid fills to closed-positions collection
- * Returns count of new fills saved
- * Uses BULK operations to avoid MongoDB timeout with 2000+ fills
+ * Returns count of new positions saved
  *
- * IMPORTANT: Only saves fills that CLOSE positions (dir contains "Close")
- * Ignores fills that open positions (closedPnl = 0)
+ * CRITICAL: Groups fills by OID (Order ID) to create ONE position per order
+ * - Multiple fills with same oid = partial fills of one order execution
+ * - Aggregates: sum PnL, sizes, weighted avg price
+ *
+ * Uses BULK operations to avoid MongoDB timeout
  */
 async function saveHyperliquidFills(fills: any[], managerId: string): Promise<number> {
   try {
@@ -432,15 +434,11 @@ async function saveHyperliquidFills(fills: any[], managerId: string): Promise<nu
     const db = client.db('yieldr');
 
     // Step 1: Filter to only include fills that CLOSE positions
-    // dir: "Close Long" or "Close Short" (has actual closedPnl)
-    // Exclude: "Open Long", "Open Short" (closedPnl = 0)
     const closeFills = fills.filter(fill => {
-      // Only save fills that actually close a position
       const dir = fill.dir || '';
       const isClose = dir.includes('Close');
       const hasPnl = parseFloat(fill.closedPnl || '0') !== 0;
-
-      return isClose || hasPnl; // Close fills OR any fill with non-zero PnL
+      return isClose || hasPnl;
     });
 
     if (closeFills.length === 0) {
@@ -450,46 +448,95 @@ async function saveHyperliquidFills(fills: any[], managerId: string): Promise<nu
 
     console.log(`[Orchestrator] Processing ${closeFills.length} closing fills (filtered from ${fills.length} total)`);
 
-    // Step 2: Prepare fill documents
-    const fillDocs = closeFills.map(fill => {
-      const positionId = `hyperliquid-${fill.walletAddress}-${fill.coin}-${fill.oid}-${fill.time}`;
+    // Step 2: GROUP fills by OID (Order ID)
+    // Multiple fills with same oid = one order execution (partial fills)
+    const fillsByOid = new Map<string, any[]>();
+
+    for (const fill of closeFills) {
+      const oid = fill.oid?.toString() || 'unknown';
+      if (!fillsByOid.has(oid)) {
+        fillsByOid.set(oid, []);
+      }
+      fillsByOid.get(oid)!.push(fill);
+    }
+
+    console.log(`[Orchestrator] Grouped ${closeFills.length} fills into ${fillsByOid.size} orders`);
+
+    // Step 3: Aggregate each OID group into ONE position
+    const aggregatedPositions = [];
+
+    for (const [oid, orderFills] of fillsByOid) {
+      // Sort fills by time to get first and last
+      const sortedFills = orderFills.sort((a, b) => a.time - b.time);
+      const firstFill = sortedFills[0];
+      const lastFill = sortedFills[sortedFills.length - 1];
+
+      // Aggregate metrics
+      const totalSize = sortedFills.reduce((sum, f) => sum + parseFloat(f.sz || '0'), 0);
+      const totalPnl = sortedFills.reduce((sum, f) => sum + parseFloat(f.closedPnl || '0'), 0);
+
+      // Weighted average exit price
+      let totalValue = 0;
+      let totalQty = 0;
+      for (const f of sortedFills) {
+        const sz = parseFloat(f.sz || '0');
+        const px = parseFloat(f.px || '0');
+        totalValue += sz * px;
+        totalQty += sz;
+      }
+      const avgExitPrice = totalQty > 0 ? totalValue / totalQty : parseFloat(firstFill.px || '0');
 
       // Determine direction from dir field
       let direction = 'UNKNOWN';
-      if (fill.dir) {
-        if (fill.dir.includes('Long')) direction = 'LONG';
-        else if (fill.dir.includes('Short')) direction = 'SHORT';
+      if (firstFill.dir) {
+        if (firstFill.dir.includes('Long')) direction = 'LONG';
+        else if (firstFill.dir.includes('Short')) direction = 'SHORT';
       }
       // Fallback to side if dir not available
       if (direction === 'UNKNOWN') {
-        direction = fill.side === 'B' ? 'LONG' : 'SHORT';
+        direction = firstFill.side === 'B' ? 'LONG' : 'SHORT';
       }
 
-      return {
+      // Create aggregated position
+      const positionId = `hyperliquid-${firstFill.walletAddress}-${firstFill.coin}-${oid}`;
+
+      aggregatedPositions.push({
         positionId,
-        walletAddress: fill.walletAddress.toLowerCase(),
+        walletAddress: firstFill.walletAddress.toLowerCase(),
         managerId,
         platform: 'hyperliquid',
-        dataSource: 'api_fills', // Real data from API
-        asset: fill.coin,
-        pair: fill.coin, // Hyperliquid uses coin name
+        dataSource: 'api_fills',
+        asset: firstFill.coin,
+        pair: firstFill.coin,
         type: 'PERP',
         direction,
-        exitPrice: parseFloat(fill.px),
-        positionSize: parseFloat(fill.sz) * parseFloat(fill.px), // size * price
-        pnl: parseFloat(fill.closedPnl || '0'),
+        exitPrice: avgExitPrice, // Weighted average of all fills
+        positionSize: totalValue, // Total USD value
+        pnl: totalPnl, // Sum of all fills
         roi: 0, // Will be calculated in analytics
-        closedAt: new Date(fill.time),
-        openedAt: new Date(fill.time), // Approximate, actual open time unknown
-        holdDuration: 0, // Unknown from fill data alone
-        exitReason: 'manual', // Default, could be refined
-        rawData: fill, // Store raw fill data
-        createdAt: new Date(),
-      };
-    });
+        closedAt: new Date(lastFill.time), // Last fill timestamp
+        openedAt: new Date(firstFill.time), // First fill timestamp (approximate)
+        holdDuration: lastFill.time - firstFill.time, // Time between first and last fill
+        exitReason: 'manual',
 
-    // Step 3: Check which positionIds already exist (ONE query for ALL)
-    const positionIds = fillDocs.map(doc => doc.positionId);
+        // Metadata for debugging
+        fillCount: sortedFills.length, // How many fills made up this order
+        totalSize, // Total size across all fills
+        rawData: {
+          oid,
+          firstFill,
+          lastFill,
+          fillCount: sortedFills.length,
+          allFills: sortedFills, // Store all fills for reference
+        },
+        createdAt: new Date(),
+      });
+    }
+
+    console.log(`[Orchestrator] Created ${aggregatedPositions.length} aggregated positions from ${closeFills.length} fills`);
+
+    // Step 4: Check which positions already exist
+    const positionIds = aggregatedPositions.map(doc => doc.positionId);
     const existingDocs = await db
       .collection('closedpositions')
       .find({ positionId: { $in: positionIds } })
@@ -498,16 +545,18 @@ async function saveHyperliquidFills(fills: any[], managerId: string): Promise<nu
 
     const existingIds = new Set(existingDocs.map(doc => doc.positionId));
 
-    // Step 4: Filter out duplicates
-    const newFills = fillDocs.filter(doc => !existingIds.has(doc.positionId));
+    // Step 5: Filter out duplicates
+    const newPositions = aggregatedPositions.filter(doc => !existingIds.has(doc.positionId));
 
-    if (newFills.length === 0) {
-      console.log(`[Orchestrator] All ${fillDocs.length} fills already exist in database`);
+    if (newPositions.length === 0) {
+      console.log(`[Orchestrator] All ${aggregatedPositions.length} positions already exist in database`);
       return 0;
     }
 
-    // Step 5: Bulk insert ALL new fills in ONE operation
-    const result = await db.collection('closedpositions').insertMany(newFills, { ordered: false });
+    // Step 6: Bulk insert
+    const result = await db.collection('closedpositions').insertMany(newPositions, { ordered: false });
+
+    console.log(`[Orchestrator] Saved ${result.insertedCount} new positions (${aggregatedPositions.length - result.insertedCount} duplicates skipped)`);
 
     return result.insertedCount;
   } catch (error: any) {
