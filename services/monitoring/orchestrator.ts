@@ -73,7 +73,7 @@ export async function runMonitoringCycle(): Promise<MonitoringResult> {
     // Build list of all API calls to make
     type PlatformCall = {
       manager: Manager;
-      platform: 'avantis' | 'hyperliquid' | 'lp';
+      platform: 'avantis' | 'hyperliquid' | 'hyperliquid-portfolio' | 'hyperliquid-fills' | 'hyperliquid-orders' | 'lp';
     };
 
     const allCalls: PlatformCall[] = [];
@@ -85,6 +85,10 @@ export async function runMonitoringCycle(): Promise<MonitoringResult> {
       }
       if (fetchDecisions.shouldFetchHyperliquid) {
         allCalls.push({ manager, platform: 'hyperliquid' });
+        // Also fetch portfolio, fills, and orders for Hyperliquid
+        allCalls.push({ manager, platform: 'hyperliquid-portfolio' });
+        allCalls.push({ manager, platform: 'hyperliquid-fills' });
+        allCalls.push({ manager, platform: 'hyperliquid-orders' });
       }
       if (fetchDecisions.shouldFetchLP) {
         allCalls.push({ manager, platform: 'lp' });
@@ -179,7 +183,7 @@ export async function runMonitoringCycle(): Promise<MonitoringResult> {
  */
 async function processSinglePlatformCall(
   manager: Manager,
-  platform: 'avantis' | 'hyperliquid' | 'lp',
+  platform: 'avantis' | 'hyperliquid' | 'hyperliquid-portfolio' | 'hyperliquid-fills' | 'hyperliquid-orders' | 'lp',
   result: MonitoringResult
 ): Promise<void> {
   const callStart = Date.now();
@@ -190,6 +194,56 @@ async function processSinglePlatformCall(
       primary: manager.walletAddress,
       scouted: manager.wallets || [],
     };
+
+    // Handle Hyperliquid portfolio data
+    if (platform === 'hyperliquid-portfolio') {
+      const { fetchHyperliquidPortfolio } = await import('./position-fetcher');
+      const portfolioResult = await fetchHyperliquidPortfolio(wallets);
+      const callDuration = Date.now() - callStart;
+
+      if (portfolioResult.success && portfolioResult.portfolios.length > 0) {
+        const savedCount = await saveHyperliquidPortfolios(portfolioResult.portfolios, manager._id);
+        console.log(`✓ ${manager.username}/portfolio: ${savedCount} snapshots saved (${callDuration}ms)`);
+      } else {
+        console.log(`✓ ${manager.username}/portfolio: 0 snapshots (${callDuration}ms)`);
+      }
+      return;
+    }
+
+    // Handle Hyperliquid fills data
+    if (platform === 'hyperliquid-fills') {
+      const { fetchHyperliquidUserFills } = await import('./position-fetcher');
+      const lastFetchTime = manager.lastFillsFetchTime;
+      const fillsResult = await fetchHyperliquidUserFills(wallets, lastFetchTime);
+      const callDuration = Date.now() - callStart;
+
+      if (fillsResult.positions.length > 0) {
+        const savedCount = await saveHyperliquidFillsSimple(fillsResult.positions, manager._id);
+        console.log(`✓ ${manager.username}/fills: ${savedCount} new fills (${callDuration}ms)`);
+        result.closedPositions += savedCount;
+
+        // Update last fetch time
+        await updateLastFillsFetchTime(manager._id, Date.now());
+      } else {
+        console.log(`✓ ${manager.username}/fills: 0 new fills (${callDuration}ms)`);
+      }
+      return;
+    }
+
+    // Handle Hyperliquid open orders
+    if (platform === 'hyperliquid-orders') {
+      const { fetchHyperliquidOpenOrders } = await import('./position-fetcher');
+      const ordersResult = await fetchHyperliquidOpenOrders(wallets);
+      const callDuration = Date.now() - callStart;
+
+      if (ordersResult.positions.length > 0) {
+        const savedCount = await saveHyperliquidOrdersSimple(ordersResult.positions, manager._id);
+        console.log(`✓ ${manager.username}/orders: ${savedCount} orders (${callDuration}ms)`);
+      } else {
+        console.log(`✓ ${manager.username}/orders: 0 orders (${callDuration}ms)`);
+      }
+      return;
+    }
 
     // Standard position fetches (for snapshots)
     let positions: any[] = [];
@@ -264,6 +318,185 @@ async function getActiveManagers(): Promise<Manager[]> {
   } catch (error) {
     console.error('Error fetching active managers:', error);
     return [];
+  }
+}
+
+/**
+ * Helper Functions for Hyperliquid Data
+ */
+
+/**
+ * Save Hyperliquid portfolio snapshots to MongoDB
+ */
+async function saveHyperliquidPortfolios(portfolios: any[], managerId: string): Promise<number> {
+  try {
+    if (portfolios.length === 0) return 0;
+
+    const client = await clientPromise;
+    const db = client.db('yieldr');
+
+    const documents = portfolios.map(portfolio => ({
+      managerId,
+      walletAddress: portfolio.walletAddress,
+      platform: 'hyperliquid',
+      timestamp: portfolio.timestamp,
+      accountValue: portfolio.accountValue || 0,
+      pnl: portfolio.pnl || 0,
+      dayData: portfolio.dayData || {},
+      weekData: portfolio.weekData || {},
+      monthData: portfolio.monthData || {},
+      allTimeData: portfolio.allTimeData || {},
+      perpDayData: portfolio.perpDayData,
+      perpWeekData: portfolio.perpWeekData,
+      perpMonthData: portfolio.perpMonthData,
+      perpAllTimeData: portfolio.perpAllTimeData,
+      createdAt: new Date(),
+    }));
+
+    // Use insertMany with ordered:false to skip duplicates
+    const result = await db.collection('portfoliohistory').insertMany(documents, { ordered: false });
+    return result.insertedCount;
+  } catch (error: any) {
+    // Handle duplicate key errors gracefully
+    if (error.code === 11000) {
+      return error.result?.nInserted || 0;
+    }
+    console.error('[Orchestrator] Error saving portfolios:', error);
+    return 0;
+  }
+}
+
+/**
+ * Save Hyperliquid fills (simplified - no OID grouping)
+ * Just saves raw fills for UI display
+ */
+async function saveHyperliquidFillsSimple(fills: any[], managerId: string): Promise<number> {
+  try {
+    if (fills.length === 0) return 0;
+
+    const client = await clientPromise;
+    const db = client.db('yieldr');
+
+    // Filter to only save fills with PnL (actual closes)
+    const closingFills = fills.filter(fill => {
+      const closedPnl = parseFloat(fill.closedPnl || '0');
+      return closedPnl !== 0;
+    });
+
+    if (closingFills.length === 0) return 0;
+
+    const documents = closingFills.map(fill => {
+      const closedPnl = parseFloat(fill.closedPnl || '0');
+      const direction = fill.dir?.includes('Long') ? 'LONG' : fill.dir?.includes('Short') ? 'SHORT' : 'UNKNOWN';
+
+      return {
+        positionId: `hyperliquid-${fill.walletAddress}-${fill.coin}-${fill.oid}-${fill.time}`,
+        walletAddress: fill.walletAddress.toLowerCase(),
+        managerId,
+        platform: 'hyperliquid',
+        dataSource: 'api_fills',
+        asset: fill.coin,
+        pair: fill.coin,
+        type: 'PERP',
+        direction,
+        exitPrice: parseFloat(fill.px || '0'),
+        positionSize: parseFloat(fill.sz || '0') * parseFloat(fill.px || '0'),
+        pnl: closedPnl,
+        roi: 0,
+        closedAt: new Date(fill.time),
+        openedAt: new Date(fill.time), // Approximate
+        holdDuration: 0,
+        exitReason: 'manual',
+        rawData: fill,
+        createdAt: new Date(),
+      };
+    });
+
+    // Check for duplicates
+    const positionIds = documents.map(doc => doc.positionId);
+    const existingDocs = await db
+      .collection('closedpositions')
+      .find({ positionId: { $in: positionIds } })
+      .project({ positionId: 1 })
+      .toArray();
+
+    const existingIds = new Set(existingDocs.map(doc => doc.positionId));
+    const newDocuments = documents.filter(doc => !existingIds.has(doc.positionId));
+
+    if (newDocuments.length === 0) return 0;
+
+    const result = await db.collection('closedpositions').insertMany(newDocuments, { ordered: false });
+    return result.insertedCount;
+  } catch (error: any) {
+    if (error.code === 11000) {
+      return error.result?.nInserted || 0;
+    }
+    console.error('[Orchestrator] Error saving fills:', error);
+    return 0;
+  }
+}
+
+/**
+ * Save Hyperliquid open orders (simplified)
+ */
+async function saveHyperliquidOrdersSimple(orders: any[], managerId: string): Promise<number> {
+  try {
+    if (orders.length === 0) return 0;
+
+    const client = await clientPromise;
+    const db = client.db('yieldr');
+
+    const bulkOps = orders.map(order => {
+      const orderId = `hyperliquid-${order.walletAddress}-${order.oid}`;
+
+      return {
+        updateOne: {
+          filter: { orderId },
+          update: {
+            $set: {
+              orderId,
+              walletAddress: order.walletAddress.toLowerCase(),
+              managerId,
+              platform: 'hyperliquid',
+              asset: order.coin,
+              pair: order.coin,
+              orderType: 'limit',
+              direction: order.side === 'B' ? 'BUY' : 'SELL',
+              size: parseFloat(order.sz),
+              price: parseFloat(order.limitPx),
+              status: 'open',
+              placedAt: new Date(order.timestamp || Date.now()),
+              lastUpdatedAt: new Date(),
+              rawData: order,
+            }
+          },
+          upsert: true
+        }
+      };
+    });
+
+    const result = await db.collection('openorders').bulkWrite(bulkOps, { ordered: false });
+    return result.upsertedCount + result.modifiedCount;
+  } catch (error) {
+    console.error('[Orchestrator] Error saving orders:', error);
+    return 0;
+  }
+}
+
+/**
+ * Update last fills fetch time for a manager
+ */
+async function updateLastFillsFetchTime(managerId: string, timestamp: number): Promise<void> {
+  try {
+    const client = await clientPromise;
+    const db = client.db('yieldr');
+
+    await db.collection('managers').updateOne(
+      { _id: managerId },
+      { $set: { lastFillsFetchTime: timestamp } }
+    );
+  } catch (error) {
+    console.warn(`[Orchestrator] Error updating last fills fetch time: ${error}`);
   }
 }
 
