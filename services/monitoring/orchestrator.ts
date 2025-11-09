@@ -11,6 +11,7 @@
  */
 
 import clientPromise from '@/lib/mongodb';
+import { ObjectId } from 'mongodb';
 import { fetchAllPositions } from './position-fetcher';
 import { detectPositionChanges } from './change-detector';
 import { createSnapshot, getLastSnapshot, getLastSnapshotPositions } from './snapshot-service';
@@ -492,7 +493,7 @@ async function updateLastFillsFetchTime(managerId: string, timestamp: number): P
     const db = client.db('yieldr');
 
     await db.collection('managers').updateOne(
-      { _id: managerId },
+      { _id: new ObjectId(managerId) },
       { $set: { lastFillsFetchTime: timestamp } }
     );
   } catch (error) {
