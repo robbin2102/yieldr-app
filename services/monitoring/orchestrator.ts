@@ -119,9 +119,9 @@ export async function runMonitoringCycle(): Promise<MonitoringResult> {
           // Detect changes and log closed positions using snapshot comparison
           const previousPositions = await getLastSnapshotPositions(manager._id);
           const currentSnapshots = await Promise.all([
-            getLastSnapshot(manager._id, 'avantis'),
-            getLastSnapshot(manager._id, 'hyperliquid'),
-            getLastSnapshot(manager._id, 'aerodrome'),
+            getLastSnapshot(manager._id, manager.walletAddress, 'avantis'),
+            getLastSnapshot(manager._id, manager.walletAddress, 'hyperliquid'),
+            getLastSnapshot(manager._id, manager.walletAddress, 'aerodrome'),
           ]);
 
           const currentPositions = currentSnapshots
@@ -299,21 +299,14 @@ export async function runMonitoringForManager(
       };
     }
 
-    const managerData: Manager = {
-      _id: manager._id.toString(),
-      username: manager.username,
-      walletAddress: manager.walletAddress,
-      wallets: manager.wallets || [],
-      lastLPFetch: manager.lastLPFetch,
-    };
-
-    const result = await processManager(managerData);
+    // Run full monitoring cycle (will process all managers, but we only care about this one)
+    const result = await runMonitoringCycle();
 
     return {
-      success: true,
+      success: result.success,
       positions: result.totalPositions,
       closedPositions: result.closedPositions,
-      analyticsUpdated: result.analyticsUpdated,
+      analyticsUpdated: result.analyticsUpdated > 0,
       duration: Date.now() - startTime,
     };
   } catch (error: any) {
