@@ -56,9 +56,9 @@ export default function WalletHandler() {
       console.log('✅ User check:', checkData);
 
       if (!checkData.exists) {
-        // New user
+        // Attempt to create new user
         console.log('🆕 Creating new account...');
-        await fetch('/api/users', {
+        const createResponse = await fetch('/api/users', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -67,6 +67,35 @@ export default function WalletHandler() {
             status: 'pending_verification'
           }),
         });
+
+        const createData = await createResponse.json();
+
+        // Check if user already existed (race condition handling)
+        if (createData.alreadyExists && createData.user) {
+          console.log('✅ User already exists, checking profile...');
+          // Treat as existing user and check their profile
+          const profileResponse = await fetch(
+            `/api/managers/profile?walletAddress=${encodeURIComponent(walletAddress)}`
+          );
+
+          if (profileResponse.ok) {
+            const profileData = await profileResponse.json();
+            if (profileData.success && profileData.data?.username) {
+              const username = profileData.data.username;
+              console.log('✅ Profile found, redirecting to dashboard');
+              localStorage.setItem('managerUsername', username);
+              window.location.href = `/manager/dashboard.html?username=${username}`;
+              return;
+            }
+          }
+
+          // Profile incomplete, continue with onboarding
+          console.log('➡️ Profile incomplete, continuing onboarding');
+          window.location.href = '/onboarding/profile.html';
+          return;
+        }
+
+        // New user successfully created
         console.log('➡️ Redirecting to profile');
         window.location.href = `/onboarding/verify-method.html?address=${walletAddress}`;
         return;

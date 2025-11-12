@@ -42,15 +42,32 @@ export async function POST(request: NextRequest) {
       metrics: {}
     };
 
-    await db.collection('users').insertOne(newUser);
+    try {
+      await db.collection('users').insertOne(newUser);
+      console.log('User created successfully:', normalizedAddress);
 
-    console.log('User created successfully:', normalizedAddress);
+      return NextResponse.json({
+        success: true,
+        message: 'User registered successfully',
+        user: newUser
+      });
+    } catch (insertError: any) {
+      // Handle duplicate key error (race condition)
+      if (insertError.code === 11000) {
+        console.log('Race condition: User created by another request, fetching existing user');
+        const existingUser = await db.collection('users').findOne({
+          walletAddress: normalizedAddress
+        });
 
-    return NextResponse.json({
-      success: true,
-      message: 'User registered successfully',
-      user: newUser
-    });
+        return NextResponse.json({
+          success: true,
+          message: 'User already exists',
+          user: existingUser,
+          alreadyExists: true
+        });
+      }
+      throw insertError;
+    }
 
   } catch (error: any) {
     console.error('Error in user registration:', error);
