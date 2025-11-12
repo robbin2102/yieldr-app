@@ -654,6 +654,20 @@
             border-bottom: 2px solid #1A1A1A;
         }
 
+        .positions-table th.sortable {
+            cursor: pointer;
+            user-select: none;
+            transition: color 0.2s;
+        }
+
+        .positions-table th.sortable:hover {
+            color: #00C805;
+        }
+
+        .positions-table th.sortable.active {
+            color: #00C805;
+        }
+
         .positions-table td {
             padding: 16px 12px;
             border-bottom: 1px solid #1A1A1A;
@@ -1101,21 +1115,22 @@
                 <table class="positions-table">
                     <thead>
                         <tr>
-                            <th>Asset</th>
-                            <th>Platform</th>
-                            <th>Type</th>
-                            <th>Size</th>
-                            <th>Margin</th>
-                            <th>Leverage</th>
-                            <th>Entry</th>
-                            <th>Current</th>
-                            <th>PnL</th>
-                            <th>ROI</th>
+                            <th class="sortable active" data-sort="datetime" onclick="sortPositions('datetime')">Fetched <span id="sort-datetime">▼</span></th>
+                            <th class="sortable" data-sort="asset" onclick="sortPositions('asset')">Asset <span id="sort-asset"></span></th>
+                            <th class="sortable" data-sort="platform" onclick="sortPositions('platform')">Platform <span id="sort-platform"></span></th>
+                            <th class="sortable" data-sort="type" onclick="sortPositions('type')">Type <span id="sort-type"></span></th>
+                            <th class="sortable" data-sort="size" onclick="sortPositions('size')">Size <span id="sort-size"></span></th>
+                            <th class="sortable" data-sort="margin" onclick="sortPositions('margin')">Margin <span id="sort-margin"></span></th>
+                            <th class="sortable" data-sort="leverage" onclick="sortPositions('leverage')">Leverage <span id="sort-leverage"></span></th>
+                            <th class="sortable" data-sort="entry" onclick="sortPositions('entry')">Entry <span id="sort-entry"></span></th>
+                            <th class="sortable" data-sort="current" onclick="sortPositions('current')">Current <span id="sort-current"></span></th>
+                            <th class="sortable" data-sort="pnl" onclick="sortPositions('pnl')">PnL <span id="sort-pnl"></span></th>
+                            <th class="sortable" data-sort="roi" onclick="sortPositions('roi')">ROI <span id="sort-roi"></span></th>
                         </tr>
                     </thead>
                     <tbody id="positionsTableBody">
                         <tr>
-                            <td colspan="10" style="text-align: center; color: #8A8A8A;">Loading positions...</td>
+                            <td colspan="11" style="text-align: center; color: #8A8A8A;">Loading positions...</td>
                         </tr>
                     </tbody>
                 </table>
@@ -1236,6 +1251,10 @@
         let positions = [];
         let currentNotesField = null;
         let walletCount = 0;
+
+        // Sorting state
+        let sortColumn = 'datetime';
+        let sortDirection = 'desc'; // desc = newest first for datetime
 
         // Wallet connection functions
         function redirectToConnect() {
@@ -1553,7 +1572,7 @@ loadDashboard();
                 }
 
                 positions = allPositions;
-                displayPositions();
+                sortPositions('datetime'); // Apply default sort by datetime (newest first)
                 updateAggregateMetrics();
 
                 console.log(`📊 Loaded ${positions.length} cached positions from MongoDB`);
@@ -1797,11 +1816,111 @@ loadDashboard();
     }
 }
 
+function sortPositions(column) {
+    // Toggle direction if clicking same column, otherwise default to desc for numbers, asc for text
+    if (sortColumn === column) {
+        sortDirection = sortDirection === 'asc' ? 'desc' : 'asc';
+    } else {
+        sortColumn = column;
+        // Default directions: desc for numbers/datetime, asc for text
+        sortDirection = ['asset', 'platform', 'type'].includes(column) ? 'asc' : 'desc';
+    }
+
+    // Update UI indicators
+    document.querySelectorAll('.positions-table th').forEach(th => {
+        th.classList.remove('active');
+        const sortSpan = th.querySelector('span[id^="sort-"]');
+        if (sortSpan) sortSpan.textContent = '';
+    });
+
+    const activeHeader = document.querySelector(`th[data-sort="${column}"]`);
+    if (activeHeader) {
+        activeHeader.classList.add('active');
+        const sortSpan = activeHeader.querySelector('span');
+        if (sortSpan) sortSpan.textContent = sortDirection === 'asc' ? '▲' : '▼';
+    }
+
+    // Sort the positions array
+    positions.sort((a, b) => {
+        let aVal, bVal;
+
+        switch(column) {
+            case 'datetime':
+                aVal = new Date(a.updatedAt || a.createdAt);
+                bVal = new Date(b.updatedAt || b.createdAt);
+                break;
+            case 'asset':
+                const isLPa = a.type === 'LP';
+                const isLPb = b.type === 'LP';
+                aVal = isLPa ? (a.token0?.symbol && a.token1?.symbol ? `${a.token0.symbol}/${a.token1.symbol}` : a.pool || 'Unknown') : (a.pair || 'Unknown');
+                bVal = isLPb ? (b.token0?.symbol && b.token1?.symbol ? `${b.token0.symbol}/${b.token1.symbol}` : b.pool || 'Unknown') : (b.pair || 'Unknown');
+                aVal = aVal.toLowerCase();
+                bVal = bVal.toLowerCase();
+                break;
+            case 'platform':
+                aVal = (a.platform || (a.type === 'LP' ? 'Uniswap V3' : 'Avantis')).toLowerCase();
+                bVal = (b.platform || (b.type === 'LP' ? 'Uniswap V3' : 'Avantis')).toLowerCase();
+                break;
+            case 'type':
+                const isLPTypeA = a.type === 'LP';
+                const isLPTypeB = b.type === 'LP';
+                aVal = (isLPTypeA ? 'LP' : a.direction || '').toLowerCase();
+                bVal = (isLPTypeB ? 'LP' : b.direction || '').toLowerCase();
+                break;
+            case 'size':
+                aVal = a.type === 'LP' ? (a.liquidity || 0) : (a.positionSize || 0);
+                bVal = b.type === 'LP' ? (b.liquidity || 0) : (b.positionSize || 0);
+                break;
+            case 'margin':
+                aVal = a.type === 'LP' ? 0 : (a.margin || 0);
+                bVal = b.type === 'LP' ? 0 : (b.margin || 0);
+                break;
+            case 'leverage':
+                aVal = a.type === 'LP' ? 0 : (a.leverage || 0);
+                bVal = b.type === 'LP' ? 0 : (b.leverage || 0);
+                break;
+            case 'entry':
+                aVal = a.type === 'LP' ? 0 : (a.entryPrice || 0);
+                bVal = b.type === 'LP' ? 0 : (b.entryPrice || 0);
+                break;
+            case 'current':
+                aVal = a.type === 'LP' ? 0 : (a.currentPrice || 0);
+                bVal = b.type === 'LP' ? 0 : (b.currentPrice || 0);
+                break;
+            case 'pnl':
+                aVal = a.pnl || 0;
+                bVal = b.pnl || 0;
+                break;
+            case 'roi':
+                aVal = a.roi || 0;
+                bVal = b.roi || 0;
+                break;
+            default:
+                return 0;
+        }
+
+        // Compare values
+        let comparison = 0;
+        if (typeof aVal === 'string') {
+            comparison = aVal.localeCompare(bVal);
+        } else if (aVal instanceof Date) {
+            comparison = aVal - bVal;
+        } else {
+            comparison = aVal - bVal;
+        }
+
+        return sortDirection === 'asc' ? comparison : -comparison;
+    });
+
+    // Re-render the table
+    displayPositions();
+}
+
 function displayPositions() {
     const tbody = document.getElementById('positionsTableBody');
 
     if (positions.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="10" style="text-align: center; color: #8A8A8A;">No positions found</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="11" style="text-align: center; color: #8A8A8A;">No positions found</td></tr>';
         // Hide Hyperliquid notice if no positions
         document.getElementById('hyperliquidNotice').style.display = 'none';
         return;
@@ -1821,6 +1940,13 @@ function displayPositions() {
 
     tbody.innerHTML = positions.map(pos => {
         const isLP = pos.type === 'LP';
+
+        // Format datetime
+        const datetime = pos.updatedAt || pos.createdAt;
+        const dateObj = new Date(datetime);
+        const formattedDate = dateObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+        const formattedTime = dateObj.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+        const datetimeDisplay = `${formattedDate} ${formattedTime}`;
 
         // Fix: Build asset name from token symbols (works even when pair/pool is null)
         let asset;
@@ -1847,6 +1973,7 @@ function displayPositions() {
 
         return `
             <tr>
+                <td style="font-size: 11px; color: #8A8A8A;">${datetimeDisplay}</td>
                 <td><strong>${asset}</strong></td>
                 <td><span class="platform-badge">${platform}</span></td>
                 <td><span class="type-badge ${isLP ? 'lp' : type.toLowerCase()}">${type}</span></td>
