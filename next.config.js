@@ -21,10 +21,14 @@ const nextConfig = {
       };
     }
 
-    // Suppress SSR warnings for browser-only packages
-    config.externals.push({
-      'idb-keyval': 'idb-keyval',
-    });
+    // Only externalize idb-related packages on the server
+    // On client, they need to be bundled for browser IndexedDB support
+    if (isServer) {
+      config.externals.push({
+        'idb-keyval': 'idb-keyval',
+        'idb': 'idb',
+      });
+    }
 
     return config;
   },
