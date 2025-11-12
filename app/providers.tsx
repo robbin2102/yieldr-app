@@ -7,6 +7,8 @@ import { RainbowKitProvider } from '@rainbow-me/rainbowkit';
 import { config } from '@/lib/wagmi';
 import { useState, useEffect } from 'react';
 
+const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://yieldr.app';
+
 export function Providers({ children }: { children: React.ReactNode }) {
   const [queryClient] = useState(() => new QueryClient());
   const [mounted, setMounted] = useState(false);
@@ -28,7 +30,9 @@ export function Providers({ children }: { children: React.ReactNode }) {
           showRecentTransactions={false}
           appInfo={{
             appName: 'Yieldr',
-            appUrl: process.env.NEXT_PUBLIC_APP_URL || 'https://yieldr.app',
+            appDescription: 'Co-invest with top crypto asset managers',
+            appUrl: appUrl,
+            appIcon: `${appUrl}/icon.png`,
           }}
         >
           {children}
