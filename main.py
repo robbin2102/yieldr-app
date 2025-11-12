@@ -66,8 +66,30 @@ async def fetch_positions(request: FetchRequest):
         total_margin = 0
         total_pnl = 0
         
-        for trade in trades:
+        for i, trade in enumerate(trades):
             trade_data = trade.trade
+
+            # DEBUG: Log all available fields for first trade
+            if i == 0:
+                print("\n=== DEBUG: Trade object fields ===")
+                for attr in dir(trade):
+                    if not attr.startswith('_'):
+                        try:
+                            val = getattr(trade, attr)
+                            if not callable(val):
+                                print(f"trade.{attr} = {val}")
+                        except: pass
+
+                print("\n=== DEBUG: Trade.trade object fields ===")
+                for attr in dir(trade_data):
+                    if not attr.startswith('_'):
+                        try:
+                            val = getattr(trade_data, attr)
+                            if not callable(val):
+                                print(f"trade.trade.{attr} = {val}")
+                        except: pass
+                print("=== END DEBUG ===\n")
+
             pair_index = trade_data.pair_index
             asset = pair_map.get(pair_index, f"Pair {pair_index}")
             
