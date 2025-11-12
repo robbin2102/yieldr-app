@@ -26,6 +26,10 @@ export function Providers({ children }: { children: React.ReactNode }) {
         <RainbowKitProvider
           modalSize="compact"
           showRecentTransactions={false}
+          appInfo={{
+            appName: 'Yieldr',
+            appUrl: process.env.NEXT_PUBLIC_APP_URL || 'https://yieldr.app',
+          }}
         >
           {children}
         </RainbowKitProvider>

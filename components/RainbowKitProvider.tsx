@@ -14,6 +14,10 @@ const config = getDefaultConfig({
   projectId,
   chains: [base],
   ssr: true,
+  appInfo: {
+    appName: 'Yieldr',
+    learnMoreUrl: process.env.NEXT_PUBLIC_APP_URL || 'https://yieldr.app',
+  },
 });
 
 const queryClient = new QueryClient();
@@ -25,6 +29,10 @@ export function Providers({ children }: { children: ReactNode }) {
         <RainbowKitProvider
           modalSize="compact"
           initialChain={base}
+          appInfo={{
+            appName: 'Yieldr',
+            appUrl: process.env.NEXT_PUBLIC_APP_URL || 'https://yieldr.app',
+          }}
         >
           {children}
         </RainbowKitProvider>
