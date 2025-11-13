@@ -16,9 +16,27 @@ export async function POST(request: NextRequest) {
     const client = await clientPromise;
     const db = client.db('yieldr');
 
+    // Fetch existing positions to preserve their createdAt timestamps
+    const existingPositions = await db.collection('positions')
+      .find({ walletAddress: walletAddress.toLowerCase() })
+      .toArray();
+
+    // Create a map of existing positions by unique key (platform + positionId)
+    const existingMap = new Map();
+    existingPositions.forEach((pos: any) => {
+      const key = `${pos.platform}-${pos.positionId}`;
+      existingMap.set(key, pos.createdAt || new Date());
+    });
+
+    // Helper function to get createdAt (preserve existing or use current time)
+    const getCreatedAt = (platform: string, positionId: string) => {
+      const key = `${platform}-${positionId}`;
+      return existingMap.get(key) || new Date();
+    };
+
     // FIXED: Delete only old positions for THIS wallet, not all positions
-    await db.collection('positions').deleteMany({ 
-      walletAddress: walletAddress.toLowerCase() 
+    await db.collection('positions').deleteMany({
+      walletAddress: walletAddress.toLowerCase()
     });
 
     // Prepare positions for storage
@@ -38,7 +56,7 @@ export async function POST(request: NextRequest) {
         status: pos.status,
         positionId: pos.positionId,
         unclaimedFees: pos.unclaimedFees || 0,
-        createdAt: new Date(),
+        createdAt: getCreatedAt(pos.platform || 'Unknown', pos.positionId),
         updatedAt: new Date()
       })),
       ...avantisPositions.map((pos: any) => ({
@@ -57,7 +75,7 @@ export async function POST(request: NextRequest) {
         roi: pos.roi,
         status: 'active',
         positionId: pos.tradeIndex,
-        createdAt: new Date(),
+        createdAt: getCreatedAt('Avantis', pos.tradeIndex),
         updatedAt: new Date()
       })),
 
@@ -77,7 +95,7 @@ export async function POST(request: NextRequest) {
       roi: pos.roi,
       status: pos.status || 'active',
       positionId: pos.positionId,
-      createdAt: new Date(),
+      createdAt: getCreatedAt('Hyperliquid', pos.positionId),
       updatedAt: new Date(),
     }))
     ];

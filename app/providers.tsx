@@ -30,9 +30,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
           showRecentTransactions={false}
           appInfo={{
             appName: 'Yieldr',
-            appDescription: 'Co-invest with top crypto asset managers',
-            appUrl: appUrl,
-            appIcon: `${appUrl}/icon.png`,
+            learnMoreUrl: appUrl,
           }}
         >
           {children}
