@@ -60,9 +60,7 @@ export function Providers({ children }: { children: ReactNode }) {
           initialChain={base}
           appInfo={{
             appName: 'Yieldr',
-            appDescription: 'Co-invest with top crypto asset managers',
-            appUrl: appUrl,
-            appIcon: `${appUrl}/icon.png`,
+            learnMoreUrl: appUrl,
           }}
         >
           {children}
