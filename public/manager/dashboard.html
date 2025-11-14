@@ -2038,10 +2038,15 @@ function updateAggregateMetrics() {
         }
 
         function closeAddWalletModal() {
-            document.getElementById('addWalletModal').classList.remove('show');
-            document.getElementById('addWalletForm').style.display = 'block';
-            document.getElementById('verifyingState').style.display = 'none';
-            document.getElementById('newWalletAddress').value = '';
+            const modal = document.getElementById('addWalletModal');
+            const form = document.getElementById('addWalletForm');
+            const verifying = document.getElementById('verifyingState');
+            const input = document.getElementById('newWalletAddress');
+
+            if (modal) modal.classList.remove('show');
+            if (form) form.style.display = 'block';
+            if (verifying) verifying.style.display = 'none';
+            if (input) input.value = '';
         }
 
         async function removeWallet(walletAddress) {
