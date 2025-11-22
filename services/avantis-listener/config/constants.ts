@@ -23,9 +23,9 @@ export const BLOCK_CONFIG = {
   BLOCKS_PER_MONTH: 1_296_000, // ~30 days
   BLOCKS_PER_90_DAYS: 3_888_000,
 
-  // Backfill settings
-  CHUNK_SIZE: 5_000, // Process 5000 blocks at a time
-  CHUNK_DELAY_MS: 200, // Wait 200ms between chunks to avoid rate limits
+  // Backfill settings (optimized for filtered queries)
+  CHUNK_SIZE: 100_000, // Process 100K blocks at a time (much faster with address filter)
+  CHUNK_DELAY_MS: 50, // Wait 50ms between chunks
 } as const;
 
 /**

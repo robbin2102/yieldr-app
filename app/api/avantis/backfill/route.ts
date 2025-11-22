@@ -14,7 +14,7 @@ export const runtime = 'nodejs';
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { walletAddress, daysBack = 90 } = body;
+    const { walletAddress, daysBack = 7 } = body; // Default 7 days for fast onboarding
 
     if (!walletAddress) {
       return NextResponse.json(

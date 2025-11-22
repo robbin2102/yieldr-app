@@ -58,22 +58,21 @@ export async function backfillWallet(options: BackfillOptions): Promise<Backfill
       );
 
       try {
-        // Fetch initiated events
+        // Fetch initiated events - FILTER BY TRADER ADDRESS
         const initiatedLogs = await getLogs({
           address: CONTRACTS.TRADING,
           event: MARKET_ORDER_INITIATED_EVENT,
+          args: {
+            trader: wallet as `0x${string}`, // Filter by indexed trader parameter
+          },
           fromBlock: chunkStart,
           toBlock: chunkEnd,
         });
 
-        console.log(`[Backfiller] Found ${initiatedLogs.length} MarketOrderInitiated events`);
+        console.log(`[Backfiller] Found ${initiatedLogs.length} MarketOrderInitiated events for ${wallet}`);
 
-        // Parse and filter by wallet
-        const parsedInitiated = batchParseMarketOrderInitiated(initiatedLogs).filter(
-          (event) => event.trader.toLowerCase() === wallet.toLowerCase()
-        );
-
-        console.log(`[Backfiller] ${parsedInitiated.length} events match wallet ${wallet}`);
+        // Parse events (already filtered by wallet at RPC level)
+        const parsedInitiated = batchParseMarketOrderInitiated(initiatedLogs);
 
         // Process initiated events
         for (const event of parsedInitiated) {
