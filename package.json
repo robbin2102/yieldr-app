@@ -7,9 +7,10 @@
     "build": "next build",
     "start": "next start",
     "backend": "node backend-src/server.js",
-    "listener": "ts-node services/avantis-listener/server.ts",
-    "listener:dev": "nodemon --exec ts-node services/avantis-listener/server.ts",
-    "backfill": "ts-node scripts/backfill-all-managers.ts"
+    "listener": "tsx services/avantis-listener/server.ts",
+    "listener:dev": "nodemon --exec tsx services/avantis-listener/server.ts",
+    "backfill": "tsx scripts/backfill-all-managers.ts",
+    "test:client": "tsx services/avantis-listener/test-client.ts"
   },
   "dependencies": {
     "@rainbow-me/rainbowkit": "^2.1.3",
