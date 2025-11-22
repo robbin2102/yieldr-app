@@ -232,25 +232,40 @@ export async function batchParseMarketExecuted(logs: Log[]): Promise<ParsedMarke
     }
   }
 
-  // Batch fetch all unique block timestamps in parallel
+  // Batch fetch all unique block timestamps with rate limiting
   if (closeEventBlocks.size > 0) {
     console.log(`[EventParser] Pre-fetching ${closeEventBlocks.size} unique block timestamps...`);
-    const blockFetches = Array.from(closeEventBlocks).map(async (blockNum) => {
-      try {
-        const block = await getBlock(blockNum);
-        return { blockNum, timestamp: new Date(Number(block.timestamp) * 1000) };
-      } catch (error) {
-        console.error(`[EventParser] Failed to fetch block ${blockNum}:`, error);
-        return null;
-      }
-    });
 
-    const blockResults = await Promise.all(blockFetches);
-    for (const result of blockResults) {
-      if (result) {
-        blockTimestampCache.set(result.blockNum, result.timestamp);
+    // Fetch in batches of 30 to avoid rate limits (50/sec limit, use 30 for safety)
+    const blockArray = Array.from(closeEventBlocks);
+    const BATCH_SIZE = 30;
+
+    for (let i = 0; i < blockArray.length; i += BATCH_SIZE) {
+      const batch = blockArray.slice(i, i + BATCH_SIZE);
+
+      const blockFetches = batch.map(async (blockNum) => {
+        try {
+          const block = await getBlock(blockNum);
+          return { blockNum, timestamp: new Date(Number(block.timestamp) * 1000) };
+        } catch (error) {
+          console.error(`[EventParser] Failed to fetch block ${blockNum}:`, error);
+          return null;
+        }
+      });
+
+      const blockResults = await Promise.all(blockFetches);
+      for (const result of blockResults) {
+        if (result) {
+          blockTimestampCache.set(result.blockNum, result.timestamp);
+        }
+      }
+
+      // Small delay between batches (1 second for 30 requests = 30 req/sec, safe under 50/sec)
+      if (i + BATCH_SIZE < blockArray.length) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
       }
     }
+
     console.log(`[EventParser] ✓ Cached ${blockTimestampCache.size} block timestamps`);
   }
 
