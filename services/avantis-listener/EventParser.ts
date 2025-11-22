@@ -8,7 +8,6 @@ import {
   MARKET_ORDER_INITIATED_EVENT,
   MARKET_EXECUTED_EVENT,
 } from './config/events';
-import { getBlock } from './core/ViemClient';
 import {
   fromPriceDecimals,
   fromLeverageDecimals,
@@ -80,7 +79,7 @@ export function parseMarketOrderInitiated(
  * @param log - Raw event log from blockchain
  * @returns Parsed event data
  */
-export async function parseMarketExecuted(log: Log): Promise<ParsedMarketExecutedEvent | null> {
+export function parseMarketExecuted(log: Log): ParsedMarketExecutedEvent | null {
   try {
     const decoded = decodeEventLog({
       abi: [MARKET_EXECUTED_EVENT],
@@ -126,18 +125,10 @@ export async function parseMarketExecuted(log: Log): Promise<ParsedMarketExecute
     const tpNum = fromPriceDecimals(tp);
     const slNum = fromPriceDecimals(sl);
 
-    // For timestamp:
-    // - Trade tuple's timestamp is ALWAYS the position open time
-    // - For open events: use trade tuple timestamp (correct)
-    // - For close events: fetch actual block timestamp (actual close time)
-    let eventTimestamp: Date;
-    if (open) {
-      eventTimestamp = fromTimestamp(timestamp); // Position open time from tuple
-    } else {
-      // Fetch actual block to get real timestamp for close event
-      const block = await getBlock(log.blockNumber || 0n);
-      eventTimestamp = new Date(Number(block.timestamp) * 1000);
-    }
+    // Use trade tuple timestamp (position open time)
+    // Note: For close events, this shows when position was opened, not closed
+    // Trade-off: Fast backfill vs accurate close timestamps
+    const eventTimestamp = fromTimestamp(timestamp);
 
     // Base parsed event
     const parsed: ParsedMarketExecutedEvent = {
@@ -199,79 +190,15 @@ export function batchParseMarketOrderInitiated(
 }
 
 /**
- * Batch parse MarketExecuted events with block timestamp caching
+ * Batch parse MarketExecuted events
  * @param logs - Array of event logs
  * @returns Array of parsed events (nulls filtered out)
  */
-export async function batchParseMarketExecuted(logs: Log[]): Promise<ParsedMarketExecutedEvent[]> {
+export function batchParseMarketExecuted(logs: Log[]): ParsedMarketExecutedEvent[] {
   const parsed: ParsedMarketExecutedEvent[] = [];
 
-  // Build cache of block timestamps for close events
-  // This avoids fetching the same block multiple times
-  const blockTimestampCache = new Map<bigint, Date>();
-
-  // Collect unique block numbers for close events
-  const closeEventBlocks = new Set<bigint>();
   for (const log of logs) {
-    try {
-      const decoded = decodeEventLog({
-        abi: [MARKET_EXECUTED_EVENT],
-        data: log.data,
-        topics: log.topics,
-      });
-      const args = decoded.args as any;
-      const open = args.open as boolean;
-
-      // If this is a close event, we'll need its block timestamp
-      if (!open && log.blockNumber) {
-        closeEventBlocks.add(log.blockNumber);
-      }
-    } catch (error) {
-      // Skip invalid events
-      continue;
-    }
-  }
-
-  // Batch fetch all unique block timestamps with rate limiting
-  if (closeEventBlocks.size > 0) {
-    console.log(`[EventParser] Pre-fetching ${closeEventBlocks.size} unique block timestamps...`);
-
-    // Fetch in batches of 30 to avoid rate limits (50/sec limit, use 30 for safety)
-    const blockArray = Array.from(closeEventBlocks);
-    const BATCH_SIZE = 30;
-
-    for (let i = 0; i < blockArray.length; i += BATCH_SIZE) {
-      const batch = blockArray.slice(i, i + BATCH_SIZE);
-
-      const blockFetches = batch.map(async (blockNum) => {
-        try {
-          const block = await getBlock(blockNum);
-          return { blockNum, timestamp: new Date(Number(block.timestamp) * 1000) };
-        } catch (error) {
-          console.error(`[EventParser] Failed to fetch block ${blockNum}:`, error);
-          return null;
-        }
-      });
-
-      const blockResults = await Promise.all(blockFetches);
-      for (const result of blockResults) {
-        if (result) {
-          blockTimestampCache.set(result.blockNum, result.timestamp);
-        }
-      }
-
-      // Small delay between batches (1 second for 30 requests = 30 req/sec, safe under 50/sec)
-      if (i + BATCH_SIZE < blockArray.length) {
-        await new Promise(resolve => setTimeout(resolve, 1000));
-      }
-    }
-
-    console.log(`[EventParser] ✓ Cached ${blockTimestampCache.size} block timestamps`);
-  }
-
-  // Now parse all events using the cache
-  for (const log of logs) {
-    const event = await parseMarketExecutedWithCache(log, blockTimestampCache);
+    const event = parseMarketExecuted(log);
     if (event) {
       parsed.push(event);
     }
@@ -282,109 +209,6 @@ export async function batchParseMarketExecuted(logs: Log[]): Promise<ParsedMarke
   );
 
   return parsed;
-}
-
-/**
- * Parse MarketExecuted with cached block timestamps
- */
-async function parseMarketExecutedWithCache(
-  log: Log,
-  blockTimestampCache: Map<bigint, Date>
-): Promise<ParsedMarketExecutedEvent | null> {
-  try {
-    const decoded = decodeEventLog({
-      abi: [MARKET_EXECUTED_EVENT],
-      data: log.data,
-      topics: log.topics,
-    });
-
-    const args = decoded.args as any;
-
-    // Extract values
-    const orderId = args.orderId as bigint;
-    const trade = args.t as any; // Tuple
-    const open = args.open as boolean;
-    const price = args.price as bigint;
-    const positionSizeUSDC = args.positionSizeUSDC as bigint;
-    const percentProfit = args.percentProfit as bigint; // int256
-    const usdcSentToTrader = args.usdcSentToTrader as bigint;
-
-    // Extract from trade tuple
-    const trader = (trade.trader as string).toLowerCase();
-    const pairIndex = trade.pairIndex as bigint;
-    const index = trade.index as bigint;
-    const initialPosToken = trade.initialPosToken as bigint;
-    const openPrice = trade.openPrice as bigint;
-    const buy = trade.buy as boolean;
-    const leverage = trade.leverage as bigint;
-    const tp = trade.tp as bigint;
-    const sl = trade.sl as bigint;
-    const timestamp = trade.timestamp as bigint;
-
-    // Validate trader address
-    if (!isValidAddress(trader)) {
-      console.error(`[EventParser] Invalid trader address: ${trader}`);
-      return null;
-    }
-
-    // Convert decimals
-    const collateralUsdc = fromUsdcDecimals(initialPosToken);
-    const positionSize = fromUsdcDecimals(positionSizeUSDC);
-    const openPriceNum = fromPriceDecimals(openPrice);
-    const executionPriceNum = fromPriceDecimals(price);
-    const leverageNum = fromLeverageDecimals(leverage);
-    const tpNum = fromPriceDecimals(tp);
-    const slNum = fromPriceDecimals(sl);
-
-    // For timestamp: use cache for close events
-    let eventTimestamp: Date;
-    if (open) {
-      eventTimestamp = fromTimestamp(timestamp); // Position open time from tuple
-    } else {
-      // Use cached block timestamp (already fetched in batch)
-      const cachedTimestamp = blockTimestampCache.get(log.blockNumber || 0n);
-      if (cachedTimestamp) {
-        eventTimestamp = cachedTimestamp;
-      } else {
-        // Fallback: fetch if not in cache (shouldn't happen)
-        const block = await getBlock(log.blockNumber || 0n);
-        eventTimestamp = new Date(Number(block.timestamp) * 1000);
-      }
-    }
-
-    // Base parsed event
-    const parsed: ParsedMarketExecutedEvent = {
-      orderId: orderId.toString(),
-      trader,
-      pairIndex: toNumber(pairIndex, 'pairIndex'),
-      tradeIndex: toNumber(index, 'tradeIndex'),
-      open,
-      isBuy: buy,
-      collateralUsdc,
-      positionSizeUsdc: positionSize,
-      leverage: leverageNum,
-      openPrice: openPriceNum,
-      executionPrice: executionPriceNum,
-      tp: tpNum,
-      sl: slNum,
-      executedAt: eventTimestamp,
-      executedTxHash: log.transactionHash || '',
-      executedBlockNumber: toNumber(log.blockNumber || 0n, 'blockNumber'),
-    };
-
-    // If this is a close (open=false), add close-specific data
-    if (!open) {
-      parsed.closePrice = executionPriceNum;
-      parsed.profitPercent = fromPercentDecimals(percentProfit);
-      // PnL = total sent to trader - initial collateral
-      parsed.pnlUsdc = fromUsdcDecimals(usdcSentToTrader) - fromUsdcDecimals(initialPosToken);
-    }
-
-    return parsed;
-  } catch (error) {
-    console.error('[EventParser] Failed to parse MarketExecuted:', error);
-    return null;
-  }
 }
 
 /**
