@@ -8,7 +8,7 @@ import EventEmitter from 'events';
 import TradeEvent from '../../models/TradeEvent';
 import { TradeStatus } from './config/constants';
 import { APP_EVENTS, FEATURES } from './config';
-import { calculateRoi } from './core/decimals';
+import { getPairSymbol } from './config/pairs';
 import type {
   ParsedMarketOrderInitiatedEvent,
   ParsedMarketExecutedEvent,
@@ -63,6 +63,7 @@ export async function processMarketOrderInitiated(
       status: TradeStatus.PENDING,
       trader: event.trader,
       pairIndex: event.pairIndex,
+      pairSymbol: getPairSymbol(event.pairIndex),
       isBuy: event.isBuy,
       initiatedAt: event.initiatedAt,
       initiatedTxHash: event.initiatedTxHash,
@@ -152,6 +153,7 @@ async function handlePositionOpened(
   // Update DB with execution data
   const updateData = {
     status: TradeStatus.EXECUTED,
+    pairSymbol: getPairSymbol(event.pairIndex),
     tradeIndex: event.tradeIndex,
     collateralUsdc: event.collateralUsdc,
     positionSizeUsdc: event.positionSizeUsdc,
@@ -214,21 +216,17 @@ async function handlePositionClosed(
     (event.executedAt.getTime() - openedAt.getTime()) / 1000
   );
 
-  // Calculate ROI
-  const roi =
-    existingRecord.collateralUsdc && event.pnlUsdc
-      ? calculateRoi(event.pnlUsdc, existingRecord.collateralUsdc)
-      : 0;
+  // ROI comes from contract's percentProfit field
+  const roi = event.profitPercent || 0;
 
   // Update DB with close data
   existingRecord.status = TradeStatus.CLOSED;
   existingRecord.closePrice = event.closePrice;
-  existingRecord.profitPercent = event.profitPercent;
   existingRecord.pnlUsdc = event.pnlUsdc;
+  existingRecord.roi = roi;
   existingRecord.closedAt = event.executedAt;
   existingRecord.closedTxHash = event.executedTxHash;
   existingRecord.durationSeconds = durationSeconds;
-  existingRecord.roi = roi;
 
   await existingRecord.save();
 
@@ -252,6 +250,7 @@ function buildTradeOpenedEvent(event: ParsedMarketExecutedEvent) {
     orderId: event.orderId,
     trader: event.trader,
     pairIndex: event.pairIndex,
+    pairSymbol: getPairSymbol(event.pairIndex),
     direction: (event.isBuy ? 'LONG' : 'SHORT') as TradeDirection,
     collateral: event.collateralUsdc || 0,
     positionSize: event.positionSizeUsdc || 0,
@@ -279,10 +278,10 @@ function buildTradeClosedEvent(
     orderId: event.orderId,
     trader: event.trader,
     pairIndex: event.pairIndex,
+    pairSymbol: getPairSymbol(event.pairIndex),
     direction: (event.isBuy ? 'LONG' : 'SHORT') as TradeDirection,
     closePrice: event.closePrice || 0,
     pnl: event.pnlUsdc || 0,
-    profitPercent: event.profitPercent || 0,
     roi,
     durationSeconds,
     closedAt: event.executedAt,

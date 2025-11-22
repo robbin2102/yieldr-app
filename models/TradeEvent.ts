@@ -35,6 +35,10 @@ const TradeEventSchema = new mongoose.Schema({
     required: true,
   },
 
+  pairSymbol: {
+    type: String, // e.g., "ETH/USD"
+  },
+
   // Trade direction
   isBuy: {
     type: Boolean,
@@ -108,12 +112,12 @@ const TradeEventSchema = new mongoose.Schema({
     type: Number,
   },
 
-  profitPercent: {
-    type: Number, // Can be negative
+  pnlUsdc: {
+    type: Number, // Profit/Loss in USDC (can be negative)
   },
 
-  pnlUsdc: {
-    type: Number, // Can be negative
+  roi: {
+    type: Number, // Return on investment percentage (can be negative)
   },
 
   closedAt: {
@@ -127,10 +131,6 @@ const TradeEventSchema = new mongoose.Schema({
   // --- Computed fields ---
   durationSeconds: {
     type: Number,
-  },
-
-  roi: {
-    type: Number, // Return on investment percentage
   },
 
   // Timestamps

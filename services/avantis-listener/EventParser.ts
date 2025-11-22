@@ -14,6 +14,7 @@ import {
   fromUsdcDecimals,
   fromPercentDecimals,
   fromTimestamp,
+  estimateTimestampFromBlock,
   toNumber,
   isValidAddress,
 } from './core/decimals';
@@ -125,6 +126,14 @@ export function parseMarketExecuted(log: Log): ParsedMarketExecutedEvent | null 
     const tpNum = fromPriceDecimals(tp);
     const slNum = fromPriceDecimals(sl);
 
+    // For timestamp:
+    // - Trade tuple's timestamp is ALWAYS the position open time
+    // - For open events: use trade tuple timestamp (correct)
+    // - For close events: use block timestamp (actual close time)
+    const eventTimestamp = open
+      ? fromTimestamp(timestamp) // Position open time from tuple
+      : estimateTimestampFromBlock(log.blockNumber || 0n); // Close time from block
+
     // Base parsed event
     const parsed: ParsedMarketExecutedEvent = {
       orderId: orderId.toString(),
@@ -140,7 +149,7 @@ export function parseMarketExecuted(log: Log): ParsedMarketExecutedEvent | null 
       executionPrice: executionPriceNum,
       tp: tpNum,
       sl: slNum,
-      executedAt: fromTimestamp(timestamp),
+      executedAt: eventTimestamp,
       executedTxHash: log.transactionHash || '',
       executedBlockNumber: toNumber(log.blockNumber || 0n, 'blockNumber'),
     };
@@ -149,7 +158,8 @@ export function parseMarketExecuted(log: Log): ParsedMarketExecutedEvent | null 
     if (!open) {
       parsed.closePrice = executionPriceNum;
       parsed.profitPercent = fromPercentDecimals(percentProfit);
-      parsed.pnlUsdc = fromUsdcDecimals(usdcSentToTrader);
+      // PnL = total sent to trader - initial collateral
+      parsed.pnlUsdc = fromUsdcDecimals(usdcSentToTrader) - fromUsdcDecimals(initialPosToken);
     }
 
     return parsed;

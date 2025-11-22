@@ -51,6 +51,23 @@ export function fromTimestamp(timestamp: bigint): Date {
 }
 
 /**
+ * Estimate timestamp from block number
+ * Base chain: ~2 second block time
+ * Base genesis block: 0 at timestamp ~1686789347 (June 2023)
+ * @param blockNumber - Block number
+ * @returns Estimated Date
+ */
+export function estimateTimestampFromBlock(blockNumber: bigint | number): Date {
+  const BASE_GENESIS_TIMESTAMP = 1686789347; // Approximate Base L2 genesis
+  const BLOCK_TIME_SECONDS = 2;
+
+  const blockNum = Number(blockNumber);
+  const estimatedTimestamp = BASE_GENESIS_TIMESTAMP + (blockNum * BLOCK_TIME_SECONDS);
+
+  return new Date(estimatedTimestamp * 1000);
+}
+
+/**
  * Safely convert bigint to number
  * Logs warning if value might lose precision
  * @param value - BigInt value
