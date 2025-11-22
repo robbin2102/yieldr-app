@@ -17,7 +17,7 @@ dotenv.config({ path: join(process.cwd(), '.env.local') });
 
 import { backfillMultipleWalletsHistory } from '../services/avantis-listener';
 import { verifyConnection } from '../services/avantis-listener/core/ViemClient';
-import connectDB from '../lib/mongodb';
+import connectDB from '../lib/mongoose';
 import Manager from '../models/manager';
 
 async function main() {

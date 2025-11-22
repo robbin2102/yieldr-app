@@ -14,7 +14,7 @@ dotenv.config({ path: join(process.cwd(), '.env.local') });
 
 import express from 'express';
 import { startAvantisListener, getListenerStatus, stopAvantisListener } from './index';
-import connectDB from '../../lib/mongodb';
+import connectDB from '../../lib/mongoose';
 import Manager from '../../models/manager';
 import TradeEvent from '../../models/TradeEvent';
 

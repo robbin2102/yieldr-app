@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getPerformanceSummary } from '../../../../services/avantis-listener/MetricsComputer';
-import connectDB from '../../../../lib/mongodb';
+import connectDB from '../../../../lib/mongoose';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
