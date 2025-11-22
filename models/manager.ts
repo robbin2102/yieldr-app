@@ -79,6 +79,30 @@ const ManagerSchema = new mongoose.Schema({
     type: Date,
     default: null
   },
+
+  // Avantis backfill tracking
+  avantisBackfillStatus: {
+    type: String,
+    enum: ['NOT_STARTED', 'IN_PROGRESS', 'COMPLETED', 'FAILED'],
+    default: 'NOT_STARTED'
+  },
+  avantisBackfillStartedAt: {
+    type: Date,
+    default: null
+  },
+  avantisBackfillCompletedAt: {
+    type: Date,
+    default: null
+  },
+  avantisLastBackfillBlock: {
+    type: Number,
+    default: null
+  },
+  avantisBackfillError: {
+    type: String,
+    default: null
+  },
+
   createdAt: {
     type: Date,
     default: Date.now
