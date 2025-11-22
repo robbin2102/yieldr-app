@@ -10,10 +10,10 @@
  */
 
 import dotenv from 'dotenv';
-import { resolve } from 'path';
+import { join } from 'path';
 
 // Load environment variables from .env.local
-dotenv.config({ path: resolve(__dirname, '../.env.local') });
+dotenv.config({ path: join(process.cwd(), '.env.local') });
 
 import { backfillMultipleWalletsHistory } from '../services/avantis-listener';
 import { verifyConnection } from '../services/avantis-listener/core/ViemClient';

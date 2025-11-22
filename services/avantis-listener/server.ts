@@ -7,10 +7,10 @@
  */
 
 import dotenv from 'dotenv';
-import { resolve } from 'path';
+import { join } from 'path';
 
 // Load environment variables from .env.local
-dotenv.config({ path: resolve(__dirname, '../../.env.local') });
+dotenv.config({ path: join(process.cwd(), '.env.local') });
 
 import express from 'express';
 import { startAvantisListener, getListenerStatus, stopAvantisListener } from './index';
