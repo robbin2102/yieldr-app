@@ -18,16 +18,16 @@ export interface TradingPair {
  */
 export const PAIR_INDEX_MAP: Record<number, TradingPair> = {
   0: {
-    symbol: 'BTC/USD',
-    baseAsset: 'BTC',
-    quoteAsset: 'USD',
-    name: 'Bitcoin',
-  },
-  1: {
     symbol: 'ETH/USD',
     baseAsset: 'ETH',
     quoteAsset: 'USD',
     name: 'Ethereum',
+  },
+  1: {
+    symbol: 'BTC/USD',
+    baseAsset: 'BTC',
+    quoteAsset: 'USD',
+    name: 'Bitcoin',
   },
   2: {
     symbol: 'LINK/USD',

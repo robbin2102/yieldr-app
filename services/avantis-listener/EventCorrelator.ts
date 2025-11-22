@@ -62,6 +62,7 @@ export async function processMarketOrderInitiated(
       orderId: event.orderId,
       status: TradeStatus.PENDING,
       trader: event.trader,
+      platform: 'Avantis',
       pairIndex: event.pairIndex,
       pairSymbol: getPairSymbol(event.pairIndex),
       isBuy: event.isBuy,

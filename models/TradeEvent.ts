@@ -29,6 +29,13 @@ const TradeEventSchema = new mongoose.Schema({
     index: true,
   },
 
+  // Platform
+  platform: {
+    type: String,
+    default: 'Avantis',
+    index: true,
+  },
+
   // Trading pair
   pairIndex: {
     type: Number,
