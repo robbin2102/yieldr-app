@@ -18,10 +18,39 @@ export const MARKET_ORDER_INITIATED_TOPIC =
 /**
  * MarketExecuted Event
  * Emitted from Events Contract (0x0c16ff40...)
+ * Using full ABI object format for tuple support
  */
-export const MARKET_EXECUTED_EVENT = parseAbiItem(
-  'event MarketExecuted(uint256 orderId, tuple(address trader, uint256 pairIndex, uint256 index, uint256 initialPosToken, uint256 positionSizeUSDC, uint256 openPrice, bool buy, uint256 leverage, uint256 tp, uint256 sl, uint256 timestamp) t, bool open, uint256 price, uint256 positionSizeUSDC, int256 percentProfit, uint256 usdcSentToTrader, bool isPnl)'
-);
+export const MARKET_EXECUTED_EVENT = {
+  type: 'event',
+  name: 'MarketExecuted',
+  inputs: [
+    { name: 'orderId', type: 'uint256', indexed: false },
+    {
+      name: 't',
+      type: 'tuple',
+      indexed: false,
+      components: [
+        { name: 'trader', type: 'address' },
+        { name: 'pairIndex', type: 'uint256' },
+        { name: 'index', type: 'uint256' },
+        { name: 'initialPosToken', type: 'uint256' },
+        { name: 'positionSizeUSDC', type: 'uint256' },
+        { name: 'openPrice', type: 'uint256' },
+        { name: 'buy', type: 'bool' },
+        { name: 'leverage', type: 'uint256' },
+        { name: 'tp', type: 'uint256' },
+        { name: 'sl', type: 'uint256' },
+        { name: 'timestamp', type: 'uint256' },
+      ],
+    },
+    { name: 'open', type: 'bool', indexed: false },
+    { name: 'price', type: 'uint256', indexed: false },
+    { name: 'positionSizeUSDC', type: 'uint256', indexed: false },
+    { name: 'percentProfit', type: 'int256', indexed: false },
+    { name: 'usdcSentToTrader', type: 'uint256', indexed: false },
+    { name: 'isPnl', type: 'bool', indexed: false },
+  ],
+} as const;
 
 export const MARKET_EXECUTED_TOPIC =
   '0x5c00d8b4c6c92b4922d1bd61ef722ec9a29169acb95d956676b07be6a6643eea' as const;
