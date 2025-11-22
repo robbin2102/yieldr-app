@@ -84,12 +84,24 @@ export async function backfillWallet(options: BackfillOptions): Promise<Backfill
         if (parsedInitiated.length > 0) {
           const orderIds = parsedInitiated.map((e) => e.orderId);
 
-          const executedLogs = await getLogs({
-            address: CONTRACTS.EVENTS,
-            event: MARKET_EXECUTED_EVENT,
-            fromBlock: chunkStart,
-            toBlock: chunkEnd,
-          });
+          // Break MarketExecuted queries into smaller sub-chunks (2K blocks) to avoid timeouts
+          // since we can't filter by trader at RPC level (trader is inside non-indexed tuple)
+          const executedSubChunkSize = 2000;
+          const executedLogs: Log[] = [];
+
+          const subChunks = createChunks(chunkStart, chunkEnd, executedSubChunkSize);
+          console.log(`[Backfiller] Fetching MarketExecuted in ${subChunks.length} sub-chunks of ${executedSubChunkSize} blocks`);
+
+          for (const subChunk of subChunks) {
+            const logs = await getLogs({
+              address: CONTRACTS.EVENTS,
+              event: MARKET_EXECUTED_EVENT,
+              fromBlock: subChunk.fromBlock,
+              toBlock: subChunk.toBlock,
+            });
+            executedLogs.push(...logs);
+            await sleep(50); // Small delay between sub-chunks
+          }
 
           console.log(`[Backfiller] Found ${executedLogs.length} MarketExecuted events`);
 
