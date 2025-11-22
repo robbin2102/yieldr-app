@@ -33,7 +33,7 @@ export interface BackfillOptions {
   startBlock?: number;
   endBlock?: number;
   chunkSize?: number;
-  delayMs?: number;
+  parallelChunks?: number; // Number of chunks to process in parallel
 }
 
 /**
