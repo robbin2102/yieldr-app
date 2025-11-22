@@ -30,22 +30,22 @@ export const PAIR_INDEX_MAP: Record<number, TradingPair> = {
     name: 'Bitcoin',
   },
   2: {
+    symbol: 'SOL/USD',
+    baseAsset: 'SOL',
+    quoteAsset: 'USD',
+    name: 'Solana',
+  },
+  3: {
     symbol: 'LINK/USD',
     baseAsset: 'LINK',
     quoteAsset: 'USD',
     name: 'Chainlink',
   },
-  3: {
+  4: {
     symbol: 'ARB/USD',
     baseAsset: 'ARB',
     quoteAsset: 'USD',
     name: 'Arbitrum',
-  },
-  4: {
-    symbol: 'SOL/USD',
-    baseAsset: 'SOL',
-    quoteAsset: 'USD',
-    name: 'Solana',
   },
   5: {
     symbol: 'MATIC/USD',

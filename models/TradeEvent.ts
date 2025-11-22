@@ -52,6 +52,11 @@ const TradeEventSchema = new mongoose.Schema({
     required: true,
   },
 
+  direction: {
+    type: String, // LONG, SHORT, CLOSE LONG, CLOSE SHORT
+    enum: ['LONG', 'SHORT', 'CLOSE LONG', 'CLOSE SHORT'],
+  },
+
   // --- From MarketOrderInitiated ---
   initiatedAt: {
     type: Date,

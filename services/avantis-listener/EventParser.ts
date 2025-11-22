@@ -8,13 +8,13 @@ import {
   MARKET_ORDER_INITIATED_EVENT,
   MARKET_EXECUTED_EVENT,
 } from './config/events';
+import { getBlock } from './core/ViemClient';
 import {
   fromPriceDecimals,
   fromLeverageDecimals,
   fromUsdcDecimals,
   fromPercentDecimals,
   fromTimestamp,
-  estimateTimestampFromBlock,
   toNumber,
   isValidAddress,
 } from './core/decimals';
@@ -80,7 +80,7 @@ export function parseMarketOrderInitiated(
  * @param log - Raw event log from blockchain
  * @returns Parsed event data
  */
-export function parseMarketExecuted(log: Log): ParsedMarketExecutedEvent | null {
+export async function parseMarketExecuted(log: Log): Promise<ParsedMarketExecutedEvent | null> {
   try {
     const decoded = decodeEventLog({
       abi: [MARKET_EXECUTED_EVENT],
@@ -129,10 +129,15 @@ export function parseMarketExecuted(log: Log): ParsedMarketExecutedEvent | null 
     // For timestamp:
     // - Trade tuple's timestamp is ALWAYS the position open time
     // - For open events: use trade tuple timestamp (correct)
-    // - For close events: use block timestamp (actual close time)
-    const eventTimestamp = open
-      ? fromTimestamp(timestamp) // Position open time from tuple
-      : estimateTimestampFromBlock(log.blockNumber || 0n); // Close time from block
+    // - For close events: fetch actual block timestamp (actual close time)
+    let eventTimestamp: Date;
+    if (open) {
+      eventTimestamp = fromTimestamp(timestamp); // Position open time from tuple
+    } else {
+      // Fetch actual block to get real timestamp for close event
+      const block = await getBlock(log.blockNumber || 0n);
+      eventTimestamp = new Date(Number(block.timestamp) * 1000);
+    }
 
     // Base parsed event
     const parsed: ParsedMarketExecutedEvent = {
@@ -198,11 +203,11 @@ export function batchParseMarketOrderInitiated(
  * @param logs - Array of event logs
  * @returns Array of parsed events (nulls filtered out)
  */
-export function batchParseMarketExecuted(logs: Log[]): ParsedMarketExecutedEvent[] {
+export async function batchParseMarketExecuted(logs: Log[]): Promise<ParsedMarketExecutedEvent[]> {
   const parsed: ParsedMarketExecutedEvent[] = [];
 
   for (const log of logs) {
-    const event = parseMarketExecuted(log);
+    const event = await parseMarketExecuted(log);
     if (event) {
       parsed.push(event);
     }

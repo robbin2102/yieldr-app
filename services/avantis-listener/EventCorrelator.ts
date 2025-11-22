@@ -151,10 +151,14 @@ async function handlePositionOpened(
 ): Promise<void> {
   const { orderId } = event;
 
+  // Compute direction: LONG or SHORT
+  const direction = event.isBuy ? 'LONG' : 'SHORT';
+
   // Update DB with execution data
   const updateData = {
     status: TradeStatus.EXECUTED,
     pairSymbol: getPairSymbol(event.pairIndex),
+    direction,
     tradeIndex: event.tradeIndex,
     collateralUsdc: event.collateralUsdc,
     positionSizeUsdc: event.positionSizeUsdc,
@@ -220,8 +224,26 @@ async function handlePositionClosed(
   // ROI comes from contract's percentProfit field
   const roi = event.profitPercent || 0;
 
+  // Compute close direction: CLOSE LONG or CLOSE SHORT
+  const closeDirection = event.isBuy ? 'CLOSE LONG' : 'CLOSE SHORT';
+
+  // Ensure collateral data is present (should be from EXECUTED state)
+  if (!existingRecord.collateralUsdc && event.collateralUsdc) {
+    existingRecord.collateralUsdc = event.collateralUsdc;
+  }
+  if (!existingRecord.positionSizeUsdc && event.positionSizeUsdc) {
+    existingRecord.positionSizeUsdc = event.positionSizeUsdc;
+  }
+  if (!existingRecord.leverage && event.leverage) {
+    existingRecord.leverage = event.leverage;
+  }
+  if (!existingRecord.openPrice && event.openPrice) {
+    existingRecord.openPrice = event.openPrice;
+  }
+
   // Update DB with close data
   existingRecord.status = TradeStatus.CLOSED;
+  existingRecord.direction = closeDirection;
   existingRecord.closePrice = event.closePrice;
   existingRecord.pnlUsdc = event.pnlUsdc;
   existingRecord.roi = roi;

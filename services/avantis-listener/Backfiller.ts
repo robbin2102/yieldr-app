@@ -78,7 +78,7 @@ async function processChunk(
     const executedLogs = executedLogsArrays.flat();
 
     // Parse and filter by wallet and orderIds
-    const parsedExecuted = batchParseMarketExecuted(executedLogs).filter(
+    const parsedExecuted = (await batchParseMarketExecuted(executedLogs)).filter(
       (event) =>
         event.trader.toLowerCase() === wallet.toLowerCase() || orderIds.includes(event.orderId)
     );
