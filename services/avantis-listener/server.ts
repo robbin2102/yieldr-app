@@ -6,6 +6,12 @@
  * and storing them in MongoDB for later retrieval via API
  */
 
+import dotenv from 'dotenv';
+import { resolve } from 'path';
+
+// Load environment variables from .env.local
+dotenv.config({ path: resolve(__dirname, '../../.env.local') });
+
 import express from 'express';
 import { startAvantisListener, getListenerStatus, stopAvantisListener } from './index';
 import connectDB from '../../lib/mongodb';

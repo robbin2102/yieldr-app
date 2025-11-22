@@ -2,6 +2,12 @@
  * Test ViemClient connection to Base chain
  */
 
+import dotenv from 'dotenv';
+import { resolve } from 'path';
+
+// Load environment variables from .env.local
+dotenv.config({ path: resolve(__dirname, '../../.env.local') });
+
 import { verifyConnection, getLatestBlockNumber, getChainId } from './core/ViemClient';
 
 async function testConnection() {

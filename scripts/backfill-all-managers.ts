@@ -3,11 +3,17 @@
  * Fetch historical Avantis trades for all verified managers
  *
  * Usage:
- *   npx ts-node scripts/backfill-all-managers.ts [daysBack]
+ *   npx tsx scripts/backfill-all-managers.ts [daysBack]
  *
  * Example:
- *   npx ts-node scripts/backfill-all-managers.ts 90
+ *   npx tsx scripts/backfill-all-managers.ts 90
  */
+
+import dotenv from 'dotenv';
+import { resolve } from 'path';
+
+// Load environment variables from .env.local
+dotenv.config({ path: resolve(__dirname, '../.env.local') });
 
 import { backfillMultipleWalletsHistory } from '../services/avantis-listener';
 import { verifyConnection } from '../services/avantis-listener/core/ViemClient';
