@@ -24,7 +24,7 @@ export const BLOCK_CONFIG = {
   BLOCKS_PER_90_DAYS: 3_888_000,
 
   // Backfill settings (optimized for filtered queries)
-  CHUNK_SIZE: 100_000, // Process 100K blocks at a time (much faster with address filter)
+  CHUNK_SIZE: 10_000, // QuickNode eth_getLogs limit is 10K blocks per request
   CHUNK_DELAY_MS: 50, // Wait 50ms between chunks
 } as const;
 
