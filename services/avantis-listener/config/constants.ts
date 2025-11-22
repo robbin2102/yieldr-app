@@ -25,7 +25,7 @@ export const BLOCK_CONFIG = {
 
   // Backfill settings (optimized for filtered queries)
   CHUNK_SIZE: 10_000, // QuickNode eth_getLogs limit is 10K blocks per request
-  PARALLEL_CHUNKS: 5, // Process N chunks in parallel for fast backfill
+  PARALLEL_CHUNKS: 12, // Process 12 chunks in parallel (~24 req/sec, well under 50/sec limit)
   EXECUTED_SUB_CHUNK_SIZE: 2_000, // Break MarketExecuted queries into 2K block sub-chunks
 } as const;
 

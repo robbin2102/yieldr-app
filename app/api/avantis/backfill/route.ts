@@ -13,6 +13,7 @@ export const runtime = 'nodejs';
  */
 export async function POST(request: NextRequest) {
   try {
+    const startTime = Date.now();
     const body = await request.json();
     const { walletAddress, daysBack = 7 } = body; // Default 7 days for fast onboarding
 
@@ -23,18 +24,25 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    console.log(`[API] Starting backfill for ${walletAddress} (${daysBack} days)`);
+    console.log(`[API] ⏱️  Starting backfill for ${walletAddress} (${daysBack} days)`);
 
     // Connect to MongoDB
+    const dbStartTime = Date.now();
     await connectDB();
+    const dbConnectTime = Date.now() - dbStartTime;
+    console.log(`[API] ✓ MongoDB connected in ${dbConnectTime}ms`);
 
     // Start backfill (this may take a while)
+    const backfillStartTime = Date.now();
     const result = await backfillWalletHistory(walletAddress, daysBack);
+    const backfillTime = Date.now() - backfillStartTime;
 
-    console.log(`[API] Backfill complete for ${walletAddress}:`, {
-      eventsFound: result.eventsFound,
-      durationMs: result.durationMs,
-    });
+    const totalTime = Date.now() - startTime;
+
+    console.log(`[API] ✅ Backfill complete for ${walletAddress}:`);
+    console.log(`[API]    📊 Events found: ${result.eventsFound} (${result.initiatedEvents} initiated, ${result.executedEvents} executed)`);
+    console.log(`[API]    ⏱️  Backfill time: ${(backfillTime / 1000).toFixed(2)}s`);
+    console.log(`[API]    ⏱️  Total API time: ${(totalTime / 1000).toFixed(2)}s`);
 
     return NextResponse.json({
       success: true,
@@ -46,6 +54,7 @@ export async function POST(request: NextRequest) {
         startBlock: result.startBlock,
         endBlock: result.endBlock,
         durationMs: result.durationMs,
+        durationSeconds: (result.durationMs / 1000).toFixed(2),
       },
     });
   } catch (error: any) {

@@ -163,5 +163,6 @@ TradeEventSchema.pre('save', function (next) {
   next();
 });
 
+// Use custom collection name 'historicaltrades' instead of default 'tradeevents'
 export default mongoose.models.TradeEvent ||
-  mongoose.model('TradeEvent', TradeEventSchema);
+  mongoose.model('TradeEvent', TradeEventSchema, 'historicaltrades');
