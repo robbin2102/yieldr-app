@@ -4,7 +4,7 @@
  */
 
 import { EventListener } from './EventListener';
-import { backfillWallet, backfillMultipleWallets, type BackfillResult } from './Backfiller';
+import { backfillWallet, backfillMultipleWallets, correctCloseTimestamps, type BackfillResult } from './Backfiller';
 import { eventEmitter } from './EventCorrelator';
 import { verifyConnection } from './core/ViemClient';
 import { BasePlugin } from './plugins/BasePlugin';
@@ -205,7 +205,20 @@ export async function backfillWalletHistory(
   daysBack: number = 90
 ): Promise<BackfillResult> {
   console.log(`[AvantisListener] Starting backfill for ${wallet} (${daysBack} days)`);
-  return await backfillWallet({ wallet, daysBack });
+
+  // Perform main backfill
+  const result = await backfillWallet({ wallet, daysBack });
+
+  // Correct close timestamps for closed trades (minimal RPC overhead)
+  console.log('[AvantisListener] Correcting close timestamps for closed trades...');
+  const correctionResult = await correctCloseTimestamps(wallet);
+
+  console.log(
+    `[AvantisListener] ✓ Timestamp correction: ${correctionResult.corrected} trades updated, ` +
+    `${correctionResult.uniqueBlocks} blocks fetched in ${(correctionResult.durationMs / 1000).toFixed(1)}s`
+  );
+
+  return result;
 }
 
 /**

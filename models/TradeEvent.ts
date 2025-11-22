@@ -140,6 +140,10 @@ const TradeEventSchema = new mongoose.Schema({
     type: String,
   },
 
+  closedBlockNumber: {
+    type: Number,
+  },
+
   // --- Computed fields ---
   durationSeconds: {
     type: Number,

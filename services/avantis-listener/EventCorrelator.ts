@@ -249,6 +249,7 @@ async function handlePositionClosed(
   existingRecord.roi = roi;
   existingRecord.closedAt = event.executedAt;
   existingRecord.closedTxHash = event.executedTxHash;
+  existingRecord.closedBlockNumber = event.executedBlockNumber;
   existingRecord.durationSeconds = durationSeconds;
 
   await existingRecord.save();
