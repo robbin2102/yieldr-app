@@ -16,63 +16,60 @@ export async function computeWalletStatistics(wallet: string): Promise<TradeStat
 
   console.log(`[MetricsComputer] Computing statistics for ${normalizedWallet}...`);
 
-  // Fetch all trades for this wallet
-  const allTrades = await TradeEvent.find({
+  // Fetch all events for this wallet
+  const allEvents = await TradeEvent.find({
     trader: normalizedWallet,
-  }).sort({ initiatedAt: 1 });
+  }).sort({ timestamp: 1 });
 
-  const openTrades = allTrades.filter((t) => t.status === 'EXECUTED');
-  const closedTrades = allTrades.filter((t) => t.status === 'CLOSED');
+  const openEvents = allEvents.filter((e) => e.eventType === 'OPEN');
+  const closeEvents = allEvents.filter((e) => e.eventType === 'CLOSE');
 
   // Basic counts
-  const totalTrades = allTrades.length;
-  const openTradesCount = openTrades.length;
-  const closedTradesCount = closedTrades.length;
+  const totalTrades = allEvents.length;
+  const openTradesCount = openEvents.length;
+  const closedTradesCount = closeEvents.length;
 
-  // Calculate time-based PnL
+  // Calculate time-based PnL using CLOSE events
   const now = new Date();
-  const pnl24h = calculatePnLForPeriod(closedTrades, now, 1);
-  const pnl7d = calculatePnLForPeriod(closedTrades, now, 7);
-  const pnl30d = calculatePnLForPeriod(closedTrades, now, 30);
+  const pnl24h = calculatePnLForPeriod(closeEvents, now, 1);
+  const pnl7d = calculatePnLForPeriod(closeEvents, now, 7);
+  const pnl30d = calculatePnLForPeriod(closeEvents, now, 30);
 
-  // Total PnL (all time)
-  const totalPnl = closedTrades.reduce((sum, t) => sum + (t.pnlUsdc || 0), 0);
+  // Total PnL (all time) - only from CLOSE events
+  const totalPnl = closeEvents.reduce((sum, e) => sum + (e.pnlUsdc || 0), 0);
 
   // Win rate
-  const winningTrades = closedTrades.filter((t) => (t.pnlUsdc || 0) > 0).length;
-  const losingTrades = closedTrades.filter((t) => (t.pnlUsdc || 0) <= 0).length;
+  const winningTrades = closeEvents.filter((e) => (e.pnlUsdc || 0) > 0).length;
+  const losingTrades = closeEvents.filter((e) => (e.pnlUsdc || 0) <= 0).length;
   const winRate = closedTradesCount > 0 ? (winningTrades / closedTradesCount) * 100 : 0;
 
-  // Average ROI
+  // Average ROI (from CLOSE events)
   const avgRoi =
     closedTradesCount > 0
-      ? closedTrades.reduce((sum, t) => sum + (t.roi || 0), 0) / closedTradesCount
+      ? closeEvents.reduce((sum, e) => sum + (e.roi || 0), 0) / closedTradesCount
       : 0;
 
-  // Total volume (sum of position sizes)
-  const totalVolume = allTrades.reduce((sum, t) => sum + (t.positionSizeUsdc || 0), 0);
+  // Total volume (sum of position sizes from all events)
+  const totalVolume = allEvents.reduce((sum, e) => sum + (e.positionSizeUsdc || 0), 0);
 
   // Average position size
   const avgPositionSize =
-    allTrades.length > 0
-      ? allTrades.reduce((sum, t) => sum + (t.positionSizeUsdc || 0), 0) / allTrades.length
+    allEvents.length > 0
+      ? allEvents.reduce((sum, e) => sum + (e.positionSizeUsdc || 0), 0) / allEvents.length
       : 0;
 
   // Average leverage
   const avgLeverage =
-    allTrades.length > 0
-      ? allTrades.reduce((sum, t) => sum + (t.leverage || 0), 0) / allTrades.length
+    allEvents.length > 0
+      ? allEvents.reduce((sum, e) => sum + (e.leverage || 0), 0) / allEvents.length
       : 0;
 
-  // Average duration (for closed trades)
-  const avgDurationSeconds =
-    closedTradesCount > 0
-      ? closedTrades.reduce((sum, t) => sum + (t.durationSeconds || 0), 0) /
-        closedTradesCount
-      : 0;
+  // Average duration - NOTE: With simplified schema, duration must be calculated from matching OPEN/CLOSE pairs
+  // For now, set to 0 as we don't have durationSeconds field anymore
+  const avgDurationSeconds = 0;
 
   // Last trade timestamp
-  const lastTradeAt = allTrades.length > 0 ? allTrades[allTrades.length - 1].initiatedAt : undefined;
+  const lastTradeAt = allEvents.length > 0 ? allEvents[allEvents.length - 1].timestamp : undefined;
 
   const statistics: TradeStatistics = {
     trader: normalizedWallet,
@@ -107,23 +104,23 @@ export async function computeWalletStatistics(wallet: string): Promise<TradeStat
 
 /**
  * Calculate PnL for a specific time period
- * @param closedTrades - Array of closed trades
+ * @param closeEvents - Array of CLOSE events
  * @param now - Current timestamp
  * @param days - Number of days back
  * @returns PnL for the period
  */
 function calculatePnLForPeriod(
-  closedTrades: any[],
+  closeEvents: any[],
   now: Date,
   days: number
 ): number {
   const cutoffDate = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
 
-  const relevantTrades = closedTrades.filter(
-    (t) => t.closedAt && new Date(t.closedAt) >= cutoffDate
+  const relevantEvents = closeEvents.filter(
+    (e) => e.timestamp && new Date(e.timestamp) >= cutoffDate
   );
 
-  return relevantTrades.reduce((sum, t) => sum + (t.pnlUsdc || 0), 0);
+  return relevantEvents.reduce((sum, e) => sum + (e.pnlUsdc || 0), 0);
 }
 
 /**
@@ -140,23 +137,23 @@ export async function getDailyPnLBreakdown(
   const now = new Date();
   const cutoffDate = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
 
-  const closedTrades = await TradeEvent.find({
+  const closeEvents = await TradeEvent.find({
     trader: normalizedWallet,
-    status: 'CLOSED',
-    closedAt: { $gte: cutoffDate },
-  }).sort({ closedAt: 1 });
+    eventType: 'CLOSE',
+    timestamp: { $gte: cutoffDate },
+  }).sort({ timestamp: 1 });
 
   // Group by day
   const dailyPnL = new Map<string, { pnl: number; count: number }>();
 
-  for (const trade of closedTrades) {
-    if (!trade.closedAt) continue;
+  for (const event of closeEvents) {
+    if (!event.timestamp) continue;
 
-    const dateKey = trade.closedAt.toISOString().split('T')[0]; // YYYY-MM-DD
+    const dateKey = event.timestamp.toISOString().split('T')[0]; // YYYY-MM-DD
 
     const existing = dailyPnL.get(dateKey) || { pnl: 0, count: 0 };
     dailyPnL.set(dateKey, {
-      pnl: existing.pnl + (trade.pnlUsdc || 0),
+      pnl: existing.pnl + (event.pnlUsdc || 0),
       count: existing.count + 1,
     });
   }
@@ -187,23 +184,23 @@ export async function getWeeklyPnLBreakdown(
   const now = new Date();
   const cutoffDate = new Date(now.getTime() - weeks * 7 * 24 * 60 * 60 * 1000);
 
-  const closedTrades = await TradeEvent.find({
+  const closeEvents = await TradeEvent.find({
     trader: normalizedWallet,
-    status: 'CLOSED',
-    closedAt: { $gte: cutoffDate },
-  }).sort({ closedAt: 1 });
+    eventType: 'CLOSE',
+    timestamp: { $gte: cutoffDate },
+  }).sort({ timestamp: 1 });
 
   // Group by week
   const weeklyPnL = new Map<string, { pnl: number; count: number }>();
 
-  for (const trade of closedTrades) {
-    if (!trade.closedAt) continue;
+  for (const event of closeEvents) {
+    if (!event.timestamp) continue;
 
-    const weekStart = getWeekStart(trade.closedAt);
+    const weekStart = getWeekStart(event.timestamp);
 
     const existing = weeklyPnL.get(weekStart) || { pnl: 0, count: 0 };
     weeklyPnL.set(weekStart, {
-      pnl: existing.pnl + (trade.pnlUsdc || 0),
+      pnl: existing.pnl + (event.pnlUsdc || 0),
       count: existing.count + 1,
     });
   }
@@ -243,21 +240,21 @@ export async function getPairBreakdown(
 ): Promise<Array<{ pairIndex: number; trades: number; pnl: number; winRate: number }>> {
   const normalizedWallet = wallet.toLowerCase();
 
-  const closedTrades = await TradeEvent.find({
+  const closeEvents = await TradeEvent.find({
     trader: normalizedWallet,
-    status: 'CLOSED',
+    eventType: 'CLOSE',
   });
 
   // Group by pair
   const pairStats = new Map<number, { trades: number; wins: number; pnl: number }>();
 
-  for (const trade of closedTrades) {
-    const existing = pairStats.get(trade.pairIndex) || { trades: 0, wins: 0, pnl: 0 };
+  for (const event of closeEvents) {
+    const existing = pairStats.get(event.pairIndex) || { trades: 0, wins: 0, pnl: 0 };
 
-    pairStats.set(trade.pairIndex, {
+    pairStats.set(event.pairIndex, {
       trades: existing.trades + 1,
-      wins: existing.wins + ((trade.pnlUsdc || 0) > 0 ? 1 : 0),
-      pnl: existing.pnl + (trade.pnlUsdc || 0),
+      wins: existing.wins + ((event.pnlUsdc || 0) > 0 ? 1 : 0),
+      pnl: existing.pnl + (event.pnlUsdc || 0),
     });
   }
 
