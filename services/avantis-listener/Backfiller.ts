@@ -211,12 +211,42 @@ export async function backfillWallet(options: BackfillOptions): Promise<Backfill
 
     console.log(`[Backfiller] Processing events in chronological order by block number...`);
 
+    // Track statistics
+    let openedCount = 0;
+    let closedCount = 0;
+    let closeFailedCount = 0;
+    let duplicateOpenCount = 0;
+
     // Process events in chronological order
     for (const event of sortedEvents) {
+      const tradeKey = `${event.trader.toLowerCase()}-${event.pairIndex}-${event.tradeIndex}`;
+      const existed = await TradeEvent.exists({ tradeKey });
+
+      if (event.open) {
+        if (existed) {
+          duplicateOpenCount++;
+          console.log(`[Backfiller] ⚠️  Duplicate OPEN for tradeKey ${tradeKey} at block ${event.executedBlockNumber}`);
+        } else {
+          openedCount++;
+        }
+      } else {
+        if (existed) {
+          closedCount++;
+        } else {
+          closeFailedCount++;
+          console.log(`[Backfiller] ⚠️  CLOSE failed (no open) for tradeKey ${tradeKey} at block ${event.executedBlockNumber}`);
+        }
+      }
+
       await processMarketExecuted(event);
     }
 
     console.log(`[Backfiller] ✓ All events processed`);
+    console.log(`[Backfiller] Statistics:`);
+    console.log(`[Backfiller]   - New positions OPENED: ${openedCount}`);
+    console.log(`[Backfiller]   - Positions CLOSED: ${closedCount}`);
+    console.log(`[Backfiller]   - Duplicate OPENs (updates): ${duplicateOpenCount}`);
+    console.log(`[Backfiller]   - CLOSE failed (no open position): ${closeFailedCount}`);
 
     // If backfill was more than 7 days and milestone was reached, log remaining time
     if (daysBack > 7 && sevenDayMilestoneReached) {
