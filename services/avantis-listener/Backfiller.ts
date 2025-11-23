@@ -196,24 +196,23 @@ export async function backfillWallet(options: BackfillOptions): Promise<Backfill
       );
     }
 
-    // Process all collected events in correct order: OPEN first, then CLOSE
+    // Process all collected events in chronological order (by block number)
+    // This ensures that for any given tradeKey, OPEN comes before CLOSE naturally
     console.log(`[Backfiller] Processing ${allExecutedEvents.length} executed events...`);
-    console.log(`[Backfiller] Step 1/2: Processing OPEN positions...`);
 
     const openEvents = allExecutedEvents.filter(e => e.open === true);
     const closeEvents = allExecutedEvents.filter(e => e.open === false);
-
     console.log(`[Backfiller] Found ${openEvents.length} OPEN and ${closeEvents.length} CLOSE events`);
 
-    // Process all OPEN events first
-    for (const event of openEvents) {
-      await processMarketExecuted(event);
-    }
+    // Sort all events by block number (chronological order)
+    const sortedEvents = allExecutedEvents.sort((a, b) => {
+      return Number(a.executedBlockNumber) - Number(b.executedBlockNumber);
+    });
 
-    console.log(`[Backfiller] Step 2/2: Processing CLOSE positions...`);
+    console.log(`[Backfiller] Processing events in chronological order by block number...`);
 
-    // Then process all CLOSE events
-    for (const event of closeEvents) {
+    // Process events in chronological order
+    for (const event of sortedEvents) {
       await processMarketExecuted(event);
     }
 
