@@ -88,15 +88,13 @@ async function processChunk(
       `[Backfiller] Chunk ${chunkIndex}/${totalChunks}: Matched ${parsedExecuted.length}/${executedLogs.length} executed events`
     );
 
-    // Process executed events
-    for (const event of parsedExecuted) {
-      await processMarketExecuted(event);
-    }
-
+    // Return parsed events instead of processing them immediately
+    // This allows us to process all OPEN events before CLOSE events
     return {
       initiated: parsedInitiated.length,
       executed: parsedExecuted.length,
       endBlock: chunkEnd,
+      executedEvents: parsedExecuted, // Return events for later processing
     };
   } catch (error) {
     console.error(`[Backfiller] Error processing chunk ${chunkIndex}:`, error);
@@ -105,7 +103,7 @@ async function processChunk(
       chunk: chunkIndex,
       error: error instanceof Error ? error.message : 'Unknown error',
     });
-    return { initiated: 0, executed: 0, endBlock: chunkEnd };
+    return { initiated: 0, executed: 0, endBlock: chunkEnd, executedEvents: [] };
   }
 }
 
@@ -145,6 +143,7 @@ export async function backfillWallet(options: BackfillOptions): Promise<Backfill
     let totalInitiated = 0;
     let totalExecuted = 0;
     let processedChunks = 0;
+    const allExecutedEvents: any[] = []; // Collect all executed events
 
     // Process chunks in parallel batches
     for (let i = 0; i < chunks.length; i += parallelChunks) {
@@ -161,11 +160,16 @@ export async function backfillWallet(options: BackfillOptions): Promise<Backfill
         batchChunks.map((chunk, idx) => processChunk(chunk, wallet, i + idx + 1, chunks.length))
       );
 
-      // Aggregate results
+      // Aggregate results and collect events
       for (const result of batchResults) {
         totalInitiated += result.initiated;
         totalExecuted += result.executed;
         processedChunks++;
+
+        // Collect executed events for later processing
+        if (result.executedEvents) {
+          allExecutedEvents.push(...result.executedEvents);
+        }
 
         // Check if we've crossed the 7-day milestone
         if (!sevenDayMilestoneReached && daysBack > 7 && result.endBlock >= sevenDayMilestoneBlock) {
@@ -191,6 +195,29 @@ export async function backfillWallet(options: BackfillOptions): Promise<Backfill
         `[Backfiller] Batch ${batchNumber}/${totalBatches} complete - Progress: ${((processedChunks / chunks.length) * 100).toFixed(1)}%`
       );
     }
+
+    // Process all collected events in correct order: OPEN first, then CLOSE
+    console.log(`[Backfiller] Processing ${allExecutedEvents.length} executed events...`);
+    console.log(`[Backfiller] Step 1/2: Processing OPEN positions...`);
+
+    const openEvents = allExecutedEvents.filter(e => e.open === true);
+    const closeEvents = allExecutedEvents.filter(e => e.open === false);
+
+    console.log(`[Backfiller] Found ${openEvents.length} OPEN and ${closeEvents.length} CLOSE events`);
+
+    // Process all OPEN events first
+    for (const event of openEvents) {
+      await processMarketExecuted(event);
+    }
+
+    console.log(`[Backfiller] Step 2/2: Processing CLOSE positions...`);
+
+    // Then process all CLOSE events
+    for (const event of closeEvents) {
+      await processMarketExecuted(event);
+    }
+
+    console.log(`[Backfiller] ✓ All events processed`);
 
     // If backfill was more than 7 days and milestone was reached, log remaining time
     if (daysBack > 7 && sevenDayMilestoneReached) {
