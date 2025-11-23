@@ -85,16 +85,17 @@ def save_pairs_to_mongodb(pairs_info: dict, mongodb_uri: str):
     pairs_list = []
     for pair_index, pair_data in pairs_info.items():
         # Build document
+        # pair_data is a PairInfoWithData Pydantic model
         doc = {
             'pairIndex': int(pair_index),
-            'from': pair_data.get('from', 'UNKNOWN'),
-            'to': pair_data.get('to', 'UNKNOWN'),
-            'symbol': f"{pair_data.get('from', 'UNKNOWN')}/{pair_data.get('to', 'UNKNOWN')}",
-            'groupIndex': pair_data.get('groupIndex'),
-            'feeIndex': pair_data.get('feeIndex'),
-            'maxLeverage': pair_data.get('maxLeverage'),
-            'minLeverage': pair_data.get('minLeverage'),
-            'spreadP': pair_data.get('spreadP'),
+            'from': pair_data.from_,  # Note: 'from_' because 'from' is Python keyword
+            'to': pair_data.to,
+            'symbol': f"{pair_data.from_}/{pair_data.to}",
+            'groupIndex': pair_data.groupIndex,
+            'feeIndex': pair_data.feeIndex,
+            'maxLeverage': pair_data.leverages.max,
+            'minLeverage': pair_data.leverages.min,
+            'spreadP': pair_data.spreadP,
             'updatedAt': datetime.utcnow(),
         }
         pairs_list.append(doc)
