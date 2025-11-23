@@ -13,6 +13,7 @@
     "test:client": "tsx services/avantis-listener/test-client.ts",
     "fix:timestamps": "tsx scripts/fix-close-timestamps.ts",
     "fix:durations": "tsx scripts/recalculate-durations.ts",
+    "fix:all": "tsx scripts/fix-all-timestamps.ts",
     "update:pairs": "tsx scripts/update-pairs.ts",
     "diagnose:closes": "tsx scripts/diagnose-missing-closes.ts"
   },
