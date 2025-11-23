@@ -93,8 +93,8 @@ def save_pairs_to_mongodb(pairs_info: dict, mongodb_uri: str):
             'symbol': f"{pair_data.from_}/{pair_data.to}",
             'groupIndex': pair_data.group_index,
             'feeIndex': pair_data.fee_index,
-            'maxLeverage': pair_data.leverages.max,
-            'minLeverage': pair_data.leverages.min,
+            'maxLeverage': pair_data.leverages.max_leverage,
+            'minLeverage': pair_data.leverages.min_leverage,
             'spreadP': pair_data.spread_p,
             'updatedAt': datetime.utcnow(),
         }
