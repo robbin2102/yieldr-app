@@ -64,6 +64,16 @@ export async function getBlock(blockNumber: bigint) {
 }
 
 /**
+ * Get transaction receipt
+ * @param hash - Transaction hash
+ * @returns Transaction receipt
+ */
+export async function getTransactionReceipt(hash: `0x${string}`) {
+  const client = getViemClient();
+  return await client.getTransactionReceipt({ hash });
+}
+
+/**
  * Sleep utility
  * @param ms - Milliseconds to sleep
  */
