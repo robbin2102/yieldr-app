@@ -91,11 +91,11 @@ def save_pairs_to_mongodb(pairs_info: dict, mongodb_uri: str):
             'from': pair_data.from_,  # Note: 'from_' because 'from' is Python keyword
             'to': pair_data.to,
             'symbol': f"{pair_data.from_}/{pair_data.to}",
-            'groupIndex': pair_data.groupIndex,
-            'feeIndex': pair_data.feeIndex,
+            'groupIndex': pair_data.group_index,
+            'feeIndex': pair_data.fee_index,
             'maxLeverage': pair_data.leverages.max,
             'minLeverage': pair_data.leverages.min,
-            'spreadP': pair_data.spreadP,
+            'spreadP': pair_data.spread_p,
             'updatedAt': datetime.utcnow(),
         }
         pairs_list.append(doc)
