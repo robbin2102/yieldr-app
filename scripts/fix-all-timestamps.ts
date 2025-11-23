@@ -30,7 +30,7 @@ async function main() {
       process.exit(0);
     }
 
-    console.log(`Found ${closedTrades.length} closed trades\n');
+    console.log('Found ' + closedTrades.length + ' closed trades\n');
 
     // Step 1: Fetch correct close timestamps from blocks
     console.log('Step 1: Fetching correct close timestamps from blocks...\n');
@@ -43,7 +43,7 @@ async function main() {
       )
     );
 
-    console.log(`Fetching timestamps for ${uniqueBlockNumbers.length} unique blocks in parallel...\n`);
+    console.log('Fetching timestamps for ' + uniqueBlockNumbers.length + ' unique blocks in parallel...\n');
 
     const blockTimestamps = new Map<number, Date>();
 
@@ -52,7 +52,7 @@ async function main() {
         const block = await getBlock(BigInt(blockNumber));
         return { blockNumber, timestamp: new Date(Number(block.timestamp) * 1000) };
       } catch (error) {
-        console.error(`Failed to fetch block ${blockNumber}:`, error);
+        console.error('Failed to fetch block ' + blockNumber + ':', error);
         return null;
       }
     });
@@ -65,7 +65,7 @@ async function main() {
       }
     }
 
-    console.log(`✓ Fetched ${blockTimestamps.size}/${uniqueBlockNumbers.length} block timestamps\n`);
+    console.log('✓ Fetched ' + blockTimestamps.size + '/' + uniqueBlockNumbers.length + ' block timestamps\n');
 
     // Step 2: Update closedAt and recalculate durations
     console.log('Step 2: Updating closedAt and recalculating durations...\n');
@@ -77,7 +77,7 @@ async function main() {
       try {
         // Get correct close timestamp from block
         if (!trade.closedBlockNumber || !blockTimestamps.has(trade.closedBlockNumber)) {
-          console.log(`⚠️  Trade ${trade.orderId}: Missing closedBlockNumber or block timestamp`);
+          console.log('⚠️  Trade ' + trade.orderId + ': Missing closedBlockNumber or block timestamp');
           errorCount++;
           continue;
         }
@@ -88,7 +88,7 @@ async function main() {
         const openedAt = trade.executedAt || trade.initiatedAt;
 
         if (!openedAt) {
-          console.log(`⚠️  Trade ${trade.orderId}: Missing open timestamp`);
+          console.log('⚠️  Trade ' + trade.orderId + ': Missing open timestamp');
           errorCount++;
           continue;
         }
@@ -111,23 +111,23 @@ async function main() {
           await trade.save();
 
           console.log(
-            `✓ Fixed trade ${trade.orderId}:\n` +
-            `  closedAt: ${oldClosedAt.toISOString()} → ${correctCloseTime.toISOString()}\n` +
-            `  duration: ${oldDuration}s → ${durationSeconds}s (${(durationSeconds / 3600).toFixed(1)}h)`
+            '✓ Fixed trade ' + trade.orderId + ':\n' +
+            '  closedAt: ' + oldClosedAt.toISOString() + ' → ' + correctCloseTime.toISOString() + '\n' +
+            '  duration: ' + oldDuration + 's → ' + durationSeconds + 's (' + (durationSeconds / 3600).toFixed(1) + 'h)'
           );
 
           correctedCount++;
         }
       } catch (error) {
-        console.error(`❌ Error processing trade ${trade.orderId}:`, error);
+        console.error('❌ Error processing trade ' + trade.orderId + ':', error);
         errorCount++;
       }
     }
 
     console.log('\n✅ Complete!');
-    console.log(`   - Trades corrected: ${correctedCount}`);
-    console.log(`   - Trades with errors: ${errorCount}`);
-    console.log(`   - Total processed: ${closedTrades.length}`);
+    console.log('   - Trades corrected: ' + correctedCount);
+    console.log('   - Trades with errors: ' + errorCount);
+    console.log('   - Total processed: ' + closedTrades.length);
 
     process.exit(0);
   } catch (error) {
