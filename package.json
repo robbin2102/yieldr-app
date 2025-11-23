@@ -10,7 +10,10 @@
     "listener": "tsx services/avantis-listener/server.ts",
     "listener:dev": "nodemon --exec tsx services/avantis-listener/server.ts",
     "backfill": "tsx scripts/backfill-all-managers.ts",
-    "test:client": "tsx services/avantis-listener/test-client.ts"
+    "test:client": "tsx services/avantis-listener/test-client.ts",
+    "fix:timestamps": "tsx scripts/fix-close-timestamps.ts",
+    "update:pairs": "tsx scripts/update-pairs.ts",
+    "diagnose:closes": "tsx scripts/diagnose-missing-closes.ts"
   },
   "dependencies": {
     "@rainbow-me/rainbowkit": "^2.1.3",
