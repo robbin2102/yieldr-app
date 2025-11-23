@@ -1,14 +1,14 @@
 /**
  * Event Correlator
- * Matches MarketOrderInitiated with MarketExecuted events by orderId
+ * Matches open and close events using tradeKey (trader-pairIndex-tradeIndex)
  * Saves to MongoDB and emits application events
  */
 
 import EventEmitter from 'events';
 import TradeEvent from '../../models/TradeEvent';
-import { TradeStatus } from './config/constants';
 import { APP_EVENTS, FEATURES } from './config';
 import { getPairSymbol } from './config/pairs';
+import { getBlock } from './core/ViemClient';
 import type {
   ParsedMarketOrderInitiatedEvent,
   ParsedMarketExecutedEvent,
@@ -21,121 +21,59 @@ import type { Trade, TradeDirection } from './types/trades';
 export const eventEmitter = new EventEmitter();
 
 /**
- * In-memory storage for pending initiated events
- * Used to correlate with executed events
+ * Get block timestamp from block number
+ * Fetches the actual block and returns its timestamp
  */
-const pendingInitiatedEvents = new Map<string, ParsedMarketOrderInitiatedEvent>();
-
-/**
- * Queue for executed events that arrived before initiated
- * Will retry correlation after a delay
- */
-const orphanedExecutedEvents = new Map<string, ParsedMarketExecutedEvent>();
-
-/**
- * Process MarketOrderInitiated event
- * Stores in memory and checks if executed event is waiting
- */
-export async function processMarketOrderInitiated(
-  event: ParsedMarketOrderInitiatedEvent
-): Promise<void> {
+async function getBlockTimestamp(blockNumber: number): Promise<Date> {
   try {
-    const { orderId, trader } = event;
-
-    console.log(
-      `[Correlator] Processing MarketOrderInitiated - orderId: ${orderId}, trader: ${trader}`
-    );
-
-    // Check if this order already exists in DB
-    const existing = await TradeEvent.findOne({ orderId });
-
-    if (existing) {
-      console.log(`[Correlator] Order ${orderId} already exists in DB, skipping`);
-      return;
-    }
-
-    // Store in memory for correlation
-    pendingInitiatedEvents.set(orderId, event);
-
-    // Create PENDING record in DB
-    const tradeEvent = new TradeEvent({
-      orderId: event.orderId,
-      status: TradeStatus.PENDING,
-      trader: event.trader,
-      platform: 'Avantis',
-      pairIndex: event.pairIndex,
-      pairSymbol: getPairSymbol(event.pairIndex),
-      isBuy: event.isBuy,
-      initiatedAt: event.initiatedAt,
-      initiatedTxHash: event.initiatedTxHash,
-      initiatedBlockNumber: event.initiatedBlockNumber,
-    });
-
-    await tradeEvent.save();
-
-    console.log(`[Correlator] ✓ Saved PENDING order ${orderId}`);
-
-    // Check if executed event is waiting (orphaned)
-    const orphaned = orphanedExecutedEvents.get(orderId);
-    if (orphaned) {
-      console.log(`[Correlator] Found orphaned executed event for ${orderId}, correlating...`);
-      orphanedExecutedEvents.delete(orderId);
-      await processMarketExecuted(orphaned);
-    }
+    const block = await getBlock(BigInt(blockNumber));
+    return new Date(Number(block.timestamp) * 1000);
   } catch (error) {
-    console.error('[Correlator] Error processing MarketOrderInitiated:', error);
+    console.error(`[Correlator] Error fetching block ${blockNumber} timestamp:`, error);
+    // Fallback to current time if block fetch fails
+    return new Date();
   }
 }
 
 /**
+ * Process MarketOrderInitiated event
+ * Note: We primarily use MarketExecuted events now
+ * This is kept for logging/debugging purposes
+ */
+export async function processMarketOrderInitiated(
+  event: ParsedMarketOrderInitiatedEvent
+): Promise<void> {
+  // MarketOrderInitiated events don't have enough data (no tradeIndex)
+  // We rely on MarketExecuted events which have the full trade tuple
+  console.log(
+    `[Correlator] Initiated event - orderId: ${event.orderId}, trader: ${event.trader}, open: ${event.open}`
+  );
+}
+
+/**
  * Process MarketExecuted event
- * Finds matching initiated event and updates DB
+ * Uses tradeKey to link open and close events
  */
 export async function processMarketExecuted(
   event: ParsedMarketExecutedEvent
 ): Promise<void> {
   try {
-    const { orderId, trader, open } = event;
+    const { orderId, trader, open, pairIndex, tradeIndex } = event;
+
+    // Build tradeKey (composite key to link open and close)
+    const tradeKey = `${trader.toLowerCase()}-${pairIndex}-${tradeIndex}`;
 
     console.log(
-      `[Correlator] Processing MarketExecuted - orderId: ${orderId}, trader: ${trader}, open: ${open}`
+      `[Correlator] Processing MarketExecuted - orderId: ${orderId}, tradeKey: ${tradeKey}, open: ${open}`
     );
-
-    // Find initiated event in memory or DB
-    let initiated = pendingInitiatedEvents.get(orderId);
-    let existingRecord = await TradeEvent.findOne({ orderId });
-
-    // If no initiated event found, this is orphaned
-    if (!initiated && !existingRecord) {
-      console.warn(
-        `[Correlator] No initiated event found for orderId ${orderId}, queuing as orphaned`
-      );
-      orphanedExecutedEvents.set(orderId, event);
-
-      // Retry after 5 seconds
-      setTimeout(async () => {
-        if (orphanedExecutedEvents.has(orderId)) {
-          console.log(`[Correlator] Retrying orphaned event ${orderId}...`);
-          orphanedExecutedEvents.delete(orderId);
-          await processMarketExecuted(event);
-        }
-      }, 5000);
-
-      return;
-    }
-
-    // Remove from pending memory
-    if (initiated) {
-      pendingInitiatedEvents.delete(orderId);
-    }
 
     // Determine if this is an open or close
     if (open) {
       // Position OPENED
-      await handlePositionOpened(event, existingRecord);
+      await handlePositionOpened(event, tradeKey);
     } else {
       // Position CLOSED
-      await handlePositionClosed(event, existingRecord);
+      await handlePositionClosed(event, tradeKey);
     }
   } catch (error) {
     console.error('[Correlator] Error processing MarketExecuted:', error);
@@ -147,57 +85,67 @@ export async function processMarketExecuted(
  */
 async function handlePositionOpened(
   event: ParsedMarketExecutedEvent,
-  existingRecord: any
+  tradeKey: string
 ): Promise<void> {
-  const { orderId } = event;
+  const { orderId, trader, pairIndex, tradeIndex } = event;
+
+  // Fetch block timestamp for accurate open time
+  const blockTimestamp = await getBlockTimestamp(event.executedBlockNumber);
 
   // Compute direction: LONG or SHORT
   const direction = event.isBuy ? 'LONG' : 'SHORT';
 
-  // Update DB with execution data
-  const updateData = {
-    status: TradeStatus.EXECUTED,
-    pairSymbol: getPairSymbol(event.pairIndex),
-    direction,
-    tradeIndex: event.tradeIndex,
-    collateralUsdc: event.collateralUsdc,
-    positionSizeUsdc: event.positionSizeUsdc,
-    leverage: event.leverage,
-    openPrice: event.openPrice,
-    executionPrice: event.executionPrice,
-    tp: event.tp,
-    sl: event.sl,
-    executedAt: event.executedAt,
-    executedTxHash: event.executedTxHash,
-    executedBlockNumber: event.executedBlockNumber,
-  };
+  // Check if this trade already exists
+  let existingTrade = await TradeEvent.findOne({ tradeKey });
 
-  if (existingRecord) {
-    // Update existing PENDING record
-    Object.assign(existingRecord, updateData);
-    await existingRecord.save();
+  if (existingTrade) {
+    console.log(`[Correlator] Trade ${tradeKey} already exists, updating...`);
+    // Update existing trade (in case we're re-processing)
+    existingTrade.status = 'OPEN';
+    existingTrade.openOrderId = orderId;
+    existingTrade.initiatedAt = blockTimestamp;
+    existingTrade.openTxHash = event.executedTxHash;
+    existingTrade.openBlockNumber = event.executedBlockNumber;
+    existingTrade.collateralUsdc = event.collateralUsdc;
+    existingTrade.positionSizeUsdc = event.positionSizeUsdc;
+    existingTrade.leverage = event.leverage;
+    existingTrade.openPrice = event.openPrice;
+    existingTrade.tp = event.tp;
+    existingTrade.sl = event.sl;
+    existingTrade.pairSymbol = getPairSymbol(pairIndex);
+    await existingTrade.save();
   } else {
-    // Create new record (in case initiated was missed)
-    const newRecord = new TradeEvent({
-      orderId: event.orderId,
-      trader: event.trader,
-      pairIndex: event.pairIndex,
-      isBuy: event.isBuy,
-      initiatedAt: event.executedAt, // Use executed time as fallback
-      initiatedTxHash: event.executedTxHash,
-      initiatedBlockNumber: event.executedBlockNumber,
-      ...updateData,
+    // Create new trade record
+    const newTrade = new TradeEvent({
+      tradeKey,
+      status: 'OPEN',
+      trader: trader.toLowerCase(),
+      platform: 'Avantis',
+      pairIndex,
+      tradeIndex,
+      pairSymbol: getPairSymbol(pairIndex),
+      direction,
+      openOrderId: orderId,
+      initiatedAt: blockTimestamp,
+      openTxHash: event.executedTxHash,
+      openBlockNumber: event.executedBlockNumber,
+      collateralUsdc: event.collateralUsdc,
+      positionSizeUsdc: event.positionSizeUsdc,
+      leverage: event.leverage,
+      openPrice: event.openPrice,
+      tp: event.tp,
+      sl: event.sl,
     });
-    await newRecord.save();
+    await newTrade.save();
   }
 
-  console.log(`[Correlator] ✓ Position OPENED - orderId: ${orderId}`);
+  console.log(`[Correlator] ✓ Position OPENED - tradeKey: ${tradeKey}, orderId: ${orderId}`);
 
   // Emit trade:opened event
   if (FEATURES.ENABLE_EVENT_EMISSION) {
     const tradeData = buildTradeOpenedEvent(event);
     eventEmitter.emit(APP_EVENTS.TRADE_OPENED, tradeData);
-    console.log(`[Correlator] ✓ Emitted trade:opened event for ${orderId}`);
+    console.log(`[Correlator] ✓ Emitted trade:opened event for ${tradeKey}`);
   }
 }
 
@@ -206,63 +154,65 @@ async function handlePositionOpened(
  */
 async function handlePositionClosed(
   event: ParsedMarketExecutedEvent,
-  existingRecord: any
+  tradeKey: string
 ): Promise<void> {
   const { orderId } = event;
 
-  if (!existingRecord) {
-    console.warn(`[Correlator] No existing record found for close of orderId ${orderId}`);
+  // Find existing open position by tradeKey
+  const existingTrade = await TradeEvent.findOne({ tradeKey });
+
+  if (!existingTrade) {
+    console.warn(`[Correlator] No existing open position found for tradeKey ${tradeKey}`);
     return;
   }
 
-  // Calculate duration
-  const openedAt = existingRecord.executedAt || existingRecord.initiatedAt;
-  const durationSeconds = Math.floor(
-    (event.executedAt.getTime() - openedAt.getTime()) / 1000
-  );
+  // Fetch block timestamp for accurate close time
+  const closeBlockTimestamp = await getBlockTimestamp(event.executedBlockNumber);
+
+  // Calculate duration (in seconds)
+  const durationSeconds = existingTrade.initiatedAt
+    ? Math.floor((closeBlockTimestamp.getTime() - existingTrade.initiatedAt.getTime()) / 1000)
+    : 0;
 
   // ROI comes from contract's percentProfit field
   const roi = event.profitPercent || 0;
 
-  // Compute close direction: CLOSE LONG or CLOSE SHORT
-  const closeDirection = event.isBuy ? 'CLOSE LONG' : 'CLOSE SHORT';
+  // Update trade with close data
+  existingTrade.status = 'CLOSED';
+  existingTrade.closeOrderId = orderId;
+  existingTrade.closedAt = closeBlockTimestamp;
+  existingTrade.closeTxHash = event.executedTxHash;
+  existingTrade.closeBlockNumber = event.executedBlockNumber;
+  existingTrade.closePrice = event.closePrice;
+  existingTrade.pnlUsdc = event.pnlUsdc;
+  existingTrade.roi = roi;
+  existingTrade.durationSeconds = durationSeconds;
 
-  // Ensure collateral data is present (should be from EXECUTED state)
-  if (!existingRecord.collateralUsdc && event.collateralUsdc) {
-    existingRecord.collateralUsdc = event.collateralUsdc;
+  // Ensure open data is present (backfill from close event if missing)
+  if (!existingTrade.collateralUsdc && event.collateralUsdc) {
+    existingTrade.collateralUsdc = event.collateralUsdc;
   }
-  if (!existingRecord.positionSizeUsdc && event.positionSizeUsdc) {
-    existingRecord.positionSizeUsdc = event.positionSizeUsdc;
+  if (!existingTrade.positionSizeUsdc && event.positionSizeUsdc) {
+    existingTrade.positionSizeUsdc = event.positionSizeUsdc;
   }
-  if (!existingRecord.leverage && event.leverage) {
-    existingRecord.leverage = event.leverage;
+  if (!existingTrade.leverage && event.leverage) {
+    existingTrade.leverage = event.leverage;
   }
-  if (!existingRecord.openPrice && event.openPrice) {
-    existingRecord.openPrice = event.openPrice;
+  if (!existingTrade.openPrice && event.openPrice) {
+    existingTrade.openPrice = event.openPrice;
   }
 
-  // Update DB with close data
-  existingRecord.status = TradeStatus.CLOSED;
-  existingRecord.direction = closeDirection;
-  existingRecord.closePrice = event.closePrice;
-  existingRecord.pnlUsdc = event.pnlUsdc;
-  existingRecord.roi = roi;
-  existingRecord.closedAt = event.executedAt;
-  existingRecord.closedTxHash = event.executedTxHash;
-  existingRecord.closedBlockNumber = event.executedBlockNumber;
-  existingRecord.durationSeconds = durationSeconds;
-
-  await existingRecord.save();
+  await existingTrade.save();
 
   console.log(
-    `[Correlator] ✓ Position CLOSED - orderId: ${orderId}, PnL: ${event.pnlUsdc?.toFixed(2)} USDC, ROI: ${roi.toFixed(2)}%`
+    `[Correlator] ✓ Position CLOSED - tradeKey: ${tradeKey}, PnL: ${event.pnlUsdc?.toFixed(2)} USDC, ROI: ${roi.toFixed(2)}%, Duration: ${durationSeconds}s`
   );
 
   // Emit trade:closed event
   if (FEATURES.ENABLE_EVENT_EMISSION) {
-    const tradeData = buildTradeClosedEvent(event, existingRecord, durationSeconds, roi);
+    const tradeData = buildTradeClosedEvent(event, existingTrade, durationSeconds, roi);
     eventEmitter.emit(APP_EVENTS.TRADE_CLOSED, tradeData);
-    console.log(`[Correlator] ✓ Emitted trade:closed event for ${orderId}`);
+    console.log(`[Correlator] ✓ Emitted trade:closed event for ${tradeKey}`);
   }
 }
 
@@ -280,10 +230,8 @@ function buildTradeOpenedEvent(event: ParsedMarketExecutedEvent) {
     positionSize: event.positionSizeUsdc || 0,
     leverage: event.leverage || 0,
     openPrice: event.openPrice || 0,
-    executionPrice: event.executionPrice || 0,
     tp: event.tp || 0,
     sl: event.sl || 0,
-    executedAt: event.executedAt,
     txHash: event.executedTxHash,
     blockNumber: event.executedBlockNumber,
   };
@@ -308,31 +256,15 @@ function buildTradeClosedEvent(
     pnl: event.pnlUsdc || 0,
     roi,
     durationSeconds,
-    closedAt: event.executedAt,
     txHash: event.executedTxHash,
     blockNumber: event.executedBlockNumber,
   };
 }
 
 /**
- * Get pending events count (for monitoring)
- */
-export function getPendingEventsCount(): number {
-  return pendingInitiatedEvents.size;
-}
-
-/**
- * Get orphaned events count (for monitoring)
- */
-export function getOrphanedEventsCount(): number {
-  return orphanedExecutedEvents.size;
-}
-
-/**
  * Clear all in-memory caches (for testing)
+ * Note: With tradeKey-based correlation, we don't use in-memory caches anymore
  */
 export function clearCaches(): void {
-  pendingInitiatedEvents.clear();
-  orphanedExecutedEvents.clear();
-  console.log('[Correlator] Caches cleared');
+  console.log('[Correlator] No caches to clear (using tradeKey-based correlation)');
 }

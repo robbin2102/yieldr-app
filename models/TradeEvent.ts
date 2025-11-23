@@ -5,8 +5,9 @@ import mongoose from 'mongoose';
  * Stores Avantis trading events from blockchain
  */
 const TradeEventSchema = new mongoose.Schema({
-  // Unique order identifier (correlation key)
-  orderId: {
+  // PRIMARY KEY - Unique trade identifier (trader-pairIndex-tradeIndex)
+  // This links open and close events for the same position
+  tradeKey: {
     type: String,
     required: true,
     unique: true,
@@ -16,7 +17,7 @@ const TradeEventSchema = new mongoose.Schema({
   // Trade status
   status: {
     type: String,
-    enum: ['PENDING', 'EXECUTED', 'CLOSED'],
+    enum: ['PENDING_OPEN', 'OPEN', 'PENDING_CLOSE', 'CLOSED'],
     required: true,
     index: true,
   },
@@ -46,39 +47,59 @@ const TradeEventSchema = new mongoose.Schema({
     type: String, // e.g., "ETH/USD"
   },
 
-  // Trade direction
-  isBuy: {
-    type: Boolean,
-    required: true,
-  },
-
-  direction: {
-    type: String, // LONG, SHORT, CLOSE LONG, CLOSE SHORT
-    enum: ['LONG', 'SHORT', 'CLOSE LONG', 'CLOSE SHORT'],
-  },
-
-  // --- From MarketOrderInitiated ---
-  initiatedAt: {
-    type: Date,
-    required: true,
-  },
-
-  initiatedTxHash: {
-    type: String,
-    required: true,
-  },
-
-  initiatedBlockNumber: {
+  // Trade index (from contract - used in tradeKey)
+  tradeIndex: {
     type: Number,
     required: true,
+  },
+
+  // Trade direction (LONG or SHORT only)
+  direction: {
+    type: String,
+    enum: ['LONG', 'SHORT'],
+    required: true,
+  },
+
+  // Order IDs for reference (open and close have different orderIds)
+  openOrderId: {
+    type: String,
+  },
+
+  closeOrderId: {
+    type: String,
+  },
+
+  // --- TIMESTAMPS (simplified to 2 fields only) ---
+  // When position opened (from MarketExecuted open=true block timestamp)
+  initiatedAt: {
+    type: Date,
+  },
+
+  // When position closed (from MarketExecuted open=false block timestamp)
+  closedAt: {
+    type: Date,
+  },
+
+  // --- Transaction hashes for reference ---
+  openTxHash: {
+    type: String,
+  },
+
+  closeTxHash: {
+    type: String,
+  },
+
+  // --- Block numbers for reference ---
+  openBlockNumber: {
+    type: Number,
     index: true,
   },
 
-  // --- From MarketExecuted (when opened) ---
-  tradeIndex: {
+  closeBlockNumber: {
     type: Number,
   },
 
+  // --- Trade details (from open execution) ---
   collateralUsdc: {
     type: Number,
   },
@@ -95,10 +116,6 @@ const TradeEventSchema = new mongoose.Schema({
     type: Number,
   },
 
-  executionPrice: {
-    type: Number,
-  },
-
   tp: {
     type: Number,
   },
@@ -107,19 +124,7 @@ const TradeEventSchema = new mongoose.Schema({
     type: Number,
   },
 
-  executedAt: {
-    type: Date,
-  },
-
-  executedTxHash: {
-    type: String,
-  },
-
-  executedBlockNumber: {
-    type: Number,
-  },
-
-  // --- For closes (when open=false) ---
+  // --- Close data (when position closes) ---
   closePrice: {
     type: Number,
   },
@@ -130,18 +135,6 @@ const TradeEventSchema = new mongoose.Schema({
 
   roi: {
     type: Number, // Return on investment percentage (can be negative)
-  },
-
-  closedAt: {
-    type: Date,
-  },
-
-  closedTxHash: {
-    type: String,
-  },
-
-  closedBlockNumber: {
-    type: Number,
   },
 
   // --- Computed fields ---
@@ -165,6 +158,7 @@ const TradeEventSchema = new mongoose.Schema({
 TradeEventSchema.index({ trader: 1, initiatedAt: -1 });
 TradeEventSchema.index({ status: 1, trader: 1 });
 TradeEventSchema.index({ trader: 1, status: 1, initiatedAt: -1 });
+TradeEventSchema.index({ trader: 1, pairIndex: 1, tradeIndex: 1 }); // For finding trades by composite key
 
 // Update 'updatedAt' on every save
 TradeEventSchema.pre('save', function (next) {

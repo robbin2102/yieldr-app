@@ -9,6 +9,7 @@ import { eventEmitter } from './EventCorrelator';
 import { verifyConnection } from './core/ViemClient';
 import { BasePlugin } from './plugins/BasePlugin';
 import { APP_EVENTS } from './config';
+import { initializePairsCache } from './config/pairs';
 import TradeEvent from '../../models/TradeEvent';
 import type { TradeOpenedEvent, TradeClosedEvent } from './types/trades';
 
@@ -206,17 +207,12 @@ export async function backfillWalletHistory(
 ): Promise<BackfillResult> {
   console.log(`[AvantisListener] Starting backfill for ${wallet} (${daysBack} days)`);
 
+  // Initialize pairs cache from MongoDB
+  console.log('[AvantisListener] Initializing pairs cache...');
+  await initializePairsCache();
+
   // Perform main backfill
   const result = await backfillWallet({ wallet, daysBack });
-
-  // Correct close timestamps for closed trades (minimal RPC overhead)
-  console.log('[AvantisListener] Correcting close timestamps for closed trades...');
-  const correctionResult = await correctCloseTimestamps(wallet);
-
-  console.log(
-    `[AvantisListener] ✓ Timestamp correction: ${correctionResult.corrected} trades updated, ` +
-    `${correctionResult.uniqueBlocks} blocks fetched in ${(correctionResult.durationMs / 1000).toFixed(1)}s`
-  );
 
   return result;
 }

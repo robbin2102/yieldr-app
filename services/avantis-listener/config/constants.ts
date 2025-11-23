@@ -33,8 +33,9 @@ export const BLOCK_CONFIG = {
  * Trade Status Enum
  */
 export enum TradeStatus {
-  PENDING = 'PENDING', // Order initiated, not yet executed
-  EXECUTED = 'EXECUTED', // Position opened
+  PENDING_OPEN = 'PENDING_OPEN', // Order initiated, waiting for execution
+  OPEN = 'OPEN', // Position opened
+  PENDING_CLOSE = 'PENDING_CLOSE', // Close order initiated, waiting for execution
   CLOSED = 'CLOSED', // Position closed
 }
 

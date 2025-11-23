@@ -1,0 +1,13 @@
+# Python dependencies for Avantis scripts
+
+# Avantis Trader SDK
+avantis-trader-sdk>=0.1.0
+
+# MongoDB driver
+pymongo>=4.0.0
+
+# Environment variables
+python-dotenv>=1.0.0
+
+# Web3 dependencies (included with avantis-trader-sdk)
+web3>=6.0.0
