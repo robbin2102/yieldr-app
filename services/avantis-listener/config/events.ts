@@ -56,6 +56,47 @@ export const MARKET_EXECUTED_TOPIC =
   '0x5c00d8b4c6c92b4922d1bd61ef722ec9a29169acb95d956676b07be6a6643eea' as const;
 
 /**
+ * LimitExecuted Event
+ * Emitted from Events Contract (0x0c16ff40...) when a limit order is executed
+ * This is critical - many trades close via limit orders, not market orders!
+ */
+export const LIMIT_EXECUTED_EVENT = {
+  type: 'event',
+  name: 'LimitExecuted',
+  inputs: [
+    { name: 'orderId', type: 'uint256', indexed: false },
+    { name: 'limitIndex', type: 'uint256', indexed: false },
+    {
+      name: 't',
+      type: 'tuple',
+      indexed: false,
+      components: [
+        { name: 'trader', type: 'address' },
+        { name: 'pairIndex', type: 'uint256' },
+        { name: 'index', type: 'uint256' },
+        { name: 'initialPosToken', type: 'uint256' },
+        { name: 'positionSizeUSDC', type: 'uint256' },
+        { name: 'openPrice', type: 'uint256' },
+        { name: 'buy', type: 'bool' },
+        { name: 'leverage', type: 'uint256' },
+        { name: 'tp', type: 'uint256' },
+        { name: 'sl', type: 'uint256' },
+        { name: 'timestamp', type: 'uint256' },
+      ],
+    },
+    { name: 'orderType', type: 'uint8', indexed: false },
+    { name: 'price', type: 'uint256', indexed: false },
+    { name: 'positionSizeUSDC', type: 'uint256', indexed: false },
+    { name: 'percentProfit', type: 'int256', indexed: false },
+    { name: 'usdcSentToTrader', type: 'uint256', indexed: false },
+    { name: 'isPnl', type: 'bool', indexed: false },
+  ],
+} as const;
+
+export const LIMIT_EXECUTED_TOPIC =
+  '0x05fb0d0ede1f86f64263bd6d3eca2a3029323adae522bc4c5ef3aa1868952102' as const;
+
+/**
  * Application Event Names (for EventEmitter)
  */
 export const APP_EVENTS = {

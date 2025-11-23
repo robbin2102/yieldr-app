@@ -94,6 +94,13 @@ export interface ParsedMarketExecutedEvent {
 }
 
 /**
+ * Parsed LimitExecuted event (after decimal conversion)
+ * Same structure as MarketExecuted since they both contain the same trade tuple
+ * The only difference is limitIndex and orderType, which we don't need to track
+ */
+export type ParsedLimitExecutedEvent = ParsedMarketExecutedEvent;
+
+/**
  * Combined trade event for correlation
  */
 export interface CorrelatedTradeEvent {

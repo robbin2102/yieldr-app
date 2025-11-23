@@ -1,7 +1,7 @@
 /**
  * Event Correlator - Simplified
- * Stores each MarketExecuted event independently (no correlation needed)
- * CLOSE events already contain complete PnL data from the blockchain
+ * Stores MarketExecuted AND LimitExecuted events independently (no correlation needed)
+ * Both event types contain complete trade data including PnL for CLOSE events
  */
 
 import EventEmitter from 'events';
@@ -12,6 +12,7 @@ import { getBlock } from './core/ViemClient';
 import type {
   ParsedMarketOrderInitiatedEvent,
   ParsedMarketExecutedEvent,
+  ParsedLimitExecutedEvent,
 } from './types/events';
 import type { TradeDirection } from './types/trades';
 
@@ -49,17 +50,18 @@ export async function processMarketOrderInitiated(
 }
 
 /**
- * Process MarketExecuted event - Simplified approach
+ * Process Executed event (Market OR Limit) - Simplified approach
  * Each event is stored independently as OPEN or CLOSE
+ * Works for both MarketExecuted and LimitExecuted since they have the same structure
  */
 export async function processMarketExecuted(
-  event: ParsedMarketExecutedEvent
+  event: ParsedMarketExecutedEvent | ParsedLimitExecutedEvent
 ): Promise<void> {
   try {
     const { orderId, trader, open, pairIndex, tradeIndex } = event;
 
     console.log(
-      `[Correlator] Processing MarketExecuted - orderId: ${orderId}, type: ${open ? 'OPEN' : 'CLOSE'}, trader: ${trader}`
+      `[Correlator] Processing executed event - orderId: ${orderId}, type: ${open ? 'OPEN' : 'CLOSE'}, trader: ${trader}`
     );
 
     // Check if event already exists

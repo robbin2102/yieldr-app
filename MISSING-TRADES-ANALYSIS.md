@@ -5,7 +5,10 @@
 - **Expected PnL:** 14.6k USDC (from Avantis dashboard)
 - **Actual PnL in MongoDB:** 5.5k USDC
 - **Missing:** ~9k USDC in PnL
-- **Root Cause:** RPC `getLogs()` didn't return all MarketExecuted events during 60-day backfill
+- **TRUE ROOT CAUSE:** ✅ **We were ONLY tracking MarketExecuted events, but IGNORING LimitExecuted events!**
+  - Many trades close via limit orders (TP/SL/Liquidation), not market orders
+  - The missing 971.27 USDC BTC trade was a LimitExecuted event (block 38460543)
+  - ~~Previous assumption about RPC missing data was INCORRECT~~
 
 ## Missing Trades Identified
 
@@ -36,49 +39,53 @@ By comparing your Basescan transaction log with known missing dates, I've identi
 - Recent data, probably already captured
 - Status: Should verify to be sure
 
-## Why Events Are Missing
+## Why Events Were Missing
 
-The 60-day backfill called `getLogs()` with large block ranges. The RPC provider may have:
-1. **Rate limited** the requests
-2. **Timed out** on large queries
-3. **Silently omitted** events without errors
-4. **Syncing issues** at the time of backfill
+The system was **ONLY listening for MarketExecuted events** but **completely IGNORING LimitExecuted events**.
 
-This is a known issue with blockchain RPCs when fetching large historical ranges.
+### What are LimitExecuted events?
+- **orderType 0**: Take Profit (TP) triggered
+- **orderType 1**: Stop Loss (SL) triggered
+- **orderType 2**: Liquidation
+- **orderType 3**: Limit order OPEN
 
-## Resolution: Targeted Re-Backfill
+Many traders set TP/SL when opening positions, so their trades close via `LimitExecuted` events, NOT `MarketExecuted` events!
 
-I've created a script that will re-fetch ONLY the missing block ranges with:
-- **Smaller chunk sizes** (500 blocks instead of default)
-- **Less parallelism** (2 concurrent requests instead of default 5)
-- **Focused ranges** (only ~28,000 blocks total vs. 518,400 for 60 days)
+## Resolution: ✅ FIXED - Added LimitExecuted Support
+
+**Changes Made:**
+
+1. ✅ Added `LIMIT_EXECUTED_EVENT` definition to `config/events.ts`
+2. ✅ Added `parseLimitExecuted()` and `batchParseLimitExecuted()` to `EventParser.ts`
+3. ✅ Updated `Backfiller.ts` to fetch BOTH MarketExecuted AND LimitExecuted events in parallel
+4. ✅ Updated `EventCorrelator.ts` to process both event types (they have identical structure)
+5. ✅ Added `ParsedLimitExecutedEvent` type (alias of ParsedMarketExecutedEvent)
 
 ### How to Run Recovery
 
+Simply re-run the backfill - it will now capture BOTH event types:
+
 ```bash
-# Run targeted backfill for missing blocks
+# Full backfill (now includes limit orders)
+npx tsx scripts/backfill-single-wallet.ts 0x9c40c5c236bc2d67e07d9781196050d53fe78908 60
+
+# Or use targeted backfill for specific ranges
 npx tsx scripts/backfill-specific-blocks.ts 0x9c40c5c236bc2d67e07d9781196050d53fe78908
 ```
 
-This will:
-1. Re-fetch blocks 38349000-38350000 (Nov 18)
-2. Re-fetch blocks 38393000-38420000 (Nov 19) **← Most important**
-3. Re-fetch blocks 38460000-38461000 (Nov 21) **← High-value BTC trade**
-4. Re-fetch blocks 38493500-38494000 (Nov 22)
-
-The script will:
-- Skip duplicates automatically (using orderId unique index)
-- Report how many NEW events were recovered
-- Show final PnL statistics
-- Compare with Avantis dashboard
+The backfiller will now show output like:
+```
+[Backfiller] Chunk 1/10: Found 15 market + 8 limit = 23 total events
+```
 
 ### Expected Outcome
 
-After running the targeted backfill:
-- Should recover ~10-20 missing CLOSE events
-- Total PnL should increase from 5.5k to ~14.6k USDC
-- Nov 19 should no longer be empty
-- Nov 21 BTC trade (971.27 USDC) should appear
+After re-running the backfill with limit order support:
+- ✅ Will capture ALL limit order closes (TP/SL/Liquidation)
+- ✅ Total PnL should increase from 5.5k to ~14.6k USDC
+- ✅ Nov 19 and Nov 21 missing trades will appear
+- ✅ The 971.27 USDC BTC trade (block 38460543) will be captured
+- ✅ Any future limit order closures will be automatically tracked
 
 ## Block Ranges Explained
 
@@ -119,11 +126,12 @@ To prevent this issue in the future:
 ## Technical Details
 
 The simplified event storage approach is **CORRECT**:
-- ✅ Each MarketExecuted event stored independently as OPEN or CLOSE
+- ✅ Each executed event (Market OR Limit) stored independently as OPEN or CLOSE
 - ✅ PnL comes directly from blockchain (no calculation errors)
 - ✅ orderId is unique identifier (no duplicate issues)
+- ✅ Both MarketExecuted and LimitExecuted use the same trade tuple structure
 
-The problem is purely **data fetching from RPC**, not logic errors.
+The problem was **missing event types**, not logic errors or RPC issues.
 
 ## Next Steps
 

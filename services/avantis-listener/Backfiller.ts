@@ -1,12 +1,12 @@
 /**
  * Backfiller - Simplified
- * Fetches MarketExecuted events only and stores them independently
+ * Fetches BOTH MarketExecuted AND LimitExecuted events
  * No correlation needed - each event is self-contained
  */
 
 import { getLogs, getLatestBlockNumber, getBlock } from './core/ViemClient';
-import { CONTRACTS, MARKET_EXECUTED_EVENT, BLOCK_CONFIG, APP_EVENTS, TradeStatus } from './config';
-import { batchParseMarketExecuted } from './EventParser';
+import { CONTRACTS, MARKET_EXECUTED_EVENT, LIMIT_EXECUTED_EVENT, BLOCK_CONFIG, APP_EVENTS, TradeStatus } from './config';
+import { batchParseMarketExecuted, batchParseLimitExecuted } from './EventParser';
 import { processMarketExecuted, eventEmitter } from './EventCorrelator';
 import type { BackfillOptions } from './core/types';
 import TradeEvent from '../../models/TradeEvent';
@@ -20,7 +20,7 @@ function sleep(ms: number): Promise<void> {
 
 /**
  * Process a single chunk of blocks - Simplified
- * Fetches MarketExecuted events only
+ * Fetches BOTH MarketExecuted AND LimitExecuted events
  */
 async function processChunk(
   chunk: { fromBlock: bigint; toBlock: bigint },
@@ -31,41 +31,62 @@ async function processChunk(
   const { fromBlock: chunkStart, toBlock: chunkEnd } = chunk;
 
   try {
-    // Fetch MarketExecuted events in sub-chunks (for better reliability)
+    // Fetch events in sub-chunks (for better reliability)
     const executedSubChunkSize = BLOCK_CONFIG.EXECUTED_SUB_CHUNK_SIZE;
     const subChunks = createChunks(chunkStart, chunkEnd, executedSubChunkSize);
 
-    // Parallel fetch of all sub-chunks
-    const executedLogsArrays = await Promise.all(
-      subChunks.map((subChunk) =>
-        getLogs({
-          address: CONTRACTS.EVENTS,
-          event: MARKET_EXECUTED_EVENT,
-          fromBlock: subChunk.fromBlock,
-          toBlock: subChunk.toBlock,
-        })
-      )
-    );
+    // Parallel fetch of BOTH MarketExecuted AND LimitExecuted events for all sub-chunks
+    const [marketExecutedLogsArrays, limitExecutedLogsArrays] = await Promise.all([
+      // Fetch MarketExecuted events
+      Promise.all(
+        subChunks.map((subChunk) =>
+          getLogs({
+            address: CONTRACTS.EVENTS,
+            event: MARKET_EXECUTED_EVENT,
+            fromBlock: subChunk.fromBlock,
+            toBlock: subChunk.toBlock,
+          })
+        )
+      ),
+      // Fetch LimitExecuted events
+      Promise.all(
+        subChunks.map((subChunk) =>
+          getLogs({
+            address: CONTRACTS.EVENTS,
+            event: LIMIT_EXECUTED_EVENT,
+            fromBlock: subChunk.fromBlock,
+            toBlock: subChunk.toBlock,
+          })
+        )
+      ),
+    ]);
 
-    // Flatten results
-    const executedLogs = executedLogsArrays.flat();
+    // Flatten and parse results
+    const marketExecutedLogs = marketExecutedLogsArrays.flat();
+    const limitExecutedLogs = limitExecutedLogsArrays.flat();
 
-    // Parse and filter by wallet
-    const parsedExecuted = batchParseMarketExecuted(executedLogs).filter(
+    const parsedMarketExecuted = batchParseMarketExecuted(marketExecutedLogs).filter(
       (event) => event.trader.toLowerCase() === wallet.toLowerCase()
     );
 
-    if (parsedExecuted.length > 0) {
+    const parsedLimitExecuted = batchParseLimitExecuted(limitExecutedLogs).filter(
+      (event) => event.trader.toLowerCase() === wallet.toLowerCase()
+    );
+
+    // Combine both event types
+    const allEvents = [...parsedMarketExecuted, ...parsedLimitExecuted];
+
+    if (allEvents.length > 0) {
       console.log(
-        `[Backfiller] Chunk ${chunkIndex}/${totalChunks}: Found ${parsedExecuted.length} executed events`
+        `[Backfiller] Chunk ${chunkIndex}/${totalChunks}: Found ${parsedMarketExecuted.length} market + ${parsedLimitExecuted.length} limit = ${allEvents.length} total events`
       );
     }
 
-    // Return parsed events for later chronological processing
+    // Return combined events for later chronological processing
     return {
-      executed: parsedExecuted.length,
+      executed: allEvents.length,
       endBlock: chunkEnd,
-      executedEvents: parsedExecuted,
+      executedEvents: allEvents,
     };
   } catch (error) {
     console.error(`[Backfiller] Error processing chunk ${chunkIndex}:`, error);

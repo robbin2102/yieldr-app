@@ -7,6 +7,7 @@ import { decodeEventLog, type Log } from 'viem';
 import {
   MARKET_ORDER_INITIATED_EVENT,
   MARKET_EXECUTED_EVENT,
+  LIMIT_EXECUTED_EVENT,
 } from './config/events';
 import {
   fromPriceDecimals,
@@ -22,6 +23,7 @@ import type {
   RawMarketExecutedEvent,
   ParsedMarketOrderInitiatedEvent,
   ParsedMarketExecutedEvent,
+  ParsedLimitExecutedEvent,
 } from './types/events';
 
 /**
@@ -166,6 +168,101 @@ export function parseMarketExecuted(log: Log): ParsedMarketExecutedEvent | null 
 }
 
 /**
+ * Parse LimitExecuted event log
+ * Almost identical to MarketExecuted - just a different event type
+ * Both use the same trade tuple structure
+ * @param log - Raw event log from blockchain
+ * @returns Parsed event data
+ */
+export function parseLimitExecuted(log: Log): ParsedLimitExecutedEvent | null {
+  try {
+    const decoded = decodeEventLog({
+      abi: [LIMIT_EXECUTED_EVENT],
+      data: log.data,
+      topics: log.topics,
+    });
+
+    const args = decoded.args as any;
+
+    // Extract values (same as MarketExecuted)
+    const orderId = args.orderId as bigint;
+    const trade = args.t as any; // Tuple
+    const orderType = args.orderType as number; // uint8: 0=TP, 1=SL, 2=LIQ, 3=OPEN
+    const price = args.price as bigint;
+    const positionSizeUSDC = args.positionSizeUSDC as bigint;
+    const percentProfit = args.percentProfit as bigint; // int256
+    const usdcSentToTrader = args.usdcSentToTrader as bigint;
+
+    // Determine if this is an OPEN or CLOSE
+    // orderType 3 = OPEN limit order, others (0=TP, 1=SL, 2=LIQ) = CLOSE
+    const open = orderType === 3;
+
+    // Extract from trade tuple
+    const trader = (trade.trader as string).toLowerCase();
+    const pairIndex = trade.pairIndex as bigint;
+    const index = trade.index as bigint;
+    const initialPosToken = trade.initialPosToken as bigint;
+    const openPrice = trade.openPrice as bigint;
+    const buy = trade.buy as boolean;
+    const leverage = trade.leverage as bigint;
+    const tp = trade.tp as bigint;
+    const sl = trade.sl as bigint;
+    const timestamp = trade.timestamp as bigint;
+
+    // Validate trader address
+    if (!isValidAddress(trader)) {
+      console.error(`[EventParser] Invalid trader address: ${trader}`);
+      return null;
+    }
+
+    // Convert decimals
+    const collateralUsdc = fromUsdcDecimals(initialPosToken);
+    const positionSize = fromUsdcDecimals(positionSizeUSDC);
+    const openPriceNum = fromPriceDecimals(openPrice);
+    const executionPriceNum = fromPriceDecimals(price);
+    const leverageNum = fromLeverageDecimals(leverage);
+    const tpNum = fromPriceDecimals(tp);
+    const slNum = fromPriceDecimals(sl);
+
+    // Use trade tuple timestamp
+    const eventTimestamp = fromTimestamp(timestamp);
+
+    // Base parsed event
+    const parsed: ParsedLimitExecutedEvent = {
+      orderId: orderId.toString(),
+      trader,
+      pairIndex: toNumber(pairIndex, 'pairIndex'),
+      tradeIndex: toNumber(index, 'tradeIndex'),
+      open,
+      isBuy: buy,
+      collateralUsdc,
+      positionSizeUsdc: positionSize,
+      leverage: leverageNum,
+      openPrice: openPriceNum,
+      executionPrice: executionPriceNum,
+      tp: tpNum,
+      sl: slNum,
+      executedAt: eventTimestamp,
+      executedTxHash: log.transactionHash || '',
+      executedBlockNumber: toNumber(log.blockNumber || 0n, 'blockNumber'),
+    };
+
+    // If this is a close (open=false), add close-specific data
+    if (!open) {
+      parsed.closePrice = executionPriceNum;
+      parsed.profitPercent = fromPercentDecimals(percentProfit);
+      // PnL = total sent to trader - initial collateral
+      parsed.pnlUsdc = fromUsdcDecimals(usdcSentToTrader) - fromUsdcDecimals(initialPosToken);
+    }
+
+    return parsed;
+  } catch (error) {
+    console.error('[EventParser] Failed to parse LimitExecuted:', error);
+    return null;
+  }
+}
+
+/**
  * Batch parse MarketOrderInitiated events
  * @param logs - Array of event logs
  * @returns Array of parsed events (nulls filtered out)
@@ -206,6 +303,28 @@ export function batchParseMarketExecuted(logs: Log[]): ParsedMarketExecutedEvent
 
   console.log(
     `[EventParser] Parsed ${parsed.length}/${logs.length} MarketExecuted events`
+  );
+
+  return parsed;
+}
+
+/**
+ * Batch parse LimitExecuted events
+ * @param logs - Array of event logs
+ * @returns Array of parsed events (nulls filtered out)
+ */
+export function batchParseLimitExecuted(logs: Log[]): ParsedLimitExecutedEvent[] {
+  const parsed: ParsedLimitExecutedEvent[] = [];
+
+  for (const log of logs) {
+    const event = parseLimitExecuted(log);
+    if (event) {
+      parsed.push(event);
+    }
+  }
+
+  console.log(
+    `[EventParser] Parsed ${parsed.length}/${logs.length} LimitExecuted events`
   );
 
   return parsed;
