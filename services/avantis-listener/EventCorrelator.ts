@@ -95,14 +95,14 @@ async function handlePositionOpened(
   // Compute direction: LONG or SHORT
   const direction = event.isBuy ? 'LONG' : 'SHORT';
 
-  // Check if this trade already exists
-  let existingTrade = await TradeEvent.findOne({ tradeKey });
+  // Check if this trade already exists by openOrderId (true unique identifier)
+  let existingTrade = await TradeEvent.findOne({ openOrderId: orderId });
 
   if (existingTrade) {
-    console.log(`[Correlator] Trade ${tradeKey} already exists, updating...`);
+    console.log(`[Correlator] Trade with openOrderId ${orderId} already exists, updating...`);
     // Update existing trade (in case we're re-processing)
     existingTrade.status = 'OPEN';
-    existingTrade.openOrderId = orderId;
+    existingTrade.tradeKey = tradeKey;
     existingTrade.initiatedAt = blockTimestamp;
     existingTrade.openTxHash = event.executedTxHash;
     existingTrade.openBlockNumber = event.executedBlockNumber;
@@ -158,11 +158,16 @@ async function handlePositionClosed(
 ): Promise<void> {
   const { orderId } = event;
 
-  // Find existing open position by tradeKey
-  const existingTrade = await TradeEvent.findOne({ tradeKey });
+  // Find the CURRENTLY OPEN position with this tradeKey
+  // NOTE: Multiple historical trades can have the same tradeKey (tradeIndex gets reused)
+  // We need to find the one that's currently OPEN, sorted by most recent open block
+  const existingTrade = await TradeEvent.findOne({
+    tradeKey,
+    status: 'OPEN'
+  }).sort({ openBlockNumber: -1 });
 
   if (!existingTrade) {
-    console.warn(`[Correlator] No existing open position found for tradeKey ${tradeKey}`);
+    console.warn(`[Correlator] No existing OPEN position found for tradeKey ${tradeKey}`);
     return;
   }
 

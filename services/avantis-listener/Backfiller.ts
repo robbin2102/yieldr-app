@@ -220,17 +220,20 @@ export async function backfillWallet(options: BackfillOptions): Promise<Backfill
     // Process events in chronological order
     for (const event of sortedEvents) {
       const tradeKey = `${event.trader.toLowerCase()}-${event.pairIndex}-${event.tradeIndex}`;
-      const existed = await TradeEvent.exists({ tradeKey });
 
       if (event.open) {
+        // Check if this openOrderId already exists (true duplicate)
+        const existed = await TradeEvent.exists({ openOrderId: event.orderId });
         if (existed) {
           duplicateOpenCount++;
-          console.log(`[Backfiller] ⚠️  Duplicate OPEN for tradeKey ${tradeKey} at block ${event.executedBlockNumber}`);
+          console.log(`[Backfiller] ⚠️  Duplicate OPEN for openOrderId ${event.orderId} at block ${event.executedBlockNumber}`);
         } else {
           openedCount++;
         }
       } else {
-        if (existed) {
+        // Check if there's an OPEN position with this tradeKey to close
+        const openPosition = await TradeEvent.exists({ tradeKey, status: 'OPEN' });
+        if (openPosition) {
           closedCount++;
         } else {
           closeFailedCount++;

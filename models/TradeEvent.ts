@@ -5,12 +5,12 @@ import mongoose from 'mongoose';
  * Stores Avantis trading events from blockchain
  */
 const TradeEventSchema = new mongoose.Schema({
-  // PRIMARY KEY - Unique trade identifier (trader-pairIndex-tradeIndex)
-  // This links open and close events for the same position
+  // Trade Key (trader-pairIndex-tradeIndex)
+  // NOTE: NOT unique! TradeIndex is reused after positions close.
+  // Multiple historical trades can have the same tradeKey over time.
   tradeKey: {
     type: String,
     required: true,
-    unique: true,
     index: true,
   },
 
@@ -60,9 +60,13 @@ const TradeEventSchema = new mongoose.Schema({
     required: true,
   },
 
-  // Order IDs for reference (open and close have different orderIds)
+  // PRIMARY KEY - Order IDs for reference (open and close have different orderIds)
+  // openOrderId is unique per trade - this is our true unique identifier
   openOrderId: {
     type: String,
+    required: true,
+    unique: true,
+    index: true,
   },
 
   closeOrderId: {
