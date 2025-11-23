@@ -9,16 +9,11 @@
  *   npx tsx scripts/backfill-all-managers.ts 90
  */
 
-import dotenv from 'dotenv';
-import { join } from 'path';
+import { config } from 'dotenv';
+import { resolve } from 'path';
 
-// Load environment variables from .env.local
-dotenv.config({ path: join(process.cwd(), '.env.local') });
-
-import { backfillMultipleWalletsHistory } from '../services/avantis-listener';
-import { verifyConnection } from '../services/avantis-listener/core/ViemClient';
-import connectDB from '../lib/mongoose';
-import Manager from '../models/manager';
+// Load environment variables from .env.local BEFORE any other imports
+config({ path: resolve(process.cwd(), '.env.local') });
 
 async function main() {
   console.log('='.repeat(60));
@@ -26,10 +21,16 @@ async function main() {
   console.log('='.repeat(60));
 
   try {
+    // Dynamic imports to ensure env vars are loaded first
+    const { backfillMultipleWalletsHistory } = await import('../services/avantis-listener');
+    const { verifyConnection } = await import('../services/avantis-listener/core/ViemClient');
+    const { default: connectDB } = await import('../lib/mongoose');
+    const { default: Manager } = await import('../models/manager');
+
     // Get days back from command line argument
     const daysBack = process.argv[2] ? parseInt(process.argv[2]) : 90;
 
-    console.log(`\n📅 Backfilling last ${daysBack} days\n`);
+    console.log('\n📅 Backfilling last ' + daysBack + ' days\n');
 
     // Connect to MongoDB
     console.log('🔌 Connecting to MongoDB...');
@@ -50,7 +51,7 @@ async function main() {
       verified: true,
     }).select('username walletAddress avantisBackfillStatus');
 
-    console.log(`✓ Found ${managers.length} verified managers\n`);
+    console.log('✓ Found ' + managers.length + ' verified managers\n');
 
     if (managers.length === 0) {
       console.log('⚠️  No verified managers found. Exiting.');
@@ -58,12 +59,12 @@ async function main() {
     }
 
     // Extract wallet addresses
-    const wallets = managers.map((m) => m.walletAddress);
+    const wallets = managers.map((m: any) => m.walletAddress);
 
     console.log('Managers to backfill:');
-    managers.forEach((m, i) => {
+    managers.forEach((m: any, i: number) => {
       console.log(
-        `  ${i + 1}. ${m.username} (${m.walletAddress}) - Status: ${m.avantisBackfillStatus || 'NOT_STARTED'}`
+        '  ' + (i + 1) + '. ' + m.username + ' (' + m.walletAddress + ') - Status: ' + (m.avantisBackfillStatus || 'NOT_STARTED')
       );
     });
 
@@ -106,19 +107,19 @@ async function main() {
     console.log('Backfill Complete!');
     console.log('='.repeat(60));
 
-    const successful = results.filter((r) => r.success).length;
-    const totalEvents = results.reduce((sum, r) => sum + r.eventsFound, 0);
+    const successful = results.filter((r: any) => r.success).length;
+    const totalEvents = results.reduce((sum: number, r: any) => sum + r.eventsFound, 0);
 
-    console.log(`\n✓ Processed ${managers.length} managers in ${(duration / 1000).toFixed(1)}s`);
-    console.log(`✓ Successful: ${successful}/${managers.length}`);
-    console.log(`✓ Total events found: ${totalEvents}`);
+    console.log('\n✓ Processed ' + managers.length + ' managers in ' + (duration / 1000).toFixed(1) + 's');
+    console.log('✓ Successful: ' + successful + '/' + managers.length);
+    console.log('✓ Total events found: ' + totalEvents);
 
     console.log('\nDetailed Results:');
-    results.forEach((result, i) => {
+    results.forEach((result: any, i: number) => {
       const manager = managers[i];
       const icon = result.success ? '✓' : '✗';
       console.log(
-        `  ${icon} ${manager.username}: ${result.eventsFound} events (${(result.durationMs / 1000).toFixed(1)}s)`
+        '  ' + icon + ' ' + manager.username + ': ' + result.eventsFound + ' events (' + (result.durationMs / 1000).toFixed(1) + 's)'
       );
     });
 
