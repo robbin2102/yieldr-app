@@ -1,23 +1,23 @@
 import mongoose from 'mongoose';
 
 /**
- * Trade Event Schema
- * Stores Avantis trading events from blockchain
+ * Trade Event Schema - Simplified
+ * Stores MarketExecuted events from Avantis blockchain
+ * Each event (OPEN or CLOSE) is stored independently
  */
 const TradeEventSchema = new mongoose.Schema({
-  // Trade Key (trader-pairIndex-tradeIndex)
-  // NOTE: NOT unique! TradeIndex is reused after positions close.
-  // Multiple historical trades can have the same tradeKey over time.
-  tradeKey: {
+  // PRIMARY KEY - orderId from MarketExecuted event (unique per event)
+  orderId: {
     type: String,
     required: true,
+    unique: true,
     index: true,
   },
 
-  // Trade status
-  status: {
+  // Event type: 'OPEN' or 'CLOSE'
+  eventType: {
     type: String,
-    enum: ['PENDING_OPEN', 'OPEN', 'PENDING_CLOSE', 'CLOSED'],
+    enum: ['OPEN', 'CLOSE'],
     required: true,
     index: true,
   },
@@ -41,81 +41,63 @@ const TradeEventSchema = new mongoose.Schema({
   pairIndex: {
     type: Number,
     required: true,
+    index: true,
   },
 
   pairSymbol: {
     type: String, // e.g., "ETH/USD"
   },
 
-  // Trade index (from contract - used in tradeKey)
+  // Trade index (from contract)
   tradeIndex: {
     type: Number,
     required: true,
   },
 
-  // Trade direction (LONG or SHORT only)
+  // Trade direction (LONG or SHORT)
   direction: {
     type: String,
     enum: ['LONG', 'SHORT'],
     required: true,
   },
 
-  // PRIMARY KEY - Order IDs for reference (open and close have different orderIds)
-  // openOrderId is unique per trade - this is our true unique identifier
-  openOrderId: {
+  // Event timestamp (from block)
+  timestamp: {
+    type: Date,
+    required: true,
+    index: true,
+  },
+
+  // Transaction hash
+  txHash: {
     type: String,
     required: true,
-    unique: true,
+  },
+
+  // Block number
+  blockNumber: {
+    type: Number,
+    required: true,
     index: true,
   },
 
-  closeOrderId: {
-    type: String,
-  },
-
-  // --- TIMESTAMPS (simplified to 2 fields only) ---
-  // When position opened (from MarketExecuted open=true block timestamp)
-  initiatedAt: {
-    type: Date,
-  },
-
-  // When position closed (from MarketExecuted open=false block timestamp)
-  closedAt: {
-    type: Date,
-  },
-
-  // --- Transaction hashes for reference ---
-  openTxHash: {
-    type: String,
-  },
-
-  closeTxHash: {
-    type: String,
-  },
-
-  // --- Block numbers for reference ---
-  openBlockNumber: {
-    type: Number,
-    index: true,
-  },
-
-  closeBlockNumber: {
-    type: Number,
-  },
-
-  // --- Trade details (from open execution) ---
+  // --- Trade details (present in all events) ---
   collateralUsdc: {
     type: Number,
+    required: true,
   },
 
   positionSizeUsdc: {
     type: Number,
+    required: true,
   },
 
   leverage: {
     type: Number,
+    required: true,
   },
 
+  // --- OPEN event specific fields ---
   openPrice: {
     type: Number,
   },
@@ -128,7 +110,7 @@ const TradeEventSchema = new mongoose.Schema({
     type: Number,
   },
 
-  // --- Close data (when position closes) ---
+  // --- CLOSE event specific fields ---
   closePrice: {
     type: Number,
   },
@@ -139,11 +121,6 @@ const TradeEventSchema = new mongoose.Schema({
 
   roi: {
     type: Number, // Return on investment percentage (can be negative)
-  },
-
-  // --- Computed fields ---
-  durationSeconds: {
-    type: Number,
   },
 
   // Timestamps
@@ -159,10 +136,9 @@ const TradeEventSchema = new mongoose.Schema({
 });
 
 // Compound indexes for efficient querying
-TradeEventSchema.index({ trader: 1, initiatedAt: -1 });
-TradeEventSchema.index({ status: 1, trader: 1 });
-TradeEventSchema.index({ trader: 1, status: 1, initiatedAt: -1 });
-TradeEventSchema.index({ trader: 1, pairIndex: 1, tradeIndex: 1 }); // For finding trades by composite key
+TradeEventSchema.index({ trader: 1, timestamp: -1 });
+TradeEventSchema.index({ trader: 1, eventType: 1, timestamp: -1 });
+TradeEventSchema.index({ trader: 1, pairIndex: 1, eventType: 1 });
 
 // Update 'updatedAt' on every save
 TradeEventSchema.pre('save', function (next) {

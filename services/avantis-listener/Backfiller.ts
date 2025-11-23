@@ -1,14 +1,14 @@
 /**
- * Backfiller
- * Fetches historical events in chunks with progress tracking
+ * Backfiller - Simplified
+ * Fetches MarketExecuted events only and stores them independently
+ * No correlation needed - each event is self-contained
  */
 
 import { getLogs, getLatestBlockNumber, getBlock } from './core/ViemClient';
-import { CONTRACTS, MARKET_ORDER_INITIATED_EVENT, MARKET_EXECUTED_EVENT, BLOCK_CONFIG, APP_EVENTS, TradeStatus } from './config';
-import { batchParseMarketOrderInitiated, batchParseMarketExecuted } from './EventParser';
-import { processMarketOrderInitiated, processMarketExecuted, eventEmitter } from './EventCorrelator';
+import { CONTRACTS, MARKET_EXECUTED_EVENT, BLOCK_CONFIG, APP_EVENTS, TradeStatus } from './config';
+import { batchParseMarketExecuted } from './EventParser';
+import { processMarketExecuted, eventEmitter } from './EventCorrelator';
 import type { BackfillOptions } from './core/types';
-import type { Log } from 'viem';
 import TradeEvent from '../../models/TradeEvent';
 
 /**
@@ -19,47 +19,19 @@ function sleep(ms: number): Promise<void> {
 }
 
 /**
- * Process a single chunk of blocks
+ * Process a single chunk of blocks - Simplified
+ * Fetches MarketExecuted events only
  */
 async function processChunk(
   chunk: { fromBlock: bigint; toBlock: bigint },
   wallet: string,
   chunkIndex: number,
   totalChunks: number
-): Promise<{ initiated: number; executed: number; endBlock: bigint }> {
+): Promise<{ executed: number; endBlock: bigint; executedEvents: any[] }> {
   const { fromBlock: chunkStart, toBlock: chunkEnd } = chunk;
 
   try {
-    // Fetch initiated events - FILTER BY TRADER ADDRESS
-    const initiatedLogs = await getLogs({
-      address: CONTRACTS.TRADING,
-      event: MARKET_ORDER_INITIATED_EVENT,
-      args: {
-        trader: wallet as `0x${string}`, // Filter by indexed trader parameter
-      },
-      fromBlock: chunkStart,
-      toBlock: chunkEnd,
-    });
-
-    // Skip if no events found (no need to fetch MarketExecuted)
-    if (initiatedLogs.length === 0) {
-      return { initiated: 0, executed: 0, endBlock: chunkEnd };
-    }
-
-    console.log(
-      `[Backfiller] Chunk ${chunkIndex}/${totalChunks}: Found ${initiatedLogs.length} initiated events`
-    );
-
-    // Parse events
-    const parsedInitiated = batchParseMarketOrderInitiated(initiatedLogs);
-
-    // Process initiated events
-    for (const event of parsedInitiated) {
-      await processMarketOrderInitiated(event);
-    }
-
-    // Fetch executed events in parallel sub-chunks
-    const orderIds = parsedInitiated.map((e) => e.orderId);
+    // Fetch MarketExecuted events in sub-chunks (for better reliability)
     const executedSubChunkSize = BLOCK_CONFIG.EXECUTED_SUB_CHUNK_SIZE;
     const subChunks = createChunks(chunkStart, chunkEnd, executedSubChunkSize);
 
@@ -78,23 +50,22 @@ async function processChunk(
     // Flatten results
     const executedLogs = executedLogsArrays.flat();
 
-    // Parse and filter by wallet and orderIds
+    // Parse and filter by wallet
     const parsedExecuted = batchParseMarketExecuted(executedLogs).filter(
-      (event) =>
-        event.trader.toLowerCase() === wallet.toLowerCase() || orderIds.includes(event.orderId)
+      (event) => event.trader.toLowerCase() === wallet.toLowerCase()
     );
 
-    console.log(
-      `[Backfiller] Chunk ${chunkIndex}/${totalChunks}: Matched ${parsedExecuted.length}/${executedLogs.length} executed events`
-    );
+    if (parsedExecuted.length > 0) {
+      console.log(
+        `[Backfiller] Chunk ${chunkIndex}/${totalChunks}: Found ${parsedExecuted.length} executed events`
+      );
+    }
 
-    // Return parsed events instead of processing them immediately
-    // This allows us to process all OPEN events before CLOSE events
+    // Return parsed events for later chronological processing
     return {
-      initiated: parsedInitiated.length,
       executed: parsedExecuted.length,
       endBlock: chunkEnd,
-      executedEvents: parsedExecuted, // Return events for later processing
+      executedEvents: parsedExecuted,
     };
   } catch (error) {
     console.error(`[Backfiller] Error processing chunk ${chunkIndex}:`, error);
@@ -103,7 +74,7 @@ async function processChunk(
       chunk: chunkIndex,
       error: error instanceof Error ? error.message : 'Unknown error',
     });
-    return { initiated: 0, executed: 0, endBlock: chunkEnd, executedEvents: [] };
+    return { executed: 0, endBlock: chunkEnd, executedEvents: [] };
   }
 }
 
@@ -140,7 +111,6 @@ export async function backfillWallet(options: BackfillOptions): Promise<Backfill
     const chunks = createChunks(startBlock, endBlock, chunkSize);
     console.log(`[Backfiller] Processing ${chunks.length} chunks in parallel batches of ${parallelChunks}`);
 
-    let totalInitiated = 0;
     let totalExecuted = 0;
     let processedChunks = 0;
     const allExecutedEvents: any[] = []; // Collect all executed events
@@ -162,7 +132,6 @@ export async function backfillWallet(options: BackfillOptions): Promise<Backfill
 
       // Aggregate results and collect events
       for (const result of batchResults) {
-        totalInitiated += result.initiated;
         totalExecuted += result.executed;
         processedChunks++;
 
@@ -186,7 +155,7 @@ export async function backfillWallet(options: BackfillOptions): Promise<Backfill
           processedBlocks: processedChunks * chunkSize,
           totalBlocks: Number(endBlock - startBlock),
           percentComplete,
-          eventsFound: totalInitiated + totalExecuted,
+          eventsFound: totalExecuted,
           currentBlock: Number(result.endBlock),
         });
       }
@@ -197,8 +166,7 @@ export async function backfillWallet(options: BackfillOptions): Promise<Backfill
     }
 
     // Process all collected events in chronological order (by block number)
-    // This ensures that for any given tradeKey, OPEN comes before CLOSE naturally
-    console.log(`[Backfiller] Processing ${allExecutedEvents.length} executed events...`);
+    console.log(`[Backfiller] Processing ${allExecutedEvents.length} MarketExecuted events...`);
 
     const openEvents = allExecutedEvents.filter(e => e.open === true);
     const closeEvents = allExecutedEvents.filter(e => e.open === false);
@@ -212,32 +180,22 @@ export async function backfillWallet(options: BackfillOptions): Promise<Backfill
     console.log(`[Backfiller] Processing events in chronological order by block number...`);
 
     // Track statistics
-    let openedCount = 0;
-    let closedCount = 0;
-    let closeFailedCount = 0;
-    let duplicateOpenCount = 0;
+    let openSaved = 0;
+    let closeSaved = 0;
+    let duplicates = 0;
 
     // Process events in chronological order
     for (const event of sortedEvents) {
-      const tradeKey = `${event.trader.toLowerCase()}-${event.pairIndex}-${event.tradeIndex}`;
+      // Check if this event already exists
+      const existed = await TradeEvent.exists({ orderId: event.orderId });
 
-      if (event.open) {
-        // Check if this openOrderId already exists (true duplicate)
-        const existed = await TradeEvent.exists({ openOrderId: event.orderId });
-        if (existed) {
-          duplicateOpenCount++;
-          console.log(`[Backfiller] ⚠️  Duplicate OPEN for openOrderId ${event.orderId} at block ${event.executedBlockNumber}`);
-        } else {
-          openedCount++;
-        }
+      if (existed) {
+        duplicates++;
       } else {
-        // Check if there's an OPEN position with this tradeKey to close
-        const openPosition = await TradeEvent.exists({ tradeKey, status: 'OPEN' });
-        if (openPosition) {
-          closedCount++;
+        if (event.open) {
+          openSaved++;
         } else {
-          closeFailedCount++;
-          console.log(`[Backfiller] ⚠️  CLOSE failed (no open) for tradeKey ${tradeKey} at block ${event.executedBlockNumber}`);
+          closeSaved++;
         }
       }
 
@@ -246,10 +204,10 @@ export async function backfillWallet(options: BackfillOptions): Promise<Backfill
 
     console.log(`[Backfiller] ✓ All events processed`);
     console.log(`[Backfiller] Statistics:`);
-    console.log(`[Backfiller]   - New positions OPENED: ${openedCount}`);
-    console.log(`[Backfiller]   - Positions CLOSED: ${closedCount}`);
-    console.log(`[Backfiller]   - Duplicate OPENs (updates): ${duplicateOpenCount}`);
-    console.log(`[Backfiller]   - CLOSE failed (no open position): ${closeFailedCount}`);
+    console.log(`[Backfiller]   - OPEN events saved: ${openSaved}`);
+    console.log(`[Backfiller]   - CLOSE events saved: ${closeSaved}`);
+    console.log(`[Backfiller]   - Duplicates skipped: ${duplicates}`);
+    console.log(`[Backfiller]   - Total events saved: ${openSaved + closeSaved}`);
 
     // If backfill was more than 7 days and milestone was reached, log remaining time
     if (daysBack > 7 && sevenDayMilestoneReached) {
@@ -263,8 +221,7 @@ export async function backfillWallet(options: BackfillOptions): Promise<Backfill
       startBlock: Number(startBlock),
       endBlock: Number(endBlock),
       totalBlocks: Number(endBlock - startBlock),
-      eventsFound: totalInitiated + totalExecuted,
-      initiatedEvents: totalInitiated,
+      eventsFound: totalExecuted,
       executedEvents: totalExecuted,
       durationMs,
       success: true,
@@ -275,7 +232,6 @@ export async function backfillWallet(options: BackfillOptions): Promise<Backfill
       wallet,
       totalBlocks: result.totalBlocks,
       totalEvents: result.eventsFound,
-      tradesFound: totalInitiated,
       startBlock: result.startBlock,
       endBlock: result.endBlock,
       durationMs,
@@ -368,7 +324,6 @@ export interface BackfillResult {
   endBlock: number;
   totalBlocks: number;
   eventsFound: number;
-  initiatedEvents: number;
   executedEvents: number;
   durationMs: number;
   success: boolean;
@@ -397,7 +352,6 @@ export async function backfillMultipleWallets(
         endBlock: 0,
         totalBlocks: 0,
         eventsFound: 0,
-        initiatedEvents: 0,
         executedEvents: 0,
         durationMs: 0,
         success: false,
@@ -413,7 +367,9 @@ export async function backfillMultipleWallets(
 }
 
 /**
- * Correct close timestamps for closed trades by fetching actual block timestamps
+ * Correct timestamps for events by fetching actual block timestamps
+ * NOTE: With the simplified approach, timestamps are fetched during event processing
+ * This function is kept for backwards compatibility or manual corrections
  * @param wallet - Wallet address to correct (optional, corrects all if not provided)
  */
 export async function correctCloseTimestamps(wallet?: string): Promise<{
@@ -423,29 +379,29 @@ export async function correctCloseTimestamps(wallet?: string): Promise<{
 }> {
   const startTime = Date.now();
 
-  console.log('[Backfiller] Starting close timestamp correction...');
+  console.log('[Backfiller] Starting event timestamp correction...');
 
   try {
-    // Query closed trades
+    // Query close events
     const query = wallet
-      ? { status: TradeStatus.CLOSED, trader: wallet.toLowerCase() }
-      : { status: TradeStatus.CLOSED };
+      ? { eventType: 'CLOSE', trader: wallet.toLowerCase() }
+      : { eventType: 'CLOSE' };
 
-    const closedTrades = await TradeEvent.find(query).select('orderId closedBlockNumber closedAt');
+    const closeEvents = await TradeEvent.find(query).select('orderId blockNumber timestamp');
 
-    if (closedTrades.length === 0) {
-      console.log('[Backfiller] No closed trades found to correct');
+    if (closeEvents.length === 0) {
+      console.log('[Backfiller] No close events found to correct');
       return { corrected: 0, uniqueBlocks: 0, durationMs: Date.now() - startTime };
     }
 
-    console.log(`[Backfiller] Found ${closedTrades.length} closed trades to correct`);
+    console.log(`[Backfiller] Found ${closeEvents.length} close events to correct`);
 
     // Extract unique block numbers
     const uniqueBlockNumbers = Array.from(
       new Set(
-        closedTrades
-          .filter((trade) => trade.closedBlockNumber)
-          .map((trade) => trade.closedBlockNumber)
+        closeEvents
+          .filter((event) => event.blockNumber)
+          .map((event) => event.blockNumber)
       )
     );
 
@@ -475,16 +431,16 @@ export async function correctCloseTimestamps(wallet?: string): Promise<{
 
     console.log(`[Backfiller] Successfully fetched ${blockTimestamps.size}/${uniqueBlockNumbers.length} block timestamps`);
 
-    // Update trades with correct timestamps
+    // Update events with correct timestamps
     let correctedCount = 0;
-    for (const trade of closedTrades) {
-      if (trade.closedBlockNumber && blockTimestamps.has(trade.closedBlockNumber)) {
-        const correctTimestamp = blockTimestamps.get(trade.closedBlockNumber)!;
+    for (const event of closeEvents) {
+      if (event.blockNumber && blockTimestamps.has(event.blockNumber)) {
+        const correctTimestamp = blockTimestamps.get(event.blockNumber)!;
 
         // Only update if timestamp is different
-        if (trade.closedAt.getTime() !== correctTimestamp.getTime()) {
-          trade.closedAt = correctTimestamp;
-          await trade.save();
+        if (event.timestamp.getTime() !== correctTimestamp.getTime()) {
+          event.timestamp = correctTimestamp;
+          await event.save();
           correctedCount++;
         }
       }
@@ -493,7 +449,7 @@ export async function correctCloseTimestamps(wallet?: string): Promise<{
     const durationMs = Date.now() - startTime;
 
     console.log(
-      `[Backfiller] ✓ Close timestamp correction complete - ${correctedCount}/${closedTrades.length} trades updated in ${(durationMs / 1000).toFixed(1)}s`
+      `[Backfiller] ✓ Timestamp correction complete - ${correctedCount}/${closeEvents.length} events updated in ${(durationMs / 1000).toFixed(1)}s`
     );
 
     return {
@@ -502,7 +458,7 @@ export async function correctCloseTimestamps(wallet?: string): Promise<{
       durationMs,
     };
   } catch (error) {
-    console.error('[Backfiller] Close timestamp correction failed:', error);
+    console.error('[Backfiller] Timestamp correction failed:', error);
     throw error;
   }
 }
