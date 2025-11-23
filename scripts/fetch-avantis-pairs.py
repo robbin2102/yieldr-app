@@ -95,7 +95,7 @@ def save_pairs_to_mongodb(pairs_info: dict, mongodb_uri: str):
             'feeIndex': pair_data.fee_index,
             'maxLeverage': pair_data.leverages.max_leverage,
             'minLeverage': pair_data.leverages.min_leverage,
-            'spreadP': pair_data.spread_p,
+            'spreadP': pair_data.constant_spread_bps,
             'updatedAt': datetime.utcnow(),
         }
         pairs_list.append(doc)
