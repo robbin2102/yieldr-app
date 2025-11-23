@@ -14,6 +14,7 @@
     "fix:timestamps": "tsx scripts/fix-close-timestamps.ts",
     "fix:durations": "tsx scripts/recalculate-durations.ts",
     "fix:all": "tsx scripts/fix-all-timestamps.ts",
+    "fix:open-times": "tsx scripts/fix-executedAt-from-blocks.ts",
     "update:pairs": "tsx scripts/update-pairs.ts",
     "diagnose:closes": "tsx scripts/diagnose-missing-closes.ts"
   },
