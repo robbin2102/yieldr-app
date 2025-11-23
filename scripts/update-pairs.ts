@@ -3,6 +3,12 @@
  * Run this to populate the pairs cache with known + newly discovered pairs
  */
 
+import { config } from 'dotenv';
+import { resolve } from 'path';
+
+// Load environment variables from .env.local
+config({ path: resolve(process.cwd(), '.env.local') });
+
 import { initializePairsCache, updatePairsCache } from '../services/avantis-listener/PairsFetcher';
 import connectDB from '../lib/mongoose';
 

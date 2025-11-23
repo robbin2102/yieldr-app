@@ -3,6 +3,12 @@
  * This will help identify missing close events
  */
 
+import { config } from 'dotenv';
+import { resolve } from 'path';
+
+// Load environment variables from .env.local
+config({ path: resolve(process.cwd(), '.env.local') });
+
 import TradeEvent from '../models/TradeEvent';
 import connectDB from '../lib/mongoose';
 import { getLogs } from '../services/avantis-listener/core/ViemClient';

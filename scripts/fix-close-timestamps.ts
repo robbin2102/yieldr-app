@@ -3,6 +3,12 @@
  * Run this to fix the negative duration issue
  */
 
+import { config } from 'dotenv';
+import { resolve } from 'path';
+
+// Load environment variables from .env.local
+config({ path: resolve(process.cwd(), '.env.local') });
+
 import { correctCloseTimestamps } from '../services/avantis-listener/Backfiller';
 import connectDB from '../lib/mongoose';
 
