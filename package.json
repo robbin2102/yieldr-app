@@ -10,6 +10,7 @@
     "listener": "tsx services/avantis-listener/server.ts",
     "listener:dev": "nodemon --exec tsx services/avantis-listener/server.ts",
     "backfill": "tsx scripts/backfill-all-managers.ts",
+    "backfill:wallet": "tsx scripts/backfill-single-wallet.ts",
     "test:client": "tsx services/avantis-listener/test-client.ts",
     "fix:timestamps": "tsx scripts/fix-close-timestamps.ts",
     "fix:durations": "tsx scripts/recalculate-durations.ts",
