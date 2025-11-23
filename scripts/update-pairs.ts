@@ -6,15 +6,16 @@
 import { config } from 'dotenv';
 import { resolve } from 'path';
 
-// Load environment variables from .env.local
+// Load environment variables from .env.local BEFORE any other imports
 config({ path: resolve(process.cwd(), '.env.local') });
-
-import { initializePairsCache, updatePairsCache } from '../services/avantis-listener/PairsFetcher';
-import connectDB from '../lib/mongoose';
 
 async function main() {
   try {
     console.log('🔧 Updating Avantis pairs cache...\n');
+
+    // Dynamic imports to ensure env vars are loaded first
+    const { initializePairsCache } = await import('../services/avantis-listener/PairsFetcher');
+    const { default: connectDB } = await import('../lib/mongoose');
 
     // Connect to MongoDB
     await connectDB();

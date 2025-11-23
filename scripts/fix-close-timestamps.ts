@@ -6,15 +6,16 @@
 import { config } from 'dotenv';
 import { resolve } from 'path';
 
-// Load environment variables from .env.local
+// Load environment variables from .env.local BEFORE any other imports
 config({ path: resolve(process.cwd(), '.env.local') });
-
-import { correctCloseTimestamps } from '../services/avantis-listener/Backfiller';
-import connectDB from '../lib/mongoose';
 
 async function main() {
   try {
     console.log('🔧 Starting close timestamp correction...');
+
+    // Dynamic imports to ensure env vars are loaded first
+    const { correctCloseTimestamps } = await import('../services/avantis-listener/Backfiller');
+    const { default: connectDB } = await import('../lib/mongoose');
 
     // Connect to MongoDB
     await connectDB();

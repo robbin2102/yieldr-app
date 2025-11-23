@@ -6,17 +6,18 @@
 import { config } from 'dotenv';
 import { resolve } from 'path';
 
-// Load environment variables from .env.local
+// Load environment variables from .env.local BEFORE any other imports
 config({ path: resolve(process.cwd(), '.env.local') });
-
-import TradeEvent from '../models/TradeEvent';
-import connectDB from '../lib/mongoose';
-import { getLogs } from '../services/avantis-listener/core/ViemClient';
-import { CONTRACTS, MARKET_EXECUTED_EVENT } from '../services/avantis-listener/config';
 
 async function main() {
   try {
     console.log('🔍 Diagnosing missing close events...\n');
+
+    // Dynamic imports to ensure env vars are loaded first
+    const { default: TradeEvent } = await import('../models/TradeEvent');
+    const { default: connectDB } = await import('../lib/mongoose');
+    const { getLogs } = await import('../services/avantis-listener/core/ViemClient');
+    const { CONTRACTS, MARKET_EXECUTED_EVENT } = await import('../services/avantis-listener/config');
 
     // Connect to MongoDB
     await connectDB();
