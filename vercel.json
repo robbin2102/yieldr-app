@@ -4,5 +4,11 @@
       "source": "/manager/:username",
       "destination": "/manager/dashboard.html"
     }
+  ],
+  "crons": [
+    {
+      "path": "/api/avantis/check-recent-events",
+      "schedule": "*/5 * * * *"
+    }
   ]
 }
