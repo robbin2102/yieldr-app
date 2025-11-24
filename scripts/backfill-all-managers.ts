@@ -43,7 +43,7 @@ const EXCLUDE_WALLETS = [
 
 // Constants
 const CONTRACTS = {
-  EVENTS: '0xC2F4eg24f333e5D51037232Eac77D8aE8093c1d1' as `0x${string}`,
+  EVENTS: '0x0c16ff40065cc3ab4bc55b60e447504afb9c7970' as `0x${string}`,
 };
 
 function sleep(ms: number): Promise<void> {

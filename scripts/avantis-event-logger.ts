@@ -26,7 +26,7 @@ config({ path: resolve(process.cwd(), '.env.local') });
 
 // Constants
 const CONTRACTS = {
-  EVENTS: '0xC2F4eg24f333e5D51037232Eac77D8aE8093c1d1' as `0x${string}`,
+  EVENTS: '0x0c16ff40065cc3ab4bc55b60e447504afb9c7970' as `0x${string}`,
 };
 
 const BLOCKS_PER_10_MINUTES = 600; // Base chain: ~2 blocks/sec = 600 blocks per 10 min
