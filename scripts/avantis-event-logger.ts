@@ -92,6 +92,8 @@ async function main() {
 
     // Step 4: Fetch MarketExecuted events
     console.log('🔍 Fetching MarketExecuted events...');
+    console.log(`  Contract: ${CONTRACTS.EVENTS}`);
+    console.log(`  Block range: ${fromBlock} to ${latestBlock}`);
 
     const marketExecutedLogs = await client.getLogs({
       address: CONTRACTS.EVENTS,
@@ -101,6 +103,10 @@ async function main() {
     });
 
     console.log(`  Found ${marketExecutedLogs.length} MarketExecuted events`);
+
+    if (marketExecutedLogs.length > 0) {
+      console.log(`  Sample event blocks: ${marketExecutedLogs.slice(0, 3).map(log => log.blockNumber).join(', ')}`);
+    }
 
     // Step 5: Fetch LimitExecuted events
     console.log('🔍 Fetching LimitExecuted events...');
@@ -116,26 +122,64 @@ async function main() {
 
     // Step 6: Filter events for monitored wallets
     const walletSet = new Set(wallets.map(w => w.toLowerCase()));
+    console.log(`\n🔍 Filtering events for ${walletSet.size} monitored wallets...`);
 
     const relevantMarketEvents = marketExecutedLogs.filter(log => {
       const parsed = parseMarketExecuted(log);
-      return parsed && walletSet.has(parsed.trader.toLowerCase());
+      if (parsed) {
+        const isMonitored = walletSet.has(parsed.trader.toLowerCase());
+        if (isMonitored) {
+          console.log(`  ✓ Found MarketExecuted for monitored wallet ${parsed.trader.substring(0, 10)}... (orderId: ${parsed.orderId}, open: ${parsed.open})`);
+        }
+        return isMonitored;
+      }
+      return false;
     });
 
     const relevantLimitEvents = limitExecutedLogs.filter(log => {
       const parsed = parseLimitExecuted(log);
-      return parsed && walletSet.has(parsed.trader.toLowerCase());
+      if (parsed) {
+        const isMonitored = walletSet.has(parsed.trader.toLowerCase());
+        if (isMonitored) {
+          console.log(`  ✓ Found LimitExecuted for monitored wallet ${parsed.trader.substring(0, 10)}... (orderId: ${parsed.orderId}, open: ${parsed.open})`);
+        }
+        return isMonitored;
+      }
+      return false;
     });
 
     const totalRelevant = relevantMarketEvents.length + relevantLimitEvents.length;
 
-    console.log('📊 Filtered Events:');
+    console.log('\n📊 Filtered Events:');
     console.log(`  Relevant MarketExecuted: ${relevantMarketEvents.length}`);
     console.log(`  Relevant LimitExecuted: ${relevantLimitEvents.length}`);
     console.log(`  Total to process: ${totalRelevant}\n`);
 
     if (totalRelevant === 0) {
       console.log('✅ No new events found for monitored wallets.');
+
+      // Show debug info if there were any events at all
+      if (marketExecutedLogs.length > 0 || limitExecutedLogs.length > 0) {
+        console.log('\n💡 Debug Info:');
+        console.log(`  Total events in range: ${marketExecutedLogs.length + limitExecutedLogs.length}`);
+        console.log(`  But none matched monitored wallets.`);
+
+        // Show sample traders if any
+        if (marketExecutedLogs.length > 0) {
+          const sampleTraders = marketExecutedLogs.slice(0, 3).map(log => {
+            const parsed = parseMarketExecuted(log);
+            return parsed?.trader;
+          }).filter(Boolean);
+          if (sampleTraders.length > 0) {
+            console.log(`  Sample traders in events: ${sampleTraders.join(', ')}`);
+          }
+        }
+      }
+
+      console.log('\n💡 Tip: If you just opened a trade:');
+      console.log('  - Wait ~30 seconds for blockchain confirmation');
+      console.log('  - Run the script again to catch the new event\n');
+
       console.log('Exiting successfully.\n');
       process.exit(0);
     }
