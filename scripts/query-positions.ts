@@ -11,7 +11,7 @@ config({ path: resolve(process.cwd(), '.env.local') });
 async function main() {
   try {
     const { default: connectDB } = await import('../lib/mongoose');
-    const { default: AvantisOpenPosition } = await import('../models/AvantisOpenPosition');
+    const { default: Position } = await import('../models/Position');
     const { default: TradeEvent } = await import('../models/TradeEvent');
 
     const wallet = process.argv[2];
@@ -32,30 +32,59 @@ async function main() {
     await connectDB();
     console.log('✅ Connected to MongoDB\n');
 
-    // Query open positions
+    // Query open positions (universal collection)
     console.log('='.repeat(70));
-    console.log('OPEN POSITIONS');
+    console.log('OPEN POSITIONS (All Platforms)');
     console.log('='.repeat(70) + '\n');
 
-    const openPositions = await AvantisOpenPosition.find({
-      trader: wallet.toLowerCase(),
-    }).sort({ openedAt: -1 });
+    const openPositions = await Position.find({
+      walletAddress: wallet.toLowerCase(),
+      status: 'active',
+    }).sort({ createdAt: -1 });
 
     if (openPositions.length === 0) {
       console.log('No open positions found.\n');
     } else {
       console.log(`Total: ${openPositions.length} open positions\n`);
 
-      for (const pos of openPositions) {
-        console.log(`${pos.pairSymbol} ${pos.direction}`);
-        console.log(`  Order ID: ${pos.orderId}`);
-        console.log(`  Opened: ${pos.openedAt.toLocaleString()}`);
-        console.log(`  Open Price: $${pos.openPrice.toFixed(2)}`);
-        console.log(`  Collateral: $${pos.collateralUsdc.toFixed(2)} USDC`);
-        console.log(`  Leverage: ${pos.leverage}x`);
-        console.log(`  TP: $${pos.tp.toFixed(2)} | SL: $${pos.sl.toFixed(2)}`);
-        console.log(`  Tx: ${pos.openTxHash.substring(0, 20)}...`);
-        console.log();
+      // Group by platform
+      const avantis = openPositions.filter(p => p.platform === 'Avantis');
+      const hyperliquid = openPositions.filter(p => p.platform === 'Hyperliquid');
+      const lp = openPositions.filter(p => p.type === 'LP');
+
+      if (avantis.length > 0) {
+        console.log(`🔹 Avantis Perps (${avantis.length}):\n`);
+        for (const pos of avantis) {
+          console.log(`${pos.pair} ${pos.direction}`);
+          console.log(`  Trade Index: ${pos.positionId}`);
+          console.log(`  Opened: ${pos.createdAt.toLocaleString()}`);
+          console.log(`  Entry Price: $${pos.entryPrice?.toFixed(2)}`);
+          console.log(`  Collateral: $${pos.margin?.toFixed(2)} USDC`);
+          console.log(`  Leverage: ${pos.leverage}x`);
+          console.log(`  Current PnL: $${pos.pnl?.toFixed(2)} (${pos.roi?.toFixed(2)}%)`);
+          console.log(`  Tx: ${pos.txHash?.substring(0, 20)}...`);
+          console.log();
+        }
+      }
+
+      if (hyperliquid.length > 0) {
+        console.log(`🔹 Hyperliquid Perps (${hyperliquid.length}):\n`);
+        for (const pos of hyperliquid) {
+          console.log(`${pos.pair} ${pos.direction}`);
+          console.log(`  Entry: $${pos.entryPrice?.toFixed(2)} | Leverage: ${pos.leverage}x`);
+          console.log(`  PnL: $${pos.pnl?.toFixed(2)}`);
+          console.log();
+        }
+      }
+
+      if (lp.length > 0) {
+        console.log(`🔹 LP Positions (${lp.length}):\n`);
+        for (const pos of lp) {
+          console.log(`${pos.pool} on ${pos.platform}`);
+          console.log(`  Liquidity: $${pos.liquidity?.toFixed(2)}`);
+          console.log(`  PnL: $${pos.pnl?.toFixed(2)}`);
+          console.log();
+        }
       }
     }
 
