@@ -4,8 +4,15 @@
  */
 
 import { watchEvent } from './core/ViemClient';
-import { CONTRACTS, MARKET_ORDER_INITIATED_EVENT, MARKET_EXECUTED_EVENT, FEATURES, RPC_CONFIG } from './config';
-import { parseMarketOrderInitiated, parseMarketExecuted } from './EventParser';
+import {
+  CONTRACTS,
+  MARKET_ORDER_INITIATED_EVENT,
+  MARKET_EXECUTED_EVENT,
+  LIMIT_EXECUTED_EVENT,
+  FEATURES,
+  RPC_CONFIG,
+} from './config';
+import { parseMarketOrderInitiated, parseMarketExecuted, parseLimitExecuted } from './EventParser';
 import {
   processMarketOrderInitiated,
   processMarketExecuted,
@@ -20,6 +27,7 @@ export class EventListener {
   private monitoredWallets: Set<string>;
   private unwatchInitiated: (() => void) | null = null;
   private unwatchExecuted: (() => void) | null = null;
+  private unwatchLimitExecuted: (() => void) | null = null;
   private isActive: boolean = false;
   private reconnectAttempts: number = 0;
 
@@ -72,6 +80,16 @@ export class EventListener {
         pollingInterval: RPC_CONFIG.RECONNECT_DELAY_MS,
       });
 
+      // Watch LimitExecuted events
+      this.unwatchLimitExecuted = watchEvent({
+        address: CONTRACTS.EVENTS,
+        event: LIMIT_EXECUTED_EVENT,
+        onLogs: (logs) => this.handleLimitExecutedLogs(logs),
+        onError: (error) => this.handleError('LimitExecuted', error),
+        poll: true,
+        pollingInterval: RPC_CONFIG.RECONNECT_DELAY_MS,
+      });
+
       this.isActive = true;
       this.reconnectAttempts = 0;
 
@@ -105,6 +123,11 @@ export class EventListener {
     if (this.unwatchExecuted) {
       this.unwatchExecuted();
       this.unwatchExecuted = null;
+    }
+
+    if (this.unwatchLimitExecuted) {
+      this.unwatchLimitExecuted();
+      this.unwatchLimitExecuted = null;
     }
 
     this.isActive = false;
@@ -219,6 +242,48 @@ export class EventListener {
         this.lastEventTime = new Date();
       } catch (error) {
         console.error('[EventListener] Error handling MarketExecuted:', error);
+        this.errorsCount++;
+      }
+    }
+  }
+
+  /**
+   * Handle LimitExecuted logs
+   */
+  private async handleLimitExecutedLogs(logs: Log[]): Promise<void> {
+    if (logs.length === 0) return;
+
+    console.log(`[EventListener] Received ${logs.length} LimitExecuted events`);
+
+    for (const log of logs) {
+      try {
+        const parsed = parseLimitExecuted(log);
+
+        if (!parsed) {
+          console.warn('[EventListener] Failed to parse LimitExecuted event');
+          continue;
+        }
+
+        // Filter by monitored wallets
+        if (!this.isMonitored(parsed.trader)) {
+          if (FEATURES.ENABLE_VERBOSE_LOGGING) {
+            console.log(
+              `[EventListener] Skipping event for non-monitored wallet ${parsed.trader}`
+            );
+          }
+          continue;
+        }
+
+        console.log(
+          `[EventListener] LimitExecuted - orderId: ${parsed.orderId}, trader: ${parsed.trader}, open: ${parsed.open}, type: ${parsed.open ? 'OPEN' : 'TP/SL/LIQ'}`
+        );
+
+        await processMarketExecuted(parsed); // Same processor as MarketExecuted
+
+        this.eventsProcessed++;
+        this.lastEventTime = new Date();
+      } catch (error) {
+        console.error('[EventListener] Error handling LimitExecuted:', error);
         this.errorsCount++;
       }
     }

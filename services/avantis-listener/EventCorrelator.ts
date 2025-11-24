@@ -6,6 +6,7 @@
 
 import EventEmitter from 'events';
 import TradeEvent from '../../models/TradeEvent';
+import AvantisOpenPosition from '../../models/AvantisOpenPosition';
 import { APP_EVENTS, FEATURES } from './config';
 import { getPairSymbol } from './config/pairs';
 import { getBlock } from './core/ViemClient';
@@ -33,6 +34,69 @@ async function getBlockTimestamp(blockNumber: number): Promise<Date> {
     console.error(`[Correlator] Error fetching block ${blockNumber} timestamp:`, error);
     // Fallback to current time if block fetch fails
     return new Date();
+  }
+}
+
+/**
+ * Add position to open positions collection
+ */
+async function addOpenPosition(
+  event: ParsedMarketExecutedEvent | ParsedLimitExecutedEvent,
+  timestamp: Date
+): Promise<void> {
+  try {
+    // Check if already exists (duplicate prevention)
+    const exists = await AvantisOpenPosition.findOne({ orderId: event.orderId });
+    if (exists) {
+      console.log(`[Correlator] Open position ${event.orderId} already exists, skipping...`);
+      return;
+    }
+
+    const openPosition = new AvantisOpenPosition({
+      orderId: event.orderId,
+      trader: event.trader.toLowerCase(),
+      platform: 'Avantis',
+      pairIndex: event.pairIndex,
+      pairSymbol: getPairSymbol(event.pairIndex),
+      tradeIndex: event.tradeIndex,
+      direction: event.isBuy ? 'LONG' : 'SHORT',
+      openPrice: event.openPrice,
+      collateralUsdc: event.collateralUsdc,
+      positionSizeUsdc: event.positionSizeUsdc,
+      leverage: event.leverage,
+      tp: event.tp,
+      sl: event.sl,
+      openedAt: timestamp,
+      openTxHash: event.executedTxHash,
+      openBlockNumber: event.executedBlockNumber,
+    });
+
+    await openPosition.save();
+    console.log(`[Correlator] ✓ Added to open positions - orderId: ${event.orderId}`);
+  } catch (error) {
+    console.error(`[Correlator] Error adding open position ${event.orderId}:`, error);
+  }
+}
+
+/**
+ * Remove position from open positions collection
+ */
+async function removeOpenPosition(orderId: string, trader: string): Promise<void> {
+  try {
+    const result = await AvantisOpenPosition.deleteOne({
+      orderId,
+      trader: trader.toLowerCase(),
+    });
+
+    if (result.deletedCount > 0) {
+      console.log(`[Correlator] ✓ Removed from open positions - orderId: ${orderId}`);
+    } else {
+      console.log(
+        `[Correlator] ⚠️  Open position ${orderId} not found (may have been closed before or partial close)`
+      );
+    }
+  } catch (error) {
+    console.error(`[Correlator] Error removing open position ${orderId}:`, error);
   }
 }
 
@@ -107,6 +171,15 @@ export async function processMarketExecuted(
         !open ? `, PnL: ${event.pnlUsdc?.toFixed(2)} USDC, ROI: ${event.profitPercent?.toFixed(2)}%` : ''
       }`
     );
+
+    // Manage open positions collection
+    if (open) {
+      // OPEN event - Add to open positions
+      await addOpenPosition(event, timestamp);
+    } else {
+      // CLOSE event - Remove from open positions
+      await removeOpenPosition(orderId, trader);
+    }
 
     // Emit application events
     if (FEATURES.ENABLE_EVENT_EMISSION) {
