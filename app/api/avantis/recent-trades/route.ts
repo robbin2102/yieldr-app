@@ -6,7 +6,7 @@ export const dynamic = 'force-dynamic';
 
 /**
  * GET /api/avantis/recent-trades
- * Shows last 50 trades from database (OPEN and CLOSE)
+ * Shows recent trades from database (OPEN and CLOSE)
  * Sorted by timestamp (most recent first)
  */
 export async function GET(request: NextRequest) {
@@ -14,11 +14,15 @@ export async function GET(request: NextRequest) {
     await connectDB();
 
     const { searchParams } = new URL(request.url);
-    const limit = parseInt(searchParams.get('limit') || '50');
+    const hours = parseInt(searchParams.get('hours') || '24');
+    const limit = parseInt(searchParams.get('limit') || '1000');
 
-    // Fetch most recent trades
+    // Fetch trades from last N hours
+    const timeAgo = new Date(Date.now() - hours * 60 * 60 * 1000);
+
     const recentTrades = await TradeEvent.find({
       platform: 'Avantis',
+      timestamp: { $gte: timeAgo },
     })
       .sort({ timestamp: -1 })
       .limit(limit)
@@ -26,39 +30,39 @@ export async function GET(request: NextRequest) {
 
     // Format with all details
     const trades = recentTrades.map(trade => ({
-      // Basic Info
-      orderId: trade.orderId,
-      eventType: trade.eventType,
+      // Priority 1: Time
       timestamp: trade.timestamp,
 
-      // Wallet & Position
-      trader: trade.trader,
+      // Priority 2: Event Type & Pair
+      eventType: trade.eventType,
       pairSymbol: trade.pairSymbol,
-      pairIndex: trade.pairIndex,
-      tradeIndex: trade.tradeIndex,
       direction: trade.direction,
 
-      // Size & Leverage
+      // Priority 3: Position Details
       positionSizeUsdc: trade.positionSizeUsdc,
       collateralUsdc: trade.collateralUsdc,
       leverage: trade.leverage,
 
-      // Prices
+      // Priority 4: Prices
       openPrice: trade.openPrice,
       closePrice: trade.closePrice,
       tp: trade.tp,
       sl: trade.sl,
 
-      // P&L (for CLOSE events)
+      // Priority 5: P&L
       pnlUsdc: trade.pnlUsdc,
       roi: trade.roi,
 
-      // Blockchain
+      // Priority 6: IDs
+      orderId: trade.orderId,
+      tradeIndex: trade.tradeIndex,
+
+      // Priority 7: Wallet
+      trader: trade.trader,
+
+      // Priority 8: Blockchain
       txHash: trade.txHash,
       blockNumber: trade.blockNumber,
-
-      // Metadata
-      createdAt: trade.createdAt,
     }));
 
     return NextResponse.json({
@@ -66,6 +70,7 @@ export async function GET(request: NextRequest) {
       data: {
         trades,
         count: trades.length,
+        hoursRange: hours,
         lastUpdated: new Date().toISOString(),
       },
     });
