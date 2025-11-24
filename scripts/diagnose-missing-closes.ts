@@ -71,7 +71,6 @@ async function main() {
           address: CONTRACTS.EVENTS,
           event: MARKET_EXECUTED_EVENT,
           fromBlock: fromBlock,
-          toBlock: 'latest',
         });
 
         // Filter for this orderId and open=false
