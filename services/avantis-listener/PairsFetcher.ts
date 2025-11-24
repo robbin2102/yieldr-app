@@ -87,7 +87,7 @@ export async function fetchPairsFromContract(): Promise<PairInfo[]> {
     // Fetch recent MarketExecuted events to discover active pairs
     const logs = await client.getLogs({
       address: PAIRS_STORAGE_CONTRACT,
-      event: parseAbiItem('event MarketExecuted(uint256 indexed orderId, tuple(address trader, uint256 pairIndex, uint256 index, bool long, bool isOpen, uint256 collateralIndex, uint8 tradeType, uint256 collateral, uint256 openPrice, uint256 tp, uint256 sl, uint256 timestamp) trade, bool open, uint64 price, uint256 priceImpactP, uint256 positionSizeUsdc, int256 percentProfit, uint256 usdcSentToTrader, uint256 collateralPriceUsd)'),
+      event: parseAbiItem('event MarketExecuted(uint256 indexed orderId, (address trader, uint256 pairIndex, uint256 index, bool open, uint256 initialPosToken, uint256 positionSizeUsdc, uint256 openPrice, bool buy, uint256 leverage, uint256 tp, uint256 sl, uint256 timestamp), (uint256 open, uint256 high, uint256 low, uint256 close), bool orderType, uint256 price, uint256 priceImpactP, int256 percentProfit, uint256 usdcSentToTrader, uint256 executionTxnFee)'),
       fromBlock: 'earliest',
       toBlock: 'latest',
     });
@@ -96,8 +96,8 @@ export async function fetchPairsFromContract(): Promise<PairInfo[]> {
     const pairIndices = new Set<number>();
     for (const log of logs) {
       const { args } = log as any;
-      if (args?.trade?.pairIndex !== undefined) {
-        pairIndices.add(Number(args.trade.pairIndex));
+      if (args?.t?.pairIndex !== undefined) {
+        pairIndices.add(Number(args.t.pairIndex));
       }
     }
 
