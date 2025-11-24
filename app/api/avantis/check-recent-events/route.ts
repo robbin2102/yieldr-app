@@ -7,16 +7,13 @@ import Position from '../../../../models/Position';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
-export const maxDuration = 300; // 5 minutes max execution time
+export const maxDuration = 60; // 60 seconds (requires Vercel Pro plan)
 
 const MINUTES_TO_CHECK = 10;
 const BLOCKS_PER_MINUTE = 120; // Base chain: 2 blocks/sec = 120 blocks/min
 const BLOCKS_TO_CHECK = MINUTES_TO_CHECK * BLOCKS_PER_MINUTE; // 1200 blocks
 
-// Exclude test wallet from monitoring
-const EXCLUDE_WALLETS = [
-  '0x780bb763e1463d2236fec780b7bd6adb40aaa120', // Test wallet
-];
+// No wallet exclusions for cron job - includes all wallets
 
 /**
  * POST /api/avantis/check-recent-events
@@ -39,17 +36,12 @@ export async function POST(request: NextRequest) {
     console.log('[Cron] ✓ Pairs cache initialized');
 
     // Load all wallets with active Avantis positions
-    const allWallets = await Position.distinct('walletAddress', {
+    const wallets = await Position.distinct('walletAddress', {
       platform: 'Avantis',
       status: 'active',
     });
 
-    // Filter out excluded wallets
-    const wallets = allWallets.filter(
-      wallet => !EXCLUDE_WALLETS.includes(wallet.toLowerCase())
-    );
-
-    console.log(`[Cron] Found ${wallets.length} wallets to check (${allWallets.length - wallets.length} excluded)`);
+    console.log(`[Cron] Found ${wallets.length} wallets to check`);
 
     if (wallets.length === 0) {
       return NextResponse.json({
@@ -159,6 +151,6 @@ export async function GET(request: NextRequest) {
     status: 'ready',
     description: 'Checks last 10 minutes of Avantis events for all active wallets',
     method: 'POST',
-    schedule: 'Every 5 minutes (Vercel cron)',
+    schedule: 'Every 10 minutes (Vercel cron)',
   });
 }
