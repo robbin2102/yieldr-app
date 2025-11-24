@@ -119,7 +119,7 @@ export function parseMarketExecuted(log: Log): ParsedMarketExecutedEvent | null 
     }
 
     // Convert decimals
-    const collateralUsdc = fromUsdcDecimals(initialPosToken);
+    // IMPORTANT: For partial closes, use positionSizeUSDC (actual size being closed), not initialPosToken (original position size)
     const positionSize = fromUsdcDecimals(positionSizeUSDC);
     const openPriceNum = fromPriceDecimals(openPrice);
     const executionPriceNum = fromPriceDecimals(price);
@@ -140,7 +140,9 @@ export function parseMarketExecuted(log: Log): ParsedMarketExecutedEvent | null 
       tradeIndex: toNumber(index, 'tradeIndex'),
       open,
       isBuy: buy,
-      collateralUsdc,
+      // For CLOSE events (including partial), use positionSizeUSDC (actual collateral being closed)
+      // For OPEN events, use initialPosToken (full collateral)
+      collateralUsdc: open ? fromUsdcDecimals(initialPosToken) : positionSize,
       positionSizeUsdc: positionSize,
       leverage: leverageNum,
       openPrice: openPriceNum,
@@ -156,8 +158,9 @@ export function parseMarketExecuted(log: Log): ParsedMarketExecutedEvent | null 
     if (!open) {
       parsed.closePrice = executionPriceNum;
       parsed.profitPercent = fromPercentDecimals(percentProfit);
-      // PnL = total sent to trader - initial collateral
-      parsed.pnlUsdc = fromUsdcDecimals(usdcSentToTrader) - fromUsdcDecimals(initialPosToken);
+      // PnL = total sent to trader - collateral for THIS close (handles partial closes correctly)
+      // For partial closes, positionSizeUSDC contains the actual collateral being closed, not the original
+      parsed.pnlUsdc = fromUsdcDecimals(usdcSentToTrader) - positionSize;
     }
 
     return parsed;
@@ -216,7 +219,7 @@ export function parseLimitExecuted(log: Log): ParsedLimitExecutedEvent | null {
     }
 
     // Convert decimals
-    const collateralUsdc = fromUsdcDecimals(initialPosToken);
+    // IMPORTANT: For partial closes, use positionSizeUSDC (actual size being closed), not initialPosToken (original position size)
     const positionSize = fromUsdcDecimals(positionSizeUSDC);
     const openPriceNum = fromPriceDecimals(openPrice);
     const executionPriceNum = fromPriceDecimals(price);
@@ -235,7 +238,9 @@ export function parseLimitExecuted(log: Log): ParsedLimitExecutedEvent | null {
       tradeIndex: toNumber(index, 'tradeIndex'),
       open,
       isBuy: buy,
-      collateralUsdc,
+      // For CLOSE events (including partial), use positionSizeUSDC (actual collateral being closed)
+      // For OPEN events, use initialPosToken (full collateral)
+      collateralUsdc: open ? fromUsdcDecimals(initialPosToken) : positionSize,
       positionSizeUsdc: positionSize,
       leverage: leverageNum,
       openPrice: openPriceNum,
@@ -251,8 +256,9 @@ export function parseLimitExecuted(log: Log): ParsedLimitExecutedEvent | null {
     if (!open) {
       parsed.closePrice = executionPriceNum;
       parsed.profitPercent = fromPercentDecimals(percentProfit);
-      // PnL = total sent to trader - initial collateral
-      parsed.pnlUsdc = fromUsdcDecimals(usdcSentToTrader) - fromUsdcDecimals(initialPosToken);
+      // PnL = total sent to trader - collateral for THIS close (handles partial closes correctly)
+      // For partial closes, positionSizeUSDC contains the actual collateral being closed, not the original
+      parsed.pnlUsdc = fromUsdcDecimals(usdcSentToTrader) - positionSize;
     }
 
     return parsed;
