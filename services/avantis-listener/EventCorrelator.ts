@@ -3,14 +3,18 @@
  * Stores MarketExecuted AND LimitExecuted events independently (no correlation needed)
  * Both event types contain complete trade data including PnL for CLOSE events
  *
- * IMPORTANT: Uses universal `positions` collection (not platform-specific)
- * - OPEN events → Add to `positions` + `historicaltrades`
- * - CLOSE events → Add to `historicaltrades` + Remove from `positions`
+ * IMPORTANT ARCHITECTURE DECISION:
+ * - This service ONLY logs events to `historicaltrades` collection
+ * - Python service manages `positions` collection (source of truth)
+ * - Avoids tradeIndex collision issues and sync complexity
+ *
+ * Flow:
+ * - OPEN/CLOSE events → Save to `historicaltrades` only
+ * - Python service → Manages `positions` (on page refresh)
  */
 
 import EventEmitter from 'events';
 import TradeEvent from '../../models/TradeEvent';
-import Position from '../../models/Position';
 import { APP_EVENTS, FEATURES } from './config';
 import { getPairSymbol } from './config/pairs';
 import { getBlock } from './core/ViemClient';
@@ -42,97 +46,10 @@ async function getBlockTimestamp(blockNumber: number): Promise<Date> {
 }
 
 /**
- * Add position to universal positions collection
- * Uses the same schema as Python service for compatibility
+ * Note: Position management removed from this service
+ * Python service is now the sole manager of the `positions` collection
+ * This avoids tradeIndex collision issues and keeps architecture simple
  */
-async function addOpenPosition(
-  event: ParsedMarketExecutedEvent | ParsedLimitExecutedEvent,
-  timestamp: Date
-): Promise<void> {
-  try {
-    const trader = event.trader.toLowerCase();
-    const tradeIndex = event.tradeIndex;
-
-    // Check if position already exists (by trader + tradeIndex, not orderId)
-    const exists = await Position.findOne({
-      walletAddress: trader,
-      platform: 'Avantis',
-      positionId: tradeIndex,
-    });
-
-    if (exists) {
-      console.log(
-        `[Correlator] Position already exists for trader ${trader}, tradeIndex ${tradeIndex}, skipping...`
-      );
-      return;
-    }
-
-    // Create position using universal schema (matches Python service format)
-    const position = new Position({
-      walletAddress: trader,
-      type: 'PERP',
-      platform: 'Avantis',
-      positionId: tradeIndex, // KEY: Use tradeIndex as positionId for CLOSE matching
-      status: 'active',
-
-      // PERP-specific fields
-      pair: getPairSymbol(event.pairIndex),
-      direction: event.isBuy ? 'LONG' : 'SHORT',
-      leverage: event.leverage,
-      positionSize: event.positionSizeUsdc,
-      margin: event.collateralUsdc,
-      entryPrice: event.openPrice,
-      currentPrice: event.openPrice, // Initial current price = entry price
-      liquidationPrice: 0, // Calculate if needed, or leave for Python service
-      pnl: 0, // Initial PnL is 0
-      roi: 0, // Initial ROI is 0
-
-      // Metadata
-      createdAt: timestamp,
-      updatedAt: timestamp,
-      txHash: event.executedTxHash,
-    });
-
-    await position.save();
-    console.log(
-      `[Correlator] ✓ Added to positions - trader: ${trader}, tradeIndex: ${tradeIndex}, pair: ${getPairSymbol(event.pairIndex)}`
-    );
-  } catch (error) {
-    console.error(
-      `[Correlator] Error adding position for trader ${event.trader}, tradeIndex ${event.tradeIndex}:`,
-      error
-    );
-  }
-}
-
-/**
- * Remove position from universal positions collection
- * Matches by trader + tradeIndex (not orderId, since CLOSE events have different orderIds)
- */
-async function removeOpenPosition(trader: string, tradeIndex: number): Promise<void> {
-  try {
-    const result = await Position.deleteOne({
-      walletAddress: trader.toLowerCase(),
-      platform: 'Avantis',
-      positionId: tradeIndex,
-    });
-
-    if (result.deletedCount > 0) {
-      console.log(
-        `[Correlator] ✓ Removed from positions - trader: ${trader}, tradeIndex: ${tradeIndex}`
-      );
-    } else {
-      console.log(
-        `[Correlator] ⚠️  Position not found in positions collection - trader: ${trader}, tradeIndex: ${tradeIndex} (may have been removed by Python service or never added)`
-      );
-    }
-  } catch (error) {
-    console.error(
-      `[Correlator] Error removing position for trader ${trader}, tradeIndex ${tradeIndex}:`,
-      error
-    );
-  }
-}
 
 /**
  * Process MarketOrderInitiated event
@@ -206,14 +123,8 @@ export async function processMarketExecuted(
       }`
     );
 
-    // Manage universal positions collection
-    if (open) {
-      // OPEN event - Add to positions
-      await addOpenPosition(event, timestamp);
-    } else {
-      // CLOSE event - Remove from positions (match by trader + tradeIndex)
-      await removeOpenPosition(trader, tradeIndex);
-    }
+    // Note: Position management is handled by Python service
+    // This service only logs events to historicaltrades
 
     // Emit application events
     if (FEATURES.ENABLE_EVENT_EMISSION) {
