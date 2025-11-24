@@ -25,6 +25,21 @@ export async function POST(request: NextRequest) {
   const startTime = Date.now();
 
   try {
+    // Security: Check for API key (except for Vercel Cron which uses internal auth)
+    const authHeader = request.headers.get('authorization');
+    const isVercelCron = request.headers.get('user-agent')?.includes('vercel-cron');
+
+    if (!isVercelCron) {
+      const expectedKey = process.env.CRON_API_KEY;
+      if (!expectedKey || authHeader !== `Bearer ${expectedKey}`) {
+        console.log('[Cron] ⚠️  Unauthorized request blocked');
+        return NextResponse.json(
+          { success: false, error: 'Unauthorized' },
+          { status: 401 }
+        );
+      }
+    }
+
     // Check for custom minutes parameter (for testing)
     const { searchParams } = new URL(request.url);
     const customMinutes = searchParams.get('minutes');
