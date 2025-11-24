@@ -37,9 +37,21 @@ export async function POST(request: NextRequest) {
     await connectDB();
     console.log('[Cron] ✓ MongoDB connected');
 
+    // Debug: Log MongoDB connection details
+    const dbName = Position.db?.name;
+    const collectionName = Position.collection?.name;
+    console.log(`[Cron] Debug - DB: ${dbName}, Collection: ${collectionName}`);
+
     // Initialize pairs cache
     await initializePairsCache();
     console.log('[Cron] ✓ Pairs cache initialized');
+
+    // Debug: Check total documents in positions collection
+    const totalDocs = await Position.countDocuments({});
+    const avantisTotal = await Position.countDocuments({ platform: 'Avantis' });
+    const avantisActive = await Position.countDocuments({ platform: 'Avantis', status: 'active' });
+
+    console.log(`[Cron] Debug - Total positions: ${totalDocs}, Avantis: ${avantisTotal}, Active: ${avantisActive}`);
 
     // Load all wallets with active Avantis positions
     const wallets = await Position.distinct('walletAddress', {
@@ -50,11 +62,7 @@ export async function POST(request: NextRequest) {
     console.log(`[Cron] Found ${wallets.length} wallets to check`);
 
     if (wallets.length === 0) {
-      // Debug: Check total positions
-      const totalPositions = await Position.countDocuments({ platform: 'Avantis' });
-      const activePositions = await Position.countDocuments({ platform: 'Avantis', status: 'active' });
-
-      console.log(`[Cron] Debug - Total Avantis positions: ${totalPositions}, Active: ${activePositions}`);
+      console.log('[Cron] ⚠️  No active Avantis wallets found - check MongoDB connection and data');
 
       return NextResponse.json({
         success: true,
@@ -62,8 +70,11 @@ export async function POST(request: NextRequest) {
         walletsChecked: 0,
         eventsFound: 0,
         debug: {
-          totalAvantisPositions: totalPositions,
-          activeAvantisPositions: activePositions,
+          dbName,
+          collectionName,
+          totalPositions: totalDocs,
+          avantisPositions: avantisTotal,
+          activeAvantisPositions: avantisActive,
         },
         durationMs: Date.now() - startTime,
       });
