@@ -1,10 +1,10 @@
 #!/bin/bash
-# Trade monitor - Last 24 hours of trades, refreshes every 60 seconds
+# Trade monitor - Last 50 trades segmented by wallet, refreshes every 300 seconds
 
 API_URL="https://yieldr-app.vercel.app/api/avantis/recent-trades"
 HOURS=24
 LIMIT=50  # Show only last 50 trades
-REFRESH_INTERVAL=60  # seconds
+REFRESH_INTERVAL=300  # seconds (5 minutes)
 
 # Colors
 GREEN='\033[0;32m'
@@ -22,12 +22,13 @@ utc_to_ist() {
   date -d "$date_part $time_part UTC + 5 hours 30 minutes" "+%Y-%m-%d %H:%M:%S" 2>/dev/null || echo "$utc_time"
 }
 
-while true; do
-  # Clear screen and move cursor to home position (prevents flicker)
-  printf "\033[2J\033[H"
+# Function to draw the table
+draw_table() {
+  # Clear screen completely
+  clear
 
   echo -e "${BLUE}═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════${NC}"
-  echo -e "${YELLOW}                                                      AVANTIS TRADES - LAST 50 (24h)${NC}"
+  echo -e "${YELLOW}                                                      AVANTIS TRADES - LAST 50 (Segmented by Wallet)${NC}"
   echo -e "${CYAN}                                           Auto-refresh: ${REFRESH_INTERVAL}s | Timezone: IST | Database: historicaltrades${NC}"
   echo -e "${BLUE}═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════${NC}"
 
@@ -36,8 +37,7 @@ while true; do
 
   if [ -z "$DATA" ] || [ "$DATA" == "null" ]; then
     echo -e "\n${RED}❌ Failed to fetch data${NC}"
-    sleep $REFRESH_INTERVAL
-    continue
+    return 1
   fi
 
   # Summary
@@ -50,14 +50,15 @@ while true; do
   echo -e "\n${CYAN}Last Updated: ${LAST_UPDATED_IST} IST  |  Total: ${TRADE_COUNT}  |  ✅ OPEN: ${OPEN_COUNT}  |  ❌ CLOSE: ${CLOSE_COUNT}${NC}\n"
 
   # Table header
-  printf "${YELLOW}%-20s %-7s %-9s %-6s %-8s %-8s %-5s %-9s %-9s %-9s %-9s %-11s %-9s %-11s %-15s${NC}\n" \
-    "DATETIME (IST)" "TYPE" "PAIR" "DIR" "SIZE" "COLLAT" "LEV" "ENTRY" "EXIT" "TP" "SL" "PNL" "ROI%" "ORDER ID" "WALLET"
+  printf "${YELLOW}%-15s %-20s %-7s %-9s %-6s %-8s %-8s %-5s %-9s %-9s %-9s %-9s %-11s %-9s %-11s${NC}\n" \
+    "WALLET" "DATETIME (IST)" "TYPE" "PAIR" "DIR" "SIZE" "COLLAT" "LEV" "ENTRY" "EXIT" "TP" "SL" "PNL" "ROI%" "ORDER ID"
 
-  printf "%-20s %-7s %-9s %-6s %-8s %-8s %-5s %-9s %-9s %-9s %-9s %-11s %-9s %-11s %-15s\n" \
-    "───────────────────" "──────" "────────" "─────" "───────" "───────" "────" "────────" "────────" "────────" "────────" "──────────" "────────" "──────────" "──────────────"
+  printf "%-15s %-20s %-7s %-9s %-6s %-8s %-8s %-5s %-9s %-9s %-9s %-9s %-11s %-9s %-11s\n" \
+    "──────────────" "───────────────────" "──────" "────────" "─────" "───────" "───────" "────" "────────" "────────" "────────" "────────" "──────────" "────────" "──────────"
 
-  # Display trades
+  # Display trades grouped by wallet
   echo "$DATA" | jq -r '.data.trades[] | [
+    .trader,
     .timestamp,
     .eventType,
     .pairSymbol,
@@ -71,9 +72,8 @@ while true; do
     (.sl // 0),
     (.pnlUsdc // 0),
     (.roi // 0),
-    .orderId,
-    .trader
-  ] | @tsv' | while IFS=$'\t' read -r timestamp eventType pair direction size collat lev entry exit tp sl pnl roi orderId trader; do
+    .orderId
+  ] | @tsv' | while IFS=$'\t' read -r trader timestamp eventType pair direction size collat lev entry exit tp sl pnl roi orderId; do
 
     # Convert to IST
     ist_time=$(utc_to_ist "$timestamp")
@@ -97,15 +97,46 @@ while true; do
       type_color="${RED}CLOSE${NC}  "
     fi
 
-    printf "%-20s ${type_color} %-9s %-6s %-8s %-8s %-5s %-9s %-9s %-9s %-9s %-11s %-9s %-11s %-15s\n" \
-      "$ist_time" "$pair" "$direction" "$size_fmt" "$collat_fmt" "$lev_fmt" \
-      "$entry_fmt" "$exit_fmt" "$tp_fmt" "$sl_fmt" "$pnl_fmt" "$roi_fmt" "$orderId" "$wallet_short"
+    printf "%-15s %-20s ${type_color} %-9s %-6s %-8s %-8s %-5s %-9s %-9s %-9s %-9s %-11s %-9s %-11s\n" \
+      "$wallet_short" "$ist_time" "$pair" "$direction" "$size_fmt" "$collat_fmt" "$lev_fmt" \
+      "$entry_fmt" "$exit_fmt" "$tp_fmt" "$sl_fmt" "$pnl_fmt" "$roi_fmt" "$orderId"
 
   done
 
   echo ""
   echo -e "${BLUE}═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════${NC}"
-  echo -e "${YELLOW}Next refresh in ${REFRESH_INTERVAL} seconds...${NC} (Press Ctrl+C to stop)"
 
-  sleep $REFRESH_INTERVAL
+  return 0
+}
+
+# Function to update countdown in place
+countdown() {
+  local seconds=$1
+
+  # Save cursor position
+  tput sc
+
+  for ((i=seconds; i>0; i--)); do
+    # Restore cursor position and clear line
+    tput rc
+    tput el
+    echo -ne "${YELLOW}Next refresh in ${i} seconds...${NC} (Press Ctrl+C to stop)"
+    sleep 1
+  done
+
+  # Clear the countdown line before refresh
+  tput rc
+  tput el
+}
+
+# Main loop
+while true; do
+  draw_table
+
+  if [ $? -eq 0 ]; then
+    countdown $REFRESH_INTERVAL
+  else
+    echo -e "${RED}Retrying in 60 seconds...${NC}"
+    sleep 60
+  fi
 done

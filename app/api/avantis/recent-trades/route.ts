@@ -24,7 +24,7 @@ export async function GET(request: NextRequest) {
       platform: 'Avantis',
       timestamp: { $gte: timeAgo },
     })
-      .sort({ timestamp: -1, trader: 1 })
+      .sort({ trader: 1, timestamp: -1 })
       .limit(limit)
       .lean();
 
