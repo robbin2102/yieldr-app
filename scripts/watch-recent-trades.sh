@@ -3,6 +3,7 @@
 
 API_URL="https://yieldr-app.vercel.app/api/avantis/recent-trades"
 HOURS=24
+LIMIT=50  # Show only last 50 trades
 REFRESH_INTERVAL=60  # seconds
 
 # Colors
@@ -22,15 +23,16 @@ utc_to_ist() {
 }
 
 while true; do
-  clear
+  # Clear screen and move cursor to home position (prevents flicker)
+  printf "\033[2J\033[H"
 
   echo -e "${BLUE}═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════${NC}"
-  echo -e "${YELLOW}                                                      AVANTIS TRADES - LAST 24 HOURS${NC}"
+  echo -e "${YELLOW}                                                      AVANTIS TRADES - LAST 50 (24h)${NC}"
   echo -e "${CYAN}                                           Auto-refresh: ${REFRESH_INTERVAL}s | Timezone: IST | Database: historicaltrades${NC}"
   echo -e "${BLUE}═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════${NC}"
 
-  # Fetch data
-  DATA=$(curl -s "$API_URL?hours=$HOURS")
+  # Fetch data with limit
+  DATA=$(curl -s "$API_URL?hours=$HOURS&limit=$LIMIT")
 
   if [ -z "$DATA" ] || [ "$DATA" == "null" ]; then
     echo -e "\n${RED}❌ Failed to fetch data${NC}"
