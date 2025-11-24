@@ -6,7 +6,7 @@ export const dynamic = 'force-dynamic';
 
 /**
  * GET /api/avantis/cron-history
- * Shows recent trades captured by cron job (last hour)
+ * Shows recent trades captured by cron job (last hour) with full details
  */
 export async function GET(request: NextRequest) {
   try {
@@ -23,47 +23,75 @@ export async function GET(request: NextRequest) {
       .limit(50)
       .lean();
 
-    // Group by 10-minute intervals (cron runs)
+    // Format as table with all available fields
+    const tradesTable = recentTrades.map(trade => ({
+      // Basic Info
+      orderId: trade.orderId,
+      eventType: trade.eventType,
+      timestamp: trade.timestamp,
+
+      // Wallet & Platform
+      trader: trade.trader,
+      platform: trade.platform,
+
+      // Position Details
+      pairSymbol: trade.pairSymbol,
+      pairIndex: trade.pairIndex,
+      tradeIndex: trade.tradeIndex,
+      direction: trade.direction,
+
+      // Size & Leverage
+      positionSizeUsdc: trade.positionSizeUsdc,
+      collateralUsdc: trade.collateralUsdc,
+      leverage: trade.leverage,
+
+      // Prices
+      openPrice: trade.openPrice,
+      closePrice: trade.closePrice,
+      tp: trade.tp,
+      sl: trade.sl,
+
+      // P&L (for CLOSE events)
+      pnlUsdc: trade.pnlUsdc,
+      roi: trade.roi,
+
+      // Blockchain Data
+      txHash: trade.txHash,
+      blockNumber: trade.blockNumber,
+
+      // Metadata
+      createdAt: trade.createdAt,
+    }));
+
+    // Group by 10-minute windows for summary
     const grouped = recentTrades.reduce((acc, trade) => {
-      const cronWindow = Math.floor(trade.timestamp.getTime() / (10 * 60 * 1000));
+      const cronWindow = Math.floor(new Date(trade.timestamp).getTime() / (10 * 60 * 1000));
       if (!acc[cronWindow]) {
-        acc[cronWindow] = [];
+        acc[cronWindow] = {
+          windowStart: new Date(cronWindow * 10 * 60 * 1000).toISOString(),
+          windowEnd: new Date((cronWindow + 1) * 10 * 60 * 1000).toISOString(),
+          count: 0,
+          opens: 0,
+          closes: 0,
+        };
       }
-      acc[cronWindow].push(trade);
+      acc[cronWindow].count++;
+      if (trade.eventType === 'OPEN') acc[cronWindow].opens++;
+      if (trade.eventType === 'CLOSE') acc[cronWindow].closes++;
       return acc;
-    }, {} as Record<number, any[]>);
+    }, {} as Record<number, any>);
 
-    // Format output
-    const cronRuns = Object.entries(grouped).map(([window, trades]) => {
-      const windowTime = new Date(parseInt(window) * 10 * 60 * 1000);
-
-      return {
-        cronWindowStart: windowTime.toISOString(),
-        cronWindowEnd: new Date(windowTime.getTime() + 10 * 60 * 1000).toISOString(),
-        eventsFound: trades.length,
-        trades: trades.map(t => ({
-          orderId: t.orderId,
-          type: t.eventType,
-          pair: t.pairSymbol,
-          direction: t.direction,
-          size: t.positionSizeUsdc,
-          leverage: t.leverage,
-          price: t.eventType === 'OPEN' ? t.openPrice : t.closePrice,
-          pnl: t.pnlUsdc,
-          roi: t.roi,
-          timestamp: t.timestamp,
-          wallet: `${t.trader.substring(0, 10)}...`,
-        })),
-      };
-    });
+    const cronSummary = Object.values(grouped);
 
     return NextResponse.json({
       success: true,
-      data: {
-        lastHour: cronRuns,
+      summary: {
         totalTrades: recentTrades.length,
+        timeRange: 'Last 60 minutes',
         lastUpdated: new Date().toISOString(),
+        cronWindows: cronSummary,
       },
+      trades: tradesTable,
     });
   } catch (error: any) {
     console.error('[CronHistory] Error:', error);
