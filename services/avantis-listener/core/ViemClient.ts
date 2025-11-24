@@ -166,7 +166,7 @@ export function watchEvent(params: {
     event: params.event,
     onLogs: params.onLogs,
     onError: params.onError,
-    poll: params.poll ?? true, // Use polling by default for stability
+    poll: (params.poll ?? true) as true, // Use polling by default for stability
     pollingInterval: params.pollingInterval ?? 2000, // Poll every 2 seconds (Base block time)
   });
 
