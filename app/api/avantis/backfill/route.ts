@@ -40,7 +40,7 @@ export async function POST(request: NextRequest) {
     const totalTime = Date.now() - startTime;
 
     console.log(`[API] ✅ Backfill complete for ${walletAddress}:`);
-    console.log(`[API]    📊 Events found: ${result.eventsFound} (${result.initiatedEvents} initiated, ${result.executedEvents} executed)`);
+    console.log(`[API]    📊 Events found: ${result.eventsFound}`);
     console.log(`[API]    ⏱️  Backfill time: ${(backfillTime / 1000).toFixed(2)}s`);
     console.log(`[API]    ⏱️  Total API time: ${(totalTime / 1000).toFixed(2)}s`);
 
@@ -49,7 +49,6 @@ export async function POST(request: NextRequest) {
       data: {
         wallet: result.wallet,
         eventsFound: result.eventsFound,
-        initiatedEvents: result.initiatedEvents,
         executedEvents: result.executedEvents,
         startBlock: result.startBlock,
         endBlock: result.endBlock,
