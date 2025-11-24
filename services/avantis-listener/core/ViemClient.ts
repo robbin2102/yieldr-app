@@ -36,7 +36,7 @@ export function getViemClient(): ReturnType<typeof createPublicClient> {
       retryCount: RETRY_CONFIG.MAX_RETRIES,
       retryDelay: RETRY_CONFIG.INITIAL_DELAY_MS,
     }),
-  });
+  }) as ReturnType<typeof createPublicClient>;
 
   console.log('[ViemClient] ✓ Viem client initialized');
 
