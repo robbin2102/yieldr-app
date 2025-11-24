@@ -25,7 +25,13 @@ export async function POST(request: NextRequest) {
   const startTime = Date.now();
 
   try {
-    console.log('[Cron] Starting recent events check...');
+    // Check for custom minutes parameter (for testing)
+    const { searchParams } = new URL(request.url);
+    const customMinutes = searchParams.get('minutes');
+    const minutesToCheck = customMinutes ? parseInt(customMinutes) : MINUTES_TO_CHECK;
+    const blocksToCheck = minutesToCheck * BLOCKS_PER_MINUTE;
+
+    console.log(`[Cron] Starting recent events check (${minutesToCheck} minutes)...`);
 
     // Connect to MongoDB
     await connectDB();
@@ -53,11 +59,11 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // Calculate block range (last 10 minutes)
+    // Calculate block range
     const latestBlock = await getLatestBlockNumber();
-    const startBlock = latestBlock - BigInt(BLOCKS_TO_CHECK);
+    const startBlock = latestBlock - BigInt(blocksToCheck);
 
-    console.log(`[Cron] Block range: ${startBlock} to ${latestBlock} (${BLOCKS_TO_CHECK} blocks)`);
+    console.log(`[Cron] Block range: ${startBlock} to ${latestBlock} (${blocksToCheck} blocks)`);
 
     // Process all wallets in parallel
     const results = await Promise.all(
@@ -116,7 +122,8 @@ export async function POST(request: NextRequest) {
         blockRange: {
           from: Number(startBlock),
           to: Number(latestBlock),
-          blocks: BLOCKS_TO_CHECK,
+          blocks: blocksToCheck,
+          minutes: minutesToCheck,
         },
         walletsWithEvents: walletsWithEvents.map(r => ({
           wallet: r.wallet,
