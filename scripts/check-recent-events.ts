@@ -18,6 +18,11 @@ const MINUTES_TO_CHECK = 10;
 const BLOCKS_PER_MINUTE = 120; // Base chain: 2 blocks/sec = 120 blocks/min
 const BLOCKS_TO_CHECK = MINUTES_TO_CHECK * BLOCKS_PER_MINUTE; // 1200 blocks
 
+// Exclude test wallet from monitoring
+const EXCLUDE_WALLETS = [
+  '0x780bb763e1463d2236fec780b7bd6adb40aaa120', // Test wallet
+];
+
 async function checkRecentEventsForWallet(
   wallet: string,
   startBlock: bigint,
@@ -87,12 +92,17 @@ async function main() {
 
     // Load all wallets with active Avantis positions
     console.log('📍 Loading wallets with active Avantis positions...');
-    const wallets = await Position.distinct('walletAddress', {
+    const allWallets = await Position.distinct('walletAddress', {
       platform: 'Avantis',
       status: 'active',
     });
 
-    console.log(`Found ${wallets.length} wallets to check:\n`);
+    // Filter out excluded wallets
+    const wallets = allWallets.filter(
+      wallet => !EXCLUDE_WALLETS.includes(wallet.toLowerCase())
+    );
+
+    console.log(`Found ${wallets.length} wallets to check (${allWallets.length - wallets.length} excluded):\n`);
     wallets.forEach((wallet, i) => {
       console.log(`  ${i + 1}. ${wallet}`);
     });

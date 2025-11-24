@@ -15,6 +15,11 @@ config({ path: resolve(process.cwd(), '.env.local') });
 const DAYS_TO_BACKFILL = 30;
 const DELAY_BETWEEN_WALLETS_MS = 2000; // 2 seconds delay to avoid rate limits
 
+// Exclude test wallet from backfill
+const EXCLUDE_WALLETS = [
+  '0x780bb763e1463d2236fec780b7bd6adb40aaa120', // Test wallet
+];
+
 /**
  * Sleep utility
  */
@@ -94,12 +99,17 @@ async function main() {
 
     // Load all wallets with active Avantis positions
     console.log('📍 Loading wallets with active Avantis positions...');
-    const wallets = await Position.distinct('walletAddress', {
+    const allWallets = await Position.distinct('walletAddress', {
       platform: 'Avantis',
       status: 'active',
     });
 
-    console.log(`\nFound ${wallets.length} wallets to backfill:\n`);
+    // Filter out excluded wallets
+    const wallets = allWallets.filter(
+      wallet => !EXCLUDE_WALLETS.includes(wallet.toLowerCase())
+    );
+
+    console.log(`\nFound ${wallets.length} wallets to backfill (${allWallets.length - wallets.length} excluded):\n`);
     wallets.forEach((wallet, i) => {
       console.log(`  ${i + 1}. ${wallet}`);
     });
