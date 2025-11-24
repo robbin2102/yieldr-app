@@ -3,7 +3,7 @@
  * Handles RPC connection, retries, and blockchain queries
  */
 
-import { createPublicClient, http, type PublicClient } from 'viem';
+import { createPublicClient, http } from 'viem';
 import { base } from 'viem/chains';
 import { RETRY_CONFIG } from '../config/constants';
 import type { RetryOptions } from './types';
@@ -11,13 +11,13 @@ import type { RetryOptions } from './types';
 /**
  * Singleton Viem client instance
  */
-let publicClient: PublicClient | null = null;
+let publicClient: ReturnType<typeof createPublicClient> | null = null;
 
 /**
  * Get or create Viem public client
  * @returns PublicClient instance
  */
-export function getViemClient(): PublicClient {
+export function getViemClient(): ReturnType<typeof createPublicClient> {
   if (publicClient) {
     return publicClient;
   }
