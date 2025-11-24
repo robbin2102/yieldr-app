@@ -301,8 +301,8 @@ async function calculateBlockRange(
         : endBlock - blocksToFetch;
 
     // Ensure startBlock is not negative
-    if (startBlock < 0n) {
-      startBlock = 0n;
+    if (startBlock < BigInt(0)) {
+      startBlock = BigInt(0);
     }
   }
 

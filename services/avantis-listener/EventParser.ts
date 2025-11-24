@@ -66,7 +66,7 @@ export function parseMarketOrderInitiated(
       isBuy,
       initiatedAt: fromTimestamp(timestamp),
       initiatedTxHash: log.transactionHash || '',
-      initiatedBlockNumber: toNumber(log.blockNumber || 0n, 'blockNumber'),
+      initiatedBlockNumber: toNumber(log.blockNumber || BigInt(0), 'blockNumber'),
     };
 
     return parsed;
@@ -151,7 +151,7 @@ export function parseMarketExecuted(log: Log): ParsedMarketExecutedEvent | null 
       sl: slNum,
       executedAt: eventTimestamp,
       executedTxHash: log.transactionHash || '',
-      executedBlockNumber: toNumber(log.blockNumber || 0n, 'blockNumber'),
+      executedBlockNumber: toNumber(log.blockNumber || BigInt(0), 'blockNumber'),
     };
 
     // If this is a close (open=false), add close-specific data
@@ -249,7 +249,7 @@ export function parseLimitExecuted(log: Log): ParsedLimitExecutedEvent | null {
       sl: slNum,
       executedAt: eventTimestamp,
       executedTxHash: log.transactionHash || '',
-      executedBlockNumber: toNumber(log.blockNumber || 0n, 'blockNumber'),
+      executedBlockNumber: toNumber(log.blockNumber || BigInt(0), 'blockNumber'),
     };
 
     // If this is a close (open=false), add close-specific data

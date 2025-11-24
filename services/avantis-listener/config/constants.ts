@@ -7,10 +7,10 @@
  * Used for converting on-chain values to human-readable format
  */
 export const DECIMALS = {
-  PRICE: 10n ** 10n, // Prices (openPrice, tp, sl, price)
-  LEVERAGE: 10n ** 10n, // Leverage values
-  USDC: 10n ** 6n, // USDC amounts (6 decimals)
-  PERCENT: 10n ** 10n, // Percentage values (including percentProfit)
+  PRICE: BigInt(10) ** BigInt(10), // Prices (openPrice, tp, sl, price)
+  LEVERAGE: BigInt(10) ** BigInt(10), // Leverage values
+  USDC: BigInt(10) ** BigInt(6), // USDC amounts (6 decimals)
+  PERCENT: BigInt(10) ** BigInt(10), // Percentage values (including percentProfit)
 } as const;
 
 /**
