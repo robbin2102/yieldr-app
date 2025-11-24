@@ -127,11 +127,9 @@ while true; do
 
   echo ""
   echo -e "${BLUE}════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════${NC}"
-
-  # Countdown timer
-  for i in $(seq $REFRESH_INTERVAL -1 1); do
-    printf "\r${YELLOW}Next refresh in: %02d seconds${NC} (Press Ctrl+C to stop)  " $i
-    sleep 1
-  done
+  echo -e "${YELLOW}Next refresh in $REFRESH_INTERVAL seconds...${NC} (Press Ctrl+C to stop)"
   echo ""
+
+  # Wait for refresh interval
+  sleep $REFRESH_INTERVAL
 done
