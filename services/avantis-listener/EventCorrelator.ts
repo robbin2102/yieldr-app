@@ -74,9 +74,11 @@ export async function processMarketExecuted(
 ): Promise<void> {
   try {
     const { orderId, trader, open, pairIndex, tradeIndex } = event;
+    const pairSymbol = getPairSymbol(pairIndex);
+    const direction = event.isBuy ? 'LONG' : 'SHORT';
 
     console.log(
-      `[Correlator] Processing executed event - orderId: ${orderId}, type: ${open ? 'OPEN' : 'CLOSE'}, trader: ${trader}`
+      `[Correlator] Processing executed event - orderId: ${orderId}, type: ${open ? 'OPEN' : 'CLOSE'}, pair: ${pairSymbol}, ${direction}, size: $${event.positionSizeUsdc?.toFixed(2)}, ${event.leverage}x, trader: ${trader.substring(0, 10)}...`
     );
 
     // Check if event already exists
@@ -118,9 +120,9 @@ export async function processMarketExecuted(
     await tradeEvent.save();
 
     console.log(
-      `[Correlator] ✓ Event saved - orderId: ${orderId}, type: ${open ? 'OPEN' : 'CLOSE'}${
-        !open ? `, PnL: ${event.pnlUsdc?.toFixed(2)} USDC, ROI: ${event.profitPercent?.toFixed(2)}%` : ''
-      }`
+      `[Correlator] ✓ Event saved - orderId: ${orderId}, ${pairSymbol} ${direction} ${open ? 'OPEN' : 'CLOSE'}, $${event.positionSizeUsdc?.toFixed(2)} @ ${event.leverage}x${
+        !open ? `, PnL: $${event.pnlUsdc?.toFixed(2)} (${event.profitPercent?.toFixed(2)}%)` : ''
+      }, time: ${timestamp.toISOString()}`
     );
 
     // Note: Position management is handled by Python service
