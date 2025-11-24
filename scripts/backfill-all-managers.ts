@@ -25,7 +25,7 @@
 
 import { config } from 'dotenv';
 import { resolve } from 'path';
-import { createPublicClient, http, parseAbiItem } from 'viem';
+import { createPublicClient, http, parseAbiItem, Log } from 'viem';
 import { base } from 'viem/chains';
 
 config({ path: resolve(process.cwd(), '.env.local') });
@@ -77,7 +77,7 @@ async function backfillWallet(
       toBlock,
     });
 
-    const relevantMarket = marketExecutedLogs.filter(log => {
+    const relevantMarket = marketExecutedLogs.filter((log: Log) => {
       const parsed = parseMarketExecuted(log);
       return parsed && parsed.trader.toLowerCase() === wallet.toLowerCase();
     });
@@ -94,7 +94,7 @@ async function backfillWallet(
       toBlock,
     });
 
-    const relevantLimit = limitExecutedLogs.filter(log => {
+    const relevantLimit = limitExecutedLogs.filter((log: Log) => {
       const parsed = parseLimitExecuted(log);
       return parsed && parsed.trader.toLowerCase() === wallet.toLowerCase();
     });
