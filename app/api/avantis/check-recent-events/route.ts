@@ -50,11 +50,21 @@ export async function POST(request: NextRequest) {
     console.log(`[Cron] Found ${wallets.length} wallets to check`);
 
     if (wallets.length === 0) {
+      // Debug: Check total positions
+      const totalPositions = await Position.countDocuments({ platform: 'Avantis' });
+      const activePositions = await Position.countDocuments({ platform: 'Avantis', status: 'active' });
+
+      console.log(`[Cron] Debug - Total Avantis positions: ${totalPositions}, Active: ${activePositions}`);
+
       return NextResponse.json({
         success: true,
         message: 'No active Avantis wallets found',
         walletsChecked: 0,
         eventsFound: 0,
+        debug: {
+          totalAvantisPositions: totalPositions,
+          activeAvantisPositions: activePositions,
+        },
         durationMs: Date.now() - startTime,
       });
     }
