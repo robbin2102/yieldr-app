@@ -186,14 +186,25 @@ export async function POST(request: NextRequest) {
 
 /**
  * GET /api/avantis/check-recent-events
- * Health check endpoint
+ * Called by Vercel cron (cron jobs use GET by default)
+ * Also serves as health check when accessed manually
  */
 export async function GET(request: NextRequest) {
+  // Check if this is a Vercel cron request
+  const isVercelCron = request.headers.get('user-agent')?.includes('vercel-cron');
+
+  if (isVercelCron) {
+    // If called by Vercel cron, process events
+    return POST(request);
+  }
+
+  // Otherwise, return health check info
   return NextResponse.json({
     endpoint: 'check-recent-events',
     status: 'ready',
     description: 'Checks last 10 minutes of Avantis events for all active wallets',
-    method: 'POST',
+    method: 'GET (Vercel Cron) or POST (Manual)',
     schedule: 'Every 10 minutes (Vercel cron)',
+    note: 'Vercel cron calls this via GET automatically',
   });
 }
