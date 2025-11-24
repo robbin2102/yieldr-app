@@ -15,7 +15,7 @@ export async function GET(request: NextRequest) {
 
     const { searchParams } = new URL(request.url);
     const hours = parseInt(searchParams.get('hours') || '24');
-    const limit = parseInt(searchParams.get('limit') || '1000');
+    const limit = parseInt(searchParams.get('limit') || '100');
 
     // Fetch trades from last N hours
     const timeAgo = new Date(Date.now() - hours * 60 * 60 * 1000);
@@ -24,7 +24,7 @@ export async function GET(request: NextRequest) {
       platform: 'Avantis',
       timestamp: { $gte: timeAgo },
     })
-      .sort({ trader: 1, timestamp: -1 })
+      .sort({ timestamp: -1 })
       .limit(limit)
       .lean();
 

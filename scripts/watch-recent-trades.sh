@@ -1,9 +1,8 @@
 #!/bin/bash
-# Trade monitor - Last 50 trades segmented by wallet, refreshes every 300 seconds
+# Trade monitor - Last 100 trades, sorted by datetime, refreshes every 300 seconds
 
 API_URL="https://yieldr-app.vercel.app/api/avantis/recent-trades"
 HOURS=24
-LIMIT=50  # Show only last 50 trades
 REFRESH_INTERVAL=300  # seconds (5 minutes)
 
 # Colors
@@ -28,12 +27,12 @@ draw_table() {
   clear
 
   echo -e "${BLUE}═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════${NC}"
-  echo -e "${YELLOW}                                                      AVANTIS TRADES - LAST 50 (Segmented by Wallet)${NC}"
+  echo -e "${YELLOW}                                                      AVANTIS TRADES - LAST 100 (Sorted by DateTime)${NC}"
   echo -e "${CYAN}                                           Auto-refresh: ${REFRESH_INTERVAL}s | Timezone: IST | Database: historicaltrades${NC}"
   echo -e "${BLUE}═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════${NC}"
 
-  # Fetch data with limit
-  DATA=$(curl -s "$API_URL?hours=$HOURS&limit=$LIMIT")
+  # Fetch last 100 trades
+  DATA=$(curl -s "$API_URL?hours=$HOURS")
 
   if [ -z "$DATA" ] || [ "$DATA" == "null" ]; then
     echo -e "\n${RED}❌ Failed to fetch data${NC}"
@@ -50,15 +49,14 @@ draw_table() {
   echo -e "\n${CYAN}Last Updated: ${LAST_UPDATED_IST} IST  |  Total: ${TRADE_COUNT}  |  ✅ OPEN: ${OPEN_COUNT}  |  ❌ CLOSE: ${CLOSE_COUNT}${NC}\n"
 
   # Table header
-  printf "${YELLOW}%-15s %-20s %-7s %-9s %-6s %-8s %-8s %-5s %-9s %-9s %-9s %-9s %-11s %-9s %-11s${NC}\n" \
-    "WALLET" "DATETIME (IST)" "TYPE" "PAIR" "DIR" "SIZE" "COLLAT" "LEV" "ENTRY" "EXIT" "TP" "SL" "PNL" "ROI%" "ORDER ID"
+  printf "${YELLOW}%-20s %-7s %-9s %-6s %-8s %-8s %-5s %-9s %-9s %-9s %-9s %-11s %-9s %-11s %-15s${NC}\n" \
+    "DATETIME (IST)" "TYPE" "PAIR" "DIR" "SIZE" "COLLAT" "LEV" "ENTRY" "EXIT" "TP" "SL" "PNL" "ROI%" "ORDER ID" "WALLET"
 
-  printf "%-15s %-20s %-7s %-9s %-6s %-8s %-8s %-5s %-9s %-9s %-9s %-9s %-11s %-9s %-11s\n" \
-    "──────────────" "───────────────────" "──────" "────────" "─────" "───────" "───────" "────" "────────" "────────" "────────" "────────" "──────────" "────────" "──────────"
+  printf "%-20s %-7s %-9s %-6s %-8s %-8s %-5s %-9s %-9s %-9s %-9s %-11s %-9s %-11s %-15s\n" \
+    "───────────────────" "──────" "────────" "─────" "───────" "───────" "────" "────────" "────────" "────────" "────────" "──────────" "────────" "──────────" "──────────────"
 
-  # Display trades grouped by wallet
+  # Display trades
   echo "$DATA" | jq -r '.data.trades[] | [
-    .trader,
     .timestamp,
     .eventType,
     .pairSymbol,
@@ -72,8 +70,9 @@ draw_table() {
     (.sl // 0),
     (.pnlUsdc // 0),
     (.roi // 0),
-    .orderId
-  ] | @tsv' | while IFS=$'\t' read -r trader timestamp eventType pair direction size collat lev entry exit tp sl pnl roi orderId; do
+    .orderId,
+    .trader
+  ] | @tsv' | while IFS=$'\t' read -r timestamp eventType pair direction size collat lev entry exit tp sl pnl roi orderId trader; do
 
     # Convert to IST
     ist_time=$(utc_to_ist "$timestamp")
@@ -97,9 +96,9 @@ draw_table() {
       type_color="${RED}CLOSE${NC}  "
     fi
 
-    printf "%-15s %-20s ${type_color} %-9s %-6s %-8s %-8s %-5s %-9s %-9s %-9s %-9s %-11s %-9s %-11s\n" \
-      "$wallet_short" "$ist_time" "$pair" "$direction" "$size_fmt" "$collat_fmt" "$lev_fmt" \
-      "$entry_fmt" "$exit_fmt" "$tp_fmt" "$sl_fmt" "$pnl_fmt" "$roi_fmt" "$orderId"
+    printf "%-20s ${type_color} %-9s %-6s %-8s %-8s %-5s %-9s %-9s %-9s %-9s %-11s %-9s %-11s %-15s\n" \
+      "$ist_time" "$pair" "$direction" "$size_fmt" "$collat_fmt" "$lev_fmt" \
+      "$entry_fmt" "$exit_fmt" "$tp_fmt" "$sl_fmt" "$pnl_fmt" "$roi_fmt" "$orderId" "$wallet_short"
 
   done
 
