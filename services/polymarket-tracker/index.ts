@@ -12,7 +12,18 @@
 
 // Load environment variables FIRST (before any imports that need them)
 import dotenv from 'dotenv';
-dotenv.config({ path: '.env.local' });
+import path from 'path';
+
+// Load from project root .env.local
+const envPath = path.resolve(process.cwd(), '.env.local');
+const result = dotenv.config({ path: envPath });
+
+// Debug: Check if env vars loaded
+if (result.error) {
+  console.error('Error loading .env.local:', result.error);
+  console.error('Looking for .env.local at:', envPath);
+  process.exit(1);
+}
 
 // Now import modules that depend on environment variables
 import connectDB from '../../lib/mongoose';
