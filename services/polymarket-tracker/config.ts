@@ -16,7 +16,8 @@ export const CONFIG = {
   LIMITS: {
     OPEN_POSITIONS: 500,      // Max per call
     CLOSED_POSITIONS: 50,     // Max per call
-    ACTIVITY: 500,            // Max per call
+    ACTIVITY: 500,            // Max per call for historical fetch
+    POLLING: 50,              // Limit for 60s polling (efficient)
   },
 
   // Time Ranges
