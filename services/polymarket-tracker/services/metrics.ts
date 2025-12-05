@@ -39,11 +39,9 @@ export async function computeMetrics(walletAddress: string): Promise<TraderMetri
   const closedPositions30d = allClosedPositions.filter((p) => p.closedAt >= day30Ago);
 
   // === OPEN POSITIONS ===
+  const currentPositionValue = openPositions.reduce((sum, p) => sum + p.currentValue, 0);
+  const initialInvestment = openPositions.reduce((sum, p) => sum + p.initialValue, 0);
   const totalUnrealizedPnl = openPositions.reduce((sum, p) => sum + p.cashPnl, 0);
-  const openInvested = openPositions.reduce(
-    (sum, p) => sum + p.initialValue,
-    0
-  );
 
   // === CLOSED POSITIONS (ALL) ===
   const totalRealizedPnl = allClosedPositions.reduce(
@@ -72,7 +70,7 @@ export async function computeMetrics(walletAddress: string): Promise<TraderMetri
 
   // === COMBINED ===
   const totalPnl = totalUnrealizedPnl + totalRealizedPnl;
-  const totalInvested = openInvested + closedInvested;
+  const totalInvested = initialInvestment + closedInvested;
   const overallRoi = totalInvested > 0 ? (totalPnl / totalInvested) * 100 : 0;
 
   // === SHARPE RATIO ===
@@ -81,10 +79,13 @@ export async function computeMetrics(walletAddress: string): Promise<TraderMetri
   const metrics: TraderMetrics = {
     // Open positions
     openPositionsCount: openPositions.length,
+    currentPositionValue,
+    initialInvestment,
     totalUnrealizedPnl,
 
     // Closed positions
     closedPositionsCount: allClosedPositions.length,
+    closedInvestment: closedInvested,
     totalRealizedPnl,
     wins,
     losses,
@@ -159,6 +160,13 @@ export function displayMetrics(metrics: TraderMetrics): void {
   console.log(`   Closed Positions: ${metrics.closedPositionsCount}`);
   console.log(`   Win Rate: ${metrics.winRate.toFixed(1)}% (${metrics.wins}W / ${metrics.losses}L)`);
 
+  console.log('\n💼 POSITION VALUE:');
+  console.log(`   Current Position Value: $${metrics.currentPositionValue.toFixed(2)}`);
+  console.log(`   Initial Investment:     $${metrics.initialInvestment.toFixed(2)}`);
+  console.log(`   Closed Investment:      $${metrics.closedInvestment.toFixed(2)}`);
+  console.log(`   ─────────────────────────────────────────────`);
+  console.log(`   Total Invested:         $${metrics.totalInvested.toFixed(2)}`);
+
   console.log('\n💰 PnL:');
   console.log(`   Unrealized PnL: $${metrics.totalUnrealizedPnl.toFixed(2)}`);
   console.log(`   Realized PnL:   $${metrics.totalRealizedPnl.toFixed(2)}`);
@@ -170,7 +178,6 @@ export function displayMetrics(metrics: TraderMetrics): void {
   console.log(`   30d PnL: $${metrics.pnl30d.toFixed(2)}  |  ROI: ${metrics.roi30d.toFixed(2)}%`);
 
   console.log('\n🎯 OVERALL:');
-  console.log(`   Total Invested: $${metrics.totalInvested.toFixed(2)}`);
   console.log(`   Overall ROI:    ${metrics.overallRoi.toFixed(2)}%`);
   console.log(`   Sharpe Ratio:   ${metrics.sharpeRatio.toFixed(3)}`);
 

@@ -58,10 +58,13 @@ export interface ActivityResponse {
 export interface TraderMetrics {
   // Open Positions
   openPositionsCount: number;
+  currentPositionValue: number;    // Total worth of all open positions NOW
+  initialInvestment: number;       // What was originally invested in open positions
   totalUnrealizedPnl: number;
 
   // Closed Positions
   closedPositionsCount: number;
+  closedInvestment: number;        // What was invested in closed positions
   totalRealizedPnl: number;
   wins: number;
   losses: number;
@@ -69,7 +72,7 @@ export interface TraderMetrics {
 
   // Combined
   totalPnl: number;
-  totalInvested: number;
+  totalInvested: number;           // initialInvestment + closedInvestment
   overallRoi: number;
 
   // Time-based PnL
