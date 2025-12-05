@@ -34,7 +34,7 @@ console.log('[DEBUG] POLYMARKET_WALLETS:', process.env.POLYMARKET_WALLETS || 'NO
 // Now import modules that depend on environment variables
 import connectDB from '../../lib/mongoose';
 import { fetchAllDataForWallet } from './services/initialFetch';
-import { computeMetrics, displayMetrics } from './services/metrics';
+import { computeMetrics, displayMetrics, saveMetrics } from './services/metrics';
 import { TradePoller } from './services/poller';
 import { CONFIG } from './config';
 import { createLogger } from './utils/logger';
@@ -58,6 +58,7 @@ async function trackWallet(walletAddress: string): Promise<TradePoller> {
     logger.info('Step 2: Computing performance metrics...');
     const metrics = await computeMetrics(walletAddress);
     displayMetrics(metrics);
+    await saveMetrics(walletAddress, metrics);
 
     // Step 3: Start polling for new trades
     logger.info('Step 3: Starting trade monitoring...');

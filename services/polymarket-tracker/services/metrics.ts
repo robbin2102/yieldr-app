@@ -5,6 +5,7 @@
 
 import PolymarketOpenPosition from '../../../models/PolymarketOpenPosition';
 import PolymarketClosedPosition from '../../../models/PolymarketClosedPosition';
+import PolymarketMetrics from '../../../models/PolymarketMetrics';
 import { createLogger } from '../utils/logger';
 import type { TraderMetrics } from '../types/polymarket';
 
@@ -145,6 +146,24 @@ function computeSharpeRatio(
   const sharpeRatio = stdDev > 0 ? avgReturn / stdDev : 0;
 
   return sharpeRatio;
+}
+
+/**
+ * Save metrics to MongoDB
+ */
+export async function saveMetrics(
+  walletAddress: string,
+  metrics: TraderMetrics
+): Promise<void> {
+  try {
+    await PolymarketMetrics.create({
+      walletAddress: walletAddress.toLowerCase(),
+      ...metrics,
+    });
+    logger.debug('Metrics saved to MongoDB');
+  } catch (error: any) {
+    logger.error(`Failed to save metrics: ${error.message}`);
+  }
 }
 
 /**

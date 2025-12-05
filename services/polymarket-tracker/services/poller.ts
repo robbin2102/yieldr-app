@@ -6,6 +6,7 @@
 import { fetchNewActivity } from '../api/activity';
 import { createLogger } from '../utils/logger';
 import PolymarketTrade from '../../../models/PolymarketTrade';
+import { computeMetrics, saveMetrics } from './metrics';
 import type { ActivityResponse } from '../types/polymarket';
 
 const logger = createLogger('Poller');
@@ -89,6 +90,11 @@ export class TradePoller {
           `  [${new Date(activity.timestamp * 1000).toISOString()}] ${action} - ${activity.outcome} - "${activity.title}"`
         );
       });
+
+      // Update metrics after new trades
+      const metrics = await computeMetrics(this.walletAddress);
+      await saveMetrics(this.walletAddress, metrics);
+      logger.debug('Metrics updated and saved');
     } catch (error: any) {
       logger.error(`Poll error for ${this.walletAddress}: ${error.message}`);
     } finally {
