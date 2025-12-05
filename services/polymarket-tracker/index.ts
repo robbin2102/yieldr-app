@@ -15,20 +15,21 @@ import dotenv from 'dotenv';
 import path from 'path';
 
 // Load from project root .env.local
-const envPath = path.resolve(process.cwd(), '.env.local');
-const result = dotenv.config({ path: envPath });
+// Only load if not already loaded by node --require dotenv/config
+if (!process.env.MONGODB_URI) {
+  const envPath = path.resolve(process.cwd(), '.env.local');
+  const result = dotenv.config({ path: envPath });
 
-// Debug: Check if env vars loaded
-console.log('[DEBUG] .env.local path:', envPath);
-console.log('[DEBUG] dotenv result:', result.error ? result.error : 'OK');
-console.log('[DEBUG] MONGODB_URI exists:', !!process.env.MONGODB_URI);
-console.log('[DEBUG] POLYMARKET_WALLETS:', process.env.POLYMARKET_WALLETS);
-
-if (result.error) {
-  console.error('Error loading .env.local:', result.error);
-  console.error('Looking for .env.local at:', envPath);
-  process.exit(1);
+  if (result.error) {
+    console.error('Error loading .env.local:', result.error);
+    console.error('Looking for .env.local at:', envPath);
+    process.exit(1);
+  }
 }
+
+// Debug: Check env vars
+console.log('[DEBUG] MONGODB_URI exists:', !!process.env.MONGODB_URI);
+console.log('[DEBUG] POLYMARKET_WALLETS:', process.env.POLYMARKET_WALLETS || 'NOT SET');
 
 // Now import modules that depend on environment variables
 import connectDB from '../../lib/mongoose';
@@ -76,7 +77,6 @@ async function trackWallet(walletAddress: string): Promise<TradePoller> {
  * Main function
  */
 async function main() {
-  console.clear();
   console.log('\n' + '█'.repeat(80));
   console.log('█' + ' '.repeat(78) + '█');
   console.log('█' + ' '.repeat(20) + 'POLYMARKET TRACKER SERVICE' + ' '.repeat(32) + '█');
