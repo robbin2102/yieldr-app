@@ -82,7 +82,6 @@ const PolymarketTradeSchema = new mongoose.Schema({
   timestamp: {
     type: Date,
     required: true,
-    index: true,
   },
 
   detectedAt: {

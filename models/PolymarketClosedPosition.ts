@@ -87,7 +87,6 @@ const PolymarketClosedPositionSchema = new mongoose.Schema({
   closedAt: {
     type: Date,
     required: true,
-    index: true,
   },
 
   endDate: {
