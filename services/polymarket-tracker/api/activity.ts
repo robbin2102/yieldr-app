@@ -11,7 +11,7 @@ import { fetchAllPaginated } from '../utils/pagination';
 const logger = createLogger('Activity API');
 
 /**
- * Fetch historical trades (TRADE + REDEEM) for last N days
+ * Fetch historical trades (TRADE type captures all buy/sell activity)
  * API limit: 500 per call, pagination supported
  */
 export async function fetchHistoricalActivity(
@@ -27,7 +27,7 @@ export async function fetchHistoricalActivity(
   const fetchPage = async (offset: number): Promise<ActivityResponse[]> => {
     const url = buildUrl('/activity', {
       user: walletAddress,
-      type: `${ACTIVITY_TYPES.TRADE},${ACTIVITY_TYPES.REDEEM}`,
+      type: ACTIVITY_TYPES.TRADE, // Only TRADE - captures all buy/sell activity
       start,
       limit: CONFIG.LIMITS.ACTIVITY,
       offset,
@@ -44,7 +44,7 @@ export async function fetchHistoricalActivity(
     CONFIG.LIMITS.ACTIVITY
   );
 
-  logger.success(`Fetched ${activities.length} activities (TRADE + REDEEM)`);
+  logger.success(`Fetched ${activities.length} TRADE activities`);
 
   return activities;
 }
@@ -63,7 +63,7 @@ export async function fetchNewActivity(
   const fetchPage = async (offset: number): Promise<ActivityResponse[]> => {
     const url = buildUrl('/activity', {
       user: walletAddress,
-      type: `${ACTIVITY_TYPES.TRADE},${ACTIVITY_TYPES.REDEEM}`,
+      type: ACTIVITY_TYPES.TRADE, // Only TRADE - captures all buy/sell activity
       start: sinceTimestamp,
       limit: CONFIG.LIMITS.ACTIVITY,
       offset,
@@ -82,7 +82,7 @@ export async function fetchNewActivity(
   );
 
   if (activities.length > 0) {
-    logger.success(`Found ${activities.length} new activities`);
+    logger.success(`Found ${activities.length} new TRADE activities`);
   }
 
   return activities;
