@@ -9,6 +9,8 @@
     "backend": "node backend-src/server.js",
     "listener": "tsx services/avantis-listener/server.ts",
     "listener:dev": "nodemon --exec tsx services/avantis-listener/server.ts",
+    "polymarket:start": "tsx services/polymarket-tracker/index.ts",
+    "polymarket:dev": "nodemon --exec tsx services/polymarket-tracker/index.ts",
     "backfill": "tsx scripts/backfill-all-managers.ts",
     "backfill:wallet": "tsx scripts/backfill-single-wallet.ts",
     "test:client": "tsx services/avantis-listener/test-client.ts",
@@ -50,6 +52,7 @@
     "postcss": "^8.4.35",
     "tailwindcss": "^3.4.1",
     "ts-node": "^10.9.2",
+    "tsx": "^4.7.0",
     "typescript": "^5.9.3",
     "utf-8-validate": "^5.0.10"
   }
