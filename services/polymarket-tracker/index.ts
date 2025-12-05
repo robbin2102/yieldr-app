@@ -10,16 +10,17 @@
  *   POLYMARKET_API_DELAY_MS - Delay between API calls in milliseconds (default: 300)
  */
 
+// Load environment variables FIRST (before any imports that need them)
 import dotenv from 'dotenv';
+dotenv.config({ path: '.env.local' });
+
+// Now import modules that depend on environment variables
 import connectDB from '../../lib/mongoose';
 import { fetchAllDataForWallet } from './services/initialFetch';
 import { computeMetrics, displayMetrics } from './services/metrics';
 import { TradePoller } from './services/poller';
 import { CONFIG } from './config';
 import { createLogger } from './utils/logger';
-
-// Load environment variables
-dotenv.config({ path: '.env.local' });
 
 const logger = createLogger('Main');
 
