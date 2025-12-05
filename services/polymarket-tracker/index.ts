@@ -19,6 +19,11 @@ const envPath = path.resolve(process.cwd(), '.env.local');
 const result = dotenv.config({ path: envPath });
 
 // Debug: Check if env vars loaded
+console.log('[DEBUG] .env.local path:', envPath);
+console.log('[DEBUG] dotenv result:', result.error ? result.error : 'OK');
+console.log('[DEBUG] MONGODB_URI exists:', !!process.env.MONGODB_URI);
+console.log('[DEBUG] POLYMARKET_WALLETS:', process.env.POLYMARKET_WALLETS);
+
 if (result.error) {
   console.error('Error loading .env.local:', result.error);
   console.error('Looking for .env.local at:', envPath);
