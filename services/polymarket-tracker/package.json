@@ -1,0 +1,26 @@
+{
+  "name": "polymarket-tracker",
+  "version": "1.0.0",
+  "description": "Polymarket trader tracking service - fetches positions, trades, and computes performance metrics",
+  "main": "dist/index.js",
+  "scripts": {
+    "start": "node dist/index.js",
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": ["polymarket", "trading", "tracker", "analytics"],
+  "author": "Yieldr",
+  "license": "MIT",
+  "dependencies": {
+    "mongoose": "^8.0.0",
+    "dotenv": "^16.3.1",
+    "node-fetch": "^2.7.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/node-fetch": "^2.6.9",
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.0"
+  }
+}
