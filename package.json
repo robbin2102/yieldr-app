@@ -9,7 +9,7 @@
     "backend": "node backend-src/server.js",
     "listener": "tsx services/avantis-listener/server.ts",
     "listener:dev": "nodemon --exec tsx services/avantis-listener/server.ts",
-    "polymarket:start": "DOTENV_CONFIG_PATH=.env.local node --require dotenv/config node_modules/.bin/tsx services/polymarket-tracker/index.ts",
+    "polymarket:start": "POLYMARKET_WALLETS=0xcde6e9587582e568041e1aa0ea0b01793e1311d7 POLYMARKET_POLL_INTERVAL_MS=60000 POLYMARKET_API_DELAY_MS=300 DOTENV_CONFIG_PATH=.env.local node --require dotenv/config node_modules/.bin/tsx services/polymarket-tracker/index.ts",
     "polymarket:dev": "DOTENV_CONFIG_PATH=.env.local nodemon --exec \"node --require dotenv/config node_modules/.bin/tsx services/polymarket-tracker/index.ts\"",
     "backfill": "tsx scripts/backfill-all-managers.ts",
     "backfill:wallet": "tsx scripts/backfill-single-wallet.ts",
