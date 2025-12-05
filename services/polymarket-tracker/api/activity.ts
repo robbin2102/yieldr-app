@@ -54,7 +54,7 @@ export async function fetchHistoricalActivity(
  * Used by poller to detect new trades
  *
  * Optimized for 60s polling intervals:
- * - Uses precise time window (last 90s)
+ * - Uses precise time window (last 60s)
  * - Small limit (50) for efficiency
  * - No pagination needed for recent trades
  */
@@ -64,9 +64,8 @@ export async function fetchNewActivity(
 ): Promise<ActivityResponse[]> {
   const now = Math.floor(Date.now() / 1000);
 
-  // For polling, use a precise window: last 90 seconds
-  // (60s interval + 30s buffer for API delays)
-  const windowStart = Math.max(sinceTimestamp, now - 90);
+  // For polling, use a precise window: last 60 seconds
+  const windowStart = Math.max(sinceTimestamp, now - 60);
 
   logger.debug(
     `Polling ${walletAddress}: ${new Date(windowStart * 1000).toISOString()} to ${new Date(now * 1000).toISOString()}`
