@@ -78,16 +78,18 @@ async function saveClosedPositions(
     const amountWon = totalBet + pos.realizedPnl;
     const roi = totalBet > 0 ? (pos.realizedPnl / totalBet) * 100 : 0;
 
+    // Create a unique trade ID from position data
+    // This ensures each unique close event gets its own document
+    const tradeId = `${walletAddress.toLowerCase()}_${pos.conditionId}_${pos.asset}_${pos.timestamp}_${pos.totalBought}_${pos.avgPrice}`;
+
     return {
       updateOne: {
         filter: {
-          walletAddress: walletAddress.toLowerCase(),
-          conditionId: pos.conditionId,
-          asset: pos.asset, // Required to differentiate Up/Down positions
-          closedAt: new Date(pos.timestamp * 1000),
+          tradeId, // Use unique trade ID as the only filter
         },
         update: {
           $set: {
+            tradeId,
             walletAddress: walletAddress.toLowerCase(),
             conditionId: pos.conditionId,
             asset: pos.asset,
