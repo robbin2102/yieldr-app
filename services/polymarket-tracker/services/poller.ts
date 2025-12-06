@@ -6,7 +6,6 @@
 import { fetchNewActivity } from '../api/activity';
 import { createLogger } from '../utils/logger';
 import PolymarketTrade from '../../../models/PolymarketTrade';
-import Trader from '../../../models/Trader';
 import { computeMetrics, saveMetrics } from './metrics';
 import { updateAllPositions } from './positionUpdate';
 import type { ActivityResponse } from '../types/polymarket';
@@ -99,29 +98,6 @@ export class TradePoller {
       // Compute and save updated metrics
       const metrics = await computeMetrics(this.walletAddress);
       await saveMetrics(this.walletAddress, metrics);
-
-      // Sync metrics to traders collection
-      await Trader.findOneAndUpdate(
-        { walletAddress: this.walletAddress.toLowerCase() },
-        {
-          $set: {
-            'metrics.totalPnL30d': metrics.pnl30d,
-            'metrics.totalPnL7d': metrics.pnl7d,
-            'metrics.totalPnL1d': metrics.pnl1d,
-            'metrics.roi30d': metrics.roi30d,
-            'metrics.roi7d': metrics.roi7d,
-            'metrics.roi1d': metrics.roi1d,
-            'metrics.overallRoi': metrics.overallRoi,
-            'metrics.winRate': metrics.winRate,
-            'metrics.totalInvested': metrics.totalInvested,
-            'metrics.openPositions': metrics.openPositionsCount,
-            'metrics.closedPositions': metrics.closedPositionsCount,
-            'metrics.sharpeRatio': metrics.sharpeRatio,
-            polymarketLastSyncAt: new Date(),
-            lastMetricsSync: new Date()
-          }
-        }
-      );
 
       logger.success('Positions and metrics updated');
     } catch (error: any) {

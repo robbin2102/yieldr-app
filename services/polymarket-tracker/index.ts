@@ -44,6 +44,7 @@ const logger = createLogger('Main');
 
 /**
  * Track a single wallet
+ * Note: Multiple traders can track the same wallet, so we don't update trader records here
  */
 async function trackWallet(walletAddress: string): Promise<TradePoller> {
   console.log('\n' + '='.repeat(80));
@@ -51,19 +52,6 @@ async function trackWallet(walletAddress: string): Promise<TradePoller> {
   console.log('='.repeat(80) + '\n');
 
   try {
-    // Update trader status to IN_PROGRESS
-    await Trader.findOneAndUpdate(
-      { walletAddress: walletAddress.toLowerCase() },
-      {
-        $set: {
-          polymarketSyncStatus: 'IN_PROGRESS',
-          polymarketSyncStartedAt: new Date(),
-          trackingStatus: 'ACTIVE'
-        }
-      },
-      { upsert: true }
-    );
-
     // Step 1: Initial fetch of all data
     logger.info('Step 1: Fetching all historical data...');
     await fetchAllDataForWallet(walletAddress);
@@ -73,31 +61,6 @@ async function trackWallet(walletAddress: string): Promise<TradePoller> {
     const metrics = await computeMetrics(walletAddress);
     displayMetrics(metrics);
     await saveMetrics(walletAddress, metrics);
-
-    // Update trader with initial metrics
-    await Trader.findOneAndUpdate(
-      { walletAddress: walletAddress.toLowerCase() },
-      {
-        $set: {
-          'metrics.totalPnL30d': metrics.pnl30d,
-          'metrics.totalPnL7d': metrics.pnl7d,
-          'metrics.totalPnL1d': metrics.pnl1d,
-          'metrics.roi30d': metrics.roi30d,
-          'metrics.roi7d': metrics.roi7d,
-          'metrics.roi1d': metrics.roi1d,
-          'metrics.overallRoi': metrics.overallRoi,
-          'metrics.winRate': metrics.winRate,
-          'metrics.totalInvested': metrics.totalInvested,
-          'metrics.openPositions': metrics.openPositionsCount,
-          'metrics.closedPositions': metrics.closedPositionsCount,
-          'metrics.sharpeRatio': metrics.sharpeRatio,
-          polymarketSyncStatus: 'COMPLETED',
-          polymarketSyncCompletedAt: new Date(),
-          polymarketLastSyncAt: new Date(),
-          lastMetricsSync: new Date()
-        }
-      }
-    );
 
     // Step 3: Start polling for new trades
     logger.info('Step 3: Starting trade monitoring...');
@@ -109,19 +72,6 @@ async function trackWallet(walletAddress: string): Promise<TradePoller> {
     return poller;
   } catch (error: any) {
     logger.error(`Failed to track wallet ${walletAddress}: ${error.message}`);
-
-    // Update trader status to FAILED
-    await Trader.findOneAndUpdate(
-      { walletAddress: walletAddress.toLowerCase() },
-      {
-        $set: {
-          polymarketSyncStatus: 'FAILED',
-          polymarketSyncError: error.message,
-          trackingStatus: 'ERROR'
-        }
-      }
-    );
-
     throw error;
   }
 }
@@ -136,13 +86,17 @@ async function getWalletsToTrack(): Promise<string[]> {
   const envWallets = CONFIG.WALLETS;
   envWallets.forEach(w => wallets.add(w.toLowerCase()));
 
-  // 2. Get wallets from traders collection (ACTIVE status only)
+  // 2. Get wallets from traders.followed_wallets (ACTIVE traders, polymarket platform only)
   const activeTraders = await Trader.find({
     trackingStatus: 'ACTIVE'
-  }).select('walletAddress');
+  }).select('followed_wallets');
 
   activeTraders.forEach(trader => {
-    wallets.add(trader.walletAddress.toLowerCase());
+    trader.followed_wallets?.forEach((fw: any) => {
+      if (fw.platform === 'polymarket') {
+        wallets.add(fw.wallet.toLowerCase());
+      }
+    });
   });
 
   return Array.from(wallets);

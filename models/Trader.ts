@@ -6,6 +6,24 @@
 
 import mongoose from 'mongoose';
 
+const FollowedWalletSchema = new mongoose.Schema({
+  wallet: {
+    type: String,
+    required: true,
+    lowercase: true
+  },
+  platform: {
+    type: String,
+    required: true,
+    enum: ['polymarket', 'avantis', 'hyperliquid'],
+    default: 'polymarket'
+  },
+  addedAt: {
+    type: Date,
+    default: Date.now
+  }
+}, { _id: false });
+
 const TraderPositionSchema = new mongoose.Schema({
   conditionId: String,
   asset: String,
@@ -58,6 +76,9 @@ const TraderSchema = new mongoose.Schema({
     type: String,
     default: ''
   },
+
+  // Wallets being tracked with platform mapping
+  followed_wallets: [FollowedWalletSchema],
 
   // Platforms (for future multi-platform support)
   platforms: {
