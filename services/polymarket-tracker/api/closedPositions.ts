@@ -21,12 +21,14 @@ export async function fetchClosedPositions(
   logger.info(`Fetching closed positions for ${walletAddress} (last ${days} days)`);
 
   // Calculate cutoff timestamp (seconds)
-  const cutoffTimestamp = Math.floor((Date.now() - days * 24 * 60 * 60 * 1000) / 1000);
+  const now = Math.floor(Date.now() / 1000);
+  const cutoffTimestamp = now - days * 24 * 60 * 60;
 
   // Fetch page function
   const fetchPage = async (offset: number): Promise<ClosedPositionResponse[]> => {
     const url = buildUrl('/closed-positions', {
       user: walletAddress,
+      start: cutoffTimestamp, // CRITICAL: Only fetch positions after this timestamp
       limit: CONFIG.LIMITS.CLOSED_POSITIONS,
       offset,
       sortBy: 'TIMESTAMP',
@@ -36,7 +38,7 @@ export async function fetchClosedPositions(
     return fetchWithDelay<ClosedPositionResponse[]>(url);
   };
 
-  // Fetch all pages with time filter
+  // Fetch all pages with time filter (for additional safety)
   const positions = await fetchPaginatedWithTimeFilter(
     fetchPage,
     CONFIG.LIMITS.CLOSED_POSITIONS,
