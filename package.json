@@ -15,6 +15,8 @@
     "polymarket:test-api": "tsx scripts/test-polymarket-api.ts",
     "polymarket:diagnose": "DOTENV_CONFIG_PATH=.env.local node --require dotenv/config node_modules/.bin/tsx scripts/diagnose-pnl-discrepancy.ts",
     "polymarket:refresh": "DOTENV_CONFIG_PATH=.env.local node --require dotenv/config node_modules/.bin/tsx scripts/force-refresh-closed-positions.ts",
+    "polymarket:test-pnl": "DOTENV_CONFIG_PATH=.env.local node --require dotenv/config node_modules/.bin/tsx scripts/test-api-vs-mongo-pnl.ts",
+    "polymarket:check-api": "npx tsx scripts/check-raw-closed-position-api.ts",
     "backfill": "tsx scripts/backfill-all-managers.ts",
     "backfill:wallet": "tsx scripts/backfill-single-wallet.ts",
     "test:client": "tsx services/avantis-listener/test-client.ts",
