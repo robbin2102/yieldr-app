@@ -188,11 +188,21 @@ export async function fetchOpenPositionsQuick(walletAddress: string): Promise<Op
 /**
  * Background fetch - Closed positions and metrics (non-blocking)
  * Runs after quick fetch, user doesn't wait for this
+ * Only fetches if data doesn't already exist (prevents re-fetching on restart)
  */
 export async function fetchClosedPositionsBackground(walletAddress: string): Promise<void> {
-  logger.info(`Background: Fetching closed positions for ${walletAddress}...`);
-
   try {
+    // Check if we already have closed positions for this wallet
+    const existingCount = await PolymarketClosedPosition.countDocuments({
+      walletAddress: walletAddress.toLowerCase()
+    });
+
+    if (existingCount > 0) {
+      logger.info(`Background: Wallet already has ${existingCount} closed positions in MongoDB, skipping fetch`);
+      return;
+    }
+
+    logger.info(`Background: Fetching closed positions for ${walletAddress}...`);
     const closedPositions = await fetchClosedPositions(walletAddress);
     await saveClosedPositions(walletAddress, closedPositions);
 

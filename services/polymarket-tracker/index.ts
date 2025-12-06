@@ -38,7 +38,6 @@ import { computeMetrics, displayMetrics, saveMetrics } from './services/metrics'
 import { TradePoller } from './services/poller';
 import { CONFIG } from './config';
 import { createLogger } from './utils/logger';
-import Trader from '../../models/Trader';
 
 const logger = createLogger('Main');
 
@@ -92,27 +91,15 @@ async function trackWallet(walletAddress: string): Promise<TradePoller> {
 }
 
 /**
- * Get wallets to track from both ENV and Database
+ * Get wallets to track from ENV only
+ * Database integration disabled to prevent unexpected multi-wallet tracking
  */
 async function getWalletsToTrack(): Promise<string[]> {
   const wallets = new Set<string>();
 
-  // 1. Get wallets from ENV (backward compatibility)
+  // Get wallets from ENV only
   const envWallets = CONFIG.WALLETS;
   envWallets.forEach(w => wallets.add(w.toLowerCase()));
-
-  // 2. Get wallets from traders.followed_wallets (ACTIVE traders, polymarket platform only)
-  const activeTraders = await Trader.find({
-    trackingStatus: 'ACTIVE'
-  }).select('followed_wallets');
-
-  activeTraders.forEach(trader => {
-    trader.followed_wallets?.forEach((fw: any) => {
-      if (fw.platform === 'polymarket') {
-        wallets.add(fw.wallet.toLowerCase());
-      }
-    });
-  });
 
   return Array.from(wallets);
 }
