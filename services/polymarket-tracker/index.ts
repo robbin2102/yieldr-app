@@ -33,7 +33,7 @@ console.log('[DEBUG] POLYMARKET_WALLETS:', process.env.POLYMARKET_WALLETS || 'NO
 
 // Now import modules that depend on environment variables
 import connectDB from '../../lib/mongoose';
-import { fetchAllDataForWallet } from './services/initialFetch';
+import { fetchOpenPositionsQuick, fetchClosedPositionsBackground } from './services/initialFetch';
 import { computeMetrics, displayMetrics, saveMetrics } from './services/metrics';
 import { TradePoller } from './services/poller';
 import { CONFIG } from './config';
@@ -52,20 +52,35 @@ async function trackWallet(walletAddress: string): Promise<TradePoller> {
   console.log('='.repeat(80) + '\n');
 
   try {
-    // Step 1: Initial fetch of all data
-    logger.info('Step 1: Fetching all historical data...');
-    await fetchAllDataForWallet(walletAddress);
+    // Step 1: FAST - Fetch and show open positions immediately (user sees this right away)
+    logger.info('Step 1: Quick load - Fetching open positions...');
+    await fetchOpenPositionsQuick(walletAddress);
+    logger.success('✓ Open positions loaded! Starting monitoring...');
 
-    // Step 2: Compute and display metrics
-    logger.info('Step 2: Computing performance metrics...');
-    const metrics = await computeMetrics(walletAddress);
-    displayMetrics(metrics);
-    await saveMetrics(walletAddress, metrics);
-
-    // Step 3: Start polling for new trades
-    logger.info('Step 3: Starting trade monitoring...');
+    // Step 2: Start polling immediately (user can start seeing new trades)
+    logger.info('Step 2: Starting real-time trade monitoring...');
     const poller = new TradePoller(walletAddress);
     poller.start(CONFIG.POLL_INTERVAL_MS);
+    logger.success('✓ Real-time monitoring active!');
+
+    // Step 3: BACKGROUND - Fetch closed positions and compute metrics (non-blocking)
+    logger.info('Step 3: Background - Loading closed positions and computing metrics...');
+
+    // Run in background - don't await
+    (async () => {
+      try {
+        await fetchClosedPositionsBackground(walletAddress);
+
+        // Compute metrics after closed positions are loaded
+        const metrics = await computeMetrics(walletAddress);
+        await saveMetrics(walletAddress, metrics);
+        displayMetrics(metrics);
+
+        logger.success('✓ Historical data and metrics loaded!');
+      } catch (error: any) {
+        logger.error(`Background tasks failed: ${error.message}`);
+      }
+    })();
 
     logger.success(`Wallet ${walletAddress} is now being tracked!`);
 

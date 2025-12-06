@@ -1,16 +1,15 @@
 /**
  * Initial Fetch Service
- * Fetches all historical data when a wallet is first added
+ * Fast initial load: Fetch open positions immediately
+ * Background: Load closed positions and historical data
  */
 
 import { fetchOpenPositions } from '../api/positions';
 import { fetchClosedPositions } from '../api/closedPositions';
-import { fetchHistoricalActivity } from '../api/activity';
 import { createLogger } from '../utils/logger';
 import PolymarketOpenPosition from '../../../models/PolymarketOpenPosition';
 import PolymarketClosedPosition from '../../../models/PolymarketClosedPosition';
-import PolymarketTrade from '../../../models/PolymarketTrade';
-import type { OpenPositionResponse, ClosedPositionResponse, ActivityResponse } from '../types/polymarket';
+import type { OpenPositionResponse, ClosedPositionResponse } from '../types/polymarket';
 
 const logger = createLogger('Initial Fetch');
 
@@ -172,7 +171,40 @@ async function saveTrades(
 }
 
 /**
+ * Quick fetch - Only open positions (fast initial load)
+ * Returns immediately so user sees their current positions
+ */
+export async function fetchOpenPositionsQuick(walletAddress: string): Promise<OpenPositionResponse[]> {
+  logger.info(`Quick fetch: Loading open positions for ${walletAddress}...`);
+
+  const openPositions = await fetchOpenPositions(walletAddress);
+  await saveOpenPositions(walletAddress, openPositions);
+
+  logger.success(`Quick fetch complete: ${openPositions.length} open positions loaded`);
+
+  return openPositions;
+}
+
+/**
+ * Background fetch - Closed positions and metrics (non-blocking)
+ * Runs after quick fetch, user doesn't wait for this
+ */
+export async function fetchClosedPositionsBackground(walletAddress: string): Promise<void> {
+  logger.info(`Background: Fetching closed positions for ${walletAddress}...`);
+
+  try {
+    const closedPositions = await fetchClosedPositions(walletAddress);
+    await saveClosedPositions(walletAddress, closedPositions);
+
+    logger.success(`Background: Saved ${closedPositions.length} closed positions`);
+  } catch (error: any) {
+    logger.error(`Background fetch failed: ${error.message}`);
+  }
+}
+
+/**
  * Fetch all data for a wallet (initial load)
+ * @deprecated Use fetchOpenPositionsQuick + fetchClosedPositionsBackground for better UX
  */
 export async function fetchAllDataForWallet(walletAddress: string): Promise<{
   openPositions: OpenPositionResponse[];
@@ -191,20 +223,16 @@ export async function fetchAllDataForWallet(walletAddress: string): Promise<{
     // 2. Fetch closed positions (last 30 days)
     const closedPositions = await fetchClosedPositions(walletAddress);
 
-    // 3. Fetch historical trades (last 30 days)
-    const trades = await fetchHistoricalActivity(walletAddress);
-
-    // 4. Save to MongoDB
+    // 3. Save to MongoDB
     await saveOpenPositions(walletAddress, openPositions);
     await saveClosedPositions(walletAddress, closedPositions);
-    await saveTrades(walletAddress, trades);
 
     logger.success(`Initial fetch completed for ${walletAddress}`);
 
     return {
       openPositions,
       closedPositions,
-      trades,
+      trades: [], // No longer fetching historical trades
     };
   } catch (error: any) {
     logger.error(`Initial fetch failed: ${error.message}`);
