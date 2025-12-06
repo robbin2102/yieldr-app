@@ -38,6 +38,7 @@ import { computeMetrics, displayMetrics, saveMetrics } from './services/metrics'
 import { TradePoller } from './services/poller';
 import { CONFIG } from './config';
 import { createLogger } from './utils/logger';
+import Trader from '../../models/Trader';
 
 const logger = createLogger('Main');
 
@@ -50,6 +51,19 @@ async function trackWallet(walletAddress: string): Promise<TradePoller> {
   console.log('='.repeat(80) + '\n');
 
   try {
+    // Update trader status to IN_PROGRESS
+    await Trader.findOneAndUpdate(
+      { walletAddress: walletAddress.toLowerCase() },
+      {
+        $set: {
+          polymarketSyncStatus: 'IN_PROGRESS',
+          polymarketSyncStartedAt: new Date(),
+          trackingStatus: 'ACTIVE'
+        }
+      },
+      { upsert: true }
+    );
+
     // Step 1: Initial fetch of all data
     logger.info('Step 1: Fetching all historical data...');
     await fetchAllDataForWallet(walletAddress);
@@ -59,6 +73,31 @@ async function trackWallet(walletAddress: string): Promise<TradePoller> {
     const metrics = await computeMetrics(walletAddress);
     displayMetrics(metrics);
     await saveMetrics(walletAddress, metrics);
+
+    // Update trader with initial metrics
+    await Trader.findOneAndUpdate(
+      { walletAddress: walletAddress.toLowerCase() },
+      {
+        $set: {
+          'metrics.totalPnL30d': metrics.pnl30d,
+          'metrics.totalPnL7d': metrics.pnl7d,
+          'metrics.totalPnL1d': metrics.pnl1d,
+          'metrics.roi30d': metrics.roi30d,
+          'metrics.roi7d': metrics.roi7d,
+          'metrics.roi1d': metrics.roi1d,
+          'metrics.overallRoi': metrics.overallRoi,
+          'metrics.winRate': metrics.winRate,
+          'metrics.totalInvested': metrics.totalInvested,
+          'metrics.openPositions': metrics.openPositionsCount,
+          'metrics.closedPositions': metrics.closedPositionsCount,
+          'metrics.sharpeRatio': metrics.sharpeRatio,
+          polymarketSyncStatus: 'COMPLETED',
+          polymarketSyncCompletedAt: new Date(),
+          polymarketLastSyncAt: new Date(),
+          lastMetricsSync: new Date()
+        }
+      }
+    );
 
     // Step 3: Start polling for new trades
     logger.info('Step 3: Starting trade monitoring...');
@@ -70,7 +109,73 @@ async function trackWallet(walletAddress: string): Promise<TradePoller> {
     return poller;
   } catch (error: any) {
     logger.error(`Failed to track wallet ${walletAddress}: ${error.message}`);
+
+    // Update trader status to FAILED
+    await Trader.findOneAndUpdate(
+      { walletAddress: walletAddress.toLowerCase() },
+      {
+        $set: {
+          polymarketSyncStatus: 'FAILED',
+          polymarketSyncError: error.message,
+          trackingStatus: 'ERROR'
+        }
+      }
+    );
+
     throw error;
+  }
+}
+
+/**
+ * Get wallets to track from both ENV and Database
+ */
+async function getWalletsToTrack(): Promise<string[]> {
+  const wallets = new Set<string>();
+
+  // 1. Get wallets from ENV (backward compatibility)
+  const envWallets = CONFIG.WALLETS;
+  envWallets.forEach(w => wallets.add(w.toLowerCase()));
+
+  // 2. Get wallets from traders collection (ACTIVE status only)
+  const activeTraders = await Trader.find({
+    trackingStatus: 'ACTIVE'
+  }).select('walletAddress');
+
+  activeTraders.forEach(trader => {
+    wallets.add(trader.walletAddress.toLowerCase());
+  });
+
+  return Array.from(wallets);
+}
+
+/**
+ * Check for new traders and start tracking them
+ */
+async function checkForNewTraders(
+  currentPollers: Map<string, TradePoller>
+): Promise<void> {
+  try {
+    const walletsToTrack = await getWalletsToTrack();
+
+    for (const wallet of walletsToTrack) {
+      if (!currentPollers.has(wallet)) {
+        logger.info(`New trader detected: ${wallet}`);
+        const poller = await trackWallet(wallet);
+        currentPollers.set(wallet, poller);
+        logger.success(`Started tracking ${wallet}`);
+      }
+    }
+
+    // Stop tracking wallets that are no longer active
+    for (const [wallet, poller] of currentPollers.entries()) {
+      if (!walletsToTrack.includes(wallet)) {
+        logger.info(`Stopping tracking for ${wallet}`);
+        poller.stop();
+        currentPollers.delete(wallet);
+      }
+    }
+  } catch (error: any) {
+    logger.error(`Error checking for new traders: ${error.message}`);
   }
 }
 
@@ -90,39 +195,52 @@ async function main() {
     await connectDB();
     logger.success('Connected to MongoDB');
 
-    // Get wallets from config
-    const wallets = CONFIG.WALLETS;
+    // Get wallets from both ENV and DB
+    const wallets = await getWalletsToTrack();
 
     if (wallets.length === 0) {
-      logger.error('No wallets configured!');
-      logger.info('Please set POLYMARKET_WALLETS environment variable');
-      logger.info('Example: POLYMARKET_WALLETS=0xabc...,0xdef...');
-      process.exit(1);
+      logger.warn('No wallets to track!');
+      logger.info('Add wallets by:');
+      logger.info('1. Setting POLYMARKET_WALLETS environment variable');
+      logger.info('2. Adding traders to the "traders" collection in MongoDB');
+      logger.info('\nWaiting for traders to be added...');
+    } else {
+      logger.info(`Found ${wallets.length} wallet(s) to track`);
     }
 
-    logger.info(`Tracking ${wallets.length} wallet(s): ${wallets.join(', ')}`);
-
     // Track all wallets
-    const pollers: TradePoller[] = [];
+    const pollers = new Map<string, TradePoller>();
 
     for (const wallet of wallets) {
-      const poller = await trackWallet(wallet);
-      pollers.push(poller);
+      try {
+        const poller = await trackWallet(wallet);
+        pollers.set(wallet.toLowerCase(), poller);
+      } catch (error: any) {
+        logger.error(`Failed to start tracking ${wallet}: ${error.message}`);
+      }
     }
 
     // Display status
     console.log('\n' + '='.repeat(80));
     console.log('SERVICE STATUS: RUNNING');
     console.log('='.repeat(80));
-    console.log(`\n✅ Tracking ${pollers.length} wallet(s)`);
+    console.log(`\n✅ Tracking ${pollers.size} wallet(s)`);
     console.log(`⏱️  Polling interval: ${CONFIG.POLL_INTERVAL_MS / 1000} seconds`);
     console.log(`🔄 API delay: ${CONFIG.API_DELAY_MS}ms`);
+    console.log(`🔍 Checking for new traders every 60 seconds`);
     console.log('\nPress Ctrl+C to stop\n');
+
+    // Periodically check for new traders (every 60 seconds)
+    const newTraderCheckInterval = setInterval(async () => {
+      await checkForNewTraders(pollers);
+    }, 60000);
 
     // Handle graceful shutdown
     process.on('SIGINT', () => {
       console.log('\n\n' + '='.repeat(80));
       logger.info('Shutting down gracefully...');
+
+      clearInterval(newTraderCheckInterval);
 
       pollers.forEach((poller) => {
         poller.stop();
