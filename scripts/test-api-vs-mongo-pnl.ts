@@ -7,9 +7,16 @@
  * Purpose: Determine if we're missing closed positions in MongoDB
  */
 
-import '../services/polymarket-tracker/config/database';
-import { fetchClosedPositions } from '../services/polymarket-tracker/api/closedPositions';
-import PolymarketClosedPosition from '../models/PolymarketClosedPosition';
+import dotenv from 'dotenv';
+import path from 'path';
+
+// Load environment variables FIRST
+const envPath = path.resolve(process.cwd(), '.env.local');
+dotenv.config({ path: envPath });
+
+import connectDB from '../lib/mongoose.js';
+import { fetchClosedPositions } from '../services/polymarket-tracker/api/closedPositions.js';
+import PolymarketClosedPosition from '../models/PolymarketClosedPosition.js';
 
 const TEST_WALLET = '0xecd55daa7c6900683b804d1d4db935fbfabe43f4';
 
@@ -54,6 +61,9 @@ async function main() {
   console.log('\n' + '='.repeat(80));
   console.log('🔍 API vs MONGODB PnL COMPARISON TEST');
   console.log('='.repeat(80) + '\n');
+
+  // Connect to database
+  await connectDB();
 
   try {
     // ========================================================================
