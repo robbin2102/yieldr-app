@@ -29,6 +29,7 @@ export async function fetchHistoricalActivity(
       user: walletAddress,
       type: ACTIVITY_TYPES.TRADE, // Only TRADE - captures all buy/sell activity
       start,
+      end: now, // Add end parameter - API requires bounded time window
       limit: CONFIG.LIMITS.ACTIVITY,
       offset,
       sortBy: 'TIMESTAMP',
