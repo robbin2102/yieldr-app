@@ -4,6 +4,7 @@
  * Background: Load closed positions and historical data
  */
 
+import { randomUUID } from 'crypto';
 import { fetchOpenPositions } from '../api/positions';
 import { fetchClosedPositions } from '../api/closedPositions';
 import { createLogger } from '../utils/logger';
@@ -78,14 +79,13 @@ async function saveClosedPositions(
     const amountWon = totalBet + pos.realizedPnl;
     const roi = totalBet > 0 ? (pos.realizedPnl / totalBet) * 100 : 0;
 
-    // Create a unique trade ID from position data
-    // This ensures each unique close event gets its own document
-    const tradeId = `${walletAddress.toLowerCase()}_${pos.conditionId}_${pos.asset}_${pos.timestamp}_${pos.totalBought}_${pos.avgPrice}`;
+    // Generate a random UUID for guaranteed uniqueness
+    const tradeId = randomUUID();
 
     return {
       updateOne: {
         filter: {
-          tradeId, // Use unique trade ID as the only filter
+          tradeId, // Use unique UUID as the only filter
         },
         update: {
           $set: {

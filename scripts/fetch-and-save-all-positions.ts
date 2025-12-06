@@ -10,6 +10,7 @@
 
 import dotenv from 'dotenv';
 import path from 'path';
+import { randomUUID } from 'crypto';
 
 const envPath = path.resolve(process.cwd(), '.env.local');
 dotenv.config({ path: envPath });
@@ -66,14 +67,13 @@ async function main() {
     // ========================================================================
     console.log('💾 STEP 3: Preparing documents...\n');
 
-    const documents = apiPositions.map((pos, index) => {
+    const documents = apiPositions.map((pos) => {
       const totalBet = pos.avgPrice * pos.totalBought;
       const amountWon = totalBet + pos.realizedPnl;
       const roi = totalBet > 0 ? (pos.realizedPnl / totalBet) * 100 : 0;
 
-      // Create unique ID that includes ALL fields to ensure uniqueness
-      // Add index to handle any edge cases where all fields are identical
-      const tradeId = `${WALLET.toLowerCase()}_${pos.conditionId}_${pos.asset}_${pos.timestamp}_${pos.totalBought}_${pos.avgPrice}_${pos.realizedPnl}_${index}`;
+      // Generate a random UUID for guaranteed uniqueness
+      const tradeId = randomUUID();
 
       return {
         tradeId,

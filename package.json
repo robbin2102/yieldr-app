@@ -21,6 +21,7 @@
     "polymarket:check-asset-dupes": "DOTENV_CONFIG_PATH=.env.local node --require dotenv/config node_modules/.bin/tsx scripts/check-asset-duplicates.ts",
     "polymarket:inspect-api": "DOTENV_CONFIG_PATH=.env.local node --require dotenv/config node_modules/.bin/tsx scripts/inspect-api-fields.ts",
     "polymarket:clear": "DOTENV_CONFIG_PATH=.env.local node --require dotenv/config node_modules/.bin/tsx scripts/clear-closed-positions.ts",
+    "polymarket:drop-indexes": "DOTENV_CONFIG_PATH=.env.local node --require dotenv/config node_modules/.bin/tsx scripts/drop-old-indexes.ts",
     "polymarket:check-api": "npx tsx scripts/check-raw-closed-position-api.ts",
     "backfill": "tsx scripts/backfill-all-managers.ts",
     "backfill:wallet": "tsx scripts/backfill-single-wallet.ts",
