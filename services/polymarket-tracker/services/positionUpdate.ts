@@ -100,6 +100,7 @@ export async function updateClosedPositions(walletAddress: string): Promise<void
         filter: {
           walletAddress: walletAddress.toLowerCase(),
           conditionId: pos.conditionId,
+          closedAt: new Date(pos.timestamp * 1000), // Add timestamp for uniqueness
         },
         update: {
           $set: {
@@ -117,7 +118,8 @@ export async function updateClosedPositions(walletAddress: string): Promise<void
             amountWon,
             roi,
             won: pos.realizedPnl > 0,
-            closedAt: new Date(pos.closedAt),
+            closedAt: new Date(pos.timestamp * 1000),
+            endDate: pos.endDate ? new Date(pos.endDate) : undefined,
             fetchedAt: new Date(),
             updatedAt: new Date(),
           },

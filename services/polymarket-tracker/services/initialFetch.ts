@@ -84,6 +84,7 @@ async function saveClosedPositions(
         filter: {
           walletAddress: walletAddress.toLowerCase(),
           conditionId: pos.conditionId,
+          closedAt: new Date(pos.timestamp * 1000), // Add timestamp for uniqueness
         },
         update: {
           $set: {
@@ -104,6 +105,7 @@ async function saveClosedPositions(
             closedAt: new Date(pos.timestamp * 1000),
             endDate: pos.endDate ? new Date(pos.endDate) : undefined,
             fetchedAt: new Date(),
+            updatedAt: new Date(),
           },
           $setOnInsert: {
             createdAt: new Date(),

@@ -29,6 +29,12 @@ export async function computeMetrics(walletAddress: string): Promise<TraderMetri
     .sort({ closedAt: -1 })
     .lean();
 
+  // Split open positions into active vs redeemable
+  // Redeemable positions are markets that resolved but haven't been redeemed yet
+  // They should be treated as "closed" for PnL purposes
+  const activeOpenPositions = openPositions.filter((p) => !p.redeemable);
+  const redeemablePositions = openPositions.filter((p) => p.redeemable);
+
   // Time-based filters
   const now = Date.now();
   const day1Ago = new Date(now - 1 * 24 * 60 * 60 * 1000);
@@ -39,13 +45,17 @@ export async function computeMetrics(walletAddress: string): Promise<TraderMetri
   const closedPositions7d = allClosedPositions.filter((p) => p.closedAt >= day7Ago);
   const closedPositions30d = allClosedPositions.filter((p) => p.closedAt >= day30Ago);
 
-  // === OPEN POSITIONS ===
-  const currentPositionValue = openPositions.reduce((sum, p) => sum + p.currentValue, 0);
-  const initialInvestment = openPositions.reduce((sum, p) => sum + p.initialValue, 0);
-  const totalUnrealizedPnl = openPositions.reduce((sum, p) => sum + p.cashPnl, 0);
+  // === ACTIVE OPEN POSITIONS ===
+  const currentPositionValue = activeOpenPositions.reduce((sum, p) => sum + p.currentValue, 0);
+  const initialInvestment = activeOpenPositions.reduce((sum, p) => sum + p.initialValue, 0);
+  const totalUnrealizedPnl = activeOpenPositions.reduce((sum, p) => sum + p.cashPnl, 0);
+
+  // === REDEEMABLE POSITIONS (treat as realized) ===
+  const redeemablePnl = redeemablePositions.reduce((sum, p) => sum + p.cashPnl, 0);
+  const redeemableInvested = redeemablePositions.reduce((sum, p) => sum + p.initialValue, 0);
 
   // === CLOSED POSITIONS (ALL) ===
-  const totalRealizedPnl = allClosedPositions.reduce(
+  const closedRealizedPnl = allClosedPositions.reduce(
     (sum, p) => sum + p.realizedPnl,
     0
   );
@@ -53,8 +63,12 @@ export async function computeMetrics(walletAddress: string): Promise<TraderMetri
     (sum, p) => sum + p.totalBet,
     0
   );
-  const wins = allClosedPositions.filter((p) => p.won).length;
-  const losses = allClosedPositions.filter((p) => !p.won).length;
+
+  // Total realized PnL includes both closed positions and redeemable positions
+  const totalRealizedPnl = closedRealizedPnl + redeemablePnl;
+
+  const wins = allClosedPositions.filter((p) => p.won).length + redeemablePositions.filter((p) => p.cashPnl > 0).length;
+  const losses = allClosedPositions.filter((p) => !p.won).length + redeemablePositions.filter((p) => p.cashPnl <= 0).length;
 
   // === TIME-BASED PnL ===
   const pnl1d = closedPositions1d.reduce((sum, p) => sum + p.realizedPnl, 0);
@@ -71,27 +85,34 @@ export async function computeMetrics(walletAddress: string): Promise<TraderMetri
 
   // === COMBINED ===
   const totalPnl = totalUnrealizedPnl + totalRealizedPnl;
-  const totalInvested = initialInvestment + closedInvested;
+  const totalInvested = initialInvestment + closedInvested + redeemableInvested;
   const overallRoi = totalInvested > 0 ? (totalPnl / totalInvested) * 100 : 0;
 
   // === SHARPE RATIO ===
-  const sharpeRatio = computeSharpeRatio(allClosedPositions);
+  // Include redeemable positions in Sharpe calculation
+  const allRealizedPositions = [
+    ...allClosedPositions.map(p => ({ realizedPnl: p.realizedPnl, totalBet: p.totalBet })),
+    ...redeemablePositions.map(p => ({ realizedPnl: p.cashPnl, totalBet: p.initialValue }))
+  ];
+  const sharpeRatio = computeSharpeRatio(allRealizedPositions);
+
+  const totalClosedAndRedeemableCount = allClosedPositions.length + redeemablePositions.length;
 
   const metrics: TraderMetrics = {
-    // Open positions
-    openPositionsCount: openPositions.length,
+    // Open positions (only active, not redeemable)
+    openPositionsCount: activeOpenPositions.length,
     currentPositionValue,
     initialInvestment,
     totalUnrealizedPnl,
 
-    // Closed positions
-    closedPositionsCount: allClosedPositions.length,
-    closedInvestment: closedInvested,
+    // Closed positions (includes redeemable)
+    closedPositionsCount: totalClosedAndRedeemableCount,
+    closedInvestment: closedInvested + redeemableInvested,
     totalRealizedPnl,
     wins,
     losses,
-    winRate: allClosedPositions.length > 0
-      ? (wins / allClosedPositions.length) * 100
+    winRate: totalClosedAndRedeemableCount > 0
+      ? (wins / totalClosedAndRedeemableCount) * 100
       : 0,
 
     // Combined

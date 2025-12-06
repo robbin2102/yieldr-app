@@ -106,7 +106,7 @@ const PolymarketClosedPositionSchema = new mongoose.Schema({
 
 // Compound indexes for efficient queries
 PolymarketClosedPositionSchema.index({ walletAddress: 1, closedAt: -1 });
-PolymarketClosedPositionSchema.index({ walletAddress: 1, conditionId: 1 });
+PolymarketClosedPositionSchema.index({ walletAddress: 1, conditionId: 1, closedAt: 1 }, { unique: true }); // Unique constraint to prevent duplicate overwrites
 PolymarketClosedPositionSchema.index({ closedAt: 1 }); // For time-based queries (1d, 7d, 30d)
 
 export default mongoose.models.PolymarketClosedPosition ||

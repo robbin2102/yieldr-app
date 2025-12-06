@@ -32,7 +32,7 @@ export async function fetchHistoricalActivity(
       limit: CONFIG.LIMITS.ACTIVITY,
       offset,
       sortBy: 'TIMESTAMP',
-      sortDirection: 'DESC',
+      sortDirection: 'ASC', // ASC for proper pagination with time filters
     });
 
     return fetchWithDelay<ActivityResponse[]>(url);
