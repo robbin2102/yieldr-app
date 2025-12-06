@@ -3,6 +3,7 @@
  * Updates open and closed positions after new trades
  */
 
+import { randomUUID } from 'crypto';
 import { fetchOpenPositions } from '../api/positions';
 import { fetchClosedPositions } from '../api/closedPositions';
 import { createLogger } from '../utils/logger';
@@ -34,6 +35,7 @@ export async function updateOpenPositions(walletAddress: string): Promise<void> 
       filter: {
         walletAddress: walletAddress.toLowerCase(),
         conditionId: pos.conditionId,
+        asset: pos.asset, // Required to differentiate Up/Down positions
       },
       update: {
         $set: {
@@ -95,15 +97,17 @@ export async function updateClosedPositions(walletAddress: string): Promise<void
     const amountWon = totalBet + pos.realizedPnl;
     const roi = totalBet > 0 ? (pos.realizedPnl / totalBet) * 100 : 0;
 
+    // Generate a random UUID for guaranteed uniqueness
+    const tradeId = randomUUID();
+
     return {
       updateOne: {
         filter: {
-          walletAddress: walletAddress.toLowerCase(),
-          conditionId: pos.conditionId,
-          closedAt: new Date(pos.timestamp * 1000), // Add timestamp for uniqueness
+          tradeId, // Use unique UUID as the only filter
         },
         update: {
           $set: {
+            tradeId,
             walletAddress: walletAddress.toLowerCase(),
             conditionId: pos.conditionId,
             asset: pos.asset,
