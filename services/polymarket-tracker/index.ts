@@ -150,6 +150,8 @@ async function getWalletsToTrack(): Promise<string[]> {
 
 /**
  * Check for new traders and start tracking them
+ * Note: This function is available for manual triggering via API
+ * The service does NOT automatically poll for new traders
  */
 async function checkForNewTraders(
   currentPollers: Map<string, TradePoller>
@@ -203,10 +205,11 @@ async function main() {
       logger.info('Add wallets by:');
       logger.info('1. Setting POLYMARKET_WALLETS environment variable');
       logger.info('2. Adding traders to the "traders" collection in MongoDB');
-      logger.info('\nWaiting for traders to be added...');
-    } else {
-      logger.info(`Found ${wallets.length} wallet(s) to track`);
+      logger.info('\nThen restart the service to start tracking.');
+      process.exit(1);
     }
+
+    logger.info(`Found ${wallets.length} wallet(s) to track`);
 
     // Track all wallets
     const pollers = new Map<string, TradePoller>();
@@ -227,20 +230,12 @@ async function main() {
     console.log(`\n✅ Tracking ${pollers.size} wallet(s)`);
     console.log(`⏱️  Polling interval: ${CONFIG.POLL_INTERVAL_MS / 1000} seconds`);
     console.log(`🔄 API delay: ${CONFIG.API_DELAY_MS}ms`);
-    console.log(`🔍 Checking for new traders every 60 seconds`);
     console.log('\nPress Ctrl+C to stop\n');
-
-    // Periodically check for new traders (every 60 seconds)
-    const newTraderCheckInterval = setInterval(async () => {
-      await checkForNewTraders(pollers);
-    }, 60000);
 
     // Handle graceful shutdown
     process.on('SIGINT', () => {
       console.log('\n\n' + '='.repeat(80));
       logger.info('Shutting down gracefully...');
-
-      clearInterval(newTraderCheckInterval);
 
       pollers.forEach((poller) => {
         poller.stop();
