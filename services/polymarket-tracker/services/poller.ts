@@ -7,7 +7,7 @@ import { fetchNewActivity } from '../api/activity';
 import { createLogger } from '../utils/logger';
 import PolymarketTrade from '../../../models/PolymarketTrade';
 import { computeMetrics, saveMetrics } from './metrics';
-import { updateAllPositions } from './positionUpdate';
+import { updateOpenPositions } from './positionUpdate';
 import type { ActivityResponse } from '../types/polymarket';
 
 const logger = createLogger('Poller');
@@ -92,8 +92,8 @@ export class TradePoller {
         );
       });
 
-      // Update positions from API (to get fresh data after trades)
-      await updateAllPositions(this.walletAddress);
+      // Update ONLY open positions from API (closed positions are immutable)
+      await updateOpenPositions(this.walletAddress);
 
       // Compute and save updated metrics
       const metrics = await computeMetrics(this.walletAddress);
