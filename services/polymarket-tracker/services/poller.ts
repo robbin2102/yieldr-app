@@ -7,6 +7,7 @@ import { fetchNewActivity } from '../api/activity';
 import { createLogger } from '../utils/logger';
 import PolymarketTrade from '../../../models/PolymarketTrade';
 import { computeMetrics, saveMetrics } from './metrics';
+import { updateAllPositions } from './positionUpdate';
 import type { ActivityResponse } from '../types/polymarket';
 
 const logger = createLogger('Poller');
@@ -91,10 +92,13 @@ export class TradePoller {
         );
       });
 
-      // Update metrics after new trades
+      // Update positions from API (to get fresh data after trades)
+      await updateAllPositions(this.walletAddress);
+
+      // Compute and save updated metrics
       const metrics = await computeMetrics(this.walletAddress);
       await saveMetrics(this.walletAddress, metrics);
-      logger.debug('Metrics updated and saved');
+      logger.success('Positions and metrics updated');
     } catch (error: any) {
       logger.error(`Poll error for ${this.walletAddress}: ${error.message}`);
     } finally {
