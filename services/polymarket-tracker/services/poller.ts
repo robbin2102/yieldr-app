@@ -9,6 +9,7 @@ import { createLogger } from '../utils/logger';
 import PolymarketTrade from '../../../models/PolymarketTrade';
 import { computeMetrics, saveMetrics } from './metrics';
 import { updateOpenPositions } from './positionUpdate';
+import { CONFIG } from '../config';
 import type { ActivityResponse } from '../types/polymarket';
 
 const logger = createLogger('Poller');
@@ -29,8 +30,8 @@ export class TradePoller {
   /**
    * Start polling at specified intervals
    */
-  start(tradeIntervalMs: number = 60000): void {
-    const positionRefreshMs = 5 * 60 * 1000; // 5 minutes
+  start(tradeIntervalMs: number = CONFIG.POLL_INTERVAL_MS): void {
+    const positionRefreshMs = CONFIG.POSITION_REFRESH_MS;
 
     logger.info(
       `Starting poller for ${this.walletAddress} (trades: ${tradeIntervalMs / 1000}s, positions: ${positionRefreshMs / 1000}s)`

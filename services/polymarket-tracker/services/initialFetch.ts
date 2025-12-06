@@ -205,11 +205,14 @@ export async function fetchClosedPositionsBackground(
       walletAddress: walletAddress.toLowerCase()
     });
 
-    // Check if data is stale (older than 1 hour)
+    // Check if data is stale (older than 1 hour) OR was fetched before 2025-12-06 18:30 UTC
+    // (data fetched before that time may not have the 'start' parameter fix)
+    const staleCutoff = new Date('2025-12-06T18:30:00Z');
+    const isOldData = latestPosition && latestPosition.fetchedAt < staleCutoff;
     const isStale = latestPosition &&
       (Date.now() - latestPosition.fetchedAt.getTime() > 60 * 60 * 1000);
 
-    if (existingCount > 0 && !forceRefresh && !isStale) {
+    if (existingCount > 0 && !forceRefresh && !isStale && !isOldData) {
       logger.info(`Background: Wallet has ${existingCount} recent closed positions, skipping fetch`);
       logger.info(`Last fetched: ${latestPosition?.fetchedAt.toISOString()}`);
       return;
@@ -217,6 +220,10 @@ export async function fetchClosedPositionsBackground(
 
     if (isStale) {
       logger.warn(`Background: Data is stale (last fetch: ${latestPosition?.fetchedAt.toISOString()}), refreshing...`);
+    }
+
+    if (isOldData) {
+      logger.warn(`Background: Data was fetched with old code (before time filter fix), refreshing...`);
     }
 
     logger.info(`Background: Fetching closed positions for ${walletAddress}...`);
