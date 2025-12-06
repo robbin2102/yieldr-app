@@ -15,6 +15,7 @@
     "polymarket:test-api": "tsx scripts/test-polymarket-api.ts",
     "polymarket:diagnose": "DOTENV_CONFIG_PATH=.env.local node --require dotenv/config node_modules/.bin/tsx scripts/diagnose-pnl-discrepancy.ts",
     "polymarket:refresh": "DOTENV_CONFIG_PATH=.env.local node --require dotenv/config node_modules/.bin/tsx scripts/force-refresh-closed-positions.ts",
+    "polymarket:fetch-all": "DOTENV_CONFIG_PATH=.env.local node --require dotenv/config node_modules/.bin/tsx scripts/fetch-and-save-all-positions.ts",
     "polymarket:test-pnl": "DOTENV_CONFIG_PATH=.env.local node --require dotenv/config node_modules/.bin/tsx scripts/test-api-vs-mongo-pnl.ts",
     "polymarket:check-dupes": "DOTENV_CONFIG_PATH=.env.local node --require dotenv/config node_modules/.bin/tsx scripts/check-duplicate-keys.ts",
     "polymarket:check-asset-dupes": "DOTENV_CONFIG_PATH=.env.local node --require dotenv/config node_modules/.bin/tsx scripts/check-asset-duplicates.ts",
