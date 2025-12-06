@@ -83,7 +83,8 @@ async function saveClosedPositions(
         filter: {
           walletAddress: walletAddress.toLowerCase(),
           conditionId: pos.conditionId,
-          closedAt: new Date(pos.timestamp * 1000), // Add timestamp for uniqueness
+          asset: pos.asset, // Required to differentiate Up/Down positions
+          closedAt: new Date(pos.timestamp * 1000),
         },
         update: {
           $set: {
