@@ -6,14 +6,9 @@
  * 2. Fetches fresh data from API
  * 3. Verifies data integrity
  * 4. Displays comprehensive summary
+ *
+ * Usage: npm run polymarket:prod-test
  */
-
-import dotenv from 'dotenv';
-import path from 'path';
-
-// Load environment variables
-const envPath = path.resolve(process.cwd(), '.env.local');
-dotenv.config({ path: envPath });
 
 import connectDB from '../lib/mongoose';
 import PolymarketOpenPosition from '../models/PolymarketOpenPosition';
@@ -121,12 +116,26 @@ async function main() {
 
     console.log('\n💰 PERFORMANCE METRICS:');
     console.log(`   Total PnL:        $${metrics.totalPnl.toFixed(2)}`);
-    console.log(`   Total Bet:        $${metrics.totalBet.toFixed(2)}`);
-    console.log(`   ROI:              ${metrics.roi.toFixed(2)}%`);
     console.log(`   Win Rate:         ${metrics.winRate.toFixed(2)}%`);
-    console.log(`   Total Trades:     ${metrics.totalTrades}`);
+    console.log(`   Total Trades:     ${closedPositions.length}`);
     console.log(`   Wins:             ${metrics.wins}`);
     console.log(`   Losses:           ${metrics.losses}`);
+
+    console.log('\n💵 PROFIT/LOSS BREAKDOWN:');
+    console.log(`   Total Won:        $${metrics.totalWon.toFixed(2)}`);
+    console.log(`   Total Lost:       $${metrics.totalLost.toFixed(2)}`);
+    console.log(`   Profit Factor:    ${metrics.profitFactor.toFixed(2)}x`);
+    console.log(`                     (For every $1 lost, earning $${metrics.profitFactor.toFixed(2)})`);
+
+    console.log('\n💼 CAPITAL ANALYSIS:');
+    console.log(`   Avg Bet Size:     $${metrics.avgBetSize.toFixed(2)}`);
+    console.log(`   Median Bet Size:  $${metrics.medianBetSize.toFixed(2)}`);
+    console.log(`   Max Bet Size:     $${metrics.maxBetSize.toFixed(2)}`);
+
+    console.log('\n🎯 RETURN ON CAPITAL (Accurate ROI):');
+    console.log(`   ROI on Avg Bet:   ${metrics.roiOnAvgCapital.toFixed(2)}%`);
+    console.log(`   ROI on Median:    ${metrics.roiOnMedianCapital.toFixed(2)}%`);
+    console.log(`   ROI on Max:       ${metrics.roiOnMaxCapital.toFixed(2)}%`);
 
     console.log('\n📊 PNL BY PERIOD:');
     console.log(`   1 Day:            $${metrics.pnl1d.toFixed(2)}`);

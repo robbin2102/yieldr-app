@@ -104,6 +104,43 @@ export async function computeMetrics(walletAddress: string): Promise<TraderMetri
 
   const totalClosedAndRedeemableCount = allClosedPositions.length + redeemablePositions.length;
 
+  // === PROFIT FACTOR ===
+  // Total Won / Total Lost (>1.0 means profitable, 1.5+ is strong, 2.0+ is exceptional)
+  const totalWon = allRealizedPositions
+    .filter(p => p.realizedPnl > 0)
+    .reduce((sum, p) => sum + p.realizedPnl, 0);
+
+  const totalLost = Math.abs(
+    allRealizedPositions
+      .filter(p => p.realizedPnl <= 0)
+      .reduce((sum, p) => sum + p.realizedPnl, 0)
+  );
+
+  const profitFactor = totalLost > 0 ? totalWon / totalLost : totalWon > 0 ? 999 : 0;
+
+  // === CAPITAL ANALYSIS (for accurate ROI) ===
+  // Trader circulates same capital across positions, so total invested is misleading
+  // Use bet size distribution to estimate actual capital deployed
+  const betSizes = allRealizedPositions.map(p => p.totalBet).sort((a, b) => a - b);
+
+  const avgBetSize = betSizes.length > 0
+    ? betSizes.reduce((sum, bet) => sum + bet, 0) / betSizes.length
+    : 0;
+
+  const medianBetSize = betSizes.length > 0
+    ? betSizes.length % 2 === 0
+      ? (betSizes[betSizes.length / 2 - 1] + betSizes[betSizes.length / 2]) / 2
+      : betSizes[Math.floor(betSizes.length / 2)]
+    : 0;
+
+  const maxBetSize = betSizes.length > 0 ? betSizes[betSizes.length - 1] : 0;
+
+  // Capital-based ROI (more accurate than invested-based)
+  // These show what % return on actual capital, not cumulative bets
+  const roiOnAvgCapital = avgBetSize > 0 ? (totalPnl / avgBetSize) * 100 : 0;
+  const roiOnMedianCapital = medianBetSize > 0 ? (totalPnl / medianBetSize) * 100 : 0;
+  const roiOnMaxCapital = maxBetSize > 0 ? (totalPnl / maxBetSize) * 100 : 0;
+
   const metrics: TraderMetrics = {
     // Open positions (only active, not redeemable)
     openPositionsCount: activeOpenPositions.length,
@@ -136,6 +173,19 @@ export async function computeMetrics(walletAddress: string): Promise<TraderMetri
 
     // Risk metrics
     sharpeRatio,
+    profitFactor,
+
+    // Capital analysis
+    avgBetSize,
+    medianBetSize,
+    maxBetSize,
+    totalWon,
+    totalLost,
+
+    // Capital-based ROI
+    roiOnAvgCapital,
+    roiOnMedianCapital,
+    roiOnMaxCapital,
   };
 
   logger.success('Metrics computed successfully');
@@ -223,9 +273,25 @@ export function displayMetrics(metrics: TraderMetrics): void {
   console.log(`   7d  PnL: $${metrics.pnl7d.toFixed(2)}  |  ROI: ${metrics.roi7d.toFixed(2)}%`);
   console.log(`   30d PnL: $${metrics.pnl30d.toFixed(2)}  |  ROI: ${metrics.roi30d.toFixed(2)}%`);
 
-  console.log('\n🎯 OVERALL:');
-  console.log(`   Overall ROI:    ${metrics.overallRoi.toFixed(2)}%`);
-  console.log(`   Sharpe Ratio:   ${metrics.sharpeRatio.toFixed(3)}`);
+  console.log('\n💵 PROFIT/LOSS BREAKDOWN:');
+  console.log(`   Total Won:      $${metrics.totalWon.toFixed(2)}`);
+  console.log(`   Total Lost:     $${metrics.totalLost.toFixed(2)}`);
+  console.log(`   Profit Factor:  ${metrics.profitFactor.toFixed(2)}x`);
+  console.log(`                   (For every $1 lost, earning $${metrics.profitFactor.toFixed(2)})`);
+
+  console.log('\n💼 CAPITAL ANALYSIS:');
+  console.log(`   Avg Bet Size:    $${metrics.avgBetSize.toFixed(2)}`);
+  console.log(`   Median Bet Size: $${metrics.medianBetSize.toFixed(2)}`);
+  console.log(`   Max Bet Size:    $${metrics.maxBetSize.toFixed(2)}`);
+
+  console.log('\n🎯 RETURN ON CAPITAL (Accurate ROI):');
+  console.log(`   ROI on Avg Bet:    ${metrics.roiOnAvgCapital.toFixed(2)}%`);
+  console.log(`   ROI on Median Bet: ${metrics.roiOnMedianCapital.toFixed(2)}%`);
+  console.log(`   ROI on Max Bet:    ${metrics.roiOnMaxCapital.toFixed(2)}%`);
+
+  console.log('\n📊 TRADITIONAL METRICS:');
+  console.log(`   Overall ROI (on total invested): ${metrics.overallRoi.toFixed(2)}%`);
+  console.log(`   Sharpe Ratio:                    ${metrics.sharpeRatio.toFixed(3)}`);
 
   console.log('\n' + '='.repeat(80) + '\n');
 }

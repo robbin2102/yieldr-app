@@ -16,7 +16,7 @@
     "polymarket:clear-all": "DOTENV_CONFIG_PATH=.env.local node --require dotenv/config node_modules/.bin/tsx scripts/clear-all-polymarket-data.ts",
     "polymarket:verify": "tsx scripts/verify-polymarket-data.ts",
     "polymarket:verify-all": "tsx scripts/verify-all-data.ts",
-    "polymarket:prod-test": "tsx scripts/test-production-flow.ts",
+    "polymarket:prod-test": "DOTENV_CONFIG_PATH=.env.local node --require dotenv/config node_modules/.bin/tsx scripts/test-production-flow.ts",
     "polymarket:test-api": "tsx scripts/test-polymarket-api.ts",
     "polymarket:diagnose": "DOTENV_CONFIG_PATH=.env.local node --require dotenv/config node_modules/.bin/tsx scripts/diagnose-pnl-discrepancy.ts",
     "polymarket:refresh": "DOTENV_CONFIG_PATH=.env.local node --require dotenv/config node_modules/.bin/tsx scripts/force-refresh-closed-positions.ts",

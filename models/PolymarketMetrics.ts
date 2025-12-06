@@ -37,6 +37,19 @@ export interface IPolymarketMetrics extends Document {
 
   // Risk Metrics
   sharpeRatio: number;
+  profitFactor: number;
+
+  // Capital Analysis
+  avgBetSize: number;
+  medianBetSize: number;
+  maxBetSize: number;
+  totalWon: number;
+  totalLost: number;
+
+  // Capital-based ROI
+  roiOnAvgCapital: number;
+  roiOnMedianCapital: number;
+  roiOnMaxCapital: number;
 
   // Metadata
   createdAt: Date;
@@ -79,6 +92,19 @@ const PolymarketMetricsSchema = new Schema<IPolymarketMetrics>({
 
   // Risk Metrics
   sharpeRatio: { type: Number, required: true },
+  profitFactor: { type: Number, required: true },
+
+  // Capital Analysis
+  avgBetSize: { type: Number, required: true },
+  medianBetSize: { type: Number, required: true },
+  maxBetSize: { type: Number, required: true },
+  totalWon: { type: Number, required: true },
+  totalLost: { type: Number, required: true },
+
+  // Capital-based ROI
+  roiOnAvgCapital: { type: Number, required: true },
+  roiOnMedianCapital: { type: Number, required: true },
+  roiOnMaxCapital: { type: Number, required: true },
 
   // Metadata
   createdAt: { type: Date, default: Date.now },

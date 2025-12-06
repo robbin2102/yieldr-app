@@ -85,4 +85,17 @@ export interface TraderMetrics {
 
   // Risk Metrics
   sharpeRatio: number;
+  profitFactor: number;            // Total Won / Total Lost (1.0+ is profitable)
+
+  // Capital Analysis (for accurate ROI)
+  avgBetSize: number;              // Average bet size across all closed positions
+  medianBetSize: number;           // Median bet size
+  maxBetSize: number;              // Maximum single bet size
+  totalWon: number;                // Total $ won (sum of winning positions)
+  totalLost: number;               // Total $ lost (sum of losing positions)
+
+  // Capital-based ROI (more accurate than invested-based)
+  roiOnAvgCapital: number;         // Total PnL / Avg Bet Size * 100
+  roiOnMedianCapital: number;      // Total PnL / Median Bet Size * 100
+  roiOnMaxCapital: number;         // Total PnL / Max Bet Size * 100
 }
