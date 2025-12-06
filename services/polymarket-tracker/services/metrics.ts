@@ -71,13 +71,19 @@ export async function computeMetrics(walletAddress: string): Promise<TraderMetri
   const losses = allClosedPositions.filter((p) => !p.won).length + redeemablePositions.filter((p) => p.cashPnl <= 0).length;
 
   // === TIME-BASED PnL ===
-  const pnl1d = closedPositions1d.reduce((sum, p) => sum + p.realizedPnl, 0);
-  const pnl7d = closedPositions7d.reduce((sum, p) => sum + p.realizedPnl, 0);
-  const pnl30d = closedPositions30d.reduce((sum, p) => sum + p.realizedPnl, 0);
+  // Include: closed positions PnL + current open positions unrealized PnL + redeemable PnL
+  const closedPnl1d = closedPositions1d.reduce((sum, p) => sum + p.realizedPnl, 0);
+  const closedPnl7d = closedPositions7d.reduce((sum, p) => sum + p.realizedPnl, 0);
+  const closedPnl30d = closedPositions30d.reduce((sum, p) => sum + p.realizedPnl, 0);
 
-  const invested1d = closedPositions1d.reduce((sum, p) => sum + p.totalBet, 0);
-  const invested7d = closedPositions7d.reduce((sum, p) => sum + p.totalBet, 0);
-  const invested30d = closedPositions30d.reduce((sum, p) => sum + p.totalBet, 0);
+  // Add current unrealized PnL to time-based calculations
+  const pnl1d = closedPnl1d + totalUnrealizedPnl + redeemablePnl;
+  const pnl7d = closedPnl7d + totalUnrealizedPnl + redeemablePnl;
+  const pnl30d = closedPnl30d + totalUnrealizedPnl + redeemablePnl;
+
+  const invested1d = closedPositions1d.reduce((sum, p) => sum + p.totalBet, 0) + initialInvestment + redeemableInvested;
+  const invested7d = closedPositions7d.reduce((sum, p) => sum + p.totalBet, 0) + initialInvestment + redeemableInvested;
+  const invested30d = closedPositions30d.reduce((sum, p) => sum + p.totalBet, 0) + initialInvestment + redeemableInvested;
 
   const roi1d = invested1d > 0 ? (pnl1d / invested1d) * 100 : 0;
   const roi7d = invested7d > 0 ? (pnl7d / invested7d) * 100 : 0;

@@ -188,18 +188,35 @@ export async function fetchOpenPositionsQuick(walletAddress: string): Promise<Op
 /**
  * Background fetch - Closed positions and metrics (non-blocking)
  * Runs after quick fetch, user doesn't wait for this
- * Only fetches if data doesn't already exist (prevents re-fetching on restart)
+ * Only fetches if data doesn't already exist OR if data is stale
  */
-export async function fetchClosedPositionsBackground(walletAddress: string): Promise<void> {
+export async function fetchClosedPositionsBackground(
+  walletAddress: string,
+  forceRefresh: boolean = false
+): Promise<void> {
   try {
-    // Check if we already have closed positions for this wallet
+    // Check if we have recent closed positions data
+    const latestPosition = await PolymarketClosedPosition
+      .findOne({ walletAddress: walletAddress.toLowerCase() })
+      .sort({ fetchedAt: -1 })
+      .select('fetchedAt');
+
     const existingCount = await PolymarketClosedPosition.countDocuments({
       walletAddress: walletAddress.toLowerCase()
     });
 
-    if (existingCount > 0) {
-      logger.info(`Background: Wallet already has ${existingCount} closed positions in MongoDB, skipping fetch`);
+    // Check if data is stale (older than 1 hour)
+    const isStale = latestPosition &&
+      (Date.now() - latestPosition.fetchedAt.getTime() > 60 * 60 * 1000);
+
+    if (existingCount > 0 && !forceRefresh && !isStale) {
+      logger.info(`Background: Wallet has ${existingCount} recent closed positions, skipping fetch`);
+      logger.info(`Last fetched: ${latestPosition?.fetchedAt.toISOString()}`);
       return;
+    }
+
+    if (isStale) {
+      logger.warn(`Background: Data is stale (last fetch: ${latestPosition?.fetchedAt.toISOString()}), refreshing...`);
     }
 
     logger.info(`Background: Fetching closed positions for ${walletAddress}...`);
