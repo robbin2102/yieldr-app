@@ -28,6 +28,7 @@ async function saveOpenPositions(
       filter: {
         walletAddress: walletAddress.toLowerCase(),
         conditionId: pos.conditionId,
+        asset: pos.asset, // Required to differentiate Up/Down positions
       },
       update: {
         $set: {

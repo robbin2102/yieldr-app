@@ -10,6 +10,7 @@ dotenv.config({ path: envPath });
 
 import connectDB from '../lib/mongoose.js';
 import PolymarketClosedPosition from '../models/PolymarketClosedPosition.js';
+import PolymarketOpenPosition from '../models/PolymarketOpenPosition.js';
 
 async function main() {
   console.log('\n' + '='.repeat(80));
@@ -19,35 +20,51 @@ async function main() {
   await connectDB();
 
   try {
-    // Get all indexes
-    const indexes = await PolymarketClosedPosition.collection.getIndexes();
+    // ========================================================================
+    // CLOSED POSITIONS
+    // ========================================================================
+    console.log('📋 CLOSED POSITIONS:\n');
+    const closedIndexes = await PolymarketClosedPosition.collection.getIndexes();
 
-    console.log('📋 Current indexes:\n');
-    Object.keys(indexes).forEach(indexName => {
+    console.log('Current indexes:');
+    Object.keys(closedIndexes).forEach(indexName => {
       console.log(`  - ${indexName}`);
-      console.log(`    ${JSON.stringify(indexes[indexName])}\n`);
     });
+    console.log('');
 
-    // Drop the problematic compound index
-    const indexToDrop = 'walletAddress_1_conditionId_1_closedAt_1';
+    const closedIndexToDrop = 'walletAddress_1_conditionId_1_closedAt_1';
 
-    if (indexes[indexToDrop]) {
-      console.log(`🗑️  Dropping index: ${indexToDrop}...\n`);
-      await PolymarketClosedPosition.collection.dropIndex(indexToDrop);
-      console.log(`✅ Successfully dropped ${indexToDrop}\n`);
+    if (closedIndexes[closedIndexToDrop]) {
+      console.log(`🗑️  Dropping: ${closedIndexToDrop}...\n`);
+      await PolymarketClosedPosition.collection.dropIndex(closedIndexToDrop);
+      console.log(`✅ Dropped ${closedIndexToDrop}\n`);
     } else {
-      console.log(`ℹ️  Index ${indexToDrop} not found (already dropped or never existed)\n`);
+      console.log(`ℹ️  ${closedIndexToDrop} already dropped\n`);
     }
 
-    // Show remaining indexes
-    const remainingIndexes = await PolymarketClosedPosition.collection.getIndexes();
+    // ========================================================================
+    // OPEN POSITIONS
+    // ========================================================================
+    console.log('📋 OPEN POSITIONS:\n');
+    const openIndexes = await PolymarketOpenPosition.collection.getIndexes();
 
-    console.log('📋 Remaining indexes:\n');
-    Object.keys(remainingIndexes).forEach(indexName => {
+    console.log('Current indexes:');
+    Object.keys(openIndexes).forEach(indexName => {
       console.log(`  - ${indexName}`);
     });
+    console.log('');
 
-    console.log('\n' + '='.repeat(80));
+    const openIndexToDrop = 'walletAddress_1_conditionId_1';
+
+    if (openIndexes[openIndexToDrop]) {
+      console.log(`🗑️  Dropping: ${openIndexToDrop}...\n`);
+      await PolymarketOpenPosition.collection.dropIndex(openIndexToDrop);
+      console.log(`✅ Dropped ${openIndexToDrop}\n`);
+    } else {
+      console.log(`ℹ️  ${openIndexToDrop} already dropped\n`);
+    }
+
+    console.log('='.repeat(80));
     console.log('✅ Index cleanup complete!');
     console.log('='.repeat(80) + '\n');
 
