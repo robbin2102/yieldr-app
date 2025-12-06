@@ -5,13 +5,13 @@
 import dotenv from 'dotenv';
 import path from 'path';
 
-// Load environment variables
+// Load environment variables FIRST
 const envPath = path.resolve(process.cwd(), '.env.local');
 dotenv.config({ path: envPath });
 
-import connectDB from '../lib/mongoose';
-import PolymarketClosedPosition from '../models/PolymarketClosedPosition';
-import PolymarketOpenPosition from '../models/PolymarketOpenPosition';
+import connectDB from '../lib/mongoose.js';
+import PolymarketClosedPosition from '../models/PolymarketClosedPosition.js';
+import PolymarketOpenPosition from '../models/PolymarketOpenPosition.js';
 
 const WALLET = '0xecd55daa7c6900683b804d1d4db935fbfabe43f4';
 
