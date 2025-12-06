@@ -104,14 +104,8 @@ export class TradePoller {
         );
       });
 
-      // Update ONLY open positions from API (closed positions are immutable)
-      await updateOpenPositions(this.walletAddress);
-
-      // Compute and save updated metrics
-      const metrics = await computeMetrics(this.walletAddress);
-      await saveMetrics(this.walletAddress, metrics);
-
-      logger.success('Positions and metrics updated');
+      // Note: Open positions are refreshed every 5 minutes by refreshPositions()
+      // We don't fetch them here to avoid excessive API calls
     } catch (error: any) {
       logger.error(`Poll error for ${this.walletAddress}: ${error.message}`);
     } finally {
