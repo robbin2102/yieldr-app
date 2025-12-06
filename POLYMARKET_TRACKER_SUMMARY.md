@@ -7,7 +7,8 @@ The Polymarket tracker service has been successfully debugged and is now product
 - ✅ **PnL Calculation Fixed**: Now accurately matches Polymarket UI ($144k+ vs previous $74k)
 - ✅ **Open Positions Fixed**: Correctly tracks both Up/Down sides of markets
 - ✅ **Duplicate Prevention**: UUID-based tradeIds prevent duplicates
-- ✅ **Data Integrity**: All 2,518+ closed positions, 2 open positions, and 90+ trades tracked correctly
+- ✅ **Data Integrity**: All 2,530+ closed positions, 2 open positions, and 90+ trades tracked correctly
+- ✅ **Advanced Metrics**: Profit Factor and capital-based ROI for accurate performance analysis
 - ✅ **Production Scripts**: Clean deployment and testing commands available
 
 ---
@@ -104,6 +105,60 @@ Trades (Immutable Events)
 ├── Update Strategy: Upsert with transaction hash
 └── Use Case: Each trade is unique by blockchain transaction
 ```
+
+### Advanced Metrics (New)
+
+**Problem**: Traditional ROI calculation used "total invested" (sum of all bets), which is misleading because traders circulate the same capital across multiple positions.
+
+**Solution**: Added industry-standard metrics and capital-based ROI:
+
+#### 1. **Profit Factor** (Industry Standard)
+```
+Formula: Total Won / Total Lost
+
+>1.0 = Profitable
+1.5+ = Strong edge
+2.0+ = Exceptional
+
+Example: $568k won / $431k lost = 1.32x
+```
+
+This metric is:
+- Dead simple to calculate and understand
+- Works perfectly with binary outcomes (Polymarket)
+- No distribution assumptions needed
+- Intuitive: "For every $1 lost, earn $X"
+
+#### 2. **Capital-Based ROI** (Accurate Returns)
+```
+Formula: Total PnL / Bet Size * 100
+
+Where Bet Size can be:
+- Average bet size (mean capital deployed)
+- Median bet size (typical position size)
+- Max bet size (peak capital usage)
+```
+
+**Why it's better**:
+- Old ROI: PnL / Sum of all bets = 4.79% (misleading)
+- New ROI: PnL / Avg bet size = 12,121% (actual return on capital)
+
+This shows **real return on deployed capital**, not cumulative bets.
+
+#### 3. **Bet Size Analysis**
+```
+Avg Bet Size:    $1,124.70  (mean position size)
+Median Bet Size: $673.30    (typical position, less affected by outliers)
+Max Bet Size:    $10,326.28 (peak capital deployed)
+```
+
+These metrics help estimate the trader's actual capital and position sizing strategy.
+
+**Files Modified**:
+- `services/polymarket-tracker/types/polymarket.ts` - Added 9 new metric fields
+- `services/polymarket-tracker/services/metrics.ts` - Implemented profit factor and capital analysis
+- `models/PolymarketMetrics.ts` - Updated MongoDB schema
+- `scripts/test-production-flow.ts` - Added new metrics to test output
 
 ---
 
