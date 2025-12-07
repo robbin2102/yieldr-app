@@ -13,6 +13,7 @@
     "polymarket:dev": "DOTENV_CONFIG_PATH=.env.local nodemon --exec \"node --require dotenv/config node_modules/.bin/tsx services/polymarket-tracker/index.ts\"",
     "polymarket:verify": "tsx scripts/verify-polymarket-data.ts",
     "polymarket:test-api": "tsx scripts/test-polymarket-api.ts",
+    "polymarket:monitor": "tsx scripts/monitor-trader-activity.ts",
     "backfill": "tsx scripts/backfill-all-managers.ts",
     "backfill:wallet": "tsx scripts/backfill-single-wallet.ts",
     "test:client": "tsx services/avantis-listener/test-client.ts",
