@@ -71,7 +71,12 @@ class TradeMonitor {
     try {
       this.apiCallCount++;
 
-      const url = `${API_BASE}/activity?user=${WALLET}&type=TRADE&start=${this.lastTimestamp}&limit=500&sortBy=TIMESTAMP&sortDirection=ASC`;
+      const now = Math.floor(Date.now() / 1000);
+
+      // Use a sliding window approach (last 120 seconds to ensure we don't miss anything)
+      const windowStart = Math.max(this.lastTimestamp - 5, now - 120);
+
+      const url = `${API_BASE}/activity?user=${WALLET}&type=TRADE&start=${windowStart}&end=${now}&limit=500&sortBy=TIMESTAMP&sortDirection=ASC`;
 
       const response = await axios.get(url, {
         timeout: 10000,
@@ -86,10 +91,9 @@ class TradeMonitor {
       // Filter out trades we've already seen
       const newTrades = activities.filter(trade => !this.seenTradeIds.has(trade.id));
 
-      // Update last timestamp if we got new trades
-      if (newTrades.length > 0) {
-        const maxTimestamp = Math.max(...newTrades.map(t => t.timestamp));
-        this.lastTimestamp = maxTimestamp;
+      // Update last timestamp to now (for next poll window)
+      if (newTrades.length > 0 || activities.length > 0) {
+        this.lastTimestamp = now;
       }
 
       // Mark trades as seen
