@@ -1,11 +1,15 @@
 /**
  * Trade Poller Service
  * Polls for new trades every 60 seconds
+ * Refreshes open positions every 5 minutes
  */
 
 import { fetchNewActivity } from '../api/activity';
 import { createLogger } from '../utils/logger';
 import PolymarketTrade from '../../../models/PolymarketTrade';
+import { computeMetrics, saveMetrics } from './metrics';
+import { updateOpenPositions } from './positionUpdate';
+import { CONFIG } from '../config';
 import type { ActivityResponse } from '../types/polymarket';
 
 const logger = createLogger('Poller');
@@ -13,8 +17,10 @@ const logger = createLogger('Poller');
 export class TradePoller {
   private walletAddress: string;
   private lastSeenTimestamp: number;
-  private intervalId: NodeJS.Timer | null = null;
+  private tradeIntervalId: NodeJS.Timer | null = null;
+  private positionIntervalId: NodeJS.Timer | null = null;
   private isPolling: boolean = false;
+  private isRefreshingPositions: boolean = false;
 
   constructor(walletAddress: string) {
     this.walletAddress = walletAddress;
@@ -22,29 +28,38 @@ export class TradePoller {
   }
 
   /**
-   * Start polling at specified interval
+   * Start polling at specified intervals
    */
-  start(intervalMs: number = 60000): void {
+  start(tradeIntervalMs: number = CONFIG.POLL_INTERVAL_MS): void {
+    const positionRefreshMs = CONFIG.POSITION_REFRESH_MS;
+
     logger.info(
-      `Starting poller for ${this.walletAddress} (interval: ${intervalMs / 1000}s)`
+      `Starting poller for ${this.walletAddress} (trades: ${tradeIntervalMs / 1000}s, positions: ${positionRefreshMs / 1000}s)`
     );
 
-    // Initial poll
+    // Initial trade poll
     this.poll();
 
-    // Schedule recurring polls
-    this.intervalId = setInterval(() => this.poll(), intervalMs);
+    // Schedule recurring trade polls (60s)
+    this.tradeIntervalId = setInterval(() => this.poll(), tradeIntervalMs);
+
+    // Schedule recurring position refresh (5min)
+    this.positionIntervalId = setInterval(() => this.refreshPositions(), positionRefreshMs);
   }
 
   /**
    * Stop polling
    */
   stop(): void {
-    if (this.intervalId) {
-      clearInterval(this.intervalId);
-      this.intervalId = null;
-      logger.info(`Stopped poller for ${this.walletAddress}`);
+    if (this.tradeIntervalId) {
+      clearInterval(this.tradeIntervalId);
+      this.tradeIntervalId = null;
     }
+    if (this.positionIntervalId) {
+      clearInterval(this.positionIntervalId);
+      this.positionIntervalId = null;
+    }
+    logger.info(`Stopped poller for ${this.walletAddress}`);
   }
 
   /**
@@ -89,10 +104,42 @@ export class TradePoller {
           `  [${new Date(activity.timestamp * 1000).toISOString()}] ${action} - ${activity.outcome} - "${activity.title}"`
         );
       });
+
+      // Note: Open positions are refreshed every 5 minutes by refreshPositions()
+      // We don't fetch them here to avoid excessive API calls
     } catch (error: any) {
       logger.error(`Poll error for ${this.walletAddress}: ${error.message}`);
     } finally {
       this.isPolling = false;
+    }
+  }
+
+  /**
+   * Refresh open positions (runs every 5 minutes)
+   */
+  private async refreshPositions(): Promise<void> {
+    if (this.isRefreshingPositions) {
+      logger.debug('Position refresh already in progress, skipping...');
+      return;
+    }
+
+    this.isRefreshingPositions = true;
+
+    try {
+      logger.info(`Refreshing open positions for ${this.walletAddress}...`);
+
+      // Update open positions from API
+      await updateOpenPositions(this.walletAddress);
+
+      // Recompute metrics with updated positions
+      const metrics = await computeMetrics(this.walletAddress);
+      await saveMetrics(this.walletAddress, metrics);
+
+      logger.success('Open positions refreshed successfully');
+    } catch (error: any) {
+      logger.error(`Position refresh error: ${error.message}`);
+    } finally {
+      this.isRefreshingPositions = false;
     }
   }
 

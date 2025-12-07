@@ -116,7 +116,7 @@ const PolymarketOpenPositionSchema = new mongoose.Schema({
 });
 
 // Compound indexes for efficient queries
-PolymarketOpenPositionSchema.index({ walletAddress: 1, conditionId: 1 }, { unique: true });
+PolymarketOpenPositionSchema.index({ walletAddress: 1, conditionId: 1, asset: 1 }, { unique: true }); // Include asset for Up/Down positions
 PolymarketOpenPositionSchema.index({ walletAddress: 1, fetchedAt: -1 });
 PolymarketOpenPositionSchema.index({ endDate: 1 });
 

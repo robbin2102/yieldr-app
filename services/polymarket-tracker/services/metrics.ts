@@ -5,6 +5,7 @@
 
 import PolymarketOpenPosition from '../../../models/PolymarketOpenPosition';
 import PolymarketClosedPosition from '../../../models/PolymarketClosedPosition';
+import PolymarketMetrics from '../../../models/PolymarketMetrics';
 import { createLogger } from '../utils/logger';
 import type { TraderMetrics } from '../types/polymarket';
 
@@ -28,6 +29,12 @@ export async function computeMetrics(walletAddress: string): Promise<TraderMetri
     .sort({ closedAt: -1 })
     .lean();
 
+  // Split open positions into active vs redeemable
+  // Redeemable positions are markets that resolved but haven't been redeemed yet
+  // They should be treated as "closed" for PnL purposes
+  const activeOpenPositions = openPositions.filter((p) => !p.redeemable);
+  const redeemablePositions = openPositions.filter((p) => p.redeemable);
+
   // Time-based filters
   const now = Date.now();
   const day1Ago = new Date(now - 1 * 24 * 60 * 60 * 1000);
@@ -38,13 +45,17 @@ export async function computeMetrics(walletAddress: string): Promise<TraderMetri
   const closedPositions7d = allClosedPositions.filter((p) => p.closedAt >= day7Ago);
   const closedPositions30d = allClosedPositions.filter((p) => p.closedAt >= day30Ago);
 
-  // === OPEN POSITIONS ===
-  const currentPositionValue = openPositions.reduce((sum, p) => sum + p.currentValue, 0);
-  const initialInvestment = openPositions.reduce((sum, p) => sum + p.initialValue, 0);
-  const totalUnrealizedPnl = openPositions.reduce((sum, p) => sum + p.cashPnl, 0);
+  // === ACTIVE OPEN POSITIONS ===
+  const currentPositionValue = activeOpenPositions.reduce((sum, p) => sum + p.currentValue, 0);
+  const initialInvestment = activeOpenPositions.reduce((sum, p) => sum + p.initialValue, 0);
+  const totalUnrealizedPnl = activeOpenPositions.reduce((sum, p) => sum + p.cashPnl, 0);
+
+  // === REDEEMABLE POSITIONS (treat as realized) ===
+  const redeemablePnl = redeemablePositions.reduce((sum, p) => sum + p.cashPnl, 0);
+  const redeemableInvested = redeemablePositions.reduce((sum, p) => sum + p.initialValue, 0);
 
   // === CLOSED POSITIONS (ALL) ===
-  const totalRealizedPnl = allClosedPositions.reduce(
+  const closedRealizedPnl = allClosedPositions.reduce(
     (sum, p) => sum + p.realizedPnl,
     0
   );
@@ -52,17 +63,27 @@ export async function computeMetrics(walletAddress: string): Promise<TraderMetri
     (sum, p) => sum + p.totalBet,
     0
   );
-  const wins = allClosedPositions.filter((p) => p.won).length;
-  const losses = allClosedPositions.filter((p) => !p.won).length;
+
+  // Total realized PnL includes both closed positions and redeemable positions
+  const totalRealizedPnl = closedRealizedPnl + redeemablePnl;
+
+  const wins = allClosedPositions.filter((p) => p.won).length + redeemablePositions.filter((p) => p.cashPnl > 0).length;
+  const losses = allClosedPositions.filter((p) => !p.won).length + redeemablePositions.filter((p) => p.cashPnl <= 0).length;
 
   // === TIME-BASED PnL ===
-  const pnl1d = closedPositions1d.reduce((sum, p) => sum + p.realizedPnl, 0);
-  const pnl7d = closedPositions7d.reduce((sum, p) => sum + p.realizedPnl, 0);
-  const pnl30d = closedPositions30d.reduce((sum, p) => sum + p.realizedPnl, 0);
+  // Include: closed positions PnL + current open positions unrealized PnL + redeemable PnL
+  const closedPnl1d = closedPositions1d.reduce((sum, p) => sum + p.realizedPnl, 0);
+  const closedPnl7d = closedPositions7d.reduce((sum, p) => sum + p.realizedPnl, 0);
+  const closedPnl30d = closedPositions30d.reduce((sum, p) => sum + p.realizedPnl, 0);
 
-  const invested1d = closedPositions1d.reduce((sum, p) => sum + p.totalBet, 0);
-  const invested7d = closedPositions7d.reduce((sum, p) => sum + p.totalBet, 0);
-  const invested30d = closedPositions30d.reduce((sum, p) => sum + p.totalBet, 0);
+  // Add current unrealized PnL to time-based calculations
+  const pnl1d = closedPnl1d + totalUnrealizedPnl + redeemablePnl;
+  const pnl7d = closedPnl7d + totalUnrealizedPnl + redeemablePnl;
+  const pnl30d = closedPnl30d + totalUnrealizedPnl + redeemablePnl;
+
+  const invested1d = closedPositions1d.reduce((sum, p) => sum + p.totalBet, 0) + initialInvestment + redeemableInvested;
+  const invested7d = closedPositions7d.reduce((sum, p) => sum + p.totalBet, 0) + initialInvestment + redeemableInvested;
+  const invested30d = closedPositions30d.reduce((sum, p) => sum + p.totalBet, 0) + initialInvestment + redeemableInvested;
 
   const roi1d = invested1d > 0 ? (pnl1d / invested1d) * 100 : 0;
   const roi7d = invested7d > 0 ? (pnl7d / invested7d) * 100 : 0;
@@ -70,27 +91,71 @@ export async function computeMetrics(walletAddress: string): Promise<TraderMetri
 
   // === COMBINED ===
   const totalPnl = totalUnrealizedPnl + totalRealizedPnl;
-  const totalInvested = initialInvestment + closedInvested;
+  const totalInvested = initialInvestment + closedInvested + redeemableInvested;
   const overallRoi = totalInvested > 0 ? (totalPnl / totalInvested) * 100 : 0;
 
   // === SHARPE RATIO ===
-  const sharpeRatio = computeSharpeRatio(allClosedPositions);
+  // Include redeemable positions in Sharpe calculation
+  const allRealizedPositions = [
+    ...allClosedPositions.map(p => ({ realizedPnl: p.realizedPnl, totalBet: p.totalBet })),
+    ...redeemablePositions.map(p => ({ realizedPnl: p.cashPnl, totalBet: p.initialValue }))
+  ];
+  const sharpeRatio = computeSharpeRatio(allRealizedPositions);
+
+  const totalClosedAndRedeemableCount = allClosedPositions.length + redeemablePositions.length;
+
+  // === PROFIT FACTOR ===
+  // Total Won / Total Lost (>1.0 means profitable, 1.5+ is strong, 2.0+ is exceptional)
+  const totalWon = allRealizedPositions
+    .filter(p => p.realizedPnl > 0)
+    .reduce((sum, p) => sum + p.realizedPnl, 0);
+
+  const totalLost = Math.abs(
+    allRealizedPositions
+      .filter(p => p.realizedPnl <= 0)
+      .reduce((sum, p) => sum + p.realizedPnl, 0)
+  );
+
+  const profitFactor = totalLost > 0 ? totalWon / totalLost : totalWon > 0 ? 999 : 0;
+
+  // === CAPITAL ANALYSIS (for accurate ROI) ===
+  // Trader circulates same capital across positions, so total invested is misleading
+  // Use bet size distribution to estimate actual capital deployed
+  const betSizes = allRealizedPositions.map(p => p.totalBet).sort((a, b) => a - b);
+
+  const avgBetSize = betSizes.length > 0
+    ? betSizes.reduce((sum, bet) => sum + bet, 0) / betSizes.length
+    : 0;
+
+  const medianBetSize = betSizes.length > 0
+    ? betSizes.length % 2 === 0
+      ? (betSizes[betSizes.length / 2 - 1] + betSizes[betSizes.length / 2]) / 2
+      : betSizes[Math.floor(betSizes.length / 2)]
+    : 0;
+
+  const maxBetSize = betSizes.length > 0 ? betSizes[betSizes.length - 1] : 0;
+
+  // Capital-based ROI (more accurate than invested-based)
+  // These show what % return on actual capital, not cumulative bets
+  const roiOnAvgCapital = avgBetSize > 0 ? (totalPnl / avgBetSize) * 100 : 0;
+  const roiOnMedianCapital = medianBetSize > 0 ? (totalPnl / medianBetSize) * 100 : 0;
+  const roiOnMaxCapital = maxBetSize > 0 ? (totalPnl / maxBetSize) * 100 : 0;
 
   const metrics: TraderMetrics = {
-    // Open positions
-    openPositionsCount: openPositions.length,
+    // Open positions (only active, not redeemable)
+    openPositionsCount: activeOpenPositions.length,
     currentPositionValue,
     initialInvestment,
     totalUnrealizedPnl,
 
-    // Closed positions
-    closedPositionsCount: allClosedPositions.length,
-    closedInvestment: closedInvested,
+    // Closed positions (includes redeemable)
+    closedPositionsCount: totalClosedAndRedeemableCount,
+    closedInvestment: closedInvested + redeemableInvested,
     totalRealizedPnl,
     wins,
     losses,
-    winRate: allClosedPositions.length > 0
-      ? (wins / allClosedPositions.length) * 100
+    winRate: totalClosedAndRedeemableCount > 0
+      ? (wins / totalClosedAndRedeemableCount) * 100
       : 0,
 
     // Combined
@@ -108,6 +173,19 @@ export async function computeMetrics(walletAddress: string): Promise<TraderMetri
 
     // Risk metrics
     sharpeRatio,
+    profitFactor,
+
+    // Capital analysis
+    avgBetSize,
+    medianBetSize,
+    maxBetSize,
+    totalWon,
+    totalLost,
+
+    // Capital-based ROI
+    roiOnAvgCapital,
+    roiOnMedianCapital,
+    roiOnMaxCapital,
   };
 
   logger.success('Metrics computed successfully');
@@ -148,6 +226,24 @@ function computeSharpeRatio(
 }
 
 /**
+ * Save metrics to MongoDB
+ */
+export async function saveMetrics(
+  walletAddress: string,
+  metrics: TraderMetrics
+): Promise<void> {
+  try {
+    await PolymarketMetrics.create({
+      walletAddress: walletAddress.toLowerCase(),
+      ...metrics,
+    });
+    logger.debug('Metrics saved to MongoDB');
+  } catch (error: any) {
+    logger.error(`Failed to save metrics: ${error.message}`);
+  }
+}
+
+/**
  * Display metrics in console
  */
 export function displayMetrics(metrics: TraderMetrics): void {
@@ -177,9 +273,25 @@ export function displayMetrics(metrics: TraderMetrics): void {
   console.log(`   7d  PnL: $${metrics.pnl7d.toFixed(2)}  |  ROI: ${metrics.roi7d.toFixed(2)}%`);
   console.log(`   30d PnL: $${metrics.pnl30d.toFixed(2)}  |  ROI: ${metrics.roi30d.toFixed(2)}%`);
 
-  console.log('\n🎯 OVERALL:');
-  console.log(`   Overall ROI:    ${metrics.overallRoi.toFixed(2)}%`);
-  console.log(`   Sharpe Ratio:   ${metrics.sharpeRatio.toFixed(3)}`);
+  console.log('\n💵 PROFIT/LOSS BREAKDOWN:');
+  console.log(`   Total Won:      $${metrics.totalWon.toFixed(2)}`);
+  console.log(`   Total Lost:     $${metrics.totalLost.toFixed(2)}`);
+  console.log(`   Profit Factor:  ${metrics.profitFactor.toFixed(2)}x`);
+  console.log(`                   (For every $1 lost, earning $${metrics.profitFactor.toFixed(2)})`);
+
+  console.log('\n💼 CAPITAL ANALYSIS:');
+  console.log(`   Avg Bet Size:    $${metrics.avgBetSize.toFixed(2)}`);
+  console.log(`   Median Bet Size: $${metrics.medianBetSize.toFixed(2)}`);
+  console.log(`   Max Bet Size:    $${metrics.maxBetSize.toFixed(2)}`);
+
+  console.log('\n🎯 RETURN ON CAPITAL (Accurate ROI):');
+  console.log(`   ROI on Avg Bet:    ${metrics.roiOnAvgCapital.toFixed(2)}%`);
+  console.log(`   ROI on Median Bet: ${metrics.roiOnMedianCapital.toFixed(2)}%`);
+  console.log(`   ROI on Max Bet:    ${metrics.roiOnMaxCapital.toFixed(2)}%`);
+
+  console.log('\n📊 TRADITIONAL METRICS:');
+  console.log(`   Overall ROI (on total invested): ${metrics.overallRoi.toFixed(2)}%`);
+  console.log(`   Sharpe Ratio:                    ${metrics.sharpeRatio.toFixed(3)}`);
 
   console.log('\n' + '='.repeat(80) + '\n');
 }

@@ -1,16 +1,16 @@
 /**
  * Initial Fetch Service
- * Fetches all historical data when a wallet is first added
+ * Fast initial load: Fetch open positions immediately
+ * Background: Load closed positions and historical data
  */
 
+import { randomUUID } from 'crypto';
 import { fetchOpenPositions } from '../api/positions';
 import { fetchClosedPositions } from '../api/closedPositions';
-import { fetchHistoricalActivity } from '../api/activity';
 import { createLogger } from '../utils/logger';
 import PolymarketOpenPosition from '../../../models/PolymarketOpenPosition';
 import PolymarketClosedPosition from '../../../models/PolymarketClosedPosition';
-import PolymarketTrade from '../../../models/PolymarketTrade';
-import type { OpenPositionResponse, ClosedPositionResponse, ActivityResponse } from '../types/polymarket';
+import type { OpenPositionResponse, ClosedPositionResponse } from '../types/polymarket';
 
 const logger = createLogger('Initial Fetch');
 
@@ -28,6 +28,7 @@ async function saveOpenPositions(
       filter: {
         walletAddress: walletAddress.toLowerCase(),
         conditionId: pos.conditionId,
+        asset: pos.asset, // Required to differentiate Up/Down positions
       },
       update: {
         $set: {
@@ -79,14 +80,17 @@ async function saveClosedPositions(
     const amountWon = totalBet + pos.realizedPnl;
     const roi = totalBet > 0 ? (pos.realizedPnl / totalBet) * 100 : 0;
 
+    // Generate a random UUID for guaranteed uniqueness
+    const tradeId = randomUUID();
+
     return {
       updateOne: {
         filter: {
-          walletAddress: walletAddress.toLowerCase(),
-          conditionId: pos.conditionId,
+          tradeId, // Use unique UUID as the only filter
         },
         update: {
           $set: {
+            tradeId,
             walletAddress: walletAddress.toLowerCase(),
             conditionId: pos.conditionId,
             asset: pos.asset,
@@ -104,6 +108,7 @@ async function saveClosedPositions(
             closedAt: new Date(pos.timestamp * 1000),
             endDate: pos.endDate ? new Date(pos.endDate) : undefined,
             fetchedAt: new Date(),
+            updatedAt: new Date(),
           },
           $setOnInsert: {
             createdAt: new Date(),
@@ -170,7 +175,74 @@ async function saveTrades(
 }
 
 /**
+ * Quick fetch - Only open positions (fast initial load)
+ * Returns immediately so user sees their current positions
+ */
+export async function fetchOpenPositionsQuick(walletAddress: string): Promise<OpenPositionResponse[]> {
+  logger.info(`Quick fetch: Loading open positions for ${walletAddress}...`);
+
+  const openPositions = await fetchOpenPositions(walletAddress);
+  await saveOpenPositions(walletAddress, openPositions);
+
+  logger.success(`Quick fetch complete: ${openPositions.length} open positions loaded`);
+
+  return openPositions;
+}
+
+/**
+ * Background fetch - Closed positions and metrics (non-blocking)
+ * Runs after quick fetch, user doesn't wait for this
+ * Only fetches if data doesn't already exist OR if data is stale
+ */
+export async function fetchClosedPositionsBackground(
+  walletAddress: string,
+  forceRefresh: boolean = false
+): Promise<void> {
+  try {
+    // Check if we have recent closed positions data
+    const latestPosition = await PolymarketClosedPosition
+      .findOne({ walletAddress: walletAddress.toLowerCase() })
+      .sort({ fetchedAt: -1 })
+      .select('fetchedAt');
+
+    const existingCount = await PolymarketClosedPosition.countDocuments({
+      walletAddress: walletAddress.toLowerCase()
+    });
+
+    // Check if data is stale (older than 1 hour) OR was fetched before 2025-12-06 18:30 UTC
+    // (data fetched before that time may not have the 'start' parameter fix)
+    const staleCutoff = new Date('2025-12-06T18:30:00Z');
+    const isOldData = latestPosition && latestPosition.fetchedAt < staleCutoff;
+    const isStale = latestPosition &&
+      (Date.now() - latestPosition.fetchedAt.getTime() > 60 * 60 * 1000);
+
+    if (existingCount > 0 && !forceRefresh && !isStale && !isOldData) {
+      logger.info(`Background: Wallet has ${existingCount} recent closed positions, skipping fetch`);
+      logger.info(`Last fetched: ${latestPosition?.fetchedAt.toISOString()}`);
+      return;
+    }
+
+    if (isStale) {
+      logger.warn(`Background: Data is stale (last fetch: ${latestPosition?.fetchedAt.toISOString()}), refreshing...`);
+    }
+
+    if (isOldData) {
+      logger.warn(`Background: Data was fetched with old code (before time filter fix), refreshing...`);
+    }
+
+    logger.info(`Background: Fetching closed positions for ${walletAddress}...`);
+    const closedPositions = await fetchClosedPositions(walletAddress);
+    await saveClosedPositions(walletAddress, closedPositions);
+
+    logger.success(`Background: Saved ${closedPositions.length} closed positions`);
+  } catch (error: any) {
+    logger.error(`Background fetch failed: ${error.message}`);
+  }
+}
+
+/**
  * Fetch all data for a wallet (initial load)
+ * @deprecated Use fetchOpenPositionsQuick + fetchClosedPositionsBackground for better UX
  */
 export async function fetchAllDataForWallet(walletAddress: string): Promise<{
   openPositions: OpenPositionResponse[];
@@ -189,20 +261,16 @@ export async function fetchAllDataForWallet(walletAddress: string): Promise<{
     // 2. Fetch closed positions (last 30 days)
     const closedPositions = await fetchClosedPositions(walletAddress);
 
-    // 3. Fetch historical trades (last 30 days)
-    const trades = await fetchHistoricalActivity(walletAddress);
-
-    // 4. Save to MongoDB
+    // 3. Save to MongoDB
     await saveOpenPositions(walletAddress, openPositions);
     await saveClosedPositions(walletAddress, closedPositions);
-    await saveTrades(walletAddress, trades);
 
     logger.success(`Initial fetch completed for ${walletAddress}`);
 
     return {
       openPositions,
       closedPositions,
-      trades,
+      trades: [], // No longer fetching historical trades
     };
   } catch (error: any) {
     logger.error(`Initial fetch failed: ${error.message}`);
