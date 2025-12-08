@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import connectDB from '@/lib/mongodb';
+import connectDB from '@/lib/mongoose';
 import HyperliquidPosition from '@/models/HyperliquidPosition';
 
 export const dynamic = 'force-dynamic';

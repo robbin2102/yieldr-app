@@ -227,46 +227,48 @@ export async function fetchAndSave30DayHistory(walletAddress: string) {
     }
 
     // Save fills with deduplication
+    console.log(`[Backfill] 💾 Starting save of ${fills.length} fills to MongoDB...`);
+    const saveStart = Date.now();
     let saved = 0;
     let duplicates = 0;
 
     for (const fill of fills) {
       try {
-        const result = await HyperliquidFill.findOneAndUpdate(
-          { walletAddress, tid: fill.tid },
-          {
-            walletAddress,
-            tid: fill.tid,
-            oid: fill.oid,
-            coin: fill.coin,
-            side: fill.side,
-            dir: fill.dir,
-            px: fill.px,
-            sz: fill.sz,
-            startPosition: fill.startPosition,
-            closedPnl: fill.closedPnl || '0.0',
-            fee: fill.fee,
-            feeToken: fill.feeToken,
-            builderFee: fill.builderFee,
-            crossed: fill.crossed,
-            hash: fill.hash,
-            time: fill.time,
-            createdAt: new Date()
-          },
-          { upsert: true, new: true }
-        );
+        // Check if fill already exists first
+        const existing = await HyperliquidFill.findOne({ walletAddress, tid: fill.tid });
 
-        // Check if it was an insert (new) or update (duplicate)
-        if (result && !result.createdAt) {
+        if (existing) {
           duplicates++;
-        } else {
-          saved++;
+          continue;
         }
+
+        // Insert new fill
+        await HyperliquidFill.create({
+          walletAddress,
+          tid: fill.tid,
+          oid: fill.oid,
+          coin: fill.coin,
+          side: fill.side,
+          dir: fill.dir,
+          px: fill.px,
+          sz: fill.sz,
+          startPosition: fill.startPosition,
+          closedPnl: fill.closedPnl || '0.0',
+          fee: fill.fee,
+          feeToken: fill.feeToken,
+          builderFee: fill.builderFee,
+          crossed: fill.crossed,
+          hash: fill.hash,
+          time: fill.time,
+          createdAt: new Date()
+        });
+        saved++;
       } catch (error: any) {
         if (error.code === 11000) {
           duplicates++;
         } else {
           console.error(`[Backfill] ⚠️  Error saving fill ${fill.tid}:`, error.message);
+          // Continue processing other fills even if one fails
         }
       }
     }
@@ -275,7 +277,8 @@ export async function fetchAndSave30DayHistory(walletAddress: string) {
     totalSaved += saved;
     totalDuplicates += duplicates;
 
-    console.log(`[Backfill] 💾 Saved ${saved} new, ${duplicates} duplicates | Total: ${totalFetched}/${MAX_FILLS}`);
+    const saveDuration = Date.now() - saveStart;
+    console.log(`[Backfill] ✅ Save completed in ${saveDuration}ms - ${saved} new, ${duplicates} duplicates | Total: ${totalFetched}/${MAX_FILLS}`);
 
     // Check if we've hit the limit
     if (totalFetched >= MAX_FILLS) {
