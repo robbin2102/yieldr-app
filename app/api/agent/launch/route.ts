@@ -39,15 +39,18 @@ export async function POST(request: NextRequest) {
     console.log(`🔵 [API] MongoDB connected in ${Date.now() - dbStart}ms`);
 
     console.log('🔵 [API] Parsing request body...');
-    const body: LaunchAgentRequest = await request.json();
+    const body: any = await request.json();
     console.log(`🔵 [API] Request body:`, JSON.stringify(body, null, 2));
-    const { walletAddress, market, platform, userId } = body;
+
+    // Accept both 'wallet' and 'walletAddress' for convenience
+    const walletAddress = body.walletAddress || body.wallet;
+    const { market, platform, userId } = body;
 
     // Validate input
     if (!walletAddress || !market) {
       console.log('🔴 [API] Validation failed: missing walletAddress or market');
       return NextResponse.json(
-        { success: false, error: 'walletAddress and market are required' },
+        { success: false, error: 'walletAddress (or wallet) and market are required' },
         { status: 400 }
       );
     }
