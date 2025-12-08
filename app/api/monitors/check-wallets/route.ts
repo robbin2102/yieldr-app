@@ -33,12 +33,20 @@ export async function GET(request: NextRequest) {
 
     await connectDB();
 
+    // Check for force parameter
+    const { searchParams } = new URL(request.url);
+    const force = searchParams.get('force') === 'true';
+
     // Find wallets that need checking
     const now = new Date();
-    const dueWallets = await MonitoredWallet.find({
-      status: 'active',
-      nextCheck: { $lte: now }
-    }).sort({ nextCheck: 1 }); // Oldest first
+    const query: any = { status: 'active' };
+
+    // Only filter by nextCheck if not forcing
+    if (!force) {
+      query.nextCheck = { $lte: now };
+    }
+
+    const dueWallets = await MonitoredWallet.find(query).sort({ nextCheck: 1 }); // Oldest first
 
     if (dueWallets.length === 0) {
       console.log('[Cron] No wallets due for checking');
@@ -50,7 +58,7 @@ export async function GET(request: NextRequest) {
       });
     }
 
-    console.log(`[Cron] Checking ${dueWallets.length} wallets...`);
+    console.log(`[Cron] Checking ${dueWallets.length} wallets${force ? ' (forced)' : ''}...`);
 
     // Process wallets in parallel
     const results = await Promise.allSettled(
