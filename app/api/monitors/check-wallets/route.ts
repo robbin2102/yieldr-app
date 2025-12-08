@@ -16,16 +16,19 @@ export async function GET(request: NextRequest) {
   const startTime = Date.now();
 
   try {
-    // Optional: Verify cron secret for security (skip in development)
+    // Security: Check for API key (skip in development for easy testing)
     const isDevelopment = process.env.NODE_ENV === 'development';
     const authHeader = request.headers.get('authorization');
 
-    if (!isDevelopment && process.env.CRON_SECRET && authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
-      console.warn('Unauthorized cron request');
-      return NextResponse.json(
-        { error: 'Unauthorized' },
-        { status: 401 }
-      );
+    if (!isDevelopment) {
+      const expectedKey = process.env.CRON_API_KEY;
+      if (!expectedKey || authHeader !== `Bearer ${expectedKey}`) {
+        console.warn('[Cron] Unauthorized request blocked');
+        return NextResponse.json(
+          { error: 'Unauthorized' },
+          { status: 401 }
+        );
+      }
     }
 
     await connectDB();
