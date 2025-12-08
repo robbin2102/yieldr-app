@@ -120,7 +120,14 @@ export async function fetchAndSaveRecentFills(
  * Returns array of closed position coins
  */
 export async function fetchAndSavePositions(walletAddress: string) {
+  console.log(`[Fetcher] 🔄 Calling Hyperliquid API (clearinghouseState) for ${walletAddress}...`);
+  const startTime = Date.now();
+
   const state = await getClearinghouseState(walletAddress);
+
+  const apiDuration = Date.now() - startTime;
+  console.log(`[Fetcher] ✓ API responded in ${apiDuration}ms`);
+  console.log(`[Fetcher] 📊 Account Value: $${state.marginSummary.accountValue}, Open Positions: ${state.assetPositions.length}`);
 
   // Get existing positions from DB
   const existingPositions = await HyperliquidPosition.find({ walletAddress });
@@ -134,6 +141,7 @@ export async function fetchAndSavePositions(walletAddress: string) {
     currentCoins.push(pos.coin);
 
     const side = parseFloat(pos.szi) > 0 ? 'LONG' : 'SHORT';
+    console.log(`[Fetcher] 💹 Position: ${pos.coin} ${side} ${pos.szi} @ $${pos.entryPx} | PnL: $${pos.unrealizedPnl}`);
 
     await HyperliquidPosition.findOneAndUpdate(
       { walletAddress, coin: pos.coin },
@@ -162,11 +170,14 @@ export async function fetchAndSavePositions(walletAddress: string) {
 
   // Delete closed positions from DB
   if (closedCoins.length > 0) {
+    console.log(`[Fetcher] 🔴 Closed positions detected: ${closedCoins.join(', ')}`);
     await HyperliquidPosition.deleteMany({
       walletAddress,
       coin: { $in: closedCoins }
     });
   }
+
+  console.log(`[Fetcher] ✓ Saved ${state.assetPositions.length} positions to DB`);
 
   return {
     marginSummary: state.marginSummary,

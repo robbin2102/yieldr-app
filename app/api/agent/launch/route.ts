@@ -125,26 +125,27 @@ export async function POST(request: NextRequest) {
 
 /**
  * Launch Hyperliquid monitoring agent
+ * Note: Historical fills backfill is skipped for fast response.
+ * Monitoring will capture new fills going forward.
  */
 async function launchHyperliquidAgent(walletAddress: string, userId?: string) {
   const now = new Date();
 
   try {
-    // 1. Fetch 30-day fills history
-    console.log('[Hyperliquid] Fetching 30-day fills...');
-    const { saved, duplicates } = await fetchAndSaveInitialFills(walletAddress);
-    console.log(`[Hyperliquid] Saved ${saved} fills (${duplicates} duplicates)`);
+    console.log(`[Hyperliquid] 🚀 Launching agent for ${walletAddress}...`);
 
-    // 2. Fetch current positions
-    console.log('[Hyperliquid] Fetching current positions...');
+    // 1. Fetch current positions ONLY (fast response)
+    console.log('[Hyperliquid] 📊 Fetching current positions...');
     const { marginSummary, currentPositions } = await fetchHyperliquidPositions(walletAddress);
-    console.log(`[Hyperliquid] Found ${currentPositions} open positions`);
+    console.log(`[Hyperliquid] ✓ Found ${currentPositions} open positions`);
 
-    // 3. Compute initial metrics
-    console.log('[Hyperliquid] Computing metrics...');
+    // 2. Compute initial metrics (will be empty initially, filled by monitoring)
+    console.log('[Hyperliquid] 📈 Computing initial metrics...');
     await computeHyperliquidMetrics(walletAddress, marginSummary);
+    console.log('[Hyperliquid] ✓ Metrics initialized');
 
-    // 4. Create MonitoredWallet entry
+    // 3. Create MonitoredWallet entry
+    console.log('[Hyperliquid] 🔧 Setting up monitoring...');
     await MonitoredWallet.findOneAndUpdate(
       { walletAddress, market: 'PERP', platform: 'HYPERLIQUID' },
       {
@@ -160,12 +161,13 @@ async function launchHyperliquidAgent(walletAddress: string, userId?: string) {
       },
       { upsert: true, new: true }
     );
+    console.log('[Hyperliquid] ✓ Monitoring activated (5min intervals)');
 
-    // 5. Return initial data
+    // 4. Return initial data
     const positions = await HyperliquidPosition.find({ walletAddress });
     const metrics = await HyperliquidMetrics.findOne({ walletAddress });
 
-    console.log(`✓ [Hyperliquid] Agent launched for ${walletAddress}`);
+    console.log(`[Hyperliquid] ✅ Agent launched successfully for ${walletAddress}`);
 
     return {
       success: true,
@@ -175,13 +177,13 @@ async function launchHyperliquidAgent(walletAddress: string, userId?: string) {
         positions,
         metrics,
         stats: {
-          fillsFetched: saved,
-          openPositions: currentPositions
+          openPositions: currentPositions,
+          note: 'Historical fills will be captured by background monitoring. Metrics will populate as trades occur.'
         }
       }
     };
   } catch (error: any) {
-    console.error('[Hyperliquid] Error launching agent:', error);
+    console.error('[Hyperliquid] ❌ Error launching agent:', error);
     throw error;
   }
 }
@@ -193,20 +195,24 @@ async function launchLPAgent(walletAddress: string, userId?: string) {
   const now = new Date();
 
   try {
+    console.log(`[LP] 🚀 Launching agent for ${walletAddress}...`);
+
     // 1. Fetch current LP positions
-    console.log('[LP] Fetching current positions...');
+    console.log('[LP] 📊 Fetching current positions from DefiKrystal...');
     const { totalPositions } = await fetchLPPositions(walletAddress);
-    console.log(`[LP] Found ${totalPositions} positions`);
+    console.log(`[LP] ✓ Found ${totalPositions} positions`);
 
     // 2. Compute initial metrics
-    console.log('[LP] Computing metrics...');
+    console.log('[LP] 📈 Computing metrics...');
     await computeLPMetrics(walletAddress);
+    console.log('[LP] ✓ Metrics computed');
 
     // 3. Create MonitoredWallet entry with random interval
     const interval = process.env.NODE_ENV === 'production'
       ? Math.floor(Math.random() * (30 - 5 + 1) + 5) * 60 * 1000 // 5-30 min
       : 60 * 1000; // 60s for testing
 
+    console.log(`[LP] 🔧 Setting up monitoring (${Math.round(interval / 1000)}s intervals)...`);
     await MonitoredWallet.findOneAndUpdate(
       { walletAddress, market: 'LP', platform: null },
       {
@@ -222,12 +228,13 @@ async function launchLPAgent(walletAddress: string, userId?: string) {
       },
       { upsert: true, new: true }
     );
+    console.log('[LP] ✓ Monitoring activated');
 
     // 4. Return initial data
     const positions = await LPPosition.find({ walletAddress });
     const metrics = await LPMetrics.findOne({ walletAddress });
 
-    console.log(`✓ [LP] Agent launched for ${walletAddress}`);
+    console.log(`[LP] ✅ Agent launched successfully for ${walletAddress}`);
 
     return {
       success: true,
@@ -243,7 +250,7 @@ async function launchLPAgent(walletAddress: string, userId?: string) {
       }
     };
   } catch (error: any) {
-    console.error('[LP] Error launching agent:', error);
+    console.error('[LP] ❌ Error launching agent:', error);
     throw error;
   }
 }
