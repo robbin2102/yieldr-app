@@ -188,134 +188,106 @@ export async function fetchAndSavePositions(walletAddress: string) {
 
 /**
  * Smart 30-day history backfill
- * - Fetches in 7-day chunks going backwards in time
- * - Stops at 10k fills OR 30 days, whichever comes first
- * - Returns detailed stats for logging
+ * Fetches all fills from last 30 days in a single call (API returns max 2000)
+ * Returns detailed stats for logging
  */
 export async function fetchAndSave30DayHistory(walletAddress: string) {
   const now = Date.now();
   const thirtyDaysAgo = now - (30 * 24 * 60 * 60 * 1000);
-  const CHUNK_SIZE = 7 * 24 * 60 * 60 * 1000; // 7 days
-  const MAX_FILLS = 2000;
 
-  let totalFetched = 0;
-  let totalSaved = 0;
-  let totalDuplicates = 0;
-  let chunksFetched = 0;
-  let currentEnd = now;
-  let stoppedReason = '';
+  console.log(`[Backfill] 📅 Starting backfill from ${new Date(now).toISOString()} back 30 days`);
+  console.log(`[Backfill] 🎯 Fetching max 2000 fills (API limit)`);
 
-  console.log(`[Backfill] 📅 Starting backfill from ${new Date(now).toISOString()} to ${new Date(thirtyDaysAgo).toISOString()}`);
-  console.log(`[Backfill] 🎯 Limits: ${MAX_FILLS} fills (API max) OR 30 days`);
+  // Fetch all fills in one call (no chunking) - matches user's curl command
+  // Don't pass endTime to get all fills from startTime to now
+  // Don't pass aggregateByTime to match user's curl exactly
+  const fetchStart = Date.now();
+  const fills = await getUserFills(walletAddress, thirtyDaysAgo);
+  const fetchDuration = Date.now() - fetchStart;
 
-  while (currentEnd > thirtyDaysAgo && totalFetched < MAX_FILLS) {
-    const currentStart = Math.max(currentEnd - CHUNK_SIZE, thirtyDaysAgo);
-    chunksFetched++;
+  console.log(`[Backfill] 📥 API returned ${fills.length} fills in ${fetchDuration}ms`);
 
-    console.log(`[Backfill] 📦 Chunk ${chunksFetched}: ${new Date(currentStart).toISOString()} to ${new Date(currentEnd).toISOString()}`);
+  if (fills.length === 0) {
+    console.log(`[Backfill] ℹ️  No fills found for this wallet`);
+    return {
+      totalFetched: 0,
+      totalSaved: 0,
+      totalDuplicates: 0,
+      chunksFetched: 1,
+      stoppedReason: 'No fills available'
+    };
+  }
 
-    const chunkStart = Date.now();
-    const fills = await getUserFills(walletAddress, currentStart, currentEnd);
-    const apiDuration = Date.now() - chunkStart;
+  // Bulk insert with deduplication
+  console.log(`[Backfill] 💾 Starting bulk save to MongoDB...`);
+  const saveStart = Date.now();
 
-    console.log(`[Backfill] 📥 API returned ${fills.length} fills in ${apiDuration}ms`);
+  // Prepare all documents
+  const fillDocs = fills.map(fill => ({
+    walletAddress,
+    tid: fill.tid,
+    oid: fill.oid,
+    coin: fill.coin,
+    side: fill.side,
+    dir: fill.dir,
+    px: fill.px,
+    sz: fill.sz,
+    startPosition: fill.startPosition,
+    closedPnl: fill.closedPnl || '0.0',
+    fee: fill.fee,
+    feeToken: fill.feeToken,
+    builderFee: fill.builderFee,
+    crossed: fill.crossed,
+    hash: fill.hash,
+    time: fill.time,
+    createdAt: new Date()
+  }));
 
-    if (fills.length === 0) {
-      console.log(`[Backfill] 🏁 No more fills found - reached beginning of trading history`);
-      stoppedReason = 'No more fills available';
-      break;
-    }
+  // Use bulkWrite for efficient upsert
+  let saved = 0;
+  let duplicates = 0;
 
-    // Save fills with deduplication
-    console.log(`[Backfill] 💾 Starting save of ${fills.length} fills to MongoDB...`);
-    const saveStart = Date.now();
-    let saved = 0;
-    let duplicates = 0;
+  try {
+    const bulkOps = fillDocs.map(doc => ({
+      updateOne: {
+        filter: { walletAddress, tid: doc.tid },
+        update: { $setOnInsert: doc },
+        upsert: true
+      }
+    }));
 
-    for (const fill of fills) {
+    const result = await HyperliquidFill.bulkWrite(bulkOps, { ordered: false });
+    saved = result.upsertedCount || 0;
+    duplicates = fills.length - saved;
+  } catch (error: any) {
+    console.error(`[Backfill] ⚠️  Bulk write error:`, error.message);
+    // Fall back to individual inserts if bulk fails
+    for (const doc of fillDocs) {
       try {
-        // Check if fill already exists first
-        const existing = await HyperliquidFill.findOne({ walletAddress, tid: fill.tid });
-
-        if (existing) {
-          duplicates++;
-          continue;
-        }
-
-        // Insert new fill
-        await HyperliquidFill.create({
-          walletAddress,
-          tid: fill.tid,
-          oid: fill.oid,
-          coin: fill.coin,
-          side: fill.side,
-          dir: fill.dir,
-          px: fill.px,
-          sz: fill.sz,
-          startPosition: fill.startPosition,
-          closedPnl: fill.closedPnl || '0.0',
-          fee: fill.fee,
-          feeToken: fill.feeToken,
-          builderFee: fill.builderFee,
-          crossed: fill.crossed,
-          hash: fill.hash,
-          time: fill.time,
-          createdAt: new Date()
-        });
+        await HyperliquidFill.create(doc);
         saved++;
-      } catch (error: any) {
-        if (error.code === 11000) {
+      } catch (err: any) {
+        if (err.code === 11000) {
           duplicates++;
         } else {
-          console.error(`[Backfill] ⚠️  Error saving fill ${fill.tid}:`, error.message);
-          // Continue processing other fills even if one fails
+          console.error(`[Backfill] ⚠️  Error saving fill ${doc.tid}:`, err.message);
         }
       }
     }
-
-    totalFetched += fills.length;
-    totalSaved += saved;
-    totalDuplicates += duplicates;
-
-    const saveDuration = Date.now() - saveStart;
-    console.log(`[Backfill] ✅ Save completed in ${saveDuration}ms - ${saved} new, ${duplicates} duplicates | Total: ${totalFetched}/${MAX_FILLS}`);
-
-    // Check if we've hit the limit
-    if (totalFetched >= MAX_FILLS) {
-      console.log(`[Backfill] 🛑 Reached ${MAX_FILLS} fills limit`);
-      stoppedReason = `Reached ${MAX_FILLS} fills limit`;
-      break;
-    }
-
-    // If we got less than 2000 fills, we've reached the end
-    if (fills.length < 2000) {
-      console.log(`[Backfill] 🏁 Received ${fills.length} fills (< 2000) - end of available data`);
-      stoppedReason = 'Reached end of available fills';
-      break;
-    }
-
-    // Move to next chunk (going backwards in time)
-    currentEnd = currentStart;
-
-    // Small delay to avoid rate limiting
-    await new Promise(resolve => setTimeout(resolve, 100));
   }
 
-  if (currentEnd <= thirtyDaysAgo && !stoppedReason) {
-    stoppedReason = 'Reached 30-day limit';
-  }
-
+  const saveDuration = Date.now() - saveStart;
+  console.log(`[Backfill] ✅ Save completed in ${saveDuration}ms`);
   console.log(`[Backfill] 📊 Summary:`);
-  console.log(`[Backfill]    Total fetched: ${totalFetched} fills`);
-  console.log(`[Backfill]    Saved: ${totalSaved} new`);
-  console.log(`[Backfill]    Duplicates: ${totalDuplicates}`);
-  console.log(`[Backfill]    Chunks: ${chunksFetched}`);
+  console.log(`[Backfill]    Total fetched: ${fills.length} fills`);
+  console.log(`[Backfill]    Saved: ${saved} new`);
+  console.log(`[Backfill]    Duplicates: ${duplicates}`);
 
   return {
-    totalFetched,
-    totalSaved,
-    totalDuplicates,
-    chunksFetched,
-    stoppedReason
+    totalFetched: fills.length,
+    totalSaved: saved,
+    totalDuplicates: duplicates,
+    chunksFetched: 1,
+    stoppedReason: fills.length >= 2000 ? 'Reached API limit (2000 fills)' : 'Fetched all available fills'
   };
 }

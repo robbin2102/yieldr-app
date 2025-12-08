@@ -96,17 +96,21 @@ export async function getUserFills(
   walletAddress: string,
   startTime: number,
   endTime?: number,
-  aggregateByTime: boolean = true
+  aggregateByTime?: boolean
 ): Promise<HyperliquidFillResponse[]> {
   const payload: any = {
     type: 'userFillsByTime',
     user: walletAddress,
-    startTime,
-    aggregateByTime
+    startTime
   };
 
   if (endTime) {
     payload.endTime = endTime;
+  }
+
+  // Only include aggregateByTime if explicitly set
+  if (aggregateByTime !== undefined) {
+    payload.aggregateByTime = aggregateByTime;
   }
 
   const response = await fetch(HYPERLIQUID_API_URL, {
