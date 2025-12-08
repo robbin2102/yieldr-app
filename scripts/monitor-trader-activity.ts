@@ -165,7 +165,7 @@ class TradeMonitor {
     const sideIcon = side === 'BUY' ? '🟢 BUY ' : side === 'SELL' ? '🔴 SELL' : '⚪ UNKNOWN';
 
     console.log('\n' + '─'.repeat(120));
-    console.log(`${sideIcon} | ${dateStr} ${timeStr} | Trade #${this.tradeCount}`);
+    console.log(`${sideIcon} | ${dateStr} ${timeStr} | Trade #${this.tradeCount} | Unix: ${trade.timestamp}`);
     console.log('─'.repeat(120));
     console.log(`📊 Market:    ${trade.title}`);
     console.log(`🎯 Outcome:   ${trade.outcome}`);
