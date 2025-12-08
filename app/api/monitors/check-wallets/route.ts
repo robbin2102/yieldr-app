@@ -16,9 +16,11 @@ export async function GET(request: NextRequest) {
   const startTime = Date.now();
 
   try {
-    // Optional: Verify cron secret for security
+    // Optional: Verify cron secret for security (skip in development)
+    const isDevelopment = process.env.NODE_ENV === 'development';
     const authHeader = request.headers.get('authorization');
-    if (process.env.CRON_SECRET && authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
+
+    if (!isDevelopment && process.env.CRON_SECRET && authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
       console.warn('Unauthorized cron request');
       return NextResponse.json(
         { error: 'Unauthorized' },
