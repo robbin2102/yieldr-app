@@ -86,6 +86,7 @@ class TradeMonitor {
 
   /**
    * Fetch new trades since last check
+   * Uses fixed lookback window to handle API indexing delays
    */
   async fetchNewTrades(): Promise<ActivityResponse[]> {
     try {
@@ -93,8 +94,9 @@ class TradeMonitor {
 
       const now = Math.floor(Date.now() / 1000);
 
-      // Use a sliding window approach (last 120 seconds to ensure we don't miss anything)
-      const windowStart = Math.max(this.lastTimestamp - 5, now - 120);
+      // Always look back 60 seconds from current time to catch API delays
+      // This ensures trades that take time to index are still captured
+      const windowStart = now - 60;
 
       const url = `${API_BASE}/activity?user=${WALLET}&type=TRADE&start=${windowStart}&end=${now}&limit=500&sortBy=TIMESTAMP&sortDirection=ASC`;
 
@@ -108,13 +110,16 @@ class TradeMonitor {
 
       const activities: ActivityResponse[] = response.data;
 
-      // Filter out trades we've already seen
+      // Filter out trades we've already seen (critical for 60s lookback)
       const newTrades = activities.filter(trade => !this.seenTradeIds.has(trade.id));
 
-      // Update last timestamp to now (for next poll window)
-      if (newTrades.length > 0 || activities.length > 0) {
-        this.lastTimestamp = now;
+      // Update lastTimestamp to the MAX trade timestamp (not system time!)
+      // This prevents the window from advancing past unindexed trades
+      if (newTrades.length > 0) {
+        const maxTradeTimestamp = Math.max(...newTrades.map(t => t.timestamp));
+        this.lastTimestamp = maxTradeTimestamp;
       }
+      // Don't update lastTimestamp if no new trades - keep looking back
 
       // Mark trades as seen
       newTrades.forEach(trade => this.seenTradeIds.add(trade.id));
