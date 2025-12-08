@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import connectDB from '@/lib/mongodb';
+import connectDB from '@/lib/mongoose';
 import MonitoredWallet from '@/models/MonitoredWallet';
 import HyperliquidPosition from '@/models/HyperliquidPosition';
 import HyperliquidMetrics from '@/models/HyperliquidMetrics';
