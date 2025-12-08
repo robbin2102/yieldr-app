@@ -7,8 +7,8 @@ import axios from 'axios';
 
 const API_BASE = 'https://data-api.polymarket.com';
 const WALLET = '0xecd55daa7c6900683b804d1d4db935fbfabe43f4';
-const POLL_INTERVAL = 1000; // 1 second
-const POSITION_REFRESH_INTERVAL = 30000; // 30 seconds
+const POLL_INTERVAL = 3000; // 3 seconds
+const POSITION_REFRESH_INTERVAL = 10000; // 10 seconds
 
 interface ActivityResponse {
   id: string;
@@ -94,11 +94,11 @@ class TradeMonitor {
 
       const now = Math.floor(Date.now() / 1000);
 
-      // Always look back 60 seconds from current time to catch API delays
-      // This ensures trades that take time to index are still captured
-      const windowStart = now - 60;
+      // Look back from last trade timestamp, with 60s safety window for API delays
+      // This ensures no gaps between polls and catches delayed indexing
+      const windowStart = Math.max(this.lastTimestamp, now - 60);
 
-      const url = `${API_BASE}/activity?user=${WALLET}&type=TRADE&start=${windowStart}&end=${now}&limit=500&sortBy=TIMESTAMP&sortDirection=ASC`;
+      const url = `${API_BASE}/activity?user=${WALLET}&type=TRADE&start=${windowStart}&end=${now}&limit=50&sortBy=TIMESTAMP&sortDirection=ASC`;
 
       const response = await axios.get(url, {
         timeout: 10000,
