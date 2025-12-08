@@ -18,11 +18,12 @@ export interface IHyperliquidMetrics extends Document {
   totalNtlPos: string; // Total notional position value
   withdrawable: string;
 
-  // Computed PnL (from fills)
+  // Computed PnL (from portfolio API)
   pnl_1d: number;
   pnl_7d: number;
   pnl_30d: number;
   pnl_allTime: number;
+  volume_24h: string;
 
   // Trade statistics
   totalTrades: number;
@@ -93,6 +94,10 @@ const HyperliquidMetricsSchema = new Schema<IHyperliquidMetrics>({
   pnl_allTime: {
     type: Number,
     default: 0
+  },
+  volume_24h: {
+    type: String,
+    default: '0'
   },
   totalTrades: {
     type: Number,

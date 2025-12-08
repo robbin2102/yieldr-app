@@ -68,6 +68,26 @@ export interface HyperliquidClearinghouseState {
   withdrawable: string;
 }
 
+export interface HyperliquidPortfolio {
+  day: {
+    pnlHistory: Array<[number, string]>;
+    accountValueHistory: Array<[number, string]>;
+    vlm: string;
+  };
+  week: {
+    pnlHistory: Array<[number, string]>;
+    accountValueHistory: Array<[number, string]>;
+  };
+  month: {
+    pnlHistory: Array<[number, string]>;
+    accountValueHistory: Array<[number, string]>;
+  };
+  allTime: {
+    pnlHistory: Array<[number, string]>;
+    accountValueHistory: Array<[number, string]>;
+  };
+}
+
 /**
  * Fetch user fills (trades) by time range
  * Max 2000 fills per response, 10000 most recent available
@@ -140,6 +160,56 @@ export async function getClearinghouseState(
   console.log(`🌐 [API] Response summary: ${data.assetPositions?.length || 0} positions, account value: $${data.marginSummary?.accountValue || 'N/A'}`);
 
   return data;
+}
+
+/**
+ * Fetch portfolio data with PnL history for 1d/7d/30d/allTime
+ */
+export async function getPortfolio(
+  walletAddress: string
+): Promise<HyperliquidPortfolio> {
+  console.log(`🌐 [API] Calling Hyperliquid Portfolio API for ${walletAddress}`);
+
+  const payload = {
+    type: 'portfolio',
+    user: walletAddress
+  };
+
+  const fetchStart = Date.now();
+  const response = await fetch(HYPERLIQUID_API_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload)
+  });
+  const fetchDuration = Date.now() - fetchStart;
+  console.log(`🌐 [API] Portfolio API responded in ${fetchDuration}ms with status ${response.status}`);
+
+  if (!response.ok) {
+    console.error(`🔴 [API] Portfolio API error: ${response.status} ${response.statusText}`);
+    throw new Error(`Hyperliquid Portfolio API error: ${response.statusText}`);
+  }
+
+  const rawData = await response.json();
+
+  // Transform array response to structured object
+  const portfolio: HyperliquidPortfolio = {
+    day: rawData[0][1],
+    week: rawData[1][1],
+    month: rawData[2][1],
+    allTime: rawData[3][1]
+  };
+
+  // Extract latest PnL values
+  const pnl_1d = portfolio.day.pnlHistory[portfolio.day.pnlHistory.length - 1]?.[1] || '0';
+  const pnl_7d = portfolio.week.pnlHistory[portfolio.week.pnlHistory.length - 1]?.[1] || '0';
+  const pnl_30d = portfolio.month.pnlHistory[portfolio.month.pnlHistory.length - 1]?.[1] || '0';
+  const pnl_allTime = portfolio.allTime.pnlHistory[portfolio.allTime.pnlHistory.length - 1]?.[1] || '0';
+
+  console.log(`🌐 [API] Portfolio PnL - 1d: $${pnl_1d}, 7d: $${pnl_7d}, 30d: $${pnl_30d}, All: $${pnl_allTime}`);
+
+  return portfolio;
 }
 
 /**

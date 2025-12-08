@@ -1,10 +1,13 @@
 /**
  * Hyperliquid Metrics Computation
+ * Uses portfolio API for PnL and fills for trade statistics
  */
 
 import HyperliquidFill from '@/models/HyperliquidFill';
 import HyperliquidPosition from '@/models/HyperliquidPosition';
 import HyperliquidMetrics from '@/models/HyperliquidMetrics';
+import HyperliquidPnlSnapshot from '@/models/HyperliquidPnlSnapshot';
+import { getPortfolio } from './api';
 
 interface MarginSummary {
   accountValue: string;
@@ -14,176 +17,239 @@ interface MarginSummary {
 }
 
 /**
- * Compute comprehensive metrics from fills and positions
+ * Compute comprehensive metrics from portfolio API and fills
  */
 export async function computeMetrics(
   walletAddress: string,
   marginSummary: MarginSummary
 ) {
-  // Fetch all fills
+  console.log(`[Metrics] 🧮 Computing metrics for ${walletAddress}...`);
+
+  // Fetch portfolio data (PnL from API)
+  const portfolio = await getPortfolio(walletAddress);
+
+  // Extract PnL values from portfolio
+  const pnl_1d = parseFloat(portfolio.day.pnlHistory[portfolio.day.pnlHistory.length - 1]?.[1] || '0');
+  const pnl_7d = parseFloat(portfolio.week.pnlHistory[portfolio.week.pnlHistory.length - 1]?.[1] || '0');
+  const pnl_30d = parseFloat(portfolio.month.pnlHistory[portfolio.month.pnlHistory.length - 1]?.[1] || '0');
+  const pnl_allTime = parseFloat(portfolio.allTime.pnlHistory[portfolio.allTime.pnlHistory.length - 1]?.[1] || '0');
+  const volume_24h = portfolio.day.vlm || '0';
+  const accountValue = portfolio.day.accountValueHistory[portfolio.day.accountValueHistory.length - 1]?.[1] || marginSummary.accountValue;
+
+  console.log(`[Metrics] 📊 PnL - 1d: $${pnl_1d}, 7d: $${pnl_7d}, 30d: $${pnl_30d}, All: $${pnl_allTime}`);
+
+  // Save PnL snapshot for Sharpe ratio calculation
+  await HyperliquidPnlSnapshot.create({
+    walletAddress,
+    timestamp: new Date(),
+    accountValue,
+    pnl_1d,
+    pnl_7d,
+    pnl_30d,
+    pnl_allTime,
+    volume_24h
+  });
+  console.log(`[Metrics] 💾 Saved PnL snapshot`);
+
+  // Fetch all fills to compute trade statistics
   const allFills = await HyperliquidFill.find({ walletAddress }).sort({ time: 1 });
 
   if (allFills.length === 0) {
-    // No trades yet, save empty metrics
-    await saveEmptyMetrics(walletAddress, marginSummary);
+    console.log(`[Metrics] ⚠️  No fills found, saving basic metrics`);
+    await saveBasicMetrics(walletAddress, {
+      accountValue,
+      totalMarginUsed: marginSummary.totalMarginUsed,
+      totalNtlPos: marginSummary.totalNtlPos,
+      pnl_1d,
+      pnl_7d,
+      pnl_30d,
+      pnl_allTime,
+      volume_24h
+    });
     return;
   }
 
-  // Calculate time-based PnL by summing closedPnl
-  const now = Date.now();
-  const oneDayAgo = now - 24 * 60 * 60 * 1000;
-  const sevenDaysAgo = now - 7 * 24 * 60 * 60 * 1000;
-  const thirtyDaysAgo = now - 30 * 24 * 60 * 60 * 1000;
+  // Filter for closing trades (trades with realized PnL)
+  const closingTrades = allFills.filter(f => f.closedPnl && parseFloat(f.closedPnl) !== 0);
+  const wins = closingTrades.filter(t => parseFloat(t.closedPnl) > 0);
+  const losses = closingTrades.filter(t => parseFloat(t.closedPnl) < 0);
 
-  const pnl_1d = allFills
-    .filter(f => f.time >= oneDayAgo && f.closedPnl && f.closedPnl !== '0.0')
-    .reduce((sum, f) => sum + parseFloat(f.closedPnl), 0);
+  console.log(`[Metrics] 📈 Total fills: ${allFills.length}, Closing trades: ${closingTrades.length}, Wins: ${wins.length}, Losses: ${losses.length}`);
 
-  const pnl_7d = allFills
-    .filter(f => f.time >= sevenDaysAgo && f.closedPnl && f.closedPnl !== '0.0')
-    .reduce((sum, f) => sum + parseFloat(f.closedPnl), 0);
+  // Calculate win rate and trade statistics
+  const winRate = closingTrades.length > 0 ? wins.length / closingTrades.length : 0;
+  const avgWin = wins.length > 0
+    ? wins.reduce((s, t) => s + parseFloat(t.closedPnl), 0) / wins.length
+    : 0;
+  const avgLoss = losses.length > 0
+    ? losses.reduce((s, t) => s + parseFloat(t.closedPnl), 0) / losses.length
+    : 0;
+  const bestTrade = wins.length > 0
+    ? Math.max(...wins.map(t => parseFloat(t.closedPnl)))
+    : 0;
+  const worstTrade = losses.length > 0
+    ? Math.min(...losses.map(t => parseFloat(t.closedPnl)))
+    : 0;
 
-  const pnl_30d = allFills
-    .filter(f => f.time >= thirtyDaysAgo && f.closedPnl && f.closedPnl !== '0.0')
-    .reduce((sum, f) => sum + parseFloat(f.closedPnl), 0);
+  // Calculate Sharpe ratio from snapshots
+  const sharpeRatio = await calculateSharpeRatio(walletAddress);
 
-  const pnl_allTime = allFills
-    .filter(f => f.closedPnl && f.closedPnl !== '0.0')
-    .reduce((sum, f) => sum + parseFloat(f.closedPnl), 0);
+  // Calculate max drawdown from snapshots
+  const maxDrawdown = await calculateMaxDrawdown(walletAddress);
 
-  // Group fills by closing trades (closedPnl != 0)
-  const closedTrades = allFills.filter(
-    f => f.closedPnl && parseFloat(f.closedPnl) !== 0
-  );
-
-  const wins = closedTrades.filter(t => parseFloat(t.closedPnl) > 0);
-  const losses = closedTrades.filter(t => parseFloat(t.closedPnl) < 0);
-
-  // Current positions for leverage calc
+  // Get current positions for leverage calc
   const currentPositions = await HyperliquidPosition.find({ walletAddress });
-
-  // Per-asset breakdown
-  const byAssetMap: Record<string, any> = {};
-
-  closedTrades.forEach(trade => {
-    if (!byAssetMap[trade.coin]) {
-      byAssetMap[trade.coin] = { fills: [], wins: [], losses: [] };
-    }
-    byAssetMap[trade.coin].fills.push(trade);
-
-    if (parseFloat(trade.closedPnl) > 0) {
-      byAssetMap[trade.coin].wins.push(trade);
-    } else {
-      byAssetMap[trade.coin].losses.push(trade);
-    }
-  });
-
-  const assetMetrics = Object.entries(byAssetMap).map(([coin, data]: [string, any]) => ({
-    coin,
-    trades: data.fills.length,
-    winRate: data.fills.length > 0 ? data.wins.length / data.fills.length : 0,
-    bestWin: data.wins.length > 0
-      ? Math.max(...data.wins.map((t: any) => parseFloat(t.closedPnl)))
-      : 0,
-    worstLoss: data.losses.length > 0
-      ? Math.min(...data.losses.map((t: any) => parseFloat(t.closedPnl)))
-      : 0,
-    totalPnl: data.fills.reduce((s: number, t: any) => s + parseFloat(t.closedPnl), 0)
-  }));
-
-  // Sharpe ratio (simplified: returns per trade)
-  const returns = closedTrades.map(t => parseFloat(t.closedPnl));
-  const avgReturn = returns.length > 0
-    ? returns.reduce((a, b) => a + b, 0) / returns.length
+  const avgLeverage = currentPositions.length > 0
+    ? currentPositions.reduce((s, p) => s + p.leverage.value, 0) / currentPositions.length
     : 0;
-  const variance = returns.length > 0
-    ? returns.reduce((sum, r) => sum + Math.pow(r - avgReturn, 2), 0) / returns.length
+  const maxLeverageUsed = currentPositions.length > 0
+    ? Math.max(...currentPositions.map(p => p.leverage.value))
     : 0;
-  const stdDev = Math.sqrt(variance);
-  const sharpeRatio = stdDev > 0 ? avgReturn / stdDev : 0;
-
-  // Max drawdown
-  let peak = 0;
-  let maxDrawdown = 0;
-  let cumPnl = 0;
-
-  allFills.forEach(fill => {
-    if (fill.closedPnl) {
-      cumPnl += parseFloat(fill.closedPnl);
-      peak = Math.max(peak, cumPnl);
-      if (peak > 0) {
-        const drawdown = (peak - cumPnl) / peak;
-        maxDrawdown = Math.max(maxDrawdown, drawdown);
-      }
-    }
-  });
 
   // Save metrics
   await HyperliquidMetrics.findOneAndUpdate(
     { walletAddress },
     {
       walletAddress,
-      accountValue: marginSummary.accountValue,
+      accountValue,
       totalMarginUsed: marginSummary.totalMarginUsed,
       totalNtlPos: marginSummary.totalNtlPos,
-      withdrawable: '0', // Not provided in marginSummary
+      withdrawable: '0',
 
       pnl_1d,
       pnl_7d,
       pnl_30d,
       pnl_allTime,
+      volume_24h,
 
-      totalTrades: closedTrades.length,
+      totalTrades: closingTrades.length,
       wins: wins.length,
       losses: losses.length,
-      winRate: closedTrades.length > 0 ? wins.length / closedTrades.length : 0,
-      avgWin: wins.length > 0
-        ? wins.reduce((s, t) => s + parseFloat(t.closedPnl), 0) / wins.length
-        : 0,
-      avgLoss: losses.length > 0
-        ? losses.reduce((s, t) => s + parseFloat(t.closedPnl), 0) / losses.length
-        : 0,
-      bestTrade: wins.length > 0
-        ? Math.max(...wins.map(t => parseFloat(t.closedPnl)))
-        : 0,
-      worstTrade: losses.length > 0
-        ? Math.min(...losses.map(t => parseFloat(t.closedPnl)))
-        : 0,
+      winRate,
+      avgWin,
+      avgLoss,
+      bestTrade,
+      worstTrade,
 
       sharpeRatio,
       maxDrawdown,
-      avgLeverage: currentPositions.length > 0
-        ? currentPositions.reduce((s, p) => s + p.leverage.value, 0) / currentPositions.length
-        : 0,
-      maxLeverageUsed: currentPositions.length > 0
-        ? Math.max(...currentPositions.map(p => p.leverage.value))
-        : 0,
+      avgLeverage,
+      maxLeverageUsed,
 
-      byAsset: assetMetrics,
+      byAsset: [], // Not computing per-asset for now
       updatedAt: new Date()
     },
     { upsert: true, new: true }
   );
 
-  console.log(`✓ Metrics computed for ${walletAddress}`);
+  console.log(`[Metrics] ✅ Metrics saved - Win rate: ${(winRate * 100).toFixed(2)}%, Sharpe: ${sharpeRatio.toFixed(2)}, Max DD: ${(maxDrawdown * 100).toFixed(2)}%`);
 }
 
 /**
- * Save empty metrics for wallets with no trades
+ * Calculate Sharpe ratio from PnL snapshots
+ * Sharpe = (mean return) / (std dev of returns)
  */
-async function saveEmptyMetrics(walletAddress: string, marginSummary: MarginSummary) {
+async function calculateSharpeRatio(walletAddress: string): Promise<number> {
+  // Get last 30 days of snapshots (at 5-min intervals, ~8640 snapshots)
+  const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+  const snapshots = await HyperliquidPnlSnapshot.find({
+    walletAddress,
+    timestamp: { $gte: thirtyDaysAgo }
+  }).sort({ timestamp: 1 });
+
+  if (snapshots.length < 2) {
+    return 0; // Need at least 2 snapshots to calculate returns
+  }
+
+  // Calculate returns between snapshots
+  const returns: number[] = [];
+  for (let i = 1; i < snapshots.length; i++) {
+    const prevPnl = snapshots[i - 1].pnl_allTime;
+    const currPnl = snapshots[i].pnl_allTime;
+    const pnlChange = currPnl - prevPnl;
+
+    // Normalize by account value to get percentage return
+    const prevAccountValue = parseFloat(snapshots[i - 1].accountValue);
+    if (prevAccountValue > 0) {
+      const returnPct = pnlChange / prevAccountValue;
+      returns.push(returnPct);
+    }
+  }
+
+  if (returns.length === 0) {
+    return 0;
+  }
+
+  // Calculate mean and std dev
+  const mean = returns.reduce((a, b) => a + b, 0) / returns.length;
+  const variance = returns.reduce((sum, r) => sum + Math.pow(r - mean, 2), 0) / returns.length;
+  const stdDev = Math.sqrt(variance);
+
+  // Sharpe ratio (annualized: multiply by sqrt of periods per year)
+  // 5-min intervals = 288 per day, 105,120 per year
+  // sqrt(105120) ≈ 324
+  const sharpe = stdDev > 0 ? (mean / stdDev) * Math.sqrt(105120) : 0;
+
+  return sharpe;
+}
+
+/**
+ * Calculate max drawdown from PnL snapshots
+ */
+async function calculateMaxDrawdown(walletAddress: string): Promise<number> {
+  const snapshots = await HyperliquidPnlSnapshot.find({
+    walletAddress
+  }).sort({ timestamp: 1 });
+
+  if (snapshots.length < 2) {
+    return 0;
+  }
+
+  let peak = snapshots[0].pnl_allTime;
+  let maxDrawdown = 0;
+
+  for (const snapshot of snapshots) {
+    const currentPnl = snapshot.pnl_allTime;
+    peak = Math.max(peak, currentPnl);
+
+    if (peak > 0) {
+      const drawdown = (peak - currentPnl) / peak;
+      maxDrawdown = Math.max(maxDrawdown, drawdown);
+    }
+  }
+
+  return maxDrawdown;
+}
+
+/**
+ * Save basic metrics when no fills are available
+ */
+async function saveBasicMetrics(
+  walletAddress: string,
+  data: {
+    accountValue: string;
+    totalMarginUsed: string;
+    totalNtlPos: string;
+    pnl_1d: number;
+    pnl_7d: number;
+    pnl_30d: number;
+    pnl_allTime: number;
+    volume_24h: string;
+  }
+) {
   await HyperliquidMetrics.findOneAndUpdate(
     { walletAddress },
     {
       walletAddress,
-      accountValue: marginSummary.accountValue,
-      totalMarginUsed: marginSummary.totalMarginUsed,
-      totalNtlPos: marginSummary.totalNtlPos,
+      accountValue: data.accountValue,
+      totalMarginUsed: data.totalMarginUsed,
+      totalNtlPos: data.totalNtlPos,
       withdrawable: '0',
-      pnl_1d: 0,
-      pnl_7d: 0,
-      pnl_30d: 0,
-      pnl_allTime: 0,
+      pnl_1d: data.pnl_1d,
+      pnl_7d: data.pnl_7d,
+      pnl_30d: data.pnl_30d,
+      pnl_allTime: data.pnl_allTime,
+      volume_24h: data.volume_24h,
       totalTrades: 0,
       wins: 0,
       losses: 0,

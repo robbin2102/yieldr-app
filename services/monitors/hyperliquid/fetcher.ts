@@ -196,7 +196,7 @@ export async function fetchAndSave30DayHistory(walletAddress: string) {
   const now = Date.now();
   const thirtyDaysAgo = now - (30 * 24 * 60 * 60 * 1000);
   const CHUNK_SIZE = 7 * 24 * 60 * 60 * 1000; // 7 days
-  const MAX_FILLS = 10000;
+  const MAX_FILLS = 2000;
 
   let totalFetched = 0;
   let totalSaved = 0;
@@ -206,7 +206,7 @@ export async function fetchAndSave30DayHistory(walletAddress: string) {
   let stoppedReason = '';
 
   console.log(`[Backfill] 📅 Starting backfill from ${new Date(now).toISOString()} to ${new Date(thirtyDaysAgo).toISOString()}`);
-  console.log(`[Backfill] 🎯 Limits: ${MAX_FILLS} fills OR 30 days`);
+  console.log(`[Backfill] 🎯 Limits: ${MAX_FILLS} fills (API max) OR 30 days`);
 
   while (currentEnd > thirtyDaysAgo && totalFetched < MAX_FILLS) {
     const currentStart = Math.max(currentEnd - CHUNK_SIZE, thirtyDaysAgo);
