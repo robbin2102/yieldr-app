@@ -110,11 +110,15 @@ export async function getUserFills(
 export async function getClearinghouseState(
   walletAddress: string
 ): Promise<HyperliquidClearinghouseState> {
+  console.log(`🌐 [API] Calling Hyperliquid API: ${HYPERLIQUID_API_URL}`);
+  console.log(`🌐 [API] Request: clearinghouseState for ${walletAddress}`);
+
   const payload = {
     type: 'clearinghouseState',
     user: walletAddress
   };
 
+  const fetchStart = Date.now();
   const response = await fetch(HYPERLIQUID_API_URL, {
     method: 'POST',
     headers: {
@@ -122,12 +126,20 @@ export async function getClearinghouseState(
     },
     body: JSON.stringify(payload)
   });
+  const fetchDuration = Date.now() - fetchStart;
+  console.log(`🌐 [API] Hyperliquid API responded in ${fetchDuration}ms with status ${response.status}`);
 
   if (!response.ok) {
+    console.error(`🔴 [API] Hyperliquid API error: ${response.status} ${response.statusText}`);
     throw new Error(`Hyperliquid API error: ${response.statusText}`);
   }
 
-  return await response.json();
+  const jsonStart = Date.now();
+  const data = await response.json();
+  console.log(`🌐 [API] JSON parsing took ${Date.now() - jsonStart}ms`);
+  console.log(`🌐 [API] Response summary: ${data.assetPositions?.length || 0} positions, account value: $${data.marginSummary?.accountValue || 'N/A'}`);
+
+  return data;
 }
 
 /**

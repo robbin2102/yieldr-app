@@ -29,14 +29,23 @@ interface LaunchAgentRequest {
  * Launch monitoring agent for a wallet
  */
 export async function POST(request: NextRequest) {
-  try {
-    await connectDB();
+  const requestStartTime = Date.now();
+  console.log('🔵 [API] POST /api/agent/launch - Request received');
 
+  try {
+    console.log('🔵 [API] Connecting to MongoDB...');
+    const dbStart = Date.now();
+    await connectDB();
+    console.log(`🔵 [API] MongoDB connected in ${Date.now() - dbStart}ms`);
+
+    console.log('🔵 [API] Parsing request body...');
     const body: LaunchAgentRequest = await request.json();
+    console.log(`🔵 [API] Request body:`, JSON.stringify(body, null, 2));
     const { walletAddress, market, platform, userId } = body;
 
     // Validate input
     if (!walletAddress || !market) {
+      console.log('🔴 [API] Validation failed: missing walletAddress or market');
       return NextResponse.json(
         { success: false, error: 'walletAddress and market are required' },
         { status: 400 }
@@ -44,6 +53,7 @@ export async function POST(request: NextRequest) {
     }
 
     if (market === 'PERP' && !platform) {
+      console.log('🔴 [API] Validation failed: PERP market requires platform');
       return NextResponse.json(
         { success: false, error: 'platform is required for PERP market' },
         { status: 400 }
@@ -51,13 +61,17 @@ export async function POST(request: NextRequest) {
     }
 
     const normalizedWallet = walletAddress.toLowerCase();
+    console.log(`🔵 [API] Normalized wallet: ${normalizedWallet}`);
 
     // Check if already monitored
+    console.log('🔵 [API] Checking if wallet already monitored...');
+    const dbQueryStart = Date.now();
     const existing = await MonitoredWallet.findOne({
       walletAddress: normalizedWallet,
       market,
       platform: market === 'PERP' ? platform : null
     });
+    console.log(`🔵 [API] DB query took ${Date.now() - dbQueryStart}ms - Found existing: ${!!existing}`);
 
     if (existing) {
       if (existing.status === 'active') {
@@ -97,18 +111,25 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    console.log(`Launching agent for ${normalizedWallet} (${market}${platform ? ` - ${platform}` : ''})...`);
+    console.log(`🔵 [API] Launching agent for ${normalizedWallet} (${market}${platform ? ` - ${platform}` : ''})...`);
 
     // Launch based on market type
     if (market === 'PERP' && platform === 'HYPERLIQUID') {
       // Hyperliquid monitoring
+      console.log('🔵 [API] Calling launchHyperliquidAgent...');
+      const launchStart = Date.now();
       const result = await launchHyperliquidAgent(normalizedWallet, userId);
+      console.log(`🔵 [API] launchHyperliquidAgent completed in ${Date.now() - launchStart}ms`);
       return NextResponse.json(result);
     } else if (market === 'LP') {
       // LP monitoring
+      console.log('🔵 [API] Calling launchLPAgent...');
+      const launchStart = Date.now();
       const result = await launchLPAgent(normalizedWallet, userId);
+      console.log(`🔵 [API] launchLPAgent completed in ${Date.now() - launchStart}ms`);
       return NextResponse.json(result);
     } else {
+      console.log('🔴 [API] Invalid market/platform combination');
       return NextResponse.json(
         { success: false, error: 'Invalid market/platform combination' },
         { status: 400 }
