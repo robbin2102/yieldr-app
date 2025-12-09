@@ -36,7 +36,12 @@ class OrderbookCache {
             });
             this.ws.on('message', (data) => {
                 try {
-                    const msg = JSON.parse(data.toString());
+                    const dataStr = data.toString();
+                    // Handle PONG responses (plain text, not JSON)
+                    if (dataStr === 'PONG') {
+                        return;
+                    }
+                    const msg = JSON.parse(dataStr);
                     if (msg.event_type === 'book') {
                         // Full orderbook snapshot
                         this.books.set(msg.asset_id, {

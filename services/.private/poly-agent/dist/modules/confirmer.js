@@ -129,21 +129,6 @@ class Confirmer {
                 passphrase: config_1.config.passphrase,
             },
         };
-        // Diagnostic logging (mask credentials for security)
-        console.log('[Confirmer] Sending auth message (type: user)...');
-        console.log('[Confirmer] Credentials check:');
-        console.log(`  - apiKey: ${config_1.config.apiKey ? config_1.config.apiKey.substring(0, 8) + '...' : 'MISSING'}`);
-        console.log(`  - secret: ${config_1.config.apiSecret ? config_1.config.apiSecret.substring(0, 8) + '...' : 'MISSING'}`);
-        console.log(`  - passphrase: ${config_1.config.passphrase ? config_1.config.passphrase.substring(0, 8) + '...' : 'MISSING'}`);
-        console.log('[Confirmer] Message structure:', JSON.stringify({
-            type: subscribeMessage.type,
-            markets: subscribeMessage.markets,
-            auth: {
-                apiKey: config_1.config.apiKey ? `${config_1.config.apiKey.substring(0, 8)}...` : 'MISSING',
-                secret: config_1.config.apiSecret ? `${config_1.config.apiSecret.substring(0, 8)}...` : 'MISSING',
-                passphrase: config_1.config.passphrase ? `${config_1.config.passphrase.substring(0, 8)}...` : 'MISSING',
-            }
-        }, null, 2));
         this.ws?.send(JSON.stringify(subscribeMessage));
     }
     reconnect() {

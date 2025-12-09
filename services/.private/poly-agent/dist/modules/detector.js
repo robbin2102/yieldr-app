@@ -27,8 +27,17 @@ class Detector {
             .sort({ 'original.timestamp': -1 })
             .lean();
         if (lastTrade?.original?.timestamp) {
-            this.lastSeenTimestamp = Math.floor(new Date(lastTrade.original.timestamp).getTime() / 1000);
-            console.log(`[Detector] Resuming from: ${new Date(this.lastSeenTimestamp * 1000).toISOString()}`);
+            const lastTradeTimestamp = Math.floor(new Date(lastTrade.original.timestamp).getTime() / 1000);
+            const fiveMinutesAgo = Math.floor(Date.now() / 1000) - (5 * 60);
+            // If last trade is older than 5 minutes, start from 5 minutes ago (not from old history)
+            if (lastTradeTimestamp < fiveMinutesAgo) {
+                this.lastSeenTimestamp = fiveMinutesAgo;
+                console.log(`[Detector] Last trade was old (${new Date(lastTradeTimestamp * 1000).toISOString()}), starting from 5 minutes ago`);
+            }
+            else {
+                this.lastSeenTimestamp = lastTradeTimestamp;
+                console.log(`[Detector] Resuming from: ${new Date(this.lastSeenTimestamp * 1000).toISOString()}`);
+            }
         }
         else {
             console.log(`[Detector] Starting fresh from: ${new Date(this.lastSeenTimestamp * 1000).toISOString()}`);
