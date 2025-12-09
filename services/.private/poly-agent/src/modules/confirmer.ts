@@ -49,7 +49,17 @@ export class Confirmer {
         const msg = JSON.parse(data.toString());
         console.log('[Confirmer] Message received:', JSON.stringify(msg, null, 2));
 
-        // Auth success
+        // Auth success - subscription confirmed
+        if (msg.type === 'subscribed' && msg.channel === 'user') {
+          clearTimeout(authTimeout);
+          console.log('[Confirmer] ✅ Authenticated and subscribed to user channel');
+          this.reconnecting = false;
+          this.startHeartbeat();
+          resolve();
+          return;
+        }
+
+        // Alternative auth success formats
         if (msg.type === 'auth' && msg.status === 'success') {
           clearTimeout(authTimeout);
           console.log('[Confirmer] ✅ Authenticated');
@@ -59,22 +69,21 @@ export class Confirmer {
           return;
         }
 
-        // Alternative auth success format
         if (msg.channel === 'user' && !msg.event_type) {
           clearTimeout(authTimeout);
-          console.log('[Confirmer] ✅ Authenticated (alternative format)');
+          console.log('[Confirmer] ✅ Authenticated (user channel)');
           this.reconnecting = false;
           this.startHeartbeat();
           resolve();
           return;
         }
 
-        // Auth failure
-        if (msg.type === 'auth' && msg.status === 'error') {
+        // Auth/subscription failure
+        if ((msg.type === 'error' || msg.status === 'error') && !this.reconnecting) {
           clearTimeout(authTimeout);
-          console.error('[Confirmer] ❌ Authentication failed:', msg.message || msg.error);
+          console.error('[Confirmer] ❌ Authentication/subscription failed:', msg.message || msg.error || JSON.stringify(msg));
           this.ws?.close();
-          reject(new Error(`Auth failed: ${msg.message || msg.error}`));
+          reject(new Error(`Auth failed: ${msg.message || msg.error || 'Unknown error'}`));
           return;
         }
 
@@ -119,20 +128,19 @@ export class Confirmer {
   }
 
   private authenticate() {
-    const timestamp = Math.floor(Date.now() / 1000).toString();
-    const message = `${timestamp}GET/ws/user`;
-    const signature = crypto
-      .createHmac('sha256', config.apiSecret)
-      .update(message)
-      .digest('base64');
+    // Try subscription-based auth format (from real-time-data-client)
+    const subscribeMessage = {
+      type: 'subscribe',
+      channel: 'user',
+      auth: {
+        apiKey: config.apiKey,
+        secret: config.apiSecret,
+        passphrase: config.passphrase,
+      },
+    };
 
-    this.ws?.send(JSON.stringify({
-      type: 'auth',
-      apiKey: config.apiKey,
-      timestamp,
-      signature,
-      passphrase: config.passphrase,
-    }));
+    console.log('[Confirmer] Sending auth message...');
+    this.ws?.send(JSON.stringify(subscribeMessage));
   }
 
   private reconnect() {
