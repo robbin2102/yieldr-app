@@ -33,6 +33,13 @@ export class Executor {
         console.error('[Executor] Unhandled error:', error);
       });
     });
+
+    // Listen for orderbook ready events to retry skipped trades
+    eventBus.on('orderbook:ready', ({ tokenId }: { tokenId: string }) => {
+      this.retrySkippedTrades(tokenId).catch((error) => {
+        console.error('[Executor] Error retrying skipped trades:', error);
+      });
+    });
   }
 
   async initialize() {
@@ -41,7 +48,6 @@ export class Executor {
   }
 
   private async handleTrade(trade: DetectedTrade) {
-    const startTime = Date.now();
     console.log(`\n[Executor] Processing ${trade.txHash.slice(0, 10)}...`);
 
     // ═══════════════════════════════════════════════════════════════
@@ -55,6 +61,7 @@ export class Executor {
           walletAddress: config.targetWallet,
           conditionId: trade.conditionId,
           tokenId: trade.tokenId,
+          txHash: trade.txHash,
           side: trade.side,
           size: trade.size,
           price: trade.price,
@@ -74,6 +81,70 @@ export class Executor {
       }
       throw error;
     }
+
+    // Execute the trade (risk checks + order submission)
+    await this.handleTradeExecution(trade, tradeRecord);
+  }
+
+  private async skipTrade(tradeRecord: any, reason: string) {
+    console.log(`[Executor] ⏭️ Skip: ${reason}`);
+
+    tradeRecord.status = 'SKIPPED';
+    tradeRecord.skipReason = reason;
+    await tradeRecord.save();
+
+    eventBus.emit('trade:skipped', { tradeId: tradeRecord._id, reason });
+  }
+
+  /**
+   * Retry SKIPPED trades when orderbook data becomes available
+   */
+  private async retrySkippedTrades(tokenId: string) {
+    // Find recent SKIPPED trades for this token that failed due to "No orderbook data"
+    const skippedTrades = await PolyAgentTrade.find({
+      'original.tokenId': tokenId,
+      status: 'SKIPPED',
+      skipReason: 'No orderbook data - subscribed for future',
+      detectedAt: { $gt: new Date(Date.now() - 300000) }, // Last 5 minutes only
+    }).limit(10); // Limit to prevent spam
+
+    if (skippedTrades.length === 0) return;
+
+    console.log(`[Executor] 🔄 Retrying ${skippedTrades.length} skipped trade(s) for token ${tokenId.slice(0, 8)}...`);
+
+    for (const tradeRecord of skippedTrades) {
+      const trade: DetectedTrade = {
+        txHash: tradeRecord.original.txHash,
+        conditionId: tradeRecord.original.conditionId,
+        tokenId: tradeRecord.original.tokenId,
+        side: tradeRecord.original.side as 'BUY' | 'SELL',
+        size: tradeRecord.original.size,
+        price: tradeRecord.original.price,
+        usdcSize: tradeRecord.original.usdcSize,
+        timestamp: Math.floor(new Date(tradeRecord.original.timestamp).getTime() / 1000),
+        title: tradeRecord.original.title,
+        outcome: tradeRecord.original.outcome,
+        detectedAt: new Date(tradeRecord.detectedAt).getTime(),
+      };
+
+      // Reset status to DETECTED for retry
+      tradeRecord.status = 'DETECTED';
+      tradeRecord.skipReason = undefined;
+      await tradeRecord.save();
+
+      console.log(`[Executor] 🔄 Retry: ${trade.side} ${trade.size} ${trade.outcome}`);
+
+      // Re-process the trade (will go through all risk checks again)
+      await this.handleTradeExecution(trade, tradeRecord);
+    }
+  }
+
+  /**
+   * Execute trade after deduplication check
+   * Separated from handleTrade so it can be called for retries
+   */
+  private async handleTradeExecution(trade: DetectedTrade, tradeRecord: any) {
+    const startTime = Date.now();
 
     // ═══════════════════════════════════════════════════════════════
     // RISK CHECKS (In-memory, <5ms total)
@@ -186,15 +257,5 @@ export class Executor {
 
       eventBus.emit('trade:failed', { tradeId: tradeRecord._id, error: error.message });
     }
-  }
-
-  private async skipTrade(tradeRecord: any, reason: string) {
-    console.log(`[Executor] ⏭️ Skip: ${reason}`);
-
-    tradeRecord.status = 'SKIPPED';
-    tradeRecord.skipReason = reason;
-    await tradeRecord.save();
-
-    eventBus.emit('trade:skipped', { tradeId: tradeRecord._id, reason });
   }
 }
