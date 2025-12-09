@@ -52,7 +52,7 @@ Real-time copy trading agent that monitors a target trader's Polymarket activity
 2. **Polymarket API Credentials**
    - Go to https://polymarket.com/settings/api
    - Generate API key, secret, and passphrase
-   - Store securely in `.env` file
+   - Store securely in `.env.local` file
 
 3. **MongoDB**
    - Uses existing `yieldr` database
@@ -70,8 +70,8 @@ cd services/.private/poly-agent
 npm install
 
 # Copy and configure environment
-cp .env.example .env
-# Edit .env with your credentials
+cp .env.example .env.local
+# Edit .env.local with your credentials
 
 # Run in development
 npm run dev
@@ -79,7 +79,7 @@ npm run dev
 
 ## Configuration
 
-Edit `.env` file:
+Edit `.env.local` file:
 
 ```env
 # Target wallet to copy
@@ -341,8 +341,8 @@ npm test
 
 ## Security Warnings
 
-⚠️ **NEVER commit this directory to git** (excluded via `.gitignore`)
-⚠️ **NEVER share your `.env` file**
+⚠️ **NEVER commit `.env.local` to git** (excluded via `.gitignore`)
+⚠️ **NEVER share your `.env.local` file**
 ⚠️ **NEVER use your main wallet** - create a dedicated bot wallet
 ⚠️ **Start with small amounts** - test with `MAX_POSITION_USDC=10` first
 
