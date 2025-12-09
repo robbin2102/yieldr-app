@@ -66,7 +66,16 @@ export class Confirmer {
       });
 
       this.ws.on('message', (data) => {
-        const msg = JSON.parse(data.toString());
+        const dataStr = data.toString();
+
+        // Handle PONG responses (plain text, not JSON)
+        if (dataStr === 'PONG') {
+          console.log('[Confirmer] 🏓 PONG received');
+          return;
+        }
+
+        // Parse JSON messages
+        const msg = JSON.parse(dataStr);
         console.log('[Confirmer] Message received:', JSON.stringify(msg, null, 2));
 
         // Check for error messages
@@ -220,6 +229,8 @@ export class Confirmer {
   private async checkPendingOrders() {
     if (this.pendingOrders.size === 0) return;
 
+    console.log(`[Confirmer] 🔍 Checking ${this.pendingOrders.size} pending order(s)...`);
+
     for (const [orderId, pending] of this.pendingOrders) {
       try {
         // Query order status from CLOB API
@@ -326,8 +337,21 @@ export class Confirmer {
     // Update slippage buffer
     await this.updateSlippageBuffer(expectedCost, actualCost, slippageUsdc);
 
-    console.log(`[Confirmer] ✅ FILLED: ${executedSize} @ $${executedPrice.toFixed(4)}`);
+    // Calculate end-to-end timing
+    const totalLatency = Date.now() - new Date(tradeRecord.detectedAt).getTime();
+    const fillLatency = tradeRecord.confirmedAt.getTime() - new Date(tradeRecord.executedAt || tradeRecord.detectedAt).getTime();
+
+    console.log(`\n═══════════════════════════════════════════════════════════`);
+    console.log(`[Confirmer] ✅ TRADE FILLED SUCCESSFULLY`);
+    console.log(`═══════════════════════════════════════════════════════════`);
+    console.log(`  Order ID: ${pending.orderId.slice(0, 16)}...`);
+    console.log(`  Executed: ${executedSize} @ $${executedPrice.toFixed(4)} ($${executedUsdcSize.toFixed(2)})`);
     console.log(`  Slippage: $${slippageUsdc.toFixed(4)} (${(slippageBps / 100).toFixed(2)}%)`);
+    console.log(`  Timing:`);
+    console.log(`    - Submission latency: ${tradeRecord.latencyMs || 0}ms`);
+    console.log(`    - Fill confirmation: ${fillLatency}ms`);
+    console.log(`    - Total end-to-end: ${totalLatency}ms`);
+    console.log(`═══════════════════════════════════════════════════════════\n`);
 
     eventBus.emit('trade:filled', { tradeId: pending.tradeId });
   }

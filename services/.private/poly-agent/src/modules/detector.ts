@@ -16,6 +16,7 @@ export class Detector {
   private intervalId: NodeJS.Timeout | null = null;
   private isPolling: boolean = false;
   private pollCount: number = 0;
+  private lastPollTime: number = 0;
 
   constructor() {
     // Start from now (will be updated from DB on start())
@@ -57,6 +58,9 @@ export class Detector {
     if (this.isPolling) return;
     this.isPolling = true;
 
+    const pollStartTime = Date.now();
+    const timeSinceLastPoll = this.lastPollTime > 0 ? pollStartTime - this.lastPollTime : 0;
+
     try {
       this.pollCount++;
 
@@ -69,7 +73,9 @@ export class Detector {
       // Build API URL - only get trades AFTER lastSeenTimestamp
       const url = `${config.dataApiBase}/activity?user=${config.targetWallet}&type=TRADE&start=${this.lastSeenTimestamp}&limit=100&sortBy=TIMESTAMP&sortDirection=ASC`;
 
+      const apiCallStart = Date.now();
       const response = await fetch(url);
+      const apiLatency = Date.now() - apiCallStart;
       if (!response.ok) {
         console.error(`[Detector] API error: ${response.status} ${response.statusText}`);
         return;
@@ -78,11 +84,16 @@ export class Detector {
       const trades = await response.json() as ActivityResponse[];
 
       if (trades.length === 0) {
-        // No new trades
+        // No new trades - log every poll for testing
+        if (timeSinceLastPoll > 0) {
+          console.log(`[Detector] Poll #${this.pollCount}: No new trades (gap: ${timeSinceLastPoll}ms, API: ${apiLatency}ms)`);
+        }
         return;
       }
 
-      console.log(`[Detector] Found ${trades.length} new trade(s)`);
+      console.log(`\n[Detector] ⚡ Poll #${this.pollCount}: Found ${trades.length} new trade(s)!`);
+      console.log(`  Time since last poll: ${timeSinceLastPoll}ms`);
+      console.log(`  API latency: ${apiLatency}ms`);
 
       for (const trade of trades) {
         // Update timestamp for next poll
@@ -118,6 +129,7 @@ export class Detector {
       console.error('[Detector] Poll error:', error);
     } finally {
       this.isPolling = false;
+      this.lastPollTime = pollStartTime;
     }
   }
 }
