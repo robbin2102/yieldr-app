@@ -33,6 +33,7 @@ export class Confirmer {
       this.ws = new WebSocket(config.wssUser);
 
       let authenticated = false;
+      const connectTime = Date.now();
 
       // Timeout if auth doesn't succeed in 10 seconds
       const authTimeout = setTimeout(() => {
@@ -46,31 +47,25 @@ export class Confirmer {
       this.ws.on('open', () => {
         console.log('[Confirmer] WebSocket opened, sending auth...');
         this.authenticate();
+
+        // Resolve immediately after sending auth (like Market Channel does)
+        // Server doesn't send explicit confirmation - it just starts sending data
+        console.log('[Confirmer] ✅ Auth message sent, connection established');
+        clearTimeout(authTimeout);
+        authenticated = true;
+        this.reconnecting = false;
+        this.startHeartbeat();
+        resolve();
       });
 
       this.ws.on('message', (data) => {
         const msg = JSON.parse(data.toString());
         console.log('[Confirmer] Message received:', JSON.stringify(msg, null, 2));
 
-        // Auth/subscription failure
-        if ((msg.type === 'error' || msg.status === 'error') && !authenticated) {
-          clearTimeout(authTimeout);
-          console.error('[Confirmer] ❌ Authentication/subscription failed:', msg.message || msg.error || JSON.stringify(msg));
-          this.ws?.close();
-          reject(new Error(`Auth failed: ${msg.message || msg.error || 'Unknown error'}`));
+        // Check for error messages
+        if (msg.type === 'error' || msg.status === 'error') {
+          console.error('[Confirmer] ❌ Server error:', msg.message || msg.error || JSON.stringify(msg));
           return;
-        }
-
-        // If we received any non-error message after auth attempt, consider it successful
-        // Polymarket doesn't send explicit "auth success" - it just starts sending data
-        if (!authenticated) {
-          authenticated = true;
-          clearTimeout(authTimeout);
-          console.log('[Confirmer] ✅ Authenticated (received first message)');
-          this.reconnecting = false;
-          this.startHeartbeat();
-          resolve();
-          // Don't return - continue processing this message
         }
 
         // Trade fill notification
@@ -96,7 +91,13 @@ export class Confirmer {
       this.ws.on('close', (code, reason) => {
         clearTimeout(authTimeout);
         this.stopHeartbeat();
-        console.log(`[Confirmer] Disconnected (code: ${code}, reason: ${reason.toString()})`);
+        const duration = Date.now() - connectTime;
+        console.log(`[Confirmer] Disconnected (code: ${code}, reason: ${reason.toString()}, duration: ${duration}ms)`);
+
+        if (duration < 1000) {
+          console.error('[Confirmer] ⚠️  Connection closed very quickly (< 1s) - likely auth/config issue');
+        }
+
         this.reconnect();
       });
 

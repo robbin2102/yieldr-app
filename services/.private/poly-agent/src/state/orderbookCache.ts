@@ -97,9 +97,9 @@ class OrderbookCache {
   private subscribeInternal(tokenId: string) {
     if (this.ws?.readyState === WebSocket.OPEN) {
       console.log(`[OrderbookCache] Subscribing to ${tokenId.slice(0, 16)}...`);
+      // Correct format from Polymarket docs: type = channel name
       this.ws.send(JSON.stringify({
-        type: 'subscribe',
-        channel: 'market',
+        type: 'market',
         assets_ids: [tokenId],
       }));
     }
