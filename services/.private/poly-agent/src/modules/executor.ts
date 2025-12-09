@@ -129,14 +129,32 @@ export class Executor {
     try {
       console.log(`[Executor] Placing FOK: ${trade.side} ${copySize} @ $${bestPrice.toFixed(4)}`);
 
-      // Build market order (nonce managed internally by ClobClient)
-      const order = await this.clobClient.createMarketOrder({
-        tokenID: trade.tokenId,
-        side: trade.side === 'BUY' ? Side.BUY : Side.SELL,
-        amount: trade.side === 'BUY' ? orderCost : copySize,  // BUY = USDC, SELL = shares
-        feeRateBps: 0,  // Polymarket has 0 fees
-        orderType: OrderType.FOK,
-      });
+      // Build order based on side (v3.0.0 API has different methods for BUY vs SELL)
+      let order;
+
+      if (trade.side === 'BUY') {
+        // BUY orders: use createMarketBuyOrder (amount in USDC)
+        order = await this.clobClient.createMarketBuyOrder(
+          {
+            tokenID: trade.tokenId,
+            amount: orderCost,  // Amount in USDC
+            feeRateBps: 0,  // Polymarket has 0 fees
+          },
+          '0.01'  // tickSize for price precision
+        );
+      } else {
+        // SELL orders: use createOrder (size in shares, requires explicit price)
+        order = await this.clobClient.createOrder(
+          {
+            tokenID: trade.tokenId,
+            price: bestPrice,
+            size: copySize,  // Size in shares
+            side: Side.SELL,
+            feeRateBps: 0,  // Polymarket has 0 fees
+          },
+          '0.01'  // tickSize for price precision
+        );
+      }
 
       // Submit as Fill-Or-Kill (immediate full fill or cancel)
       const response = await this.clobClient.postOrder(order, OrderType.FOK);
