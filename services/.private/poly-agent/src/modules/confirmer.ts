@@ -142,6 +142,12 @@ export class Confirmer {
         return;
       }
 
+      // Ensure copy object exists (should always exist by this point, but TypeScript requires check)
+      if (!tradeRecord.copy) {
+        console.error(`[Confirmer] Copy object missing for trade: ${pending.tradeId}`);
+        return;
+      }
+
       tradeRecord.status = 'FILLED';
       tradeRecord.copy.executedSize = executedSize;
       tradeRecord.copy.executedPrice = executedPrice;
