@@ -113,17 +113,38 @@ export class Executor {
     console.log(`[Executor] 🔄 Retrying ${skippedTrades.length} skipped trade(s) for token ${tokenId.slice(0, 8)}...`);
 
     for (const tradeRecord of skippedTrades) {
+      // Extract original trade data with null safety
+      const original = tradeRecord.original as any;
+
+      // Validate that we have all required data (should always exist, but TypeScript safety)
+      if (!original ||
+          !original.txHash ||
+          !original.conditionId ||
+          !original.tokenId ||
+          !original.side ||
+          original.size == null ||
+          original.price == null ||
+          original.usdcSize == null ||
+          !original.timestamp ||
+          !original.title ||
+          !original.outcome ||
+          !tradeRecord.detectedAt) {
+        console.error(`[Executor] ⚠️ Skip retry: Missing data in record ${tradeRecord._id}`);
+        continue;
+      }
+
+      // Reconstruct DetectedTrade from validated database record
       const trade: DetectedTrade = {
-        txHash: tradeRecord.original.txHash,
-        conditionId: tradeRecord.original.conditionId,
-        tokenId: tradeRecord.original.tokenId,
-        side: tradeRecord.original.side as 'BUY' | 'SELL',
-        size: tradeRecord.original.size,
-        price: tradeRecord.original.price,
-        usdcSize: tradeRecord.original.usdcSize,
-        timestamp: Math.floor(new Date(tradeRecord.original.timestamp).getTime() / 1000),
-        title: tradeRecord.original.title,
-        outcome: tradeRecord.original.outcome,
+        txHash: original.txHash as string,
+        conditionId: original.conditionId as string,
+        tokenId: original.tokenId as string,
+        side: original.side as 'BUY' | 'SELL',
+        size: original.size as number,
+        price: original.price as number,
+        usdcSize: original.usdcSize as number,
+        timestamp: Math.floor(new Date(original.timestamp).getTime() / 1000),
+        title: original.title as string,
+        outcome: original.outcome as string,
         detectedAt: new Date(tradeRecord.detectedAt).getTime(),
       };
 
