@@ -50,8 +50,9 @@ Real-time copy trading agent that monitors a target trader's Polymarket activity
    - **NEVER use your main wallet** (contains private key)
 
 2. **Polymarket API Credentials**
-   - Go to https://polymarket.com/settings/api
-   - Generate API key, secret, and passphrase
+   - **IMPORTANT:** You must derive credentials from your bot wallet private key
+   - Polymarket WebSocket requires credentials derived from your wallet, not manually created ones
+   - See "Deriving API Credentials" section below
    - Store securely in `.env.polyagent` file (isolated from main app)
 
 3. **MongoDB**
@@ -69,13 +70,76 @@ cd services/.private/poly-agent
 # Install dependencies
 npm install
 
-# Copy and configure environment (isolated secrets)
+# Copy environment template
 cp .env.polyagent.example .env.polyagent
-# Edit .env.polyagent with your credentials
+
+# Edit .env.polyagent and add:
+# - TARGET_WALLET (trader to copy)
+# - BOT_WALLET_ADDRESS (your MetaMask wallet address)
+# - BOT_PRIVATE_KEY (your MetaMask wallet private key)
+# - MONGODB_URI (MongoDB connection string)
+
+# Derive API credentials (see next section)
+npx ts-node derive-keys.ts
+# OR
+python3 derive-keys.py
+
+# Copy the output credentials into .env.polyagent
 
 # Run in development
 npm run dev
 ```
+
+## Deriving API Credentials
+
+**CRITICAL:** Polymarket WebSocket User Channel requires API credentials derived from your wallet private key. You CANNOT use manually created API keys from the Polymarket UI.
+
+### Option 1: TypeScript Script (Recommended)
+
+```bash
+# Make sure dependencies are installed
+npm install
+
+# Run the key derivation script
+npx ts-node derive-keys.ts
+```
+
+### Option 2: Python Script
+
+```bash
+# Install Python dependencies
+pip install -r requirements.txt
+
+# Run the Python key derivation script
+python3 derive-keys.py
+```
+
+Both scripts will:
+1. Read your `BOT_PRIVATE_KEY` from `.env.polyagent` (secure - no hardcoded secrets)
+2. Connect to Polymarket CLOB API using your wallet
+3. Derive WebSocket-compatible API credentials
+4. Print output for you to copy into `.env.polyagent`
+
+**Example output:**
+```
+✅ SUCCESS! API Credentials derived:
+
+════════════════════════════════════════════════════════════
+Copy these values to your .env.polyagent file:
+════════════════════════════════════════════════════════════
+
+POLYMARKET_API_KEY="abc123..."
+POLYMARKET_API_SECRET="def456..."
+POLYMARKET_PASSPHRASE="ghi789..."
+
+════════════════════════════════════════════════════════════
+```
+
+**Important Notes:**
+- Your wallet needs a small amount of MATIC (~0.01) for gas to derive credentials
+- Use your **MetaMask wallet** private key (the one you connected to Polymarket with)
+- Do NOT use the Polymarket proxy wallet address
+- These credentials are permanent unless you explicitly revoke them
 
 ## Configuration
 
