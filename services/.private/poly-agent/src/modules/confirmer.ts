@@ -32,11 +32,15 @@ export class Confirmer {
 
       this.ws = new WebSocket(config.wssUser);
 
+      let authenticated = false;
+
       // Timeout if auth doesn't succeed in 10 seconds
       const authTimeout = setTimeout(() => {
-        console.error('[Confirmer] Authentication timeout - no response from server');
-        this.ws?.close();
-        reject(new Error('Authentication timeout'));
+        if (!authenticated) {
+          console.error('[Confirmer] Authentication timeout - no response from server');
+          this.ws?.close();
+          reject(new Error('Authentication timeout'));
+        }
       }, 10000);
 
       this.ws.on('open', () => {
@@ -48,42 +52,25 @@ export class Confirmer {
         const msg = JSON.parse(data.toString());
         console.log('[Confirmer] Message received:', JSON.stringify(msg, null, 2));
 
-        // Auth success - subscription confirmed
-        if (msg.type === 'subscribed' && msg.channel === 'user') {
-          clearTimeout(authTimeout);
-          console.log('[Confirmer] ✅ Authenticated and subscribed to user channel');
-          this.reconnecting = false;
-          this.startHeartbeat();
-          resolve();
-          return;
-        }
-
-        // Alternative auth success formats
-        if (msg.type === 'auth' && msg.status === 'success') {
-          clearTimeout(authTimeout);
-          console.log('[Confirmer] ✅ Authenticated');
-          this.reconnecting = false;
-          this.startHeartbeat();
-          resolve();
-          return;
-        }
-
-        if (msg.channel === 'user' && !msg.event_type) {
-          clearTimeout(authTimeout);
-          console.log('[Confirmer] ✅ Authenticated (user channel)');
-          this.reconnecting = false;
-          this.startHeartbeat();
-          resolve();
-          return;
-        }
-
         // Auth/subscription failure
-        if ((msg.type === 'error' || msg.status === 'error') && !this.reconnecting) {
+        if ((msg.type === 'error' || msg.status === 'error') && !authenticated) {
           clearTimeout(authTimeout);
           console.error('[Confirmer] ❌ Authentication/subscription failed:', msg.message || msg.error || JSON.stringify(msg));
           this.ws?.close();
           reject(new Error(`Auth failed: ${msg.message || msg.error || 'Unknown error'}`));
           return;
+        }
+
+        // If we received any non-error message after auth attempt, consider it successful
+        // Polymarket doesn't send explicit "auth success" - it just starts sending data
+        if (!authenticated) {
+          authenticated = true;
+          clearTimeout(authTimeout);
+          console.log('[Confirmer] ✅ Authenticated (received first message)');
+          this.reconnecting = false;
+          this.startHeartbeat();
+          resolve();
+          // Don't return - continue processing this message
         }
 
         // Trade fill notification
@@ -127,10 +114,10 @@ export class Confirmer {
   }
 
   private authenticate() {
-    // Try subscription-based auth format (from real-time-data-client)
+    // Correct format from Polymarket docs: type = "user", not "subscribe"
     const subscribeMessage = {
-      type: 'subscribe',
-      channel: 'user',
+      type: 'user',          // Channel type
+      markets: [],           // Array of market condition IDs (empty = all markets)
       auth: {
         apiKey: config.apiKey,
         secret: config.apiSecret,
@@ -138,7 +125,7 @@ export class Confirmer {
       },
     };
 
-    console.log('[Confirmer] Sending auth message...');
+    console.log('[Confirmer] Sending auth message (type: user)...');
     this.ws?.send(JSON.stringify(subscribeMessage));
   }
 
