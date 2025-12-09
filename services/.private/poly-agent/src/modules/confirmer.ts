@@ -338,8 +338,10 @@ export class Confirmer {
     await this.updateSlippageBuffer(expectedCost, actualCost, slippageUsdc);
 
     // Calculate end-to-end timing
-    const totalLatency = Date.now() - new Date(tradeRecord.detectedAt).getTime();
-    const fillLatency = tradeRecord.confirmedAt.getTime() - new Date(tradeRecord.executedAt || tradeRecord.detectedAt).getTime();
+    const detectedTime = tradeRecord.detectedAt ? new Date(tradeRecord.detectedAt).getTime() : Date.now();
+    const executedTime = tradeRecord.executedAt ? new Date(tradeRecord.executedAt).getTime() : detectedTime;
+    const totalLatency = Date.now() - detectedTime;
+    const fillLatency = tradeRecord.confirmedAt.getTime() - executedTime;
 
     console.log(`\n═══════════════════════════════════════════════════════════`);
     console.log(`[Confirmer] ✅ TRADE FILLED SUCCESSFULLY`);
