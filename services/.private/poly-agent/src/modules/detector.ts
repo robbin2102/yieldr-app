@@ -13,7 +13,7 @@ import { DetectedTrade, ActivityResponse } from '../types';
  */
 export class Detector {
   private lastSeenTimestamp: number;
-  private intervalId: NodeJS.Timer | null = null;
+  private intervalId: NodeJS.Timeout | null = null;
   private isPolling: boolean = false;
 
   constructor() {
@@ -66,7 +66,7 @@ export class Detector {
         return;
       }
 
-      const trades: ActivityResponse[] = await response.json();
+      const trades = await response.json() as ActivityResponse[];
 
       if (trades.length === 0) {
         // No new trades

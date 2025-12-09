@@ -17,7 +17,7 @@ import { PositionResponse } from '../types';
  * Note: v1 only LOGS gaps, does not auto-fix them
  */
 export class Reconciler {
-  private intervalId: NodeJS.Timer | null = null;
+  private intervalId: NodeJS.Timeout | null = null;
 
   start() {
     console.log(`[Reconciler] Starting ${config.reconcilerIntervalMs}ms position checks`);
@@ -52,7 +52,7 @@ export class Reconciler {
         return;
       }
 
-      const traderPositions: PositionResponse[] = await traderResponse.json();
+      const traderPositions = await traderResponse.json() as PositionResponse[];
 
       // Fetch our positions
       const ourResponse = await fetch(
@@ -64,7 +64,7 @@ export class Reconciler {
         return;
       }
 
-      const ourPositions: PositionResponse[] = await ourResponse.json();
+      const ourPositions = await ourResponse.json() as PositionResponse[];
 
       // Build lookup map for our positions
       const ourPositionMap = new Map<string, PositionResponse>();
