@@ -24,33 +24,57 @@ export class Confirmer {
   private ws: WebSocket | null = null;
   private pendingOrders: Map<string, PendingOrder> = new Map();
   private reconnecting: boolean = false;
+  private heartbeatInterval: NodeJS.Timeout | null = null;
 
   async connect(): Promise<void> {
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       console.log('[Confirmer] Connecting to User Channel...');
+      console.log(`[Confirmer] URL: ${config.wssUser}`);
 
       this.ws = new WebSocket(config.wssUser);
 
+      // Timeout if auth doesn't succeed in 10 seconds
+      const authTimeout = setTimeout(() => {
+        console.error('[Confirmer] Authentication timeout - no response from server');
+        this.ws?.close();
+        reject(new Error('Authentication timeout'));
+      }, 10000);
+
       this.ws.on('open', () => {
+        console.log('[Confirmer] WebSocket opened, sending auth...');
         this.authenticate();
       });
 
       this.ws.on('message', (data) => {
         const msg = JSON.parse(data.toString());
+        console.log('[Confirmer] Message received:', JSON.stringify(msg, null, 2));
 
         // Auth success
         if (msg.type === 'auth' && msg.status === 'success') {
+          clearTimeout(authTimeout);
           console.log('[Confirmer] ✅ Authenticated');
           this.reconnecting = false;
+          this.startHeartbeat();
           resolve();
           return;
         }
 
         // Alternative auth success format
         if (msg.channel === 'user' && !msg.event_type) {
-          console.log('[Confirmer] ✅ Authenticated');
+          clearTimeout(authTimeout);
+          console.log('[Confirmer] ✅ Authenticated (alternative format)');
           this.reconnecting = false;
+          this.startHeartbeat();
           resolve();
+          return;
+        }
+
+        // Auth failure
+        if (msg.type === 'auth' && msg.status === 'error') {
+          clearTimeout(authTimeout);
+          console.error('[Confirmer] ❌ Authentication failed:', msg.message || msg.error);
+          this.ws?.close();
+          reject(new Error(`Auth failed: ${msg.message || msg.error}`));
           return;
         }
 
@@ -67,15 +91,23 @@ export class Confirmer {
             console.error('[Confirmer] Error handling order update:', error);
           });
         }
+
+        // Pong response (heartbeat)
+        if (msg.type === 'pong') {
+          console.log('[Confirmer] Received pong');
+        }
       });
 
-      this.ws.on('close', () => {
-        console.log('[Confirmer] Disconnected');
+      this.ws.on('close', (code, reason) => {
+        clearTimeout(authTimeout);
+        this.stopHeartbeat();
+        console.log(`[Confirmer] Disconnected (code: ${code}, reason: ${reason.toString()})`);
         this.reconnect();
       });
 
       this.ws.on('error', (err) => {
-        console.error('[Confirmer] Error:', err.message);
+        clearTimeout(authTimeout);
+        console.error('[Confirmer] WebSocket error:', err.message);
       });
 
       // Listen for submitted orders from Executor
@@ -113,6 +145,23 @@ export class Confirmer {
         console.error('[Confirmer] Reconnect failed:', error);
       });
     }, 5000);
+  }
+
+  private startHeartbeat() {
+    // Send ping every 30 seconds to keep connection alive
+    this.heartbeatInterval = setInterval(() => {
+      if (this.ws?.readyState === WebSocket.OPEN) {
+        console.log('[Confirmer] Sending ping...');
+        this.ws.send(JSON.stringify({ type: 'ping' }));
+      }
+    }, 30000);
+  }
+
+  private stopHeartbeat() {
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval);
+      this.heartbeatInterval = null;
+    }
   }
 
   /**
@@ -231,6 +280,7 @@ export class Confirmer {
   }
 
   disconnect() {
+    this.stopHeartbeat();
     this.ws?.close();
     this.ws = null;
   }
