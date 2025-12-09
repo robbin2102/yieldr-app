@@ -73,7 +73,12 @@ function connect() {
     messageCount++;
 
     try {
-      const msg = JSON.parse(data.toString());
+      let msg = JSON.parse(data.toString());
+
+      // First message might be wrapped in array
+      if (Array.isArray(msg) && msg.length > 0) {
+        msg = msg[0];
+      }
 
       console.log(`\n${'═'.repeat(60)}`);
       console.log(`MESSAGE #${messageCount} (${new Date().toISOString()})`);
