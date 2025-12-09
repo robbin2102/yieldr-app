@@ -1,4 +1,5 @@
 import WebSocket from 'ws';
+import crypto from 'crypto';
 import { config } from '../config';
 import { eventBus } from '../state/eventBus';
 import { PolyAgentTrade } from '../db/models/PolyAgentTrade';
@@ -24,6 +25,8 @@ export class Confirmer {
   private pendingOrders: Map<string, PendingOrder> = new Map();
   private reconnecting: boolean = false;
   private heartbeatInterval: NodeJS.Timeout | null = null;
+  private pollingInterval: NodeJS.Timeout | null = null;
+  private pollingActive: boolean = false;
 
   async connect(): Promise<void> {
     return new Promise((resolve, reject) => {
@@ -55,6 +58,10 @@ export class Confirmer {
         authenticated = true;
         this.reconnecting = false;
         this.startHeartbeat();
+
+        // Stop polling if WebSocket connects
+        this.stopPolling();
+
         resolve();
       });
 
@@ -96,6 +103,10 @@ export class Confirmer {
 
         if (duration < 1000) {
           console.error('[Confirmer] ⚠️  Connection closed very quickly (< 1s) - likely auth/config issue');
+          console.log('[Confirmer] 🔄 Falling back to REST API polling for fill tracking');
+
+          // Start polling as fallback
+          this.startPolling();
         }
 
         this.reconnect();
@@ -175,6 +186,153 @@ export class Confirmer {
   }
 
   /**
+   * Start polling REST API for fill tracking (fallback when WebSocket fails)
+   */
+  private startPolling() {
+    if (this.pollingActive) return;
+
+    this.pollingActive = true;
+    console.log('[Confirmer] 📡 Starting REST API polling (1s interval)');
+
+    // Poll every 1 second for pending orders
+    this.pollingInterval = setInterval(() => {
+      this.checkPendingOrders().catch((error) => {
+        console.error('[Confirmer] Polling error:', error.message);
+      });
+    }, 1000);
+  }
+
+  /**
+   * Stop REST API polling
+   */
+  private stopPolling() {
+    if (this.pollingInterval) {
+      clearInterval(this.pollingInterval);
+      this.pollingInterval = null;
+      this.pollingActive = false;
+      console.log('[Confirmer] Stopped REST API polling');
+    }
+  }
+
+  /**
+   * Check pending orders via REST API
+   */
+  private async checkPendingOrders() {
+    if (this.pendingOrders.size === 0) return;
+
+    for (const [orderId, pending] of this.pendingOrders) {
+      try {
+        // Query order status from CLOB API
+        const response = await fetch(
+          `${config.clobApiBase}/order/${orderId}`,
+          {
+            headers: {
+              'POLY-API-KEY': config.apiKey,
+              'POLY-SIGNATURE': this.generateSignature(orderId),
+              'POLY-TIMESTAMP': Math.floor(Date.now() / 1000).toString(),
+              'POLY-PASSPHRASE': config.passphrase,
+            },
+          }
+        );
+
+        if (!response.ok) {
+          if (response.status === 404) {
+            // Order not found - might be cancelled or expired
+            console.log(`[Confirmer] Order ${orderId.slice(0, 16)}... not found (404)`);
+            this.pendingOrders.delete(orderId);
+          }
+          continue;
+        }
+
+        const orderData = await response.json() as any;
+
+        // Check if order is filled
+        if (orderData.status === 'MATCHED' || orderData.status === 'FILLED') {
+          console.log(`[Confirmer] ✅ Order filled via polling: ${orderId.slice(0, 16)}...`);
+
+          // Process the fill (same logic as WebSocket)
+          await this.processFill(pending, {
+            size: orderData.size_matched || orderData.original_size,
+            price: orderData.price,
+            status: orderData.status,
+          });
+
+          this.pendingOrders.delete(orderId);
+        }
+      } catch (error: any) {
+        console.error(`[Confirmer] Error checking order ${orderId.slice(0, 16)}...:`, error.message);
+      }
+    }
+
+    if (this.pendingOrders.size > 0) {
+      console.log(`[Confirmer] 📋 Tracking ${this.pendingOrders.size} pending order(s)...`);
+    }
+  }
+
+  /**
+   * Generate HMAC signature for REST API requests
+   */
+  private generateSignature(orderId: string): string {
+    const timestamp = Math.floor(Date.now() / 1000).toString();
+    const message = `${timestamp}GET/order/${orderId}`;
+
+    return crypto
+      .createHmac('sha256', config.apiSecret)
+      .update(message)
+      .digest('base64');
+  }
+
+  /**
+   * Process fill data (common logic for WebSocket and polling)
+   */
+  private async processFill(pending: PendingOrder, fillData: { size: string; price: string; status: string }) {
+    const executedSize = parseFloat(fillData.size);
+    const executedPrice = parseFloat(fillData.price);
+    const executedUsdcSize = executedSize * executedPrice;
+
+    // Update trade record
+    const tradeRecord = await PolyAgentTrade.findById(pending.tradeId);
+    if (!tradeRecord) {
+      console.error(`[Confirmer] Trade record not found: ${pending.tradeId}`);
+      return;
+    }
+
+    if (!tradeRecord.copy) {
+      console.error(`[Confirmer] Copy object missing for trade: ${pending.tradeId}`);
+      return;
+    }
+
+    tradeRecord.status = 'FILLED';
+    tradeRecord.copy.executedSize = executedSize;
+    tradeRecord.copy.executedPrice = executedPrice;
+    tradeRecord.copy.executedUsdcSize = executedUsdcSize;
+    tradeRecord.confirmedAt = new Date();
+
+    // Calculate slippage
+    const expectedCost = pending.originalTrade.price * executedSize;
+    const actualCost = executedUsdcSize;
+    const slippageUsdc = expectedCost - actualCost;
+    const slippageBps = ((pending.originalTrade.price - executedPrice) / pending.originalTrade.price) * 10000;
+
+    tradeRecord.slippage = {
+      expectedCost,
+      actualCost,
+      slippageUsdc,
+      slippageBps,
+    };
+
+    await tradeRecord.save();
+
+    // Update slippage buffer
+    await this.updateSlippageBuffer(expectedCost, actualCost, slippageUsdc);
+
+    console.log(`[Confirmer] ✅ FILLED: ${executedSize} @ $${executedPrice.toFixed(4)}`);
+    console.log(`  Slippage: $${slippageUsdc.toFixed(4)} (${(slippageBps / 100).toFixed(2)}%)`);
+
+    eventBus.emit('trade:filled', { tradeId: pending.tradeId });
+  }
+
+  /**
    * Handle trade fill notification from WSS
    */
   private async handleTradeFill(msg: any) {
@@ -190,51 +348,12 @@ export class Confirmer {
 
     // Only process MATCHED or CONFIRMED status
     if (msg.status === 'MATCHED' || msg.status === 'CONFIRMED') {
-      const executedSize = parseFloat(msg.size);
-      const executedPrice = parseFloat(msg.price);
-      const executedUsdcSize = executedSize * executedPrice;
+      await this.processFill(pending, {
+        size: msg.size,
+        price: msg.price,
+        status: msg.status,
+      });
 
-      // Update trade record
-      const tradeRecord = await PolyAgentTrade.findById(pending.tradeId);
-      if (!tradeRecord) {
-        console.error(`[Confirmer] Trade record not found: ${pending.tradeId}`);
-        return;
-      }
-
-      // Ensure copy object exists (should always exist by this point, but TypeScript requires check)
-      if (!tradeRecord.copy) {
-        console.error(`[Confirmer] Copy object missing for trade: ${pending.tradeId}`);
-        return;
-      }
-
-      tradeRecord.status = 'FILLED';
-      tradeRecord.copy.executedSize = executedSize;
-      tradeRecord.copy.executedPrice = executedPrice;
-      tradeRecord.copy.executedUsdcSize = executedUsdcSize;
-      tradeRecord.confirmedAt = new Date();
-
-      // Calculate slippage
-      const expectedCost = pending.originalTrade.price * executedSize;
-      const actualCost = executedUsdcSize;
-      const slippageUsdc = expectedCost - actualCost;  // Positive = saved money
-      const slippageBps = ((pending.originalTrade.price - executedPrice) / pending.originalTrade.price) * 10000;
-
-      tradeRecord.slippage = {
-        expectedCost,
-        actualCost,
-        slippageUsdc,
-        slippageBps,
-      };
-
-      await tradeRecord.save();
-
-      // Update slippage buffer in MongoDB (direct write, no cache)
-      await this.updateSlippageBuffer(expectedCost, actualCost, slippageUsdc);
-
-      console.log(`[Confirmer] ✅ FILLED: ${executedSize} @ $${executedPrice.toFixed(4)}`);
-      console.log(`  Slippage: $${slippageUsdc.toFixed(4)} (${(slippageBps / 100).toFixed(2)}%)`);
-
-      eventBus.emit('trade:filled', { tradeId: pending.tradeId });
       this.pendingOrders.delete(orderId);
     }
   }
@@ -291,6 +410,7 @@ export class Confirmer {
 
   disconnect() {
     this.stopHeartbeat();
+    this.stopPolling();
     this.ws?.close();
     this.ws = null;
   }
