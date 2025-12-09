@@ -2,22 +2,30 @@ import { config as dotenvConfig } from 'dotenv';
 import { resolve } from 'path';
 import { existsSync } from 'fs';
 
-// Load environment variables - try multiple locations
-const envLocalPath = resolve(__dirname, '../.env.local');         // poly-agent/.env.local
-const envPath = resolve(__dirname, '../.env');                     // poly-agent/.env
-const rootEnvLocalPath = resolve(__dirname, '../../../.env.local'); // project root .env.local
+// Load environment variables - try multiple locations (priority order)
+const envPolyagentPath = resolve(__dirname, '../.env.polyagent');    // poly-agent/.env.polyagent (PREFERRED)
+const envPolyAgentPath = resolve(__dirname, '../.env.poly-agent');   // poly-agent/.env.poly-agent (alternative)
+const envLocalPath = resolve(__dirname, '../.env.local');            // poly-agent/.env.local (fallback)
+const envPath = resolve(__dirname, '../.env');                        // poly-agent/.env (fallback)
+const rootEnvLocalPath = resolve(__dirname, '../../../.env.local');  // project root .env.local (fallback)
 
-if (existsSync(envLocalPath)) {
+if (existsSync(envPolyagentPath)) {
+  console.log('[Config] ✅ Loading from poly-agent/.env.polyagent (isolated secrets)');
+  dotenvConfig({ path: envPolyagentPath });
+} else if (existsSync(envPolyAgentPath)) {
+  console.log('[Config] ✅ Loading from poly-agent/.env.poly-agent (isolated secrets)');
+  dotenvConfig({ path: envPolyAgentPath });
+} else if (existsSync(envLocalPath)) {
   console.log('[Config] Loading from poly-agent/.env.local');
   dotenvConfig({ path: envLocalPath });
 } else if (existsSync(envPath)) {
   console.log('[Config] Loading from poly-agent/.env');
   dotenvConfig({ path: envPath });
 } else if (existsSync(rootEnvLocalPath)) {
-  console.log('[Config] Loading from project root .env.local');
+  console.log('[Config] ⚠️  Loading from project root .env.local (consider using .env.polyagent for better isolation)');
   dotenvConfig({ path: rootEnvLocalPath });
 } else {
-  throw new Error('No .env.local or .env file found! Please create services/.private/poly-agent/.env.local from .env.example, or add poly-agent variables to root .env.local');
+  throw new Error('No environment file found! Please create services/.private/poly-agent/.env.polyagent from .env.example');
 }
 
 export const config = {
@@ -66,7 +74,7 @@ const required = [
 
 for (const key of required) {
   if (!config[key as keyof typeof config]) {
-    throw new Error(`Missing required config: ${key}. Please check your .env.local file.`);
+    throw new Error(`Missing required config: ${key}. Please check your .env.polyagent file.`);
   }
 }
 

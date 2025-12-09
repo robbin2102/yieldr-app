@@ -34,7 +34,13 @@ yarn-error.log*
 next-env.d.ts
 venv/
 
-# Private services - exclude .env files only (code is safe to commit)
+# Private services - exclude ALL env files (code is safe to commit)
 services/.private/**/.env
 services/.private/**/.env.local
 services/.private/**/.env.*.local
+services/.private/**/.env.polyagent
+services/.private/**/.env.poly-agent
+
+# Additional safety - exclude these patterns anywhere
+.env.polyagent
+.env.poly-agent
