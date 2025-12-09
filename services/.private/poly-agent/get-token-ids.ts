@@ -125,44 +125,71 @@ async function getTokenIds() {
 }
 
 async function tryGetTokensFromCLOB(conditionId: string) {
-  console.log(`\n🔍 Fetching tokens from CLOB API for condition ${conditionId.slice(0, 16)}...\n`);
+  console.log(`\n🔍 Fetching tokens from Gamma Markets API for condition ${conditionId.slice(0, 16)}...\n`);
 
   try {
-    const clobUrl = `https://clob.polymarket.com/markets/${conditionId}`;
-    const response = await fetch(clobUrl);
+    // Use Gamma Markets API with condition_ids filter as per docs
+    const gammaMarketsUrl = `https://gamma-api.polymarket.com/markets?condition_ids=${conditionId}`;
+    const response = await fetch(gammaMarketsUrl);
 
     if (!response.ok) {
-      console.error(`❌ CLOB API request failed: ${response.status}`);
+      console.error(`❌ Gamma Markets API request failed: ${response.status}`);
       return;
     }
 
-    const data = await response.json() as any;
-
-    // CLOB API returns array of markets
-    let markets = Array.isArray(data) ? data : (data.markets || []);
+    const markets = await response.json() as any[];
 
     if (!markets || markets.length === 0) {
-      console.error('❌ No markets found in CLOB API response');
-      console.log('Response structure:', JSON.stringify(data).slice(0, 200));
+      console.error('❌ No markets found for this condition ID');
       return;
     }
 
-    console.log('✅ Tokens found in CLOB API!\n');
+    const market = markets[0];
+
+    console.log('✅ Market found!\n');
     console.log('═══════════════════════════════════════════════════════════');
-    console.log('📍 TOKEN IDs FOR ORDERBOOK:');
-    console.log('═══════════════════════════════════════════════════════════\n');
+    console.log(`📊 ${market.question || market.slug}`);
+    console.log('═══════════════════════════════════════════════════════════');
+    console.log(`Active: ${market.active ? 'YES ✅' : 'NO ❌'}`);
+    console.log(`Closed: ${market.closed ? 'YES' : 'NO'}`);
+    console.log(`Enable OrderBook: ${market.enableOrderBook ? 'YES ✅' : 'NO ❌'}`);
+    console.log('');
 
-    markets.forEach((market: any) => {
-      console.log(`• ${market.outcome}: ${market.token_id}`);
-      console.log(`  Active: ${market.active ? 'YES ✅' : 'NO ❌'}`);
-      console.log(`  Closed: ${market.closed ? 'YES' : 'NO'}`);
-      console.log('');
-    });
+    // Parse clobTokenIds from the market
+    if (market.clobTokenIds) {
+      console.log('📍 TOKEN IDs FOR ORDERBOOK:');
+      console.log('═══════════════════════════════════════════════════════════\n');
 
-    printTestCommandsFromCLOB(markets);
+      // clobTokenIds is a comma-separated string
+      const tokenIds = market.clobTokenIds.split(',').map((id: string) => id.trim());
+
+      // Parse outcomes (typically comma-separated like "Yes,No" or "Up,Down")
+      const outcomes = market.outcomes ? market.outcomes.split(',').map((o: string) => o.trim()) : [];
+
+      // Map token IDs to outcomes
+      const tokens = tokenIds.map((tokenId: string, index: number) => ({
+        outcome: outcomes[index] || `Outcome ${index + 1}`,
+        token_id: tokenId,
+        active: market.active,
+        closed: market.closed,
+      }));
+
+      tokens.forEach((token: any) => {
+        console.log(`• ${token.outcome}: ${token.token_id}`);
+        console.log(`  Active: ${token.active ? 'YES ✅' : 'NO ❌'}`);
+        console.log(`  Closed: ${token.closed ? 'YES' : 'NO'}`);
+        console.log('');
+      });
+
+      printTestCommandsFromCLOB(tokens);
+
+    } else {
+      console.error('❌ No clobTokenIds found in market response');
+      console.log('Market structure:', JSON.stringify(market).slice(0, 300));
+    }
 
   } catch (error: any) {
-    console.error('❌ CLOB API error:', error.message);
+    console.error('❌ API error:', error.message);
     console.error('Stack:', error.stack);
   }
 }
