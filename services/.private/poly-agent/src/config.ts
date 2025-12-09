@@ -2,16 +2,22 @@ import { config as dotenvConfig } from 'dotenv';
 import { resolve } from 'path';
 import { existsSync } from 'fs';
 
-// Load environment variables - try .env.local first, then .env
-const envLocalPath = resolve(__dirname, '../.env.local');
-const envPath = resolve(__dirname, '../.env');
+// Load environment variables - try multiple locations
+const envLocalPath = resolve(__dirname, '../.env.local');         // poly-agent/.env.local
+const envPath = resolve(__dirname, '../.env');                     // poly-agent/.env
+const rootEnvLocalPath = resolve(__dirname, '../../../.env.local'); // project root .env.local
 
 if (existsSync(envLocalPath)) {
+  console.log('[Config] Loading from poly-agent/.env.local');
   dotenvConfig({ path: envLocalPath });
 } else if (existsSync(envPath)) {
+  console.log('[Config] Loading from poly-agent/.env');
   dotenvConfig({ path: envPath });
+} else if (existsSync(rootEnvLocalPath)) {
+  console.log('[Config] Loading from project root .env.local');
+  dotenvConfig({ path: rootEnvLocalPath });
 } else {
-  throw new Error('No .env.local or .env file found! Please create one from .env.example');
+  throw new Error('No .env.local or .env file found! Please create services/.private/poly-agent/.env.local from .env.example, or add poly-agent variables to root .env.local');
 }
 
 export const config = {
