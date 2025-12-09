@@ -23,7 +23,6 @@ import { DetectedTrade } from '../types';
  */
 export class Executor {
   private clobClient: ClobClient;
-  private nonceCounter: number = 0;
 
   constructor(clobClient: ClobClient) {
     this.clobClient = clobClient;
@@ -37,9 +36,8 @@ export class Executor {
   }
 
   async initialize() {
-    // Pre-fetch nonce from CLOB
-    this.nonceCounter = await this.clobClient.getNonce();
-    console.log(`[Executor] Initialized with nonce: ${this.nonceCounter}`);
+    // Executor ready - nonce is managed internally by ClobClient
+    console.log('[Executor] Initialized');
   }
 
   private async handleTrade(trade: DetectedTrade) {
@@ -131,14 +129,13 @@ export class Executor {
     try {
       console.log(`[Executor] Placing FOK: ${trade.side} ${copySize} @ $${bestPrice.toFixed(4)}`);
 
-      // Build market order
+      // Build market order (nonce managed internally by ClobClient)
       const order = await this.clobClient.createMarketOrder({
         tokenID: trade.tokenId,
         side: trade.side === 'BUY' ? Side.BUY : Side.SELL,
         amount: trade.side === 'BUY' ? orderCost : copySize,  // BUY = USDC, SELL = shares
-        price: bestPrice,
         feeRateBps: 0,  // Polymarket has 0 fees
-        nonce: this.nonceCounter++,
+        orderType: OrderType.FOK,
       });
 
       // Submit as Fill-Or-Kill (immediate full fill or cancel)
