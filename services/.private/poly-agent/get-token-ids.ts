@@ -160,11 +160,29 @@ async function tryGetTokensFromCLOB(conditionId: string) {
       console.log('📍 TOKEN IDs FOR ORDERBOOK:');
       console.log('═══════════════════════════════════════════════════════════\n');
 
-      // clobTokenIds is a comma-separated string
-      const tokenIds = market.clobTokenIds.split(',').map((id: string) => id.trim());
+      // clobTokenIds and outcomes are JSON arrays stored as strings
+      let tokenIds: string[] = [];
+      let outcomes: string[] = [];
 
-      // Parse outcomes (typically comma-separated like "Yes,No" or "Up,Down")
-      const outcomes = market.outcomes ? market.outcomes.split(',').map((o: string) => o.trim()) : [];
+      try {
+        // Try parsing as JSON array first
+        tokenIds = typeof market.clobTokenIds === 'string'
+          ? JSON.parse(market.clobTokenIds)
+          : market.clobTokenIds;
+
+        outcomes = market.outcomes
+          ? (typeof market.outcomes === 'string' ? JSON.parse(market.outcomes) : market.outcomes)
+          : [];
+      } catch (e) {
+        // Fallback to comma-separated if JSON parse fails
+        tokenIds = typeof market.clobTokenIds === 'string'
+          ? market.clobTokenIds.split(',').map((id: string) => id.trim())
+          : [market.clobTokenIds];
+
+        outcomes = market.outcomes
+          ? (typeof market.outcomes === 'string' ? market.outcomes.split(',').map((o: string) => o.trim()) : market.outcomes)
+          : [];
+      }
 
       // Map token IDs to outcomes
       const tokens = tokenIds.map((tokenId: string, index: number) => ({
