@@ -1,5 +1,4 @@
 import WebSocket from 'ws';
-import crypto from 'crypto';
 import { config } from '../config';
 import { eventBus } from '../state/eventBus';
 import { PolyAgentTrade } from '../db/models/PolyAgentTrade';
