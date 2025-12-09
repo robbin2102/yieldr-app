@@ -7,8 +7,8 @@ import { DetectedTrade, ActivityResponse } from '../types';
  * Detector - Monitors target wallet for new trades
  *
  * - Polls Polymarket /activity API every 3 seconds
- * - Resumes from last seen trade in MongoDB
- * - Emits 'trade:detected' event for each new trade
+ * - Always starts from NOW (no historical backfill - can't execute at old prices)
+ * - Only executes real-time trades detected during polling
  * - Deduplication handled by MongoDB unique index on txHash
  */
 export class Detector {
@@ -19,30 +19,34 @@ export class Detector {
   private lastPollTime: number = 0;
 
   constructor() {
-    // Start from now (will be updated from DB on start())
+    // Start from now (no backfill on startup)
     this.lastSeenTimestamp = Math.floor(Date.now() / 1000);
   }
 
   async start() {
-    // Resume from last trade in DB
+    const now = Math.floor(Date.now() / 1000);
+    const oneMinuteAgo = now - 60;
+
+    // Check if there was a recent trade (within 1 minute = graceful restart)
     const lastTrade = await PolyAgentTrade.findOne({})
       .sort({ 'original.timestamp': -1 })
       .lean();
 
     if (lastTrade?.original?.timestamp) {
       const lastTradeTimestamp = Math.floor(new Date(lastTrade.original.timestamp).getTime() / 1000);
-      const fiveMinutesAgo = Math.floor(Date.now() / 1000) - (5 * 60);
 
-      // If last trade is older than 5 minutes, start from 5 minutes ago (not from old history)
-      if (lastTradeTimestamp < fiveMinutesAgo) {
-        this.lastSeenTimestamp = fiveMinutesAgo;
-        console.log(`[Detector] Last trade was old (${new Date(lastTradeTimestamp * 1000).toISOString()}), starting from 5 minutes ago`);
-      } else {
+      // Only resume if very recent (< 1 minute = quick restart, won't miss trades)
+      if (lastTradeTimestamp >= oneMinuteAgo) {
         this.lastSeenTimestamp = lastTradeTimestamp;
-        console.log(`[Detector] Resuming from: ${new Date(this.lastSeenTimestamp * 1000).toISOString()}`);
+        console.log(`[Detector] 🔄 Quick restart detected - resuming from ${new Date(this.lastSeenTimestamp * 1000).toISOString()}`);
+      } else {
+        this.lastSeenTimestamp = now;
+        console.log(`[Detector] 🚀 Starting fresh from NOW (historical trades skipped - can't execute at old prices)`);
+        console.log(`[Detector] Last DB trade was at ${new Date(lastTradeTimestamp * 1000).toISOString()}`);
       }
     } else {
-      console.log(`[Detector] Starting fresh from: ${new Date(this.lastSeenTimestamp * 1000).toISOString()}`);
+      this.lastSeenTimestamp = now;
+      console.log(`[Detector] 🚀 Starting fresh from NOW - no historical trades in DB`);
     }
 
     console.log(`[Detector] Starting ${config.detectorIntervalMs}ms polling for ${config.targetWallet}`);

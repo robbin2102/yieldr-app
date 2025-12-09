@@ -2,8 +2,8 @@
  * Detector - Monitors target wallet for new trades
  *
  * - Polls Polymarket /activity API every 3 seconds
- * - Resumes from last seen trade in MongoDB
- * - Emits 'trade:detected' event for each new trade
+ * - Always starts from NOW (no historical backfill - can't execute at old prices)
+ * - Only executes real-time trades detected during polling
  * - Deduplication handled by MongoDB unique index on txHash
  */
 export declare class Detector {
