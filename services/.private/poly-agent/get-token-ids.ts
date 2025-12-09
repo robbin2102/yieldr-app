@@ -136,10 +136,14 @@ async function tryGetTokensFromCLOB(conditionId: string) {
       return;
     }
 
-    const markets = await response.json() as any[];
+    const data = await response.json() as any;
+
+    // CLOB API returns array of markets
+    let markets = Array.isArray(data) ? data : (data.markets || []);
 
     if (!markets || markets.length === 0) {
-      console.error('❌ No markets found in CLOB API');
+      console.error('❌ No markets found in CLOB API response');
+      console.log('Response structure:', JSON.stringify(data).slice(0, 200));
       return;
     }
 
@@ -159,6 +163,7 @@ async function tryGetTokensFromCLOB(conditionId: string) {
 
   } catch (error: any) {
     console.error('❌ CLOB API error:', error.message);
+    console.error('Stack:', error.stack);
   }
 }
 
