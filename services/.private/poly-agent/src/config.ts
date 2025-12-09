@@ -30,16 +30,16 @@ if (existsSync(envPolyagentPath)) {
 
 export const config = {
   // Target trader wallet
-  targetWallet: process.env.TARGET_WALLET!,
+  targetWallet: process.env.TARGET_WALLET?.trim()!,
 
   // Bot wallet (our wallet)
-  botWalletAddress: process.env.BOT_WALLET_ADDRESS!,
-  botPrivateKey: process.env.BOT_PRIVATE_KEY!,
+  botWalletAddress: process.env.BOT_WALLET_ADDRESS?.trim()!,
+  botPrivateKey: process.env.BOT_PRIVATE_KEY?.trim()!,
 
   // Polymarket API credentials
-  apiKey: process.env.POLYMARKET_API_KEY!,
-  apiSecret: process.env.POLYMARKET_API_SECRET!,
-  passphrase: process.env.POLYMARKET_PASSPHRASE!,
+  apiKey: process.env.POLYMARKET_API_KEY?.trim()!,
+  apiSecret: process.env.POLYMARKET_API_SECRET?.trim()!,
+  passphrase: process.env.POLYMARKET_PASSPHRASE?.trim()!,
 
   // MongoDB connection
   mongoUri: process.env.MONGODB_URI!,

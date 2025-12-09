@@ -125,7 +125,22 @@ export class Confirmer {
       },
     };
 
+    // Diagnostic logging (mask credentials for security)
     console.log('[Confirmer] Sending auth message (type: user)...');
+    console.log('[Confirmer] Credentials check:');
+    console.log(`  - apiKey: ${config.apiKey ? config.apiKey.substring(0, 8) + '...' : 'MISSING'}`);
+    console.log(`  - secret: ${config.apiSecret ? config.apiSecret.substring(0, 8) + '...' : 'MISSING'}`);
+    console.log(`  - passphrase: ${config.passphrase ? config.passphrase.substring(0, 8) + '...' : 'MISSING'}`);
+    console.log('[Confirmer] Message structure:', JSON.stringify({
+      type: subscribeMessage.type,
+      markets: subscribeMessage.markets,
+      auth: {
+        apiKey: config.apiKey ? `${config.apiKey.substring(0, 8)}...` : 'MISSING',
+        secret: config.apiSecret ? `${config.apiSecret.substring(0, 8)}...` : 'MISSING',
+        passphrase: config.passphrase ? `${config.passphrase.substring(0, 8)}...` : 'MISSING',
+      }
+    }, null, 2));
+
     this.ws?.send(JSON.stringify(subscribeMessage));
   }
 
