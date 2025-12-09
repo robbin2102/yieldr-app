@@ -51,9 +51,13 @@ class OrderbookCache {
                 .sort((a: any, b: any) => a.price - b.price),  // Low to high
               lastUpdate: Date.now(),
             });
+
+            const bestBid = msg.bids.length > 0 ? msg.bids[0].price : 'N/A';
+            const bestAsk = msg.asks.length > 0 ? msg.asks[0].price : 'N/A';
+            console.log(`[OrderbookCache] 📊 Orderbook snapshot: ${msg.asset_id.slice(0, 8)}... (bid: ${bestBid}, ask: ${bestAsk}, ${this.books.size} markets cached)`);
           } else if (msg.event_type === 'price_change') {
             // Incremental update
-            this.applyChanges(msg.asset_id, msg.changes);
+            this.applyChanges(msg.asset_id, msg.price_changes);
           }
         } catch (err) {
           console.error('[OrderbookCache] Parse error:', err);

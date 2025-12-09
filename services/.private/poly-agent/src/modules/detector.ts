@@ -15,6 +15,7 @@ export class Detector {
   private lastSeenTimestamp: number;
   private intervalId: NodeJS.Timeout | null = null;
   private isPolling: boolean = false;
+  private pollCount: number = 0;
 
   constructor() {
     // Start from now (will be updated from DB on start())
@@ -57,6 +58,14 @@ export class Detector {
     this.isPolling = true;
 
     try {
+      this.pollCount++;
+
+      // Log activity every 10 polls (30 seconds)
+      if (this.pollCount % 10 === 0) {
+        const date = new Date(this.lastSeenTimestamp * 1000).toISOString();
+        console.log(`[Detector] 👁️  Monitoring ${config.targetWallet.slice(0, 8)}... (${this.pollCount} checks, last: ${date})`);
+      }
+
       // Build API URL - only get trades AFTER lastSeenTimestamp
       const url = `${config.dataApiBase}/activity?user=${config.targetWallet}&type=TRADE&start=${this.lastSeenTimestamp}&limit=100&sortBy=TIMESTAMP&sortDirection=ASC`;
 
