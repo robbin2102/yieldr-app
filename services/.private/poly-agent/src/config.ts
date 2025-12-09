@@ -1,8 +1,18 @@
 import { config as dotenvConfig } from 'dotenv';
 import { resolve } from 'path';
+import { existsSync } from 'fs';
 
-// Load .env file from poly-agent root
-dotenvConfig({ path: resolve(__dirname, '../.env') });
+// Load environment variables - try .env.local first, then .env
+const envLocalPath = resolve(__dirname, '../.env.local');
+const envPath = resolve(__dirname, '../.env');
+
+if (existsSync(envLocalPath)) {
+  dotenvConfig({ path: envLocalPath });
+} else if (existsSync(envPath)) {
+  dotenvConfig({ path: envPath });
+} else {
+  throw new Error('No .env.local or .env file found! Please create one from .env.example');
+}
 
 export const config = {
   // Target trader wallet
@@ -50,7 +60,7 @@ const required = [
 
 for (const key of required) {
   if (!config[key as keyof typeof config]) {
-    throw new Error(`Missing required config: ${key}. Please check your .env file.`);
+    throw new Error(`Missing required config: ${key}. Please check your .env.local file.`);
   }
 }
 
