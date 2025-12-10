@@ -1,29 +1,33 @@
 /**
- * OrderbookCache - THE ONLY CACHE IN THE SYSTEM
- *
- * Maintains real-time orderbook data via WebSocket Market Channel.
- * For cache misses, fetches orderbook synchronously via REST API.
+ * OrderbookCache - REST-only orderbook fetching with TTL caching
  *
  * CRITICAL: In a financial system, we NEVER skip trades due to missing orderbook.
- * If cache miss → fetch synchronously → cache → execute trade.
+ * - Cache miss → fetch synchronously via REST API (~100-200ms)
+ * - Cache hit → use cached data (0ms)
+ * - TTL: 2 seconds (keeps data fresh, reduces API calls)
+ *
+ * WebSocket removed due to corruption issues (overwriting good REST data with bad data).
+ * REST API is reliable and fast enough for copy trading.
  *
  * Usage:
- * - getBestPrice(tokenId, side) - Get best bid/ask (0ms if cached, 100-200ms if fetch needed)
- * - subscribe(tokenId) - Subscribe to real-time WebSocket updates
- * - hasOrderbook(tokenId) - Check if data is cached
+ * - getBestPrice(tokenId, side) - Get best bid/ask (fetches if not cached or expired)
+ * - hasOrderbook(tokenId) - Check if data is cached and fresh
  */
 declare class OrderbookCache {
-    private ws;
     private books;
-    private subscribedTokens;
-    private reconnecting;
-    connect(): Promise<void>;
-    private reconnect;
+    private readonly TTL_MS;
     /**
-     * Subscribe to orderbook updates for a token
+     * Get best price for immediate execution
+     *
+     * Automatically fetches from REST API if:
+     * - Not in cache
+     * - Cache expired (> TTL_MS old)
+     *
+     * @param tokenId - Token to get price for
+     * @param side - BUY = get best ask (lowest sell price), SELL = get best bid (highest buy price)
+     * @returns Price or null if fetch failed or orderbook empty
      */
-    subscribe(tokenId: string): void;
-    private subscribeInternal;
+    getBestPrice(tokenId: string, side: 'BUY' | 'SELL'): Promise<number | null>;
     /**
      * Fetch orderbook from REST API and cache it (synchronous, blocking)
      *
@@ -35,25 +39,13 @@ declare class OrderbookCache {
      */
     fetchOrderbookSync(tokenId: string): Promise<boolean>;
     /**
-     * Get best price for immediate execution
-     *
-     * CRITICAL: Returns null only if orderbook is empty (no bids/asks), not if uncached.
-     * Caller must fetch orderbook first if not cached.
-     *
-     * @param tokenId - Token to get price for
-     * @param side - BUY = get best ask (lowest sell price), SELL = get best bid (highest buy price)
-     * @returns Price or null if orderbook is empty
-     */
-    getBestPrice(tokenId: string, side: 'BUY' | 'SELL'): number | null;
-    /**
-     * Check if we have orderbook data for a token
+     * Check if we have fresh orderbook data for a token
      */
     hasOrderbook(tokenId: string): boolean;
     /**
-     * Apply incremental orderbook changes from WSS
+     * Clear all cached orderbooks (useful for testing)
      */
-    private applyChanges;
-    disconnect(): void;
+    clearCache(): void;
 }
 export declare const orderbookCache: OrderbookCache;
 export {};

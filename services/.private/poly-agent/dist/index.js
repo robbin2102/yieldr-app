@@ -7,7 +7,6 @@ const mongoose_1 = __importDefault(require("mongoose"));
 const config_1 = require("./config");
 const connection_1 = require("./db/connection");
 const client_1 = require("./clob/client");
-const orderbookCache_1 = require("./state/orderbookCache");
 const detector_1 = require("./modules/detector");
 const executor_1 = require("./modules/executor");
 const confirmer_1 = require("./modules/confirmer");
@@ -38,41 +37,36 @@ async function main() {
     console.log('[Main] Connecting to MongoDB...');
     await (0, connection_1.connectDB)();
     // ═══════════════════════════════════════════════════════════════
-    // 2. Connect WebSocket Market Channel (orderbook cache - ONLY CACHE)
-    // ═══════════════════════════════════════════════════════════════
-    console.log('[Main] Connecting to orderbook cache...');
-    await orderbookCache_1.orderbookCache.connect();
-    // ═══════════════════════════════════════════════════════════════
-    // 3. Initialize CLOB client
+    // 2. Initialize CLOB client
     // ═══════════════════════════════════════════════════════════════
     console.log('[Main] Initializing CLOB client...');
     const clobClient = await (0, client_1.createClobClient)();
     // ═══════════════════════════════════════════════════════════════
-    // 4. Initialize and connect Confirmer (WSS User Channel)
+    // 3. Initialize and connect Confirmer (WSS User Channel for fills)
     // ═══════════════════════════════════════════════════════════════
     console.log('[Main] Connecting to User Channel...');
     const confirmer = new confirmer_1.Confirmer();
     await confirmer.connect();
     // ═══════════════════════════════════════════════════════════════
-    // 5. Initialize Executor
+    // 4. Initialize Executor
     // ═══════════════════════════════════════════════════════════════
     console.log('[Main] Initializing Executor...');
     const executor = new executor_1.Executor(clobClient);
     await executor.initialize();
     // ═══════════════════════════════════════════════════════════════
-    // 6. Start Detector
+    // 5. Start Detector
     // ═══════════════════════════════════════════════════════════════
     console.log('[Main] Starting Detector...');
     const detector = new detector_1.Detector();
     await detector.start();
     // ═══════════════════════════════════════════════════════════════
-    // 7. Start Reconciler
+    // 6. Start Reconciler
     // ═══════════════════════════════════════════════════════════════
     console.log('[Main] Starting Reconciler...');
     const reconciler = new reconciler_1.Reconciler();
     reconciler.start();
     // ═══════════════════════════════════════════════════════════════
-    // 8. Stats logger (every 30 seconds)
+    // 7. Stats logger (every 30 seconds)
     // ═══════════════════════════════════════════════════════════════
     setInterval(async () => {
         try {
@@ -101,14 +95,13 @@ async function main() {
     }, 30000);
     console.log('\n✅ Poly-Agent is running. Listening for trades...\n');
     // ═══════════════════════════════════════════════════════════════
-    // 9. Graceful shutdown
+    // 8. Graceful shutdown
     // ═══════════════════════════════════════════════════════════════
     process.on('SIGINT', async () => {
         console.log('\n\n[Main] Shutting down...');
         detector.stop();
         reconciler.stop();
         confirmer.disconnect();
-        orderbookCache_1.orderbookCache.disconnect();
         await mongoose_1.default.connection.close();
         console.log('[Main] Goodbye! 👋\n');
         process.exit(0);
@@ -118,7 +111,6 @@ async function main() {
         detector.stop();
         reconciler.stop();
         confirmer.disconnect();
-        orderbookCache_1.orderbookCache.disconnect();
         await mongoose_1.default.connection.close();
         console.log('[Main] Shutdown complete\n');
         process.exit(0);

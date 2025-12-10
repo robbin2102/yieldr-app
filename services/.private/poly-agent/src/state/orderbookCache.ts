@@ -1,6 +1,4 @@
-import WebSocket from 'ws';
 import { config } from '../config';
-import { eventBus } from './eventBus';
 
 interface OrderBook {
   bids: { price: number; size: number }[];  // Sorted high to low
@@ -9,114 +7,63 @@ interface OrderBook {
 }
 
 /**
- * OrderbookCache - THE ONLY CACHE IN THE SYSTEM
- *
- * Maintains real-time orderbook data via WebSocket Market Channel.
- * For cache misses, fetches orderbook synchronously via REST API.
+ * OrderbookCache - REST-only orderbook fetching with TTL caching
  *
  * CRITICAL: In a financial system, we NEVER skip trades due to missing orderbook.
- * If cache miss → fetch synchronously → cache → execute trade.
+ * - Cache miss → fetch synchronously via REST API (~100-200ms)
+ * - Cache hit → use cached data (0ms)
+ * - TTL: 2 seconds (keeps data fresh, reduces API calls)
+ *
+ * WebSocket removed due to corruption issues (overwriting good REST data with bad data).
+ * REST API is reliable and fast enough for copy trading.
  *
  * Usage:
- * - getBestPrice(tokenId, side) - Get best bid/ask (0ms if cached, 100-200ms if fetch needed)
- * - subscribe(tokenId) - Subscribe to real-time WebSocket updates
- * - hasOrderbook(tokenId) - Check if data is cached
+ * - getBestPrice(tokenId, side) - Get best bid/ask (fetches if not cached or expired)
+ * - hasOrderbook(tokenId) - Check if data is cached and fresh
  */
 class OrderbookCache {
-  private ws: WebSocket | null = null;
   private books: Map<string, OrderBook> = new Map();
-  private subscribedTokens: Set<string> = new Set();
-  private reconnecting: boolean = false;
-
-  async connect(): Promise<void> {
-    return new Promise((resolve) => {
-      console.log('[OrderbookCache] Connecting to Market Channel...');
-
-      this.ws = new WebSocket(config.wssMarket);
-
-      this.ws.on('open', () => {
-        console.log('[OrderbookCache] ✅ Connected');
-        this.reconnecting = false;
-        resolve();
-      });
-
-      this.ws.on('message', (data) => {
-        try {
-          const dataStr = data.toString();
-
-          // Handle PONG responses (plain text, not JSON)
-          if (dataStr === 'PONG') {
-            return;
-          }
-
-          const msg = JSON.parse(dataStr);
-
-          if (msg.event_type === 'book') {
-            // Full orderbook snapshot
-            this.books.set(msg.asset_id, {
-              bids: msg.bids
-                .map((b: any) => ({ price: parseFloat(b.price), size: parseFloat(b.size) }))
-                .sort((a: any, b: any) => b.price - a.price),  // High to low
-              asks: msg.asks
-                .map((a: any) => ({ price: parseFloat(a.price), size: parseFloat(a.size) }))
-                .sort((a: any, b: any) => a.price - b.price),  // Low to high
-              lastUpdate: Date.now(),
-            });
-
-            const bestBid = msg.bids.length > 0 ? msg.bids[0].price : 'N/A';
-            const bestAsk = msg.asks.length > 0 ? msg.asks[0].price : 'N/A';
-            console.log(`[OrderbookCache] 📊 Orderbook snapshot: ${msg.asset_id.slice(0, 8)}... (bid: ${bestBid}, ask: ${bestAsk}, ${this.books.size} markets cached)`);
-          } else if (msg.event_type === 'price_change') {
-            // Incremental update
-            this.applyChanges(msg.asset_id, msg.price_changes);
-          }
-        } catch (err) {
-          console.error('[OrderbookCache] Parse error:', err);
-        }
-      });
-
-      this.ws.on('close', () => {
-        console.log('[OrderbookCache] Disconnected');
-        this.reconnect();
-      });
-
-      this.ws.on('error', (err) => {
-        console.error('[OrderbookCache] Error:', err.message);
-      });
-    });
-  }
-
-  private reconnect() {
-    if (this.reconnecting) return;
-    this.reconnecting = true;
-
-    console.log('[OrderbookCache] Reconnecting in 5s...');
-    setTimeout(async () => {
-      await this.connect();
-      // Resubscribe to all tokens
-      for (const tokenId of this.subscribedTokens) {
-        this.subscribeInternal(tokenId);
-      }
-    }, 5000);
-  }
+  private readonly TTL_MS = 2000;  // 2 second cache TTL
 
   /**
-   * Subscribe to orderbook updates for a token
+   * Get best price for immediate execution
+   *
+   * Automatically fetches from REST API if:
+   * - Not in cache
+   * - Cache expired (> TTL_MS old)
+   *
+   * @param tokenId - Token to get price for
+   * @param side - BUY = get best ask (lowest sell price), SELL = get best bid (highest buy price)
+   * @returns Price or null if fetch failed or orderbook empty
    */
-  subscribe(tokenId: string) {
-    if (this.subscribedTokens.has(tokenId)) return;
-    this.subscribedTokens.add(tokenId);
-    this.subscribeInternal(tokenId);
-  }
+  async getBestPrice(tokenId: string, side: 'BUY' | 'SELL'): Promise<number | null> {
+    const book = this.books.get(tokenId);
+    const now = Date.now();
 
-  private subscribeInternal(tokenId: string) {
-    if (this.ws?.readyState === WebSocket.OPEN) {
-      console.log(`[OrderbookCache] Subscribing to ${tokenId.slice(0, 16)}...`);
-      // Correct format from Polymarket docs: type = channel name
-      this.ws.send(JSON.stringify({
-        type: 'market',
-        assets_ids: [tokenId],
-      }));
+    // Check if cache is fresh (< TTL_MS old)
+    if (book && (now - book.lastUpdate) < this.TTL_MS) {
+      // Cache hit - return immediately
+      if (side === 'BUY') {
+        return book.asks.length > 0 ? book.asks[0].price : null;
+      } else {
+        return book.bids.length > 0 ? book.bids[0].price : null;
+      }
+    }
+
+    // Cache miss or expired - fetch fresh data
+    const fetchSuccess = await this.fetchOrderbookSync(tokenId);
+    if (!fetchSuccess) {
+      return null;
+    }
+
+    // Get price from freshly fetched data
+    const freshBook = this.books.get(tokenId);
+    if (!freshBook) return null;
+
+    if (side === 'BUY') {
+      return freshBook.asks.length > 0 ? freshBook.asks[0].price : null;
+    } else {
+      return freshBook.bids.length > 0 ? freshBook.bids[0].price : null;
     }
   }
 
@@ -132,7 +79,7 @@ class OrderbookCache {
   async fetchOrderbookSync(tokenId: string): Promise<boolean> {
     try {
       const fetchStart = Date.now();
-      console.log(`[OrderbookCache] 🔄 Cache miss - fetching orderbook for ${tokenId.slice(0, 16)}...`);
+      console.log(`[OrderbookCache] 🔄 Fetching orderbook for ${tokenId.slice(0, 16)}...`);
 
       const url = `${config.clobApiBase}/book?token_id=${tokenId}`;
       const response = await fetch(url);
@@ -160,10 +107,7 @@ class OrderbookCache {
       const bestBid = book.bids.length > 0 ? book.bids[0].price : 'N/A';
       const bestAsk = book.asks.length > 0 ? book.asks[0].price : 'N/A';
 
-      console.log(`[OrderbookCache] ✅ Fetched orderbook in ${fetchLatency}ms (bid: ${bestBid}, ask: ${bestAsk})`);
-
-      // Subscribe to WebSocket for future updates
-      this.subscribe(tokenId);
+      console.log(`[OrderbookCache] ✅ Fetched in ${fetchLatency}ms (bid: ${bestBid}, ask: ${bestAsk})`);
 
       return true;
     } catch (error: any) {
@@ -173,71 +117,22 @@ class OrderbookCache {
   }
 
   /**
-   * Get best price for immediate execution
-   *
-   * CRITICAL: Returns null only if orderbook is empty (no bids/asks), not if uncached.
-   * Caller must fetch orderbook first if not cached.
-   *
-   * @param tokenId - Token to get price for
-   * @param side - BUY = get best ask (lowest sell price), SELL = get best bid (highest buy price)
-   * @returns Price or null if orderbook is empty
-   */
-  getBestPrice(tokenId: string, side: 'BUY' | 'SELL'): number | null {
-    const book = this.books.get(tokenId);
-    if (!book) return null;
-
-    if (side === 'BUY') {
-      // For BUY orders: take the best ask (lowest sell price)
-      return book.asks.length > 0 ? book.asks[0].price : null;
-    } else {
-      // For SELL orders: take the best bid (highest buy price)
-      return book.bids.length > 0 ? book.bids[0].price : null;
-    }
-  }
-
-  /**
-   * Check if we have orderbook data for a token
+   * Check if we have fresh orderbook data for a token
    */
   hasOrderbook(tokenId: string): boolean {
-    return this.books.has(tokenId);
+    const book = this.books.get(tokenId);
+    if (!book) return false;
+
+    const now = Date.now();
+    return (now - book.lastUpdate) < this.TTL_MS;
   }
 
   /**
-   * Apply incremental orderbook changes from WSS
+   * Clear all cached orderbooks (useful for testing)
    */
-  private applyChanges(assetId: string, changes: any[]) {
-    const book = this.books.get(assetId);
-    if (!book) return;
-
-    for (const change of changes) {
-      const price = parseFloat(change.price);
-      const size = parseFloat(change.size);
-      const side = change.side === 'BUY' ? 'bids' : 'asks';
-
-      // Remove existing level at this price
-      book[side] = book[side].filter(l => l.price !== price);
-
-      // Add new level if size > 0 (size = 0 means level removed)
-      if (size > 0) {
-        book[side].push({ price, size });
-      }
-
-      // Re-sort
-      if (side === 'bids') {
-        book.bids.sort((a, b) => b.price - a.price);  // High to low
-      } else {
-        book.asks.sort((a, b) => a.price - b.price);  // Low to high
-      }
-    }
-
-    book.lastUpdate = Date.now();
+  clearCache() {
+    this.books.clear();
   }
-
-  disconnect() {
-    this.ws?.close();
-    this.ws = null;
-  }
-
 }
 
 export const orderbookCache = new OrderbookCache();

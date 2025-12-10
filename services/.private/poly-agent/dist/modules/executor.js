@@ -99,24 +99,13 @@ class Executor {
         // ═══════════════════════════════════════════════════════════════
         // Check 1: Calculate copy size (fractional shares allowed)
         let copySize = trade.size * config_1.config.copyRatio;
-        // Check 2: Get best price from orderbook (fetch if not cached)
-        let bestPrice = orderbookCache_1.orderbookCache.getBestPrice(trade.tokenId, trade.side);
+        // Check 2: Get best price from orderbook (fetches from REST API if not cached)
+        // This automatically handles cache miss and TTL expiration
+        const bestPrice = await orderbookCache_1.orderbookCache.getBestPrice(trade.tokenId, trade.side);
         if (!bestPrice) {
-            // CRITICAL: Cache miss - fetch orderbook synchronously (blocking ~100-200ms)
-            // We NEVER skip trades due to missing orderbook data
-            console.log(`[Executor] ⚠️ Orderbook not cached - fetching synchronously...`);
-            const fetchSuccess = await orderbookCache_1.orderbookCache.fetchOrderbookSync(trade.tokenId);
-            if (!fetchSuccess) {
-                // Only fail if REST API fetch fails after retries
-                await this.skipTrade(tradeRecord, 'CRITICAL: Failed to fetch orderbook after retries');
-                return;
-            }
-            // Retry getting price after fetch
-            bestPrice = orderbookCache_1.orderbookCache.getBestPrice(trade.tokenId, trade.side);
-            if (!bestPrice) {
-                await this.skipTrade(tradeRecord, 'CRITICAL: Orderbook is empty (no bids/asks available)');
-                return;
-            }
+            // Only fails if REST API fetch failed or orderbook is empty
+            await this.skipTrade(tradeRecord, 'CRITICAL: Failed to fetch orderbook or orderbook empty');
+            return;
         }
         // Check 3: Cap at max position size
         let orderCost = copySize * bestPrice;
@@ -125,11 +114,8 @@ class Executor {
             orderCost = copySize * bestPrice;
             console.log(`[Executor] Capped to ${copySize} shares ($${orderCost.toFixed(2)})`);
         }
-        // Check 4: Final size check after capping
-        if (copySize < config_1.config.minTradeSize) {
-            await this.skipTrade(tradeRecord, `Capped size ${copySize} < min ${config_1.config.minTradeSize}`);
-            return;
-        }
+        // CRITICAL: NO minimum size check - copy ALL trades regardless of size
+        // Trader may place 100 small orders that add up to a position
         // ═══════════════════════════════════════════════════════════════
         // EXECUTE FOK ORDER
         // ═══════════════════════════════════════════════════════════════
@@ -143,30 +129,41 @@ class Executor {
         eventBus_1.eventBus.emit('trade:executing', { tradeId: tradeRecord._id, trade, copySize, bestPrice });
         try {
             console.log(`[Executor] Placing FOK: ${trade.side} ${copySize} @ $${bestPrice.toFixed(4)}`);
-            // Build order based on side (v3.0.0 API has different methods for BUY vs SELL)
+            // Create market order based on side
             let order;
             if (trade.side === 'BUY') {
-                // BUY orders: use createMarketBuyOrder (amount in USDC)
+                // BUY: use createMarketBuyOrder with amount in USDC
                 order = await this.clobClient.createMarketBuyOrder({
                     tokenID: trade.tokenId,
-                    amount: orderCost, // Amount in USDC
-                    feeRateBps: 0, // Polymarket has 0 fees
-                }, '0.01' // tickSize for price precision
-                );
+                    amount: orderCost, // USDC to spend
+                    price: bestPrice, // Add price parameter per API requirements
+                    feeRateBps: 0,
+                    nonce: 0,
+                });
             }
             else {
-                // SELL orders: use createOrder (size in shares, requires explicit price)
+                // SELL: use createOrder with explicit price and size
                 order = await this.clobClient.createOrder({
                     tokenID: trade.tokenId,
                     price: bestPrice,
-                    size: copySize, // Size in shares
+                    size: copySize, // Shares to sell
                     side: clob_client_1.Side.SELL,
-                    feeRateBps: 0, // Polymarket has 0 fees
-                }, '0.01' // tickSize for price precision
-                );
+                    feeRateBps: 0,
+                    nonce: 0,
+                });
             }
+            console.log(`[Executor] Order created: ${JSON.stringify({
+                side: trade.side,
+                tokenID: trade.tokenId.slice(0, 16) + '...',
+                amount: trade.side === 'BUY' ? orderCost : copySize,
+                price: bestPrice,
+            })}`);
             // Submit as Fill-Or-Kill (immediate full fill or cancel)
             const response = await this.clobClient.postOrder(order, clob_client_1.OrderType.FOK);
+            // Check if response is valid
+            if (!response || !response.orderID) {
+                throw new Error('No orderID returned from API - order may have been rejected');
+            }
             const latencyMs = Date.now() - startTime;
             console.log(`[Executor] ✅ Submitted: ${response.orderID} (${latencyMs}ms)`);
             // Update trade record
@@ -185,10 +182,17 @@ class Executor {
         }
         catch (error) {
             console.error(`[Executor] ❌ Order failed:`, error.message);
+            // Log detailed API error if available
+            if (error.response?.data) {
+                console.error(`[Executor] API Error Details:`, JSON.stringify(error.response.data, null, 2));
+            }
             tradeRecord.status = 'FAILED';
-            tradeRecord.failReason = error.message;
+            tradeRecord.failReason = error.response?.data?.error || error.message;
             await tradeRecord.save();
-            eventBus_1.eventBus.emit('trade:failed', { tradeId: tradeRecord._id, error: error.message });
+            eventBus_1.eventBus.emit('trade:failed', {
+                tradeId: tradeRecord._id,
+                error: error.response?.data?.error || error.message
+            });
         }
     }
 }
