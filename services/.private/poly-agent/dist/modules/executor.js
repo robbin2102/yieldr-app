@@ -114,8 +114,22 @@ class Executor {
             orderCost = copySize * bestPrice;
             console.log(`[Executor] Capped to ${copySize} shares ($${orderCost.toFixed(2)})`);
         }
-        // CRITICAL: NO minimum size check - copy ALL trades regardless of size
-        // Trader may place 100 small orders that add up to a position
+        // Check 4: For BUY orders, enforce Polymarket $1 minimum
+        // This is an API constraint, not our choice
+        if (trade.side === 'BUY' && orderCost < 1) {
+            console.log(`[Executor] ⚠️ Order below $1 minimum ($${orderCost.toFixed(2)}) - rounding up to $1`);
+            orderCost = 1;
+            copySize = orderCost / bestPrice; // Recalculate shares based on $1 spend
+        }
+        // Check 5: For SELL orders, verify we have enough shares
+        if (trade.side === 'SELL') {
+            const ourShares = await this.getOurPosition(trade.tokenId);
+            if (ourShares < copySize) {
+                await this.skipTrade(tradeRecord, `Cannot sell - insufficient shares (need ${copySize.toFixed(4)}, have ${ourShares.toFixed(4)})`);
+                return;
+            }
+            console.log(`[Executor] Balance check: have ${ourShares.toFixed(4)} shares, selling ${copySize.toFixed(4)}`);
+        }
         // ═══════════════════════════════════════════════════════════════
         // EXECUTE FOK ORDER
         // ═══════════════════════════════════════════════════════════════
@@ -193,6 +207,27 @@ class Executor {
                 tradeId: tradeRecord._id,
                 error: error.response?.data?.error || error.message
             });
+        }
+    }
+    /**
+     * Get our position size for a specific token
+     * Fetches from /positions API and returns shares owned (0 if no position)
+     */
+    async getOurPosition(tokenId) {
+        try {
+            const response = await fetch(`${config_1.config.dataApiBase}/positions?user=${config_1.config.botWalletAddress}`);
+            if (!response.ok) {
+                console.error(`[Executor] Failed to fetch positions: ${response.status}`);
+                return 0;
+            }
+            const positions = await response.json();
+            // Find position matching this tokenId
+            const position = positions.find((p) => p.asset_id === tokenId);
+            return position?.size || 0;
+        }
+        catch (error) {
+            console.error(`[Executor] Error fetching position:`, error.message);
+            return 0;
         }
     }
 }

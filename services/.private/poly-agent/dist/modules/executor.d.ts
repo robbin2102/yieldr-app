@@ -34,4 +34,9 @@ export declare class Executor {
      * All trades are copied at the configured ratio, regardless of size.
      */
     private handleTradeExecution;
+    /**
+     * Get our position size for a specific token
+     * Fetches from /positions API and returns shares owned (0 if no position)
+     */
+    private getOurPosition;
 }
