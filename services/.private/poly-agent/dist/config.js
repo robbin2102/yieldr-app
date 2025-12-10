@@ -46,9 +46,9 @@ exports.config = {
     // MongoDB connection
     mongoUri: process.env.MONGODB_URI,
     // Agent parameters
-    copyRatio: parseFloat(process.env.COPY_RATIO || '0.05'),
-    maxPositionUsdc: parseFloat(process.env.MAX_POSITION_USDC || '50'),
-    minTradeSize: parseFloat(process.env.MIN_TRADE_SIZE || '1'),
+    copyRatio: parseFloat(process.env.COPY_RATIO || '0.01'),
+    maxPositionUsdc: parseFloat(process.env.MAX_POSITION_USDC || '2000'),
+    minTradeSize: parseFloat(process.env.MIN_TRADE_SIZE || '0'), // DEPRECATED: Not used anymore
     // Polling intervals
     detectorIntervalMs: parseInt(process.env.DETECTOR_INTERVAL_MS || '3000'),
     reconcilerIntervalMs: parseInt(process.env.RECONCILER_INTERVAL_MS || '60000'),

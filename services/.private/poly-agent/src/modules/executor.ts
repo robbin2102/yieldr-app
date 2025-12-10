@@ -8,23 +8,24 @@ import { DetectedTrade } from '../types';
 /**
  * Executor - Executes copy trades with FOK orders
  *
+ * CRITICAL FINANCIAL SYSTEM BEHAVIOR:
+ * - NEVER skip trades - every trade the target wallet makes is copied
+ * - If orderbook not cached: fetch synchronously via REST API (~100-200ms latency)
+ * - Only fail if REST API fetch fails after retries (extremely rare)
+ *
  * Flow:
  * 1. Receive 'trade:detected' event from Detector
  * 2. Try to insert to MongoDB (unique index handles dedup)
- * 3. Run in-memory risk checks (<5ms)
- * 4. Build and submit FOK order to CLOB
- * 5. Emit 'trade:submitted' for Confirmer to track
+ * 3. Calculate copy size (trader size × copyRatio, fractional shares allowed)
+ * 4. Get best price from orderbook (fetch if not cached)
+ * 5. Cap at max position size if needed
+ * 6. Build and submit FOK order to CLOB
+ * 7. Emit 'trade:submitted' for Confirmer to track fills
  *
- * Risk checks (all in-memory, no blocking):
- * - Calculate copy size (trader size × copyRatio)
- * - Check minimum size threshold
- * - Get best price from orderbook cache
- * - Cap at max position size
- *
- * Note: NO RETRY LOGIC in Phase 1 testing
- * - If no orderbook data, trade is skipped permanently
- * - OrderbookCache subscribes for future trades on same token
- * - Retry logic will be added in Phase 2 after testing
+ * Position Sizing:
+ * - Copy ALL trades regardless of size (even 0.5 shares → 0.005 shares at 1%)
+ * - Trader may place 100 small orders that add up - we copy all of them
+ * - Only limit is MAX_POSITION_USDC per trade
  */
 export class Executor {
   private clobClient: ClobClient;
@@ -96,32 +97,41 @@ export class Executor {
 
   /**
    * Execute trade after deduplication check
+   *
+   * CRITICAL: We NEVER skip trades in a financial system.
+   * All trades are copied at the configured ratio, regardless of size.
    */
   private async handleTradeExecution(trade: DetectedTrade, tradeRecord: any) {
     const startTime = Date.now();
 
     // ═══════════════════════════════════════════════════════════════
-    // RISK CHECKS (In-memory, <5ms total)
+    // RISK CHECKS (In-memory when cached, blocking fetch if not)
     // ═══════════════════════════════════════════════════════════════
 
-    // Check 1: Calculate copy size
-    let copySize = Math.floor(trade.size * config.copyRatio);
+    // Check 1: Calculate copy size (fractional shares allowed)
+    let copySize = trade.size * config.copyRatio;
 
-    if (copySize < config.minTradeSize) {
-      await this.skipTrade(tradeRecord, `Size ${copySize} < min ${config.minTradeSize}`);
-      return;
-    }
-
-    // Check 2: Get best price from orderbook cache (0ms lookup)
-    const bestPrice = orderbookCache.getBestPrice(trade.tokenId, trade.side);
+    // Check 2: Get best price from orderbook (fetch if not cached)
+    let bestPrice = orderbookCache.getBestPrice(trade.tokenId, trade.side);
 
     if (!bestPrice) {
-      // No orderbook data yet - subscribe for future trades on this token
-      // NOTE: This trade is skipped permanently (Phase 1 - no retries)
-      // Future trades on this token will have orderbook data from cache
-      orderbookCache.subscribe(trade.tokenId);
-      await this.skipTrade(tradeRecord, 'No orderbook data (Phase 1: skipped permanently, subscribed for future trades)');
-      return;
+      // CRITICAL: Cache miss - fetch orderbook synchronously (blocking ~100-200ms)
+      // We NEVER skip trades due to missing orderbook data
+      console.log(`[Executor] ⚠️ Orderbook not cached - fetching synchronously...`);
+      const fetchSuccess = await orderbookCache.fetchOrderbookSync(trade.tokenId);
+
+      if (!fetchSuccess) {
+        // Only fail if REST API fetch fails after retries
+        await this.skipTrade(tradeRecord, 'CRITICAL: Failed to fetch orderbook after retries');
+        return;
+      }
+
+      // Retry getting price after fetch
+      bestPrice = orderbookCache.getBestPrice(trade.tokenId, trade.side);
+      if (!bestPrice) {
+        await this.skipTrade(tradeRecord, 'CRITICAL: Orderbook is empty (no bids/asks available)');
+        return;
+      }
     }
 
     // Check 3: Cap at max position size

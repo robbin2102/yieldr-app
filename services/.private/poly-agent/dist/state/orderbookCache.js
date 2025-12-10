@@ -10,12 +10,15 @@ const config_1 = require("../config");
  * OrderbookCache - THE ONLY CACHE IN THE SYSTEM
  *
  * Maintains real-time orderbook data via WebSocket Market Channel.
- * Required for fast execution - provides 0ms price lookups on critical path.
+ * For cache misses, fetches orderbook synchronously via REST API.
+ *
+ * CRITICAL: In a financial system, we NEVER skip trades due to missing orderbook.
+ * If cache miss → fetch synchronously → cache → execute trade.
  *
  * Usage:
- * - subscribe(tokenId) - Subscribe to market updates for a token
- * - getBestPrice(tokenId, side) - Get best bid/ask (0ms lookup)
- * - hasOrderbook(tokenId) - Check if we have data yet
+ * - getBestPrice(tokenId, side) - Get best bid/ask (0ms if cached, 100-200ms if fetch needed)
+ * - subscribe(tokenId) - Subscribe to real-time WebSocket updates
+ * - hasOrderbook(tokenId) - Check if data is cached
  */
 class OrderbookCache {
     constructor() {
@@ -107,11 +110,58 @@ class OrderbookCache {
         }
     }
     /**
+     * Fetch orderbook from REST API and cache it (synchronous, blocking)
+     *
+     * CRITICAL: This is called when cache misses to ensure we NEVER skip trades.
+     * Latency: ~100-200ms for REST API call.
+     *
+     * @param tokenId - Token to fetch orderbook for
+     * @returns true if successful, false if failed
+     */
+    async fetchOrderbookSync(tokenId) {
+        try {
+            const fetchStart = Date.now();
+            console.log(`[OrderbookCache] 🔄 Cache miss - fetching orderbook for ${tokenId.slice(0, 16)}...`);
+            const url = `${config_1.config.clobApiBase}/book?token_id=${tokenId}`;
+            const response = await fetch(url);
+            if (!response.ok) {
+                console.error(`[OrderbookCache] ❌ REST API error: ${response.status} ${response.statusText}`);
+                return false;
+            }
+            const data = await response.json();
+            const fetchLatency = Date.now() - fetchStart;
+            // Parse and cache orderbook
+            this.books.set(tokenId, {
+                bids: (data.bids || [])
+                    .map((b) => ({ price: parseFloat(b.price), size: parseFloat(b.size) }))
+                    .sort((a, b) => b.price - a.price), // High to low
+                asks: (data.asks || [])
+                    .map((a) => ({ price: parseFloat(a.price), size: parseFloat(a.size) }))
+                    .sort((a, b) => a.price - b.price), // Low to high
+                lastUpdate: Date.now(),
+            });
+            const book = this.books.get(tokenId);
+            const bestBid = book.bids.length > 0 ? book.bids[0].price : 'N/A';
+            const bestAsk = book.asks.length > 0 ? book.asks[0].price : 'N/A';
+            console.log(`[OrderbookCache] ✅ Fetched orderbook in ${fetchLatency}ms (bid: ${bestBid}, ask: ${bestAsk})`);
+            // Subscribe to WebSocket for future updates
+            this.subscribe(tokenId);
+            return true;
+        }
+        catch (error) {
+            console.error(`[OrderbookCache] ❌ Failed to fetch orderbook: ${error.message}`);
+            return false;
+        }
+    }
+    /**
      * Get best price for immediate execution
+     *
+     * CRITICAL: Returns null only if orderbook is empty (no bids/asks), not if uncached.
+     * Caller must fetch orderbook first if not cached.
      *
      * @param tokenId - Token to get price for
      * @param side - BUY = get best ask (lowest sell price), SELL = get best bid (highest buy price)
-     * @returns Price or null if no orderbook data
+     * @returns Price or null if orderbook is empty
      */
     getBestPrice(tokenId, side) {
         const book = this.books.get(tokenId);
