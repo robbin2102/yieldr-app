@@ -20,6 +20,11 @@ import { DetectedTrade } from '../types';
  * - Check minimum size threshold
  * - Get best price from orderbook cache
  * - Cap at max position size
+ *
+ * Note: NO RETRY LOGIC in Phase 1 testing
+ * - If no orderbook data, trade is skipped permanently
+ * - OrderbookCache subscribes for future trades on same token
+ * - Retry logic will be added in Phase 2 after testing
  */
 export class Executor {
   private clobClient: ClobClient;
@@ -31,13 +36,6 @@ export class Executor {
     eventBus.on('trade:detected', (trade: DetectedTrade) => {
       this.handleTrade(trade).catch((error) => {
         console.error('[Executor] Unhandled error:', error);
-      });
-    });
-
-    // Listen for orderbook ready events to retry skipped trades
-    eventBus.on('orderbook:ready', ({ tokenId }: { tokenId: string }) => {
-      this.retrySkippedTrades(tokenId).catch((error) => {
-        console.error('[Executor] Error retrying skipped trades:', error);
       });
     });
   }
@@ -97,72 +95,7 @@ export class Executor {
   }
 
   /**
-   * Retry SKIPPED trades when orderbook data becomes available
-   */
-  private async retrySkippedTrades(tokenId: string) {
-    // Find recent SKIPPED trades for this token that failed due to "No orderbook data"
-    const skippedTrades = await PolyAgentTrade.find({
-      'original.tokenId': tokenId,
-      status: 'SKIPPED',
-      skipReason: 'No orderbook data - subscribed for future',
-      detectedAt: { $gt: new Date(Date.now() - 300000) }, // Last 5 minutes only
-    }).limit(10); // Limit to prevent spam
-
-    if (skippedTrades.length === 0) return;
-
-    console.log(`[Executor] 🔄 Retrying ${skippedTrades.length} skipped trade(s) for token ${tokenId.slice(0, 8)}...`);
-
-    for (const tradeRecord of skippedTrades) {
-      // Extract original trade data with null safety
-      const original = tradeRecord.original as any;
-
-      // Validate that we have all required data (should always exist, but TypeScript safety)
-      if (!original ||
-          !original.txHash ||
-          !original.conditionId ||
-          !original.tokenId ||
-          !original.side ||
-          original.size == null ||
-          original.price == null ||
-          original.usdcSize == null ||
-          !original.timestamp ||
-          !original.title ||
-          !original.outcome ||
-          !tradeRecord.detectedAt) {
-        console.error(`[Executor] ⚠️ Skip retry: Missing data in record ${tradeRecord._id}`);
-        continue;
-      }
-
-      // Reconstruct DetectedTrade from validated database record
-      const trade: DetectedTrade = {
-        txHash: original.txHash as string,
-        conditionId: original.conditionId as string,
-        tokenId: original.tokenId as string,
-        side: original.side as 'BUY' | 'SELL',
-        size: original.size as number,
-        price: original.price as number,
-        usdcSize: original.usdcSize as number,
-        timestamp: Math.floor(new Date(original.timestamp).getTime() / 1000),
-        title: original.title as string,
-        outcome: original.outcome as string,
-        detectedAt: new Date(tradeRecord.detectedAt).getTime(),
-      };
-
-      // Reset status to DETECTED for retry
-      tradeRecord.status = 'DETECTED';
-      tradeRecord.skipReason = undefined;
-      await tradeRecord.save();
-
-      console.log(`[Executor] 🔄 Retry: ${trade.side} ${trade.size} ${trade.outcome}`);
-
-      // Re-process the trade (will go through all risk checks again)
-      await this.handleTradeExecution(trade, tradeRecord);
-    }
-  }
-
-  /**
    * Execute trade after deduplication check
-   * Separated from handleTrade so it can be called for retries
    */
   private async handleTradeExecution(trade: DetectedTrade, tradeRecord: any) {
     const startTime = Date.now();
@@ -183,9 +116,11 @@ export class Executor {
     const bestPrice = orderbookCache.getBestPrice(trade.tokenId, trade.side);
 
     if (!bestPrice) {
-      // No orderbook data yet - subscribe for next time
+      // No orderbook data yet - subscribe for future trades on this token
+      // NOTE: This trade is skipped permanently (Phase 1 - no retries)
+      // Future trades on this token will have orderbook data from cache
       orderbookCache.subscribe(trade.tokenId);
-      await this.skipTrade(tradeRecord, 'No orderbook data - subscribed for future');
+      await this.skipTrade(tradeRecord, 'No orderbook data (Phase 1: skipped permanently, subscribed for future trades)');
       return;
     }
 

@@ -14,6 +14,11 @@ import { ClobClient } from '@polymarket/clob-client';
  * - Check minimum size threshold
  * - Get best price from orderbook cache
  * - Cap at max position size
+ *
+ * Note: NO RETRY LOGIC in Phase 1 testing
+ * - If no orderbook data, trade is skipped permanently
+ * - OrderbookCache subscribes for future trades on same token
+ * - Retry logic will be added in Phase 2 after testing
  */
 export declare class Executor {
     private clobClient;
@@ -22,12 +27,7 @@ export declare class Executor {
     private handleTrade;
     private skipTrade;
     /**
-     * Retry SKIPPED trades when orderbook data becomes available
-     */
-    private retrySkippedTrades;
-    /**
      * Execute trade after deduplication check
-     * Separated from handleTrade so it can be called for retries
      */
     private handleTradeExecution;
 }

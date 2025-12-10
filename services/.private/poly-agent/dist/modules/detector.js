@@ -73,7 +73,8 @@ class Detector {
                 console.log(`[Detector] 👁️  Monitoring ${config_1.config.targetWallet.slice(0, 8)}... (${this.pollCount} checks, last: ${date})`);
             }
             // Build API URL - only get trades AFTER lastSeenTimestamp
-            const url = `${config_1.config.dataApiBase}/activity?user=${config_1.config.targetWallet}&type=TRADE&start=${this.lastSeenTimestamp}&limit=100&sortBy=TIMESTAMP&sortDirection=ASC`;
+            // Note: start parameter is INCLUSIVE, so we use +1 to avoid fetching same trades
+            const url = `${config_1.config.dataApiBase}/activity?user=${config_1.config.targetWallet}&type=TRADE&start=${this.lastSeenTimestamp + 1}&limit=100&sortBy=TIMESTAMP&sortDirection=ASC`;
             const apiCallStart = Date.now();
             const response = await fetch(url);
             const apiLatency = Date.now() - apiCallStart;

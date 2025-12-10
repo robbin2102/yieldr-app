@@ -38,11 +38,6 @@ declare class OrderbookCache {
      */
     private applyChanges;
     disconnect(): void;
-    /**
-     * Emit event when orderbook data becomes available
-     * This allows executor to retry SKIPPED trades
-     */
-    private emitOrderbookReady;
 }
 export declare const orderbookCache: OrderbookCache;
 export {};

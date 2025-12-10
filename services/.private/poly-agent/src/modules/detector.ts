@@ -84,7 +84,8 @@ export class Detector {
       }
 
       // Build API URL - only get trades AFTER lastSeenTimestamp
-      const url = `${config.dataApiBase}/activity?user=${config.targetWallet}&type=TRADE&start=${this.lastSeenTimestamp}&limit=100&sortBy=TIMESTAMP&sortDirection=ASC`;
+      // Note: start parameter is INCLUSIVE, so we use +1 to avoid fetching same trades
+      const url = `${config.dataApiBase}/activity?user=${config.targetWallet}&type=TRADE&start=${this.lastSeenTimestamp + 1}&limit=100&sortBy=TIMESTAMP&sortDirection=ASC`;
 
       const apiCallStart = Date.now();
       const response = await fetch(url);

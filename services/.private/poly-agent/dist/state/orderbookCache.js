@@ -6,7 +6,6 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.orderbookCache = void 0;
 const ws_1 = __importDefault(require("ws"));
 const config_1 = require("../config");
-const eventBus_1 = require("./eventBus");
 /**
  * OrderbookCache - THE ONLY CACHE IN THE SYSTEM
  *
@@ -56,8 +55,6 @@ class OrderbookCache {
                         const bestBid = msg.bids.length > 0 ? msg.bids[0].price : 'N/A';
                         const bestAsk = msg.asks.length > 0 ? msg.asks[0].price : 'N/A';
                         console.log(`[OrderbookCache] 📊 Orderbook snapshot: ${msg.asset_id.slice(0, 8)}... (bid: ${bestBid}, ask: ${bestAsk}, ${this.books.size} markets cached)`);
-                        // Emit event when new orderbook data arrives (for retrying skipped trades)
-                        this.emitOrderbookReady(msg.asset_id);
                     }
                     else if (msg.event_type === 'price_change') {
                         // Incremental update
@@ -165,13 +162,6 @@ class OrderbookCache {
     disconnect() {
         this.ws?.close();
         this.ws = null;
-    }
-    /**
-     * Emit event when orderbook data becomes available
-     * This allows executor to retry SKIPPED trades
-     */
-    emitOrderbookReady(tokenId) {
-        eventBus_1.eventBus.emit('orderbook:ready', { tokenId });
     }
 }
 exports.orderbookCache = new OrderbookCache();
