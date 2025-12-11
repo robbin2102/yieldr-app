@@ -16,13 +16,14 @@ export async function createClobClient(): Promise<{ client: ClobClient; wallet: 
   console.log('[CLOB] Initializing client...');
 
   // Create provider connected to Polygon RPC
-  // Explicitly specify network to avoid auto-detection issues
+  // Use StaticJsonRpcProvider to avoid ALL network auto-detection
+  // This is critical for QuickNode multichain endpoints
   const network = {
     name: 'polygon',
     chainId: config.chainId,
   };
 
-  const provider = new ethers.providers.JsonRpcProvider(config.polygonRpcUrl, network);
+  const provider = new ethers.providers.StaticJsonRpcProvider(config.polygonRpcUrl, network);
   console.log(`[CLOB] Using RPC: ${config.polygonRpcUrl.substring(0, 50)}...`);
   console.log(`[CLOB] Network: Polygon (chainId: ${config.chainId})`);
 

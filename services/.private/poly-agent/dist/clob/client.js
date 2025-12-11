@@ -17,12 +17,13 @@ const config_1 = require("../config");
 async function createClobClient() {
     console.log('[CLOB] Initializing client...');
     // Create provider connected to Polygon RPC
-    // Explicitly specify network to avoid auto-detection issues
+    // Use StaticJsonRpcProvider to avoid ALL network auto-detection
+    // This is critical for QuickNode multichain endpoints
     const network = {
         name: 'polygon',
         chainId: config_1.config.chainId,
     };
-    const provider = new ethers_1.ethers.providers.JsonRpcProvider(config_1.config.polygonRpcUrl, network);
+    const provider = new ethers_1.ethers.providers.StaticJsonRpcProvider(config_1.config.polygonRpcUrl, network);
     console.log(`[CLOB] Using RPC: ${config_1.config.polygonRpcUrl.substring(0, 50)}...`);
     console.log(`[CLOB] Network: Polygon (chainId: ${config_1.config.chainId})`);
     // Create wallet from private key and connect to provider
