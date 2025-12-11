@@ -43,9 +43,15 @@ async function rawRpcCall(rpcUrl, method, params) {
  * This is a ONE-TIME setup that needs to happen before placing any orders.
  * We use MaxUint256 (unlimited approval) as recommended by Polymarket's official docs.
  *
- * Required approvals:
- * 1. USDC.approve(CTF_EXCHANGE, MaxUint256) - For BUY orders
- * 2. CTF.setApprovalForAll(CTF_EXCHANGE, true) - For SELL orders
+ * Polymarket has TWO exchange contracts:
+ * - CTF_EXCHANGE: Regular markets
+ * - NEG_RISK_CTF_EXCHANGE: Most popular markets (e.g. "Bitcoin Up or Down")
+ *
+ * Required approvals (4 total):
+ * 1. USDC.approve(CTF_EXCHANGE, MaxUint256)
+ * 2. CTF.setApprovalForAll(CTF_EXCHANGE, true)
+ * 3. USDC.approve(NEG_RISK_CTF_EXCHANGE, MaxUint256)
+ * 4. CTF.setApprovalForAll(NEG_RISK_CTF_EXCHANGE, true)
  *
  * @param privateKey - Private key of the wallet (0x prefixed)
  * @param rpcUrl - Polygon RPC URL
@@ -161,6 +167,92 @@ async function ensureAllowances(privateKey, rpcUrl, chainId) {
         else {
             console.log('[Allowances] ✅ CTF approval already set');
         }
+        // ═══════════════════════════════════════════════════════════════
+        // 3. Check and Set USDC Allowance for NEG_RISK Exchange
+        // ═══════════════════════════════════════════════════════════════
+        // Check NEG_RISK exchange allowance (most popular markets use this)
+        const negRiskAllowanceData = allowanceSelector +
+            walletAddress.slice(2).padStart(64, '0') +
+            POLYGON_CONTRACTS.NEG_RISK_CTF_EXCHANGE.slice(2).padStart(64, '0');
+        const negRiskUsdcAllowanceHex = await rawRpcCall(rpcUrl, 'eth_call', [
+            { to: POLYGON_CONTRACTS.USDC, data: negRiskAllowanceData },
+            'latest'
+        ]);
+        const negRiskUsdcAllowance = BigInt(negRiskUsdcAllowanceHex);
+        console.log(`[Allowances] Current NEG_RISK USDC allowance: ${Number(negRiskUsdcAllowance) / 1e6} USDC`);
+        if (negRiskUsdcAllowance < ONE_MILLION_USDC) {
+            console.log('[Allowances] ⚙️  Setting unlimited NEG_RISK USDC approval...');
+            console.log(`[Allowances] Approving ${POLYGON_CONTRACTS.NEG_RISK_CTF_EXCHANGE} to spend USDC`);
+            const provider = new ethers_1.ethers.providers.JsonRpcProvider(rpcUrl);
+            const wallet = new ethers_1.ethers.Wallet(privateKey, provider);
+            const usdcInterface = new ethers_1.ethers.utils.Interface([
+                'function approve(address spender, uint256 amount) returns (bool)'
+            ]);
+            const feeData = await provider.getFeeData();
+            const priorityFee = ethers_1.ethers.utils.parseUnits('35', 'gwei');
+            const maxFeePerGas = feeData.maxFeePerGas || ethers_1.ethers.utils.parseUnits('200', 'gwei');
+            const tx = await wallet.sendTransaction({
+                to: POLYGON_CONTRACTS.USDC,
+                data: usdcInterface.encodeFunctionData('approve', [
+                    POLYGON_CONTRACTS.NEG_RISK_CTF_EXCHANGE,
+                    ethers_1.ethers.constants.MaxUint256
+                ]),
+                maxPriorityFeePerGas: priorityFee,
+                maxFeePerGas: maxFeePerGas.add(priorityFee),
+            });
+            console.log(`[Allowances] Transaction sent: ${tx.hash}`);
+            console.log('[Allowances] Waiting for confirmation (max 2 minutes)...');
+            const receipt = await Promise.race([
+                tx.wait(),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('Transaction confirmation timeout after 2 minutes')), 120000)),
+            ]);
+            console.log(`[Allowances] ✅ NEG_RISK USDC approval confirmed (block ${receipt.blockNumber})`);
+        }
+        else {
+            console.log('[Allowances] ✅ NEG_RISK USDC allowance already set');
+        }
+        // ═══════════════════════════════════════════════════════════════
+        // 4. Check and Set CTF Approval for NEG_RISK Exchange
+        // ═══════════════════════════════════════════════════════════════
+        const negRiskIsApprovedData = isApprovedSelector +
+            walletAddress.slice(2).padStart(64, '0') +
+            POLYGON_CONTRACTS.NEG_RISK_CTF_EXCHANGE.slice(2).padStart(64, '0');
+        const negRiskCtfApprovedHex = await rawRpcCall(rpcUrl, 'eth_call', [
+            { to: POLYGON_CONTRACTS.CTF, data: negRiskIsApprovedData },
+            'latest'
+        ]);
+        const negRiskIsApproved = BigInt(negRiskCtfApprovedHex) !== BigInt(0);
+        if (!negRiskIsApproved) {
+            console.log('[Allowances] ⚙️  Setting NEG_RISK CTF approval for all tokens...');
+            console.log(`[Allowances] Approving ${POLYGON_CONTRACTS.NEG_RISK_CTF_EXCHANGE} to manage CTF tokens`);
+            const provider = new ethers_1.ethers.providers.JsonRpcProvider(rpcUrl);
+            const wallet = new ethers_1.ethers.Wallet(privateKey, provider);
+            const ctfInterface = new ethers_1.ethers.utils.Interface([
+                'function setApprovalForAll(address operator, bool approved)'
+            ]);
+            const feeData = await provider.getFeeData();
+            const priorityFee = ethers_1.ethers.utils.parseUnits('35', 'gwei');
+            const maxFeePerGas = feeData.maxFeePerGas || ethers_1.ethers.utils.parseUnits('200', 'gwei');
+            const tx = await wallet.sendTransaction({
+                to: POLYGON_CONTRACTS.CTF,
+                data: ctfInterface.encodeFunctionData('setApprovalForAll', [
+                    POLYGON_CONTRACTS.NEG_RISK_CTF_EXCHANGE,
+                    true
+                ]),
+                maxPriorityFeePerGas: priorityFee,
+                maxFeePerGas: maxFeePerGas.add(priorityFee),
+            });
+            console.log(`[Allowances] Transaction sent: ${tx.hash}`);
+            console.log('[Allowances] Waiting for confirmation (max 2 minutes)...');
+            const receipt = await Promise.race([
+                tx.wait(),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('Transaction confirmation timeout after 2 minutes')), 120000)),
+            ]);
+            console.log(`[Allowances] ✅ NEG_RISK CTF approval confirmed (block ${receipt.blockNumber})`);
+        }
+        else {
+            console.log('[Allowances] ✅ NEG_RISK CTF approval already set');
+        }
         console.log('[Allowances] ✅ All allowances ready for trading\n');
     }
     catch (error) {
@@ -181,8 +273,9 @@ async function ensureAllowances(privateKey, rpcUrl, chainId) {
  */
 async function checkAllowances(walletAddress, rpcUrl) {
     console.log('\n[Allowances] Current allowance status:');
-    // Check USDC allowance
     const allowanceSelector = '0xdd62ed3e';
+    const isApprovedSelector = '0xe985e9c5';
+    // Check CTF_EXCHANGE allowances
     const allowanceData = allowanceSelector +
         walletAddress.slice(2).padStart(64, '0') +
         POLYGON_CONTRACTS.CTF_EXCHANGE.slice(2).padStart(64, '0');
@@ -191,8 +284,6 @@ async function checkAllowances(walletAddress, rpcUrl) {
         'latest'
     ]);
     const usdcAllowance = BigInt(usdcAllowanceHex);
-    // Check CTF approval
-    const isApprovedSelector = '0xe985e9c5';
     const isApprovedData = isApprovedSelector +
         walletAddress.slice(2).padStart(64, '0') +
         POLYGON_CONTRACTS.CTF_EXCHANGE.slice(2).padStart(64, '0');
@@ -201,8 +292,29 @@ async function checkAllowances(walletAddress, rpcUrl) {
         'latest'
     ]);
     const ctfApproved = BigInt(ctfApprovedHex) !== BigInt(0);
-    console.log(`  USDC: ${Number(usdcAllowance) / 1e6} USDC`);
-    console.log(`  CTF:  ${ctfApproved ? 'Approved ✅' : 'Not approved ❌'}`);
+    // Check NEG_RISK_CTF_EXCHANGE allowances
+    const negRiskAllowanceData = allowanceSelector +
+        walletAddress.slice(2).padStart(64, '0') +
+        POLYGON_CONTRACTS.NEG_RISK_CTF_EXCHANGE.slice(2).padStart(64, '0');
+    const negRiskUsdcAllowanceHex = await rawRpcCall(rpcUrl, 'eth_call', [
+        { to: POLYGON_CONTRACTS.USDC, data: negRiskAllowanceData },
+        'latest'
+    ]);
+    const negRiskUsdcAllowance = BigInt(negRiskUsdcAllowanceHex);
+    const negRiskIsApprovedData = isApprovedSelector +
+        walletAddress.slice(2).padStart(64, '0') +
+        POLYGON_CONTRACTS.NEG_RISK_CTF_EXCHANGE.slice(2).padStart(64, '0');
+    const negRiskCtfApprovedHex = await rawRpcCall(rpcUrl, 'eth_call', [
+        { to: POLYGON_CONTRACTS.CTF, data: negRiskIsApprovedData },
+        'latest'
+    ]);
+    const negRiskCtfApproved = BigInt(negRiskCtfApprovedHex) !== BigInt(0);
+    console.log(`  CTF_EXCHANGE:`);
+    console.log(`    USDC: ${Number(usdcAllowance) / 1e6} USDC`);
+    console.log(`    CTF:  ${ctfApproved ? 'Approved ✅' : 'Not approved ❌'}`);
+    console.log(`  NEG_RISK_CTF_EXCHANGE:`);
+    console.log(`    USDC: ${Number(negRiskUsdcAllowance) / 1e6} USDC`);
+    console.log(`    CTF:  ${negRiskCtfApproved ? 'Approved ✅' : 'Not approved ❌'}`);
     console.log('');
 }
 //# sourceMappingURL=allowances.js.map
