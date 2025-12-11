@@ -1,4 +1,3 @@
-import { ethers } from 'ethers';
 /**
  * Ensures all required allowances are set for Polymarket trading
  *
@@ -18,4 +17,4 @@ export declare function ensureAllowances(privateKey: string, rpcUrl: string, cha
  * Checks current allowances without modifying them
  * Useful for debugging and monitoring
  */
-export declare function checkAllowances(wallet: ethers.Wallet): Promise<void>;
+export declare function checkAllowances(walletAddress: string, rpcUrl: string): Promise<void>;

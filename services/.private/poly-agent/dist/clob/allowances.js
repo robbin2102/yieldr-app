@@ -18,19 +18,25 @@ const POLYGON_CONTRACTS = {
     NEG_RISK_ADAPTER: '0xd91E80cF2E7be2e162c6513ceD06f1dD0dA35296',
 };
 /**
- * ERC20 ABI - Only the functions we need
+ * Raw RPC call - bypasses ethers provider to avoid circular references
  */
-const ERC20_ABI = [
-    'function approve(address spender, uint256 amount) external returns (bool)',
-    'function allowance(address owner, address spender) external view returns (uint256)',
-];
-/**
- * ERC1155 ABI - Only the functions we need
- */
-const ERC1155_ABI = [
-    'function setApprovalForAll(address operator, bool approved) external',
-    'function isApprovedForAll(address account, address operator) external view returns (bool)',
-];
+async function rawRpcCall(rpcUrl, method, params) {
+    const res = await fetch(rpcUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: 1,
+            method,
+            params
+        }),
+    });
+    const json = await res.json();
+    if (json.error) {
+        throw new Error(json.error.message);
+    }
+    return json.result;
+}
 /**
  * Ensures all required allowances are set for Polymarket trading
  *
@@ -51,40 +57,47 @@ async function ensureAllowances(privateKey, rpcUrl, chainId) {
     if (chainId !== 137) {
         throw new Error(`Unsupported chain ID: ${chainId}. Only Polygon (137) is supported.`);
     }
-    // Create provider with explicit network (prevents auto-detection calls)
-    const network = {
-        name: 'polygon',
-        chainId: chainId,
-    };
-    const provider = new ethers_1.ethers.providers.StaticJsonRpcProvider(rpcUrl, network);
-    // Get wallet address WITHOUT creating a wallet object (avoids circular references)
-    const tempWallet = new ethers_1.ethers.Wallet(privateKey);
-    const walletAddress = tempWallet.address;
+    // Get wallet address (no provider needed)
+    const walletAddress = new ethers_1.ethers.Wallet(privateKey).address;
     console.log(`[Allowances] Wallet address: ${walletAddress}`);
     try {
         // ═══════════════════════════════════════════════════════════════
         // 1. Check and Set USDC Allowance (for BUY orders)
         // ═══════════════════════════════════════════════════════════════
-        const usdcContract = new ethers_1.ethers.Contract(POLYGON_CONTRACTS.USDC, ERC20_ABI, provider);
-        const usdcAllowance = await usdcContract.allowance(walletAddress, // Plain string - no wallet object circular reference
-        POLYGON_CONTRACTS.CTF_EXCHANGE);
-        console.log(`[Allowances] Current USDC allowance: ${ethers_1.ethers.utils.formatUnits(usdcAllowance, 6)} USDC`);
-        // Check if allowance is already sufficient (> 1M USDC means unlimited was set)
-        const ONE_MILLION_USDC = ethers_1.ethers.utils.parseUnits('1000000', 6);
-        if (usdcAllowance.lt(ONE_MILLION_USDC)) {
+        // ERC20 allowance(owner, spender) function selector + encoded params
+        const allowanceSelector = '0xdd62ed3e';
+        const allowanceData = allowanceSelector +
+            walletAddress.slice(2).padStart(64, '0') +
+            POLYGON_CONTRACTS.CTF_EXCHANGE.slice(2).padStart(64, '0');
+        // Raw eth_call - bypasses ethers completely, no circular references
+        const usdcAllowanceHex = await rawRpcCall(rpcUrl, 'eth_call', [
+            { to: POLYGON_CONTRACTS.USDC, data: allowanceData },
+            'latest'
+        ]);
+        const usdcAllowance = BigInt(usdcAllowanceHex);
+        console.log(`[Allowances] Current USDC allowance: ${Number(usdcAllowance) / 1e6} USDC`);
+        const ONE_MILLION_USDC = BigInt(1000000) * BigInt(1e6);
+        if (usdcAllowance < ONE_MILLION_USDC) {
             console.log('[Allowances] ⚙️  Setting unlimited USDC approval...');
             console.log(`[Allowances] Approving ${POLYGON_CONTRACTS.CTF_EXCHANGE} to spend USDC`);
-            // Create wallet without provider first
-            const signerWallet = new ethers_1.ethers.Wallet(privateKey);
-            // Connect to provider ONLY at moment of use
-            const connectedWallet = signerWallet.connect(provider);
-            const usdcContractWithSigner = new ethers_1.ethers.Contract(POLYGON_CONTRACTS.USDC, ERC20_ABI, connectedWallet);
-            const approveTx = await usdcContractWithSigner.approve(POLYGON_CONTRACTS.CTF_EXCHANGE, ethers_1.ethers.constants.MaxUint256);
-            console.log(`[Allowances] Transaction sent: ${approveTx.hash}`);
+            // For WRITE operations, use regular JsonRpcProvider (not Static)
+            const provider = new ethers_1.ethers.providers.JsonRpcProvider(rpcUrl);
+            const wallet = new ethers_1.ethers.Wallet(privateKey, provider);
+            // Use Interface to encode function data (no Contract object)
+            const usdcInterface = new ethers_1.ethers.utils.Interface([
+                'function approve(address spender, uint256 amount) returns (bool)'
+            ]);
+            const tx = await wallet.sendTransaction({
+                to: POLYGON_CONTRACTS.USDC,
+                data: usdcInterface.encodeFunctionData('approve', [
+                    POLYGON_CONTRACTS.CTF_EXCHANGE,
+                    ethers_1.ethers.constants.MaxUint256
+                ])
+            });
+            console.log(`[Allowances] Transaction sent: ${tx.hash}`);
             console.log('[Allowances] Waiting for confirmation (max 2 minutes)...');
-            // Wait for confirmation with timeout (2 minutes)
             const receipt = await Promise.race([
-                approveTx.wait(),
+                tx.wait(),
                 new Promise((_, reject) => setTimeout(() => reject(new Error('Transaction confirmation timeout after 2 minutes')), 120000)),
             ]);
             console.log(`[Allowances] ✅ USDC approval confirmed (block ${receipt.blockNumber})`);
@@ -95,23 +108,38 @@ async function ensureAllowances(privateKey, rpcUrl, chainId) {
         // ═══════════════════════════════════════════════════════════════
         // 2. Check and Set CTF Approval (for SELL orders)
         // ═══════════════════════════════════════════════════════════════
-        const ctfContract = new ethers_1.ethers.Contract(POLYGON_CONTRACTS.CTF, ERC1155_ABI, provider);
-        const isApproved = await ctfContract.isApprovedForAll(walletAddress, // Plain string - no circular reference
-        POLYGON_CONTRACTS.CTF_EXCHANGE);
+        // ERC1155 isApprovedForAll(owner, operator) function selector + encoded params
+        const isApprovedSelector = '0xe985e9c5';
+        const isApprovedData = isApprovedSelector +
+            walletAddress.slice(2).padStart(64, '0') +
+            POLYGON_CONTRACTS.CTF_EXCHANGE.slice(2).padStart(64, '0');
+        // Raw eth_call - bypasses ethers completely
+        const ctfApprovedHex = await rawRpcCall(rpcUrl, 'eth_call', [
+            { to: POLYGON_CONTRACTS.CTF, data: isApprovedData },
+            'latest'
+        ]);
+        const isApproved = BigInt(ctfApprovedHex) !== BigInt(0);
         if (!isApproved) {
             console.log('[Allowances] ⚙️  Setting CTF approval for all tokens...');
             console.log(`[Allowances] Approving ${POLYGON_CONTRACTS.CTF_EXCHANGE} to manage CTF tokens`);
-            // Create wallet without provider first
-            const signerWallet = new ethers_1.ethers.Wallet(privateKey);
-            // Connect to provider ONLY at moment of use
-            const connectedWallet = signerWallet.connect(provider);
-            const ctfContractWithSigner = new ethers_1.ethers.Contract(POLYGON_CONTRACTS.CTF, ERC1155_ABI, connectedWallet);
-            const setApprovalTx = await ctfContractWithSigner.setApprovalForAll(POLYGON_CONTRACTS.CTF_EXCHANGE, true);
-            console.log(`[Allowances] Transaction sent: ${setApprovalTx.hash}`);
+            // For WRITE operations, use regular JsonRpcProvider (not Static)
+            const provider = new ethers_1.ethers.providers.JsonRpcProvider(rpcUrl);
+            const wallet = new ethers_1.ethers.Wallet(privateKey, provider);
+            // Use Interface to encode function data (no Contract object)
+            const ctfInterface = new ethers_1.ethers.utils.Interface([
+                'function setApprovalForAll(address operator, bool approved)'
+            ]);
+            const tx = await wallet.sendTransaction({
+                to: POLYGON_CONTRACTS.CTF,
+                data: ctfInterface.encodeFunctionData('setApprovalForAll', [
+                    POLYGON_CONTRACTS.CTF_EXCHANGE,
+                    true
+                ])
+            });
+            console.log(`[Allowances] Transaction sent: ${tx.hash}`);
             console.log('[Allowances] Waiting for confirmation (max 2 minutes)...');
-            // Wait for confirmation with timeout (2 minutes)
             const receipt = await Promise.race([
-                setApprovalTx.wait(),
+                tx.wait(),
                 new Promise((_, reject) => setTimeout(() => reject(new Error('Transaction confirmation timeout after 2 minutes')), 120000)),
             ]);
             console.log(`[Allowances] ✅ CTF approval confirmed (block ${receipt.blockNumber})`);
@@ -137,13 +165,29 @@ async function ensureAllowances(privateKey, rpcUrl, chainId) {
  * Checks current allowances without modifying them
  * Useful for debugging and monitoring
  */
-async function checkAllowances(wallet) {
+async function checkAllowances(walletAddress, rpcUrl) {
     console.log('\n[Allowances] Current allowance status:');
-    const usdcContract = new ethers_1.ethers.Contract(POLYGON_CONTRACTS.USDC, ERC20_ABI, wallet);
-    const ctfContract = new ethers_1.ethers.Contract(POLYGON_CONTRACTS.CTF, ERC1155_ABI, wallet);
-    const usdcAllowance = await usdcContract.allowance(wallet.address, POLYGON_CONTRACTS.CTF_EXCHANGE);
-    const ctfApproved = await ctfContract.isApprovedForAll(wallet.address, POLYGON_CONTRACTS.CTF_EXCHANGE);
-    console.log(`  USDC: ${ethers_1.ethers.utils.formatUnits(usdcAllowance, 6)} USDC`);
+    // Check USDC allowance
+    const allowanceSelector = '0xdd62ed3e';
+    const allowanceData = allowanceSelector +
+        walletAddress.slice(2).padStart(64, '0') +
+        POLYGON_CONTRACTS.CTF_EXCHANGE.slice(2).padStart(64, '0');
+    const usdcAllowanceHex = await rawRpcCall(rpcUrl, 'eth_call', [
+        { to: POLYGON_CONTRACTS.USDC, data: allowanceData },
+        'latest'
+    ]);
+    const usdcAllowance = BigInt(usdcAllowanceHex);
+    // Check CTF approval
+    const isApprovedSelector = '0xe985e9c5';
+    const isApprovedData = isApprovedSelector +
+        walletAddress.slice(2).padStart(64, '0') +
+        POLYGON_CONTRACTS.CTF_EXCHANGE.slice(2).padStart(64, '0');
+    const ctfApprovedHex = await rawRpcCall(rpcUrl, 'eth_call', [
+        { to: POLYGON_CONTRACTS.CTF, data: isApprovedData },
+        'latest'
+    ]);
+    const ctfApproved = BigInt(ctfApprovedHex) !== BigInt(0);
+    console.log(`  USDC: ${Number(usdcAllowance) / 1e6} USDC`);
     console.log(`  CTF:  ${ctfApproved ? 'Approved ✅' : 'Not approved ❌'}`);
     console.log('');
 }
