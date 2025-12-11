@@ -59,6 +59,9 @@ export const config = {
   wssMarket: process.env.WSS_MARKET || 'wss://ws-subscriptions-clob.polymarket.com/ws/market',
   wssUser: process.env.WSS_USER || 'wss://ws-subscriptions-clob.polymarket.com/ws/user',
   chainId: parseInt(process.env.CHAIN_ID || '137'),
+
+  // Polygon RPC endpoint (for on-chain transactions like approvals)
+  polygonRpcUrl: process.env.POLYGON_RPC_URL || 'https://polygon-rpc.com',
 };
 
 // Validate required environment variables

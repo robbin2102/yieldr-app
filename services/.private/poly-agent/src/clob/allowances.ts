@@ -88,9 +88,15 @@ export async function ensureAllowances(
       );
 
       console.log(`[Allowances] Transaction sent: ${approveTx.hash}`);
-      console.log('[Allowances] Waiting for confirmation...');
+      console.log('[Allowances] Waiting for confirmation (max 2 minutes)...');
 
-      const receipt = await approveTx.wait();
+      // Wait for confirmation with timeout (2 minutes)
+      const receipt = await Promise.race([
+        approveTx.wait(),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('Transaction confirmation timeout after 2 minutes')), 120000)
+        ),
+      ]) as any;
 
       console.log(`[Allowances] ✅ USDC approval confirmed (block ${receipt.blockNumber})`);
     } else {
@@ -122,9 +128,15 @@ export async function ensureAllowances(
       );
 
       console.log(`[Allowances] Transaction sent: ${setApprovalTx.hash}`);
-      console.log('[Allowances] Waiting for confirmation...');
+      console.log('[Allowances] Waiting for confirmation (max 2 minutes)...');
 
-      const receipt = await setApprovalTx.wait();
+      // Wait for confirmation with timeout (2 minutes)
+      const receipt = await Promise.race([
+        setApprovalTx.wait(),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('Transaction confirmation timeout after 2 minutes')), 120000)
+        ),
+      ]) as any;
 
       console.log(`[Allowances] ✅ CTF approval confirmed (block ${receipt.blockNumber})`);
     } else {

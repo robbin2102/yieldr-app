@@ -17,7 +17,8 @@ const config_1 = require("../config");
 async function createClobClient() {
     console.log('[CLOB] Initializing client...');
     // Create provider connected to Polygon RPC
-    const provider = new ethers_1.ethers.providers.JsonRpcProvider('https://polygon-rpc.com');
+    const provider = new ethers_1.ethers.providers.JsonRpcProvider(config_1.config.polygonRpcUrl);
+    console.log(`[CLOB] Using RPC: ${config_1.config.polygonRpcUrl.substring(0, 50)}...`);
     // Create wallet from private key and connect to provider
     const wallet = new ethers_1.ethers.Wallet(config_1.config.botPrivateKey, provider);
     console.log(`[CLOB] Wallet address: ${wallet.address}`);

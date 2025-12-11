@@ -16,4 +16,5 @@ export declare const config: {
     wssMarket: string;
     wssUser: string;
     chainId: number;
+    polygonRpcUrl: string;
 };

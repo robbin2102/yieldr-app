@@ -64,8 +64,12 @@ async function ensureAllowances(wallet, chainId) {
             console.log(`[Allowances] Approving ${POLYGON_CONTRACTS.CTF_EXCHANGE} to spend USDC`);
             const approveTx = await usdcContract.approve(POLYGON_CONTRACTS.CTF_EXCHANGE, ethers_1.ethers.constants.MaxUint256);
             console.log(`[Allowances] Transaction sent: ${approveTx.hash}`);
-            console.log('[Allowances] Waiting for confirmation...');
-            const receipt = await approveTx.wait();
+            console.log('[Allowances] Waiting for confirmation (max 2 minutes)...');
+            // Wait for confirmation with timeout (2 minutes)
+            const receipt = await Promise.race([
+                approveTx.wait(),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('Transaction confirmation timeout after 2 minutes')), 120000)),
+            ]);
             console.log(`[Allowances] ✅ USDC approval confirmed (block ${receipt.blockNumber})`);
         }
         else {
@@ -81,8 +85,12 @@ async function ensureAllowances(wallet, chainId) {
             console.log(`[Allowances] Approving ${POLYGON_CONTRACTS.CTF_EXCHANGE} to manage CTF tokens`);
             const setApprovalTx = await ctfContract.setApprovalForAll(POLYGON_CONTRACTS.CTF_EXCHANGE, true);
             console.log(`[Allowances] Transaction sent: ${setApprovalTx.hash}`);
-            console.log('[Allowances] Waiting for confirmation...');
-            const receipt = await setApprovalTx.wait();
+            console.log('[Allowances] Waiting for confirmation (max 2 minutes)...');
+            // Wait for confirmation with timeout (2 minutes)
+            const receipt = await Promise.race([
+                setApprovalTx.wait(),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('Transaction confirmation timeout after 2 minutes')), 120000)),
+            ]);
             console.log(`[Allowances] ✅ CTF approval confirmed (block ${receipt.blockNumber})`);
         }
         else {
