@@ -45,7 +45,7 @@ async function main() {
   // ═══════════════════════════════════════════════════════════════
   // 3. Ensure allowances are set (one-time setup)
   // ═══════════════════════════════════════════════════════════════
-  await ensureAllowances(wallet, config.chainId);
+  await ensureAllowances(config.botPrivateKey, config.polygonRpcUrl, config.chainId);
 
   // ═══════════════════════════════════════════════════════════════
   // 4. Initialize and connect Confirmer (WSS User Channel for fills)

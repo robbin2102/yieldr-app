@@ -9,10 +9,11 @@ import { ethers } from 'ethers';
  * 1. USDC.approve(CTF_EXCHANGE, MaxUint256) - For BUY orders
  * 2. CTF.setApprovalForAll(CTF_EXCHANGE, true) - For SELL orders
  *
- * @param wallet - Ethers wallet instance
+ * @param privateKey - Private key of the wallet (0x prefixed)
+ * @param rpcUrl - Polygon RPC URL
  * @param chainId - Chain ID (137 for Polygon)
  */
-export declare function ensureAllowances(wallet: ethers.Wallet, chainId: number): Promise<void>;
+export declare function ensureAllowances(privateKey: string, rpcUrl: string, chainId: number): Promise<void>;
 /**
  * Checks current allowances without modifying them
  * Useful for debugging and monitoring
