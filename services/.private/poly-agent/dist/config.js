@@ -59,7 +59,7 @@ exports.config = {
     wssUser: process.env.WSS_USER || 'wss://ws-subscriptions-clob.polymarket.com/ws/user',
     chainId: parseInt(process.env.CHAIN_ID || '137'),
     // Polygon RPC endpoint (for on-chain transactions like approvals)
-    polygonRpcUrl: process.env.POLYGON_RPC_URL || 'https://polygon-rpc.com',
+    polygonRpcUrl: process.env.POLYGON_RPC_URL,
 };
 // Validate required environment variables
 const required = [
@@ -69,7 +69,8 @@ const required = [
     'apiKey',
     'apiSecret',
     'passphrase',
-    'mongoUri'
+    'mongoUri',
+    'polygonRpcUrl'
 ];
 for (const key of required) {
     if (!exports.config[key]) {
