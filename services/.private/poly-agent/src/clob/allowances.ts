@@ -106,12 +106,21 @@ export async function ensureAllowances(
         'function approve(address spender, uint256 amount) returns (bool)'
       ]);
 
+      // Get current gas prices from network
+      const feeData = await provider.getFeeData();
+
+      // Polygon requires minimum 30 Gwei priority fee (use 35 to be safe)
+      const priorityFee = ethers.utils.parseUnits('35', 'gwei');
+      const maxFeePerGas = feeData.maxFeePerGas || ethers.utils.parseUnits('200', 'gwei');
+
       const tx = await wallet.sendTransaction({
         to: POLYGON_CONTRACTS.USDC,
         data: usdcInterface.encodeFunctionData('approve', [
           POLYGON_CONTRACTS.CTF_EXCHANGE,
           ethers.constants.MaxUint256
-        ])
+        ]),
+        maxPriorityFeePerGas: priorityFee,
+        maxFeePerGas: maxFeePerGas.add(priorityFee),
       });
 
       console.log(`[Allowances] Transaction sent: ${tx.hash}`);
@@ -160,12 +169,21 @@ export async function ensureAllowances(
         'function setApprovalForAll(address operator, bool approved)'
       ]);
 
+      // Get current gas prices from network
+      const feeData = await provider.getFeeData();
+
+      // Polygon requires minimum 30 Gwei priority fee (use 35 to be safe)
+      const priorityFee = ethers.utils.parseUnits('35', 'gwei');
+      const maxFeePerGas = feeData.maxFeePerGas || ethers.utils.parseUnits('200', 'gwei');
+
       const tx = await wallet.sendTransaction({
         to: POLYGON_CONTRACTS.CTF,
         data: ctfInterface.encodeFunctionData('setApprovalForAll', [
           POLYGON_CONTRACTS.CTF_EXCHANGE,
           true
-        ])
+        ]),
+        maxPriorityFeePerGas: priorityFee,
+        maxFeePerGas: maxFeePerGas.add(priorityFee),
       });
 
       console.log(`[Allowances] Transaction sent: ${tx.hash}`);
