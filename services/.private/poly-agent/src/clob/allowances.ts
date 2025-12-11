@@ -60,13 +60,19 @@ export async function ensureAllowances(
   }
 
   // Create FRESH provider and wallet to avoid circular references
+  console.log('[Allowances] DEBUG: Creating provider...');
   const network = { name: 'polygon', chainId };
   const provider = new ethers.providers.StaticJsonRpcProvider(rpcUrl, network);
+  console.log('[Allowances] DEBUG: Provider created');
+
+  console.log('[Allowances] DEBUG: Creating wallet...');
   const wallet = new ethers.Wallet(privateKey, provider);
+  console.log('[Allowances] DEBUG: Wallet created');
 
   console.log(`[Allowances] Wallet address: ${wallet.address}`);
 
   try {
+    console.log('[Allowances] DEBUG: Step 1 - Creating USDC contract...');
     // ═══════════════════════════════════════════════════════════════
     // 1. Check and Set USDC Allowance (for BUY orders)
     // ═══════════════════════════════════════════════════════════════
@@ -76,11 +82,17 @@ export async function ensureAllowances(
       ERC20_ABI,
       provider
     );
+    console.log('[Allowances] DEBUG: Step 2 - USDC contract created');
+
+    console.log('[Allowances] DEBUG: Step 3 - About to call allowance()...');
+    console.log('[Allowances] DEBUG: wallet.address type:', typeof wallet.address);
+    console.log('[Allowances] DEBUG: wallet.address value:', wallet.address);
 
     const usdcAllowance = await usdcContract.allowance(
       wallet.address,
       POLYGON_CONTRACTS.CTF_EXCHANGE
     );
+    console.log('[Allowances] DEBUG: Step 4 - allowance() call succeeded');
 
     console.log(`[Allowances] Current USDC allowance: ${ethers.utils.formatUnits(usdcAllowance, 6)} USDC`);
 

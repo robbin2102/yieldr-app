@@ -52,16 +52,26 @@ async function ensureAllowances(privateKey, rpcUrl, chainId) {
         throw new Error(`Unsupported chain ID: ${chainId}. Only Polygon (137) is supported.`);
     }
     // Create FRESH provider and wallet to avoid circular references
+    console.log('[Allowances] DEBUG: Creating provider...');
     const network = { name: 'polygon', chainId };
     const provider = new ethers_1.ethers.providers.StaticJsonRpcProvider(rpcUrl, network);
+    console.log('[Allowances] DEBUG: Provider created');
+    console.log('[Allowances] DEBUG: Creating wallet...');
     const wallet = new ethers_1.ethers.Wallet(privateKey, provider);
+    console.log('[Allowances] DEBUG: Wallet created');
     console.log(`[Allowances] Wallet address: ${wallet.address}`);
     try {
+        console.log('[Allowances] DEBUG: Step 1 - Creating USDC contract...');
         // ═══════════════════════════════════════════════════════════════
         // 1. Check and Set USDC Allowance (for BUY orders)
         // ═══════════════════════════════════════════════════════════════
         const usdcContract = new ethers_1.ethers.Contract(POLYGON_CONTRACTS.USDC, ERC20_ABI, provider);
+        console.log('[Allowances] DEBUG: Step 2 - USDC contract created');
+        console.log('[Allowances] DEBUG: Step 3 - About to call allowance()...');
+        console.log('[Allowances] DEBUG: wallet.address type:', typeof wallet.address);
+        console.log('[Allowances] DEBUG: wallet.address value:', wallet.address);
         const usdcAllowance = await usdcContract.allowance(wallet.address, POLYGON_CONTRACTS.CTF_EXCHANGE);
+        console.log('[Allowances] DEBUG: Step 4 - allowance() call succeeded');
         console.log(`[Allowances] Current USDC allowance: ${ethers_1.ethers.utils.formatUnits(usdcAllowance, 6)} USDC`);
         // Check if allowance is already sufficient (> 1M USDC means unlimited was set)
         const ONE_MILLION_USDC = ethers_1.ethers.utils.parseUnits('1000000', 6);
