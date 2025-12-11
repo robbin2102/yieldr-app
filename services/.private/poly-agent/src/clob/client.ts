@@ -10,13 +10,16 @@ import { config } from '../config';
  * - Order submission to Polymarket
  * - Authentication with API credentials
  *
- * @returns Initialized ClobClient instance
+ * @returns Initialized ClobClient instance and wallet
  */
-export async function createClobClient(): Promise<ClobClient> {
+export async function createClobClient(): Promise<{ client: ClobClient; wallet: ethers.Wallet }> {
   console.log('[CLOB] Initializing client...');
 
-  // Create wallet from private key
-  const wallet = new ethers.Wallet(config.botPrivateKey);
+  // Create provider connected to Polygon RPC
+  const provider = new ethers.providers.JsonRpcProvider('https://polygon-rpc.com');
+
+  // Create wallet from private key and connect to provider
+  const wallet = new ethers.Wallet(config.botPrivateKey, provider);
   console.log(`[CLOB] Wallet address: ${wallet.address}`);
 
   // Initialize CLOB client with credentials
@@ -32,5 +35,5 @@ export async function createClobClient(): Promise<ClobClient> {
   );
 
   console.log('[CLOB] ✅ Client ready');
-  return client;
+  return { client, wallet };
 }

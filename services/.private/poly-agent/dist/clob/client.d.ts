@@ -1,3 +1,4 @@
+import { ethers } from 'ethers';
 import { ClobClient } from '@polymarket/clob-client';
 /**
  * Create and initialize Polymarket CLOB client
@@ -7,6 +8,9 @@ import { ClobClient } from '@polymarket/clob-client';
  * - Order submission to Polymarket
  * - Authentication with API credentials
  *
- * @returns Initialized ClobClient instance
+ * @returns Initialized ClobClient instance and wallet
  */
-export declare function createClobClient(): Promise<ClobClient>;
+export declare function createClobClient(): Promise<{
+    client: ClobClient;
+    wallet: ethers.Wallet;
+}>;

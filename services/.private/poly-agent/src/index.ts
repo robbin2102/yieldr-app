@@ -2,6 +2,7 @@ import mongoose from 'mongoose';
 import { config } from './config';
 import { connectDB } from './db/connection';
 import { createClobClient } from './clob/client';
+import { ensureAllowances } from './clob/allowances';
 import { orderbookCache } from './state/orderbookCache';
 import { Detector } from './modules/detector';
 import { Executor } from './modules/executor';
@@ -39,38 +40,43 @@ async function main() {
   // 2. Initialize CLOB client
   // ═══════════════════════════════════════════════════════════════
   console.log('[Main] Initializing CLOB client...');
-  const clobClient = await createClobClient();
+  const { client: clobClient, wallet } = await createClobClient();
 
   // ═══════════════════════════════════════════════════════════════
-  // 3. Initialize and connect Confirmer (WSS User Channel for fills)
+  // 3. Ensure allowances are set (one-time setup)
+  // ═══════════════════════════════════════════════════════════════
+  await ensureAllowances(wallet, config.chainId);
+
+  // ═══════════════════════════════════════════════════════════════
+  // 4. Initialize and connect Confirmer (WSS User Channel for fills)
   // ═══════════════════════════════════════════════════════════════
   console.log('[Main] Connecting to User Channel...');
   const confirmer = new Confirmer();
   await confirmer.connect();
 
   // ═══════════════════════════════════════════════════════════════
-  // 4. Initialize Executor
+  // 5. Initialize Executor
   // ═══════════════════════════════════════════════════════════════
   console.log('[Main] Initializing Executor...');
   const executor = new Executor(clobClient);
   await executor.initialize();
 
   // ═══════════════════════════════════════════════════════════════
-  // 5. Start Detector
+  // 6. Start Detector
   // ═══════════════════════════════════════════════════════════════
   console.log('[Main] Starting Detector...');
   const detector = new Detector();
   await detector.start();
 
   // ═══════════════════════════════════════════════════════════════
-  // 6. Start Reconciler
+  // 7. Start Reconciler
   // ═══════════════════════════════════════════════════════════════
   console.log('[Main] Starting Reconciler...');
   const reconciler = new Reconciler();
   reconciler.start();
 
   // ═══════════════════════════════════════════════════════════════
-  // 7. Stats logger (every 30 seconds)
+  // 8. Stats logger (every 30 seconds)
   // ═══════════════════════════════════════════════════════════════
   setInterval(async () => {
     try {
@@ -100,7 +106,7 @@ async function main() {
   console.log('\n✅ Poly-Agent is running. Listening for trades...\n');
 
   // ═══════════════════════════════════════════════════════════════
-  // 8. Graceful shutdown
+  // 9. Graceful shutdown
   // ═══════════════════════════════════════════════════════════════
   process.on('SIGINT', async () => {
     console.log('\n\n[Main] Shutting down...');
