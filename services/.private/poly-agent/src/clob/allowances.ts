@@ -57,6 +57,12 @@ export async function ensureAllowances(
     throw new Error(`Unsupported chain ID: ${chainId}. Only Polygon (137) is supported.`);
   }
 
+  // Get provider from wallet (already connected)
+  const provider = wallet.provider;
+  if (!provider) {
+    throw new Error('Wallet must be connected to a provider');
+  }
+
   try {
     // ═══════════════════════════════════════════════════════════════
     // 1. Check and Set USDC Allowance (for BUY orders)
@@ -65,7 +71,7 @@ export async function ensureAllowances(
     const usdcContract = new ethers.Contract(
       POLYGON_CONTRACTS.USDC,
       ERC20_ABI,
-      wallet
+      provider // Use provider for read-only, then connect wallet for writes
     );
 
     const usdcAllowance = await usdcContract.allowance(
@@ -82,7 +88,8 @@ export async function ensureAllowances(
       console.log('[Allowances] ⚙️  Setting unlimited USDC approval...');
       console.log(`[Allowances] Approving ${POLYGON_CONTRACTS.CTF_EXCHANGE} to spend USDC`);
 
-      const approveTx = await usdcContract.approve(
+      // Connect wallet to contract for signing
+      const approveTx = await usdcContract.connect(wallet).approve(
         POLYGON_CONTRACTS.CTF_EXCHANGE,
         ethers.constants.MaxUint256
       );
@@ -110,7 +117,7 @@ export async function ensureAllowances(
     const ctfContract = new ethers.Contract(
       POLYGON_CONTRACTS.CTF,
       ERC1155_ABI,
-      wallet
+      provider // Use provider for read-only
     );
 
     const isApproved = await ctfContract.isApprovedForAll(
@@ -122,7 +129,8 @@ export async function ensureAllowances(
       console.log('[Allowances] ⚙️  Setting CTF approval for all tokens...');
       console.log(`[Allowances] Approving ${POLYGON_CONTRACTS.CTF_EXCHANGE} to manage CTF tokens`);
 
-      const setApprovalTx = await ctfContract.setApprovalForAll(
+      // Connect wallet to contract for signing
+      const setApprovalTx = await ctfContract.connect(wallet).setApprovalForAll(
         POLYGON_CONTRACTS.CTF_EXCHANGE,
         true
       );

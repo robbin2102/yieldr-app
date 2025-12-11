@@ -50,11 +50,17 @@ async function ensureAllowances(wallet, chainId) {
     if (chainId !== 137) {
         throw new Error(`Unsupported chain ID: ${chainId}. Only Polygon (137) is supported.`);
     }
+    // Get provider from wallet (already connected)
+    const provider = wallet.provider;
+    if (!provider) {
+        throw new Error('Wallet must be connected to a provider');
+    }
     try {
         // ═══════════════════════════════════════════════════════════════
         // 1. Check and Set USDC Allowance (for BUY orders)
         // ═══════════════════════════════════════════════════════════════
-        const usdcContract = new ethers_1.ethers.Contract(POLYGON_CONTRACTS.USDC, ERC20_ABI, wallet);
+        const usdcContract = new ethers_1.ethers.Contract(POLYGON_CONTRACTS.USDC, ERC20_ABI, provider // Use provider for read-only, then connect wallet for writes
+        );
         const usdcAllowance = await usdcContract.allowance(wallet.address, POLYGON_CONTRACTS.CTF_EXCHANGE);
         console.log(`[Allowances] Current USDC allowance: ${ethers_1.ethers.utils.formatUnits(usdcAllowance, 6)} USDC`);
         // Check if allowance is already sufficient (> 1M USDC means unlimited was set)
@@ -62,7 +68,8 @@ async function ensureAllowances(wallet, chainId) {
         if (usdcAllowance.lt(ONE_MILLION_USDC)) {
             console.log('[Allowances] ⚙️  Setting unlimited USDC approval...');
             console.log(`[Allowances] Approving ${POLYGON_CONTRACTS.CTF_EXCHANGE} to spend USDC`);
-            const approveTx = await usdcContract.approve(POLYGON_CONTRACTS.CTF_EXCHANGE, ethers_1.ethers.constants.MaxUint256);
+            // Connect wallet to contract for signing
+            const approveTx = await usdcContract.connect(wallet).approve(POLYGON_CONTRACTS.CTF_EXCHANGE, ethers_1.ethers.constants.MaxUint256);
             console.log(`[Allowances] Transaction sent: ${approveTx.hash}`);
             console.log('[Allowances] Waiting for confirmation (max 2 minutes)...');
             // Wait for confirmation with timeout (2 minutes)
@@ -78,12 +85,14 @@ async function ensureAllowances(wallet, chainId) {
         // ═══════════════════════════════════════════════════════════════
         // 2. Check and Set CTF Approval (for SELL orders)
         // ═══════════════════════════════════════════════════════════════
-        const ctfContract = new ethers_1.ethers.Contract(POLYGON_CONTRACTS.CTF, ERC1155_ABI, wallet);
+        const ctfContract = new ethers_1.ethers.Contract(POLYGON_CONTRACTS.CTF, ERC1155_ABI, provider // Use provider for read-only
+        );
         const isApproved = await ctfContract.isApprovedForAll(wallet.address, POLYGON_CONTRACTS.CTF_EXCHANGE);
         if (!isApproved) {
             console.log('[Allowances] ⚙️  Setting CTF approval for all tokens...');
             console.log(`[Allowances] Approving ${POLYGON_CONTRACTS.CTF_EXCHANGE} to manage CTF tokens`);
-            const setApprovalTx = await ctfContract.setApprovalForAll(POLYGON_CONTRACTS.CTF_EXCHANGE, true);
+            // Connect wallet to contract for signing
+            const setApprovalTx = await ctfContract.connect(wallet).setApprovalForAll(POLYGON_CONTRACTS.CTF_EXCHANGE, true);
             console.log(`[Allowances] Transaction sent: ${setApprovalTx.hash}`);
             console.log('[Allowances] Waiting for confirmation (max 2 minutes)...');
             // Wait for confirmation with timeout (2 minutes)
