@@ -88,8 +88,14 @@ export async function ensureAllowances(
       console.log('[Allowances] ⚙️  Setting unlimited USDC approval...');
       console.log(`[Allowances] Approving ${POLYGON_CONTRACTS.CTF_EXCHANGE} to spend USDC`);
 
-      // Connect wallet to contract for signing
-      const approveTx = await usdcContract.connect(wallet).approve(
+      // Create a NEW contract instance with wallet for writing (no circular reference)
+      const usdcContractWithSigner = new ethers.Contract(
+        POLYGON_CONTRACTS.USDC,
+        ERC20_ABI,
+        wallet
+      );
+
+      const approveTx = await usdcContractWithSigner.approve(
         POLYGON_CONTRACTS.CTF_EXCHANGE,
         ethers.constants.MaxUint256
       );
@@ -129,8 +135,14 @@ export async function ensureAllowances(
       console.log('[Allowances] ⚙️  Setting CTF approval for all tokens...');
       console.log(`[Allowances] Approving ${POLYGON_CONTRACTS.CTF_EXCHANGE} to manage CTF tokens`);
 
-      // Connect wallet to contract for signing
-      const setApprovalTx = await ctfContract.connect(wallet).setApprovalForAll(
+      // Create a NEW contract instance with wallet for writing (no circular reference)
+      const ctfContractWithSigner = new ethers.Contract(
+        POLYGON_CONTRACTS.CTF,
+        ERC1155_ABI,
+        wallet
+      );
+
+      const setApprovalTx = await ctfContractWithSigner.setApprovalForAll(
         POLYGON_CONTRACTS.CTF_EXCHANGE,
         true
       );

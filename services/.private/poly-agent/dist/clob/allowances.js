@@ -68,8 +68,9 @@ async function ensureAllowances(wallet, chainId) {
         if (usdcAllowance.lt(ONE_MILLION_USDC)) {
             console.log('[Allowances] ⚙️  Setting unlimited USDC approval...');
             console.log(`[Allowances] Approving ${POLYGON_CONTRACTS.CTF_EXCHANGE} to spend USDC`);
-            // Connect wallet to contract for signing
-            const approveTx = await usdcContract.connect(wallet).approve(POLYGON_CONTRACTS.CTF_EXCHANGE, ethers_1.ethers.constants.MaxUint256);
+            // Create a NEW contract instance with wallet for writing (no circular reference)
+            const usdcContractWithSigner = new ethers_1.ethers.Contract(POLYGON_CONTRACTS.USDC, ERC20_ABI, wallet);
+            const approveTx = await usdcContractWithSigner.approve(POLYGON_CONTRACTS.CTF_EXCHANGE, ethers_1.ethers.constants.MaxUint256);
             console.log(`[Allowances] Transaction sent: ${approveTx.hash}`);
             console.log('[Allowances] Waiting for confirmation (max 2 minutes)...');
             // Wait for confirmation with timeout (2 minutes)
@@ -91,8 +92,9 @@ async function ensureAllowances(wallet, chainId) {
         if (!isApproved) {
             console.log('[Allowances] ⚙️  Setting CTF approval for all tokens...');
             console.log(`[Allowances] Approving ${POLYGON_CONTRACTS.CTF_EXCHANGE} to manage CTF tokens`);
-            // Connect wallet to contract for signing
-            const setApprovalTx = await ctfContract.connect(wallet).setApprovalForAll(POLYGON_CONTRACTS.CTF_EXCHANGE, true);
+            // Create a NEW contract instance with wallet for writing (no circular reference)
+            const ctfContractWithSigner = new ethers_1.ethers.Contract(POLYGON_CONTRACTS.CTF, ERC1155_ABI, wallet);
+            const setApprovalTx = await ctfContractWithSigner.setApprovalForAll(POLYGON_CONTRACTS.CTF_EXCHANGE, true);
             console.log(`[Allowances] Transaction sent: ${setApprovalTx.hash}`);
             console.log('[Allowances] Waiting for confirmation (max 2 minutes)...');
             // Wait for confirmation with timeout (2 minutes)
