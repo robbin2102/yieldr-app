@@ -51,6 +51,8 @@ export async function ensureAllowances(
   chainId: number
 ): Promise<void> {
   console.log('\n[Allowances] Checking trading allowances...');
+  console.log('[Allowances] DEBUG: Wallet address:', wallet.address);
+  console.log('[Allowances] DEBUG: Has provider?', !!wallet.provider);
 
   // Only support Polygon mainnet
   if (chainId !== 137) {
@@ -62,22 +64,27 @@ export async function ensureAllowances(
   if (!provider) {
     throw new Error('Wallet must be connected to a provider');
   }
+  console.log('[Allowances] DEBUG: Provider extracted successfully');
 
   try {
     // ═══════════════════════════════════════════════════════════════
     // 1. Check and Set USDC Allowance (for BUY orders)
     // ═══════════════════════════════════════════════════════════════
 
+    console.log('[Allowances] DEBUG: Creating USDC contract with provider...');
     const usdcContract = new ethers.Contract(
       POLYGON_CONTRACTS.USDC,
       ERC20_ABI,
       provider // Use provider for read-only, then connect wallet for writes
     );
+    console.log('[Allowances] DEBUG: USDC contract created');
 
+    console.log('[Allowances] DEBUG: Calling allowance()...');
     const usdcAllowance = await usdcContract.allowance(
       wallet.address,
       POLYGON_CONTRACTS.CTF_EXCHANGE
     );
+    console.log('[Allowances] DEBUG: Allowance retrieved successfully');
 
     console.log(`[Allowances] Current USDC allowance: ${ethers.utils.formatUnits(usdcAllowance, 6)} USDC`);
 
