@@ -16,8 +16,15 @@ export async function createClobClient(): Promise<{ client: ClobClient; wallet: 
   console.log('[CLOB] Initializing client...');
 
   // Create provider connected to Polygon RPC
-  const provider = new ethers.providers.JsonRpcProvider(config.polygonRpcUrl);
+  // Explicitly specify network to avoid auto-detection issues
+  const network = {
+    name: 'polygon',
+    chainId: config.chainId,
+  };
+
+  const provider = new ethers.providers.JsonRpcProvider(config.polygonRpcUrl, network);
   console.log(`[CLOB] Using RPC: ${config.polygonRpcUrl.substring(0, 50)}...`);
+  console.log(`[CLOB] Network: Polygon (chainId: ${config.chainId})`);
 
   // Create wallet from private key and connect to provider
   const wallet = new ethers.Wallet(config.botPrivateKey, provider);
