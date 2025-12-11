@@ -59,8 +59,12 @@ export async function ensureAllowances(
     throw new Error(`Unsupported chain ID: ${chainId}. Only Polygon (137) is supported.`);
   }
 
-  // Create provider - don't pass network object (causes circular refs in ethers v5)
-  const provider = new ethers.providers.StaticJsonRpcProvider(rpcUrl);
+  // Create provider with explicit network (prevents auto-detection calls)
+  const network = {
+    name: 'polygon',
+    chainId: chainId,
+  };
+  const provider = new ethers.providers.StaticJsonRpcProvider(rpcUrl, network);
 
   // Get wallet address WITHOUT creating a wallet object (avoids circular references)
   const tempWallet = new ethers.Wallet(privateKey);
