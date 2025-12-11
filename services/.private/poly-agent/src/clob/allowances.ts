@@ -59,20 +59,17 @@ export async function ensureAllowances(
     throw new Error(`Unsupported chain ID: ${chainId}. Only Polygon (137) is supported.`);
   }
 
-  // Create FRESH provider and wallet to avoid circular references
-  console.log('[Allowances] DEBUG: Creating provider...');
+  // Create provider (no wallet - avoids circular references)
   const network = { name: 'polygon', chainId };
   const provider = new ethers.providers.StaticJsonRpcProvider(rpcUrl, network);
-  console.log('[Allowances] DEBUG: Provider created');
 
-  console.log('[Allowances] DEBUG: Creating wallet...');
-  const wallet = new ethers.Wallet(privateKey, provider);
-  console.log('[Allowances] DEBUG: Wallet created');
+  // Get wallet address WITHOUT creating a wallet object (avoids circular references)
+  const tempWallet = new ethers.Wallet(privateKey);
+  const walletAddress = tempWallet.address;
 
-  console.log(`[Allowances] Wallet address: ${wallet.address}`);
+  console.log(`[Allowances] Wallet address: ${walletAddress}`);
 
   try {
-    console.log('[Allowances] DEBUG: Step 1 - Creating USDC contract...');
     // ═══════════════════════════════════════════════════════════════
     // 1. Check and Set USDC Allowance (for BUY orders)
     // ═══════════════════════════════════════════════════════════════
@@ -82,17 +79,11 @@ export async function ensureAllowances(
       ERC20_ABI,
       provider
     );
-    console.log('[Allowances] DEBUG: Step 2 - USDC contract created');
-
-    console.log('[Allowances] DEBUG: Step 3 - About to call allowance()...');
-    console.log('[Allowances] DEBUG: wallet.address type:', typeof wallet.address);
-    console.log('[Allowances] DEBUG: wallet.address value:', wallet.address);
 
     const usdcAllowance = await usdcContract.allowance(
-      wallet.address,
+      walletAddress,  // Plain string - no wallet object circular reference
       POLYGON_CONTRACTS.CTF_EXCHANGE
     );
-    console.log('[Allowances] DEBUG: Step 4 - allowance() call succeeded');
 
     console.log(`[Allowances] Current USDC allowance: ${ethers.utils.formatUnits(usdcAllowance, 6)} USDC`);
 
@@ -103,11 +94,16 @@ export async function ensureAllowances(
       console.log('[Allowances] ⚙️  Setting unlimited USDC approval...');
       console.log(`[Allowances] Approving ${POLYGON_CONTRACTS.CTF_EXCHANGE} to spend USDC`);
 
-      // Create a NEW contract instance with wallet for writing (no circular reference)
+      // Create wallet without provider first
+      const signerWallet = new ethers.Wallet(privateKey);
+
+      // Connect to provider ONLY at moment of use
+      const connectedWallet = signerWallet.connect(provider);
+
       const usdcContractWithSigner = new ethers.Contract(
         POLYGON_CONTRACTS.USDC,
         ERC20_ABI,
-        wallet
+        connectedWallet
       );
 
       const approveTx = await usdcContractWithSigner.approve(
@@ -138,11 +134,11 @@ export async function ensureAllowances(
     const ctfContract = new ethers.Contract(
       POLYGON_CONTRACTS.CTF,
       ERC1155_ABI,
-      provider // Use provider for read-only
+      provider
     );
 
     const isApproved = await ctfContract.isApprovedForAll(
-      wallet.address,
+      walletAddress,  // Plain string - no circular reference
       POLYGON_CONTRACTS.CTF_EXCHANGE
     );
 
@@ -150,11 +146,16 @@ export async function ensureAllowances(
       console.log('[Allowances] ⚙️  Setting CTF approval for all tokens...');
       console.log(`[Allowances] Approving ${POLYGON_CONTRACTS.CTF_EXCHANGE} to manage CTF tokens`);
 
-      // Create a NEW contract instance with wallet for writing (no circular reference)
+      // Create wallet without provider first
+      const signerWallet = new ethers.Wallet(privateKey);
+
+      // Connect to provider ONLY at moment of use
+      const connectedWallet = signerWallet.connect(provider);
+
       const ctfContractWithSigner = new ethers.Contract(
         POLYGON_CONTRACTS.CTF,
         ERC1155_ABI,
-        wallet
+        connectedWallet
       );
 
       const setApprovalTx = await ctfContractWithSigner.setApprovalForAll(
