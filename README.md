@@ -130,7 +130,7 @@ Phase 4: v2.0+              →  Autonomous agents, agent economy
 - ✅ **Community First** — Public allocation tiers open now
 - ✅ **Team Vested** — 1-year cliff + 3-year monthly vesting
 
-> 📖 See [Token Documentation](https://docs.yieldr.org/#token-overview) for full tokenomics
+> 📖 See [Token Documentation](https://yieldr.org/docs#token-overview) for full tokenomics
 
 ---
 
@@ -154,93 +154,7 @@ Phase 4: v2.0+              →  Autonomous agents, agent economy
 | Spot/LP | Aerodrome, Uniswap |
 | Social | Farcaster wallets |
 
----
 
-## 📁 Project Structure
-
-```
-yieldr/
-├── app/                    # Next.js app router
-│   ├── (auth)/            # Authentication routes
-│   ├── (dashboard)/       # Main app routes
-│   └── api/               # API routes
-├── components/            # React components
-│   ├── chat/              # Chat interface
-│   ├── positions/         # Position panels
-│   └── ui/                # Shared UI components
-├── lib/                   # Utilities and helpers
-│   ├── ai/                # AI agent logic
-│   ├── blockchain/        # Web3 integrations
-│   └── db/                # Database operations
-├── services/              # Backend microservices
-│   ├── indexer/           # On-chain data indexer
-│   └── analytics/         # Performance analytics
-└── docs/                  # Documentation
-```
-
----
-
-## 🏃 Running Locally
-
-### Prerequisites
-- Node.js 18+
-- pnpm
-- MongoDB
-- Base RPC endpoint
-
-### Installation
-
-```bash
-# Clone the repository
-git clone https://github.com/yieldr/yieldr.git
-cd yieldr
-
-# Install dependencies
-pnpm install
-
-# Set up environment variables
-cp .env.example .env.local
-# Edit .env.local with your credentials
-
-# Run development server
-pnpm dev
-```
-
-### Environment Variables
-
-```env
-# Database
-MONGODB_URI=
-
-# Blockchain
-BASE_RPC_URL=
-NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID=
-
-# AI
-ANTHROPIC_API_KEY=
-
-# Auth
-NEXTAUTH_SECRET=
-NEXTAUTH_URL=
-```
-
----
-
-## 🤝 Contributing
-
-We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for details.
-
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
-
-### Development Guidelines
-- Follow the existing code style
-- Write tests for new features
-- Update documentation as needed
-- Keep PRs focused and atomic
 
 ---
 
@@ -256,9 +170,9 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 |----------|------|
 | 🌐 Website | [yieldr.org](https://yieldr.org) |
 | 📱 App | [app.yieldr.org](https://app.yieldr.org) |
-| 📖 Documentation | [docs.yieldr.org](https://docs.yieldr.org) |
-| 🐦 Twitter | [@yieldr_org](https://twitter.com/yieldr_org) |
-| 💬 Discord | [discord.gg/yieldr](https://discord.gg/yieldr) |
+| 📖 Documentation | [docs.yieldr.org](https://yieldr.org/docs) |
+| 🐦 Twitter | [@yieldr_org](https://twitter.com/yieldrdotorg) |
+| 💬 Discord | [https://discord.gg/MPESzWps) |
 
 ---
 
