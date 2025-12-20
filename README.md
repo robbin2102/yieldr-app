@@ -170,8 +170,8 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 |----------|------|
 | 🌐 Website | [yieldr.org](https://yieldr.org) |
 | 📱 App | [app.yieldr.org](https://app.yieldr.org) |
-| 📖 Documentation | [docs.yieldr.org](https://yieldr.org/docs) |
-| 🐦 Twitter | [@yieldr_org](https://twitter.com/yieldrdotorg) |
+| 📖 Documentation | [yieldr.org/docs](https://yieldr.org/docs) |
+| 🐦 Twitter | [@yieldrdotorg](https://twitter.com/yieldrdotorg) |
 | 💬 Discord | [https://discord.gg/MPESzWps) |
 
 ---
