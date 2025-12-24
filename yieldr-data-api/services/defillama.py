@@ -1,5 +1,5 @@
 """
-DeFiLlama API client for token prices on Base.
+DeFiLlama API client for token prices (multi-chain).
 Free tier: 500 requests/minute (no API key needed).
 Auto-filters spam tokens - only returns prices for tokens with real liquidity.
 """
@@ -13,18 +13,19 @@ class DeFiLlamaService:
 
     def __init__(self):
         self.base_url = "https://coins.llama.fi"
-        self.chain = "base"  # Hardcoded for Base chain
         self.timeout = 15.0
 
     async def get_token_prices(
         self,
-        token_addresses: List[str]
+        token_addresses: List[str],
+        chain: str = "base"
     ) -> Dict[str, Dict[str, any]]:
         """
-        Get current prices for multiple tokens on Base.
+        Get current prices for multiple tokens (multi-chain).
 
         Args:
             token_addresses: List of token contract addresses
+            chain: Chain name (base, ethereum, solana, etc.) Default: base
 
         Returns:
             Dict mapping token address (lowercase) to:
@@ -51,8 +52,8 @@ class DeFiLlamaService:
         if not token_addresses:
             return {}
 
-        # Build coin identifiers: "base:0x..."
-        coins = [f"{self.chain}:{addr.lower()}" for addr in token_addresses]
+        # Build coin identifiers: "{chain}:0x..."
+        coins = [f"{chain}:{addr.lower()}" for addr in token_addresses]
 
         # DeFiLlama supports up to 100 coins per request
         if len(coins) > 100:
