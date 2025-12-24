@@ -1,11 +1,11 @@
 """
 Spot wallet scanning endpoint.
-Analyzes a wallet's token holdings on Base using Alchemy + DeFiLlama.
+Analyzes a wallet's token holdings (multi-chain) using Alchemy + DeFiLlama.
 """
 
 from typing import Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, Query
-from services.alchemy import alchemy_service
+from services.alchemy import alchemy_service, Chain
 from core.utils import normalize_address
 from api.dependencies import verify_api_key
 
@@ -14,17 +14,23 @@ router = APIRouter()
 
 @router.get(
     "/scan/{wallet}",
-    summary="Scan wallet token holdings",
+    summary="Scan wallet token holdings (multi-chain)",
     description="Get native ETH + ERC-20 token holdings with USD values (auto-filtered for spam)"
 )
 async def scan_wallet(
     wallet: str,
+    chain: Chain = Query(default=Chain.BASE, description="Blockchain to scan: base or ethereum"),
     min_value: float = Query(default=0.1, description="Minimum USD value to include (default: $0.10)"),
+    include_native: bool = Query(default=True, description="Include native ETH balance"),
     limit: int = Query(default=50, ge=1, le=100, description="Max tokens to return"),
     _api_key: str = Depends(verify_api_key)
 ) -> Dict[str, Any]:
     """
-    Scan a wallet's spot token holdings on Base.
+    Scan a wallet's spot token holdings (multi-chain support).
+
+    **Supported Chains:**
+    - ✅ Base (default)
+    - ✅ Ethereum mainnet
 
     **Includes:**
     - ✅ Native ETH balance
@@ -38,7 +44,9 @@ async def scan_wallet(
 
     **Args:**
     - wallet: Ethereum wallet address
+    - chain: Blockchain to scan (base or ethereum) - default: base
     - min_value: Minimum USD value to include (default: $0.10)
+    - include_native: Include native ETH balance (default: true)
     - limit: Max tokens to return (default: 50, max: 100)
 
     **Returns:**
@@ -73,7 +81,7 @@ async def scan_wallet(
     try:
         # Normalize wallet address
         wallet_normalized = normalize_address(wallet)
-        print(f"🔍 Scanning wallet: {wallet_normalized}")
+        print(f"🔍 Scanning wallet: {wallet_normalized} on {chain.value}")
 
         # Get tokens with values from Alchemy + DeFiLlama
         # This automatically:
@@ -86,18 +94,20 @@ async def scan_wallet(
         # - Sorts by value descending
         tokens = await alchemy_service.get_wallet_tokens_with_values(
             wallet=wallet_normalized,
+            chain=chain,
             min_value_usd=min_value,
-            include_native=True,
+            include_native=include_native,
             limit=limit
         )
 
         # Calculate total value
         total_value_usd = sum(token["value_usd"] for token in tokens)
 
-        print(f"✅ Scan complete: {len(tokens)} tokens, ${total_value_usd:.2f} total value")
+        print(f"✅ Scan complete: {len(tokens)} tokens, ${total_value_usd:.2f} total value on {chain.value}")
 
         return {
             "wallet": wallet_normalized,
+            "chain": chain.value,
             "totalTokens": len(tokens),
             "totalValueUSD": round(total_value_usd, 2),
             "tokens": tokens

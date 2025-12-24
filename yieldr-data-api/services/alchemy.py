@@ -13,7 +13,7 @@ from services.defillama import defillama_service
 settings = get_settings()
 
 
-class Chain(Enum):
+class Chain(str, Enum):
     """Supported blockchain networks."""
     BASE = "base"
     ETHEREUM = "ethereum"
@@ -37,14 +37,26 @@ CHAIN_CONFIG = {
 class AlchemyService:
     """Client for Alchemy API (multi-chain support)."""
 
-    def __init__(self, chain: Chain = Chain.BASE):
-        self.chain = chain
-        self.config = CHAIN_CONFIG[chain]
-        self.endpoint = settings.alchemy_base_url  # Will work for both chains if URL is correct
+    def __init__(self):
         self.timeout = 30.0
 
-    async def _rpc_call(self, method: str, params: List[Any]) -> Any:
+    def _get_endpoint(self, chain: Chain) -> str:
+        """Get Alchemy endpoint URL for the specified chain."""
+        if chain == Chain.BASE:
+            return settings.alchemy_base_url
+        elif chain == Chain.ETHEREUM:
+            # If ETH URL is set, use it; otherwise derive from Base URL
+            if settings.alchemy_eth_url:
+                return settings.alchemy_eth_url
+            else:
+                # Derive from Base URL by replacing 'base-mainnet' with 'eth-mainnet'
+                return settings.alchemy_base_url.replace("base-mainnet", "eth-mainnet")
+        else:
+            raise ValueError(f"Unsupported chain: {chain}")
+
+    async def _rpc_call(self, chain: Chain, method: str, params: List[Any]) -> Any:
         """Make JSON-RPC call to Alchemy."""
+        endpoint = self._get_endpoint(chain)
         payload = {
             "jsonrpc": "2.0",
             "id": 1,
@@ -54,7 +66,7 @@ class AlchemyService:
 
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.post(
-                self.endpoint,
+                endpoint,
                 json=payload,
                 headers={"Content-Type": "application/json"}
             )
@@ -66,7 +78,7 @@ class AlchemyService:
 
             return data.get("result")
 
-    async def get_native_balance(self, wallet: str) -> Dict:
+    async def get_native_balance(self, wallet: str, chain: Chain = Chain.BASE) -> Dict:
         """
         Get native ETH balance with USD value.
 
@@ -74,26 +86,29 @@ class AlchemyService:
 
         Args:
             wallet: Wallet address
+            chain: Blockchain to query (BASE or ETHEREUM)
 
         Returns:
             Dict with balance, price, and value info
         """
+        config = CHAIN_CONFIG[chain]
+
         # Get balance in wei
-        result = await self._rpc_call("eth_getBalance", [wallet, "latest"])
+        result = await self._rpc_call(chain, "eth_getBalance", [wallet, "latest"])
         balance_wei = int(result, 16)
         balance = balance_wei / 10**18
 
         # Get ETH price via WETH address
-        weth = self.config["weth_address"]
+        weth = config["weth_address"]
         prices = await defillama_service.get_token_prices(
             [weth],
-            chain=self.config["defillama_prefix"]
+            chain=config["defillama_prefix"]
         )
         price_usd = prices.get(weth, {}).get("price_usd", 0)
 
         return {
             "tokenAddress": "native",
-            "symbol": self.config["native_symbol"],
+            "symbol": config["native_symbol"],
             "decimals": 18,
             "balance": round(balance, 8),
             "price_usd": round(price_usd, 2),
@@ -101,7 +116,7 @@ class AlchemyService:
             "is_native": True
         }
 
-    async def get_wallet_token_balances(self, wallet: str) -> List[Dict]:
+    async def get_wallet_token_balances(self, wallet: str, chain: Chain = Chain.BASE) -> List[Dict]:
         """
         Get ALL ERC-20 token balances for a wallet.
 
@@ -109,11 +124,13 @@ class AlchemyService:
 
         Args:
             wallet: Wallet address
+            chain: Blockchain to query (BASE or ETHEREUM)
 
         Returns:
             List of {contractAddress, tokenBalance (hex)}
         """
         result = await self._rpc_call(
+            chain,
             "alchemy_getTokenBalances",
             [wallet, "erc20"]
         )
@@ -122,6 +139,7 @@ class AlchemyService:
     async def get_wallet_tokens_with_values(
         self,
         wallet: str,
+        chain: Chain = Chain.BASE,
         min_value_usd: float = 0.1,
         include_native: bool = True,
         limit: int = 50
@@ -134,6 +152,7 @@ class AlchemyService:
 
         Args:
             wallet: Wallet address
+            chain: Blockchain to query (BASE or ETHEREUM)
             min_value_usd: Minimum USD value to include (default: $0.10)
             include_native: Include native ETH balance (default: True)
             limit: Max tokens to return
@@ -141,19 +160,20 @@ class AlchemyService:
         Returns:
             List of tokens sorted by value descending
         """
+        config = CHAIN_CONFIG[chain]
         tokens = []
 
         # Step 1: Get native balance (ETH)
         if include_native:
             try:
-                native = await self.get_native_balance(wallet)
+                native = await self.get_native_balance(wallet, chain)
                 if native["value_usd"] >= min_value_usd:
                     tokens.append(native)
             except Exception as e:
                 print(f"⚠️  Failed to get native balance: {e}")
 
         # Step 2: Get all ERC-20 balances from Alchemy
-        balances = await self.get_wallet_token_balances(wallet)
+        balances = await self.get_wallet_token_balances(wallet, chain)
 
         if not balances:
             # Sort and return (might just have native ETH)
@@ -185,7 +205,7 @@ class AlchemyService:
         addresses = [t["address"] for t in valid_tokens]
         prices = await defillama_service.get_token_prices(
             addresses,
-            chain=self.config["defillama_prefix"]
+            chain=config["defillama_prefix"]
         )
 
         # Step 5: Calculate values, filter by min_value
@@ -231,9 +251,5 @@ class AlchemyService:
         return tokens[:limit]
 
 
-# Chain-specific singletons
-alchemy_base = AlchemyService(Chain.BASE)
-alchemy_ethereum = AlchemyService(Chain.ETHEREUM)
-
-# Default instance (Base)
-alchemy_service = alchemy_base
+# Singleton instance
+alchemy_service = AlchemyService()

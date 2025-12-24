@@ -13,10 +13,13 @@ class Settings(BaseSettings):
 
     # Required settings
     mongodb_uri: str
-    alchemy_base_url: str = Field(alias="ALCHEMY_BASE_URL")
+    alchemy_base_url: str = Field(alias="ALCHEMY_BASE_URL")  # Full URL for Base: https://base-mainnet.g.alchemy.com/v2/API_KEY
     moralis_api_key: str
     moralis_base_url: str = "https://deep-index.moralis.io/api/v2.2"
     api_key: str
+
+    # Optional: Ethereum endpoint (if not set, will derive from Base URL)
+    alchemy_eth_url: str = Field(default="", alias="ALCHEMY_ETH_URL")
 
     # Server configuration
     api_port: int = Field(default=8000, alias="API_PORT")
