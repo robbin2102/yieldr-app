@@ -1,9 +1,9 @@
 """
 QuickNode API client for Base blockchain interactions.
-Uses Token API v2 for wallet token balance queries.
+Used in Part 2 for eth_getLogs (event indexing).
 """
 
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List
 import httpx
 from config import get_settings
 
@@ -11,50 +11,43 @@ settings = get_settings()
 
 
 class QuickNodeClient:
-    """Client for QuickNode Base RPC with Token API v2 support."""
+    """Client for QuickNode Base RPC."""
 
     def __init__(self):
         self.endpoint = settings.quicknode_endpoint
         self.headers = {"Content-Type": "application/json"}
+        self.timeout = 30.0
 
-    async def qn_getWalletTokenBalance(
-        self,
-        wallet: str,
-        contracts: Optional[List[str]] = None
-    ) -> Dict[str, Any]:
+    async def _rpc_call(self, method: str, params: List[Any]) -> Any:
         """
-        Get ERC-20 token balances for a wallet using QuickNode Token API v2.
+        Make a JSON-RPC call to QuickNode.
 
         Args:
-            wallet: Wallet address (checksum format recommended)
-            contracts: Optional list of token contract addresses to filter
+            method: RPC method name
+            params: Method parameters
 
         Returns:
-            Dict with 'result' containing:
-              - owner: wallet address
-              - totalItems: number of tokens
-              - assets: list of token balance objects
-              - pageKey: pagination key (if any)
+            Result from RPC call
 
         Raises:
-            httpx.HTTPError: If the API request fails
+            ValueError: If QuickNode returns an error
+            httpx.HTTPError: If the request fails
         """
+        if not self.endpoint:
+            raise ValueError("QuickNode endpoint not configured. Set QUICKNODE_BASE_RPC_URL in .env.local")
+
         payload = {
             "id": 1,
             "jsonrpc": "2.0",
-            "method": "qn_getWalletTokenBalance",
-            "params": {
-                "wallet": wallet,
-                "contracts": contracts or []
-            }
+            "method": method,
+            "params": params
         }
 
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.post(
                 self.endpoint,
                 json=payload,
-                headers=self.headers,
-                timeout=30.0
+                headers=self.headers
             )
             response.raise_for_status()
             data = response.json()
@@ -63,4 +56,9 @@ class QuickNodeClient:
             if "error" in data:
                 raise ValueError(f"QuickNode API error: {data['error']}")
 
-            return data.get("result", {})
+            return data.get("result")
+
+    # Part 2: Event indexing methods will be added here
+    # async def eth_getLogs(...) -> List[Dict]:
+    #     """Get event logs for token swaps."""
+    #     pass

@@ -13,15 +13,16 @@ class Settings(BaseSettings):
 
     # Required settings
     mongodb_uri: str
-    quicknode_endpoint: str = Field(alias="QUICKNODE_BASE_RPC_URL")
+    alchemy_base_url: str = Field(alias="ALCHEMY_BASE_URL")
     moralis_api_key: str
     moralis_base_url: str = "https://deep-index.moralis.io/api/v2.2"
     api_key: str
 
     # Server configuration
-    api_port: int = Field(default=8000, alias="API_PORT")  # Default to 8000 if API_PORT not set
+    api_port: int = Field(default=8000, alias="API_PORT")
 
-    # Optional settings (for later parts)
+    # Optional settings (for Part 2+)
+    quicknode_endpoint: str = Field(default="", alias="QUICKNODE_BASE_RPC_URL")  # For Part 2 eth_getLogs
     taapi_api_key: str = ""
     quicknode_stream_secret: str = ""
 

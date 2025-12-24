@@ -4,21 +4,34 @@ FastAPI service for token scanning, trader indexing, PnL computation, and market
 
 ## Part 1: Core Setup + Spot Scan ✅
 
-Part 1 implementation is complete with the following features:
+Part 1 implementation uses **Alchemy (free tier)** for token balances and **DeFiLlama (free)** for prices with automatic spam filtering.
 
 ### Features Implemented
 - ✅ FastAPI application with lifespan management
 - ✅ MongoDB connection with Motor (async driver)
-- ✅ QuickNode client (Token API v2)
-- ✅ GeckoTerminal client (token prices)
-- ✅ Moralis client (wallet profitability)
+- ✅ **Alchemy client** - Token balances (300M CUs/month free)
+- ✅ **DeFiLlama client** - Token prices (500 req/min, no API key)
+- ✅ **Auto spam filtering** - DeFiLlama only prices real tokens
 - ✅ API key authentication
 - ✅ `/health` endpoint
-- ✅ `/api/v1/spot/scan/{wallet}` endpoint
+- ✅ `/api/v1/spot/scan/{wallet}` endpoint with query params
 
-### Endpoints
+### Why Alchemy + DeFiLlama?
 
-#### `GET /health`
+| Service | Purpose | Cost | Spam Filtering |
+|---------|---------|------|----------------|
+| **Alchemy** | Token balances | Free (300M CUs/month) | Manual (balance > 1) |
+| **DeFiLlama** | Token prices | Free (500/min) | ✅ Automatic (no price = spam) |
+| QuickNode | ❌ Removed (paid) | Paid | Manual |
+| GeckoTerminal | Kept for Part 2 trending | Free (30/min) | N/A |
+
+**Result:** Zero API costs for Part 1, automatic spam filtering!
+
+---
+
+## Endpoints
+
+### `GET /health`
 Health check endpoint (no authentication required).
 
 **Response:**
@@ -30,8 +43,8 @@ Health check endpoint (no authentication required).
 }
 ```
 
-#### `GET /api/v1/spot/scan/{wallet}`
-Scan a wallet's ERC-20 token holdings on Base with profitability metrics.
+### `GET /api/v1/spot/scan/{wallet}`
+Scan a wallet's ERC-20 token holdings on Base with automatic spam filtering.
 
 **Headers:**
 - `X-API-Key`: Your API key (required)
@@ -39,33 +52,43 @@ Scan a wallet's ERC-20 token holdings on Base with profitability metrics.
 **Path Parameters:**
 - `wallet`: Ethereum wallet address
 
+**Query Parameters:**
+- `min_value` (optional): Minimum USD value to include (default: $10)
+- `limit` (optional): Max tokens to return (default: 50, max: 100)
+
+**Example Request:**
+```bash
+curl -H "X-API-Key: your-key" \
+  "http://localhost:8000/api/v1/spot/scan/0x742d35Cc6634C0532925a3b844Bc454e4438f44e?min_value=5&limit=20"
+```
+
 **Response:**
 ```json
 {
-  "wallet": "0x...",
-  "totalTokens": 5,
+  "wallet": "0x742d35cc6634c0532925a3b844bc454e4438f44e",
+  "totalTokens": 3,
   "totalValueUSD": 1234.56,
   "tokens": [
     {
-      "address": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+      "tokenAddress": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
       "symbol": "USDC",
-      "balance": "1000000000",
       "decimals": 6,
-      "balanceFormatted": 1000.0,
-      "priceUSD": 1.0,
-      "valueUSD": 1000.0,
-      "profitability": {
-        "avg_buy_price_usd": 0.98,
-        "avg_sell_price_usd": 1.02,
-        "realized_profit_usd": 40.0,
-        "realized_profit_percentage": 4.08,
-        "total_usd_invested": 980.0,
-        "count_of_trades": 5
-      }
+      "balance": 1000.0,
+      "price_usd": 1.0,
+      "value_usd": 1000.0
     }
   ]
 }
 ```
+
+**Spam Filtering (Automatic):**
+- ✅ Filters dust balances (balance <= 1, often NFT spam)
+- ✅ Only includes tokens with DeFiLlama prices (real liquidity)
+- ✅ Filters low confidence prices (< 0.5)
+- ✅ Applies minimum USD value filter
+- ✅ Sorted by value (highest first)
+
+---
 
 ## Setup Instructions
 
@@ -73,6 +96,12 @@ Scan a wallet's ERC-20 token holdings on Base with profitability metrics.
 
 ```bash
 cd yieldr-data-api
+
+# Create virtual environment (recommended)
+python3.11 -m venv venv
+source venv/bin/activate  # On Mac/Linux
+
+# Install packages
 pip install -r requirements.txt
 ```
 
@@ -83,31 +112,50 @@ The API uses the **shared `.env.local` file in the project root** (not in yieldr
 Add these variables to your existing `yieldr-app/.env.local` file:
 
 ```bash
-# === SHARED (Frontend + Backend) ===
+# === REQUIRED (Part 1) ===
 MONGODB_URI=mongodb+srv://user:pass@cluster.mongodb.net/yieldr
-QUICKNODE_BASE_RPC_URL=https://your-quicknode-endpoint.quiknode.pro/xxx/
-
-# === BACKEND (Yieldr Data Services API) ===
+ALCHEMY_BASE_URL=https://base-mainnet.g.alchemy.com/v2/YOUR-API-KEY
 MORALIS_API_KEY=your-moralis-api-key
-API_KEY=your-api-key-for-auth
+API_KEY=your-secure-api-key
 
-# === OPTIONAL (Part 4 & 6) ===
+# === OPTIONAL (Server Port) ===
+API_PORT=8000
+
+# === OPTIONAL (Part 2+) ===
+# QUICKNODE_BASE_RPC_URL=https://xxx.base-mainnet.quiknode.pro/xxx/
 # TAAPI_API_KEY=your-taapi-key
 # QUICKNODE_STREAM_SECRET=your-webhook-secret
 ```
 
-You can also copy from `.env.example` in the project root.
-
 **Where to get these:**
-- **MongoDB**: Create a free cluster at [MongoDB Atlas](https://www.mongodb.com/cloud/atlas)
-- **QuickNode**: Sign up at [QuickNode](https://www.quicknode.com/) and create a Base endpoint with Token API v2 addon
-- **Moralis**: Get API key at [Moralis](https://moralis.io/)
-- **API_KEY**: Create your own secure string (e.g., `openssl rand -hex 32`)
+
+#### MongoDB (Required)
+- Sign up at [MongoDB Atlas](https://www.mongodb.com/cloud/atlas)
+- Create a free cluster (M0 tier)
+- Get connection string from "Connect" → "Connect your application"
+
+#### Alchemy (Required - FREE)
+- Sign up at [Alchemy](https://www.alchemy.com/)
+- Create a new app → Select "Base" chain
+- Copy the HTTPS endpoint URL
+- Free tier: **300M compute units/month** (plenty for Part 1)
+
+#### Moralis (Required for Part 2)
+- Sign up at [Moralis](https://moralis.io/)
+- Get API key from dashboard
+- Not used in Part 1 scan, but needed for Part 2
+
+#### API_KEY (Required)
+- Generate a secure random string:
+```bash
+openssl rand -hex 32
+```
 
 ### 3. Run the Server
 
 ```bash
 cd yieldr-data-api
+source venv/bin/activate  # If using venv
 python main.py
 ```
 
@@ -126,14 +174,22 @@ The API will be available at `http://localhost:8000`
 curl http://localhost:8000/health
 ```
 
-**Test wallet scan (replace with your API key and wallet):**
+**Test wallet scan (replace with your API key):**
 ```bash
 curl -H "X-API-Key: your-api-key-here" \
-  http://localhost:8000/api/v1/spot/scan/0x742d35Cc6634C0532925a3b844Bc454e4438f44e
+  "http://localhost:8000/api/v1/spot/scan/0x742d35Cc6634C0532925a3b844Bc454e4438f44e"
+```
+
+**With query parameters:**
+```bash
+curl -H "X-API-Key: your-api-key-here" \
+  "http://localhost:8000/api/v1/spot/scan/0x742d35Cc6634C0532925a3b844Bc454e4438f44e?min_value=5&limit=20"
 ```
 
 **View interactive docs:**
 Open `http://localhost:8000/docs` in your browser for Swagger UI documentation.
+
+---
 
 ## Project Structure
 
@@ -149,26 +205,57 @@ yieldr-data-api/
 ├── db/
 │   └── mongodb.py             # MongoDB connection management
 ├── services/
-│   ├── quicknode.py           # QuickNode API client
-│   ├── geckoterminal.py       # GeckoTerminal API client
-│   └── moralis.py             # Moralis API client
+│   ├── alchemy.py             # Alchemy API client (token balances)
+│   ├── defillama.py           # DeFiLlama API client (token prices)
+│   ├── geckoterminal.py       # GeckoTerminal (Part 2: trending pools)
+│   ├── quicknode.py           # QuickNode (Part 2: eth_getLogs)
+│   └── moralis.py             # Moralis (Part 2: top traders)
 ├── config.py                  # Configuration management
 ├── main.py                    # FastAPI application
 ├── requirements.txt           # Python dependencies
-└── .env.example               # Environment variables template
+└── README.md                  # This file
 ```
+
+---
+
+## API Costs (Part 1)
+
+| Service | Endpoint | Cost per Call | Monthly Free Tier | Part 1 Usage |
+|---------|----------|---------------|-------------------|--------------|
+| **Alchemy** | `alchemy_getTokenBalances` | 20 CUs | 300M CUs | ✅ ~15k scans/month |
+| **DeFiLlama** | `/prices/current` | Free | 500/min | ✅ Unlimited |
+| **MongoDB** | Database | Free | 512MB | ✅ Plenty |
+
+**Total monthly cost for Part 1: $0** 🎉
+
+---
 
 ## What's Next?
 
-Part 2 will implement:
+**Part 2** will implement:
 - Indexing script for trending tokens (GeckoTerminal)
 - Top profitable traders discovery (Moralis)
+- Token transfer event indexing (QuickNode `eth_getLogs`)
 - `/api/v1/trader/top` endpoint
 - MongoDB storage for indexed data
 
-## Notes
+---
 
-- All token addresses are normalized to lowercase for consistency
-- Profitability data is fetched from Moralis for each token (may be null if unavailable)
-- Tokens are sorted by USD value (highest first)
-- The API uses async/await throughout for optimal performance
+## Troubleshooting
+
+### "ALCHEMY_BASE_URL field required"
+Make sure you've added `ALCHEMY_BASE_URL` to your `.env.local` file in the project root.
+
+### "Failed to scan wallet"
+- Check your Alchemy API key is correct
+- Verify the wallet address is valid
+- Check server logs for detailed error
+
+### "Invalid API key"
+Make sure you're passing the correct `X-API-Key` header that matches `API_KEY` in `.env.local`.
+
+### Port already in use
+If port 8000 is taken, change `API_PORT` in `.env.local` or run:
+```bash
+uvicorn main:app --reload --port 8001
+```

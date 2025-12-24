@@ -1,6 +1,6 @@
 """
-GeckoTerminal API client for token prices and trending pools on Base.
-Provides token price lookups and trending pool discovery.
+GeckoTerminal API client for trending pools on Base.
+Used in Part 2 for discovering trending tokens.
 """
 
 from typing import Dict, Any, List
@@ -13,52 +13,7 @@ class GeckoTerminalClient:
     def __init__(self):
         self.base_url = "https://api.geckoterminal.com/api/v2"
         self.network = "base"
-
-    async def get_token_prices_batch(
-        self,
-        token_addresses: List[str]
-    ) -> Dict[str, Dict[str, Any]]:
-        """
-        Get current prices for multiple tokens on Base.
-
-        Args:
-            token_addresses: List of token contract addresses (up to 30 per request)
-
-        Returns:
-            Dict mapping token address (lowercase) to:
-              - price_usd: Current USD price
-              - price_change_24h: 24h price change percentage (if available)
-
-        Example:
-            {
-                "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913": {
-                    "price_usd": 1.0,
-                    "price_change_24h": 0.01
-                }
-            }
-        """
-        if not token_addresses:
-            return {}
-
-        # GeckoTerminal supports up to 30 addresses per request
-        addresses = ",".join([addr.lower() for addr in token_addresses[:30]])
-        url = f"{self.base_url}/simple/networks/{self.network}/token_price/{addresses}"
-
-        async with httpx.AsyncClient() as client:
-            response = await client.get(url, timeout=15.0)
-            response.raise_for_status()
-            data = response.json()
-
-            result = {}
-            for addr, price_data in data.get("data", {}).get("attributes", {}).get("token_prices", {}).items():
-                # price_data is just a string like "1.0" or null
-                if price_data:
-                    result[addr.lower()] = {
-                        "price_usd": float(price_data),
-                        "price_change_24h": 0.0  # Not available in simple price endpoint
-                    }
-
-            return result
+        self.timeout = 15.0
 
     async def get_trending_pools(self, limit: int = 20) -> List[Dict[str, Any]]:
         """
@@ -76,8 +31,8 @@ class GeckoTerminalClient:
         url = f"{self.base_url}/networks/{self.network}/trending_pools"
         params = {"page": 1}
 
-        async with httpx.AsyncClient() as client:
-            response = await client.get(url, params=params, timeout=15.0)
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.get(url, params=params)
             response.raise_for_status()
             data = response.json()
 
@@ -93,3 +48,7 @@ class GeckoTerminalClient:
                 })
 
             return pools
+
+
+# Singleton instance
+geckoterminal_service = GeckoTerminalClient()
