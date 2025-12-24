@@ -1,0 +1,20 @@
+# === Core FastAPI ===
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+pydantic==2.5.0
+pydantic-settings==2.1.0
+
+# === Database ===
+motor==3.3.2
+pymongo==4.6.0
+
+# === HTTP Client ===
+httpx==0.25.1
+
+# === Data Processing (for later parts) ===
+pandas==2.0.3
+numpy==1.24.3
+# pandas-ta will be added in Part 4 when needed
+
+# === Utilities ===
+python-dotenv==1.0.0
