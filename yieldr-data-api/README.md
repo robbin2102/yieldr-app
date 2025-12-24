@@ -78,21 +78,25 @@ pip install -r requirements.txt
 
 ### 2. Configure Environment Variables
 
-Create a `.env.local` file with the following required variables:
+The API uses the **shared `.env.local` file in the project root** (not in yieldr-data-api/).
+
+Add these variables to your existing `yieldr-app/.env.local` file:
 
 ```bash
-# MongoDB connection string
+# === SHARED (Frontend + Backend) ===
 MONGODB_URI=mongodb+srv://user:pass@cluster.mongodb.net/yieldr
-
-# QuickNode Base RPC endpoint (Token API v2)
 QUICKNODE_BASE_RPC_URL=https://your-quicknode-endpoint.quiknode.pro/xxx/
 
-# Moralis API key
+# === BACKEND (Yieldr Data Services API) ===
 MORALIS_API_KEY=your-moralis-api-key
-
-# API key for authenticating requests
 API_KEY=your-api-key-for-auth
+
+# === OPTIONAL (Part 4 & 6) ===
+# TAAPI_API_KEY=your-taapi-key
+# QUICKNODE_STREAM_SECRET=your-webhook-secret
 ```
+
+You can also copy from `.env.example` in the project root.
 
 **Where to get these:**
 - **MongoDB**: Create a free cluster at [MongoDB Atlas](https://www.mongodb.com/cloud/atlas)

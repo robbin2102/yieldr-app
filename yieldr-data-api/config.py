@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     quicknode_stream_secret: str = ""
 
     model_config = SettingsConfigDict(
-        env_file=".env.local",
+        env_file="../.env.local",  # Look for .env.local in project root
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore"
