@@ -18,6 +18,9 @@ class Settings(BaseSettings):
     moralis_base_url: str = "https://deep-index.moralis.io/api/v2.2"
     api_key: str
 
+    # Server configuration
+    api_port: int = Field(default=8000, alias="API_PORT")  # Default to 8000 if API_PORT not set
+
     # Optional settings (for later parts)
     taapi_api_key: str = ""
     quicknode_stream_secret: str = ""

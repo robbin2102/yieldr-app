@@ -8,6 +8,9 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from db.mongodb import connect_db, close_db
 from api.spot.router import router as spot_router
+from config import get_settings
+
+settings = get_settings()
 
 
 @asynccontextmanager
@@ -67,9 +70,10 @@ app.include_router(spot_router, prefix="/api/v1")
 
 if __name__ == "__main__":
     import uvicorn
+    print(f"🌐 Starting server on port {settings.api_port}...")
     uvicorn.run(
         "main:app",
         host="0.0.0.0",
-        port=8000,
+        port=settings.api_port,
         reload=True
     )
