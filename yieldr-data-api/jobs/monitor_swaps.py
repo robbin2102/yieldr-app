@@ -52,7 +52,7 @@ DEX_ROUTERS = {
 
 async def load_tracked_wallets(db) -> Set[str]:
     """
-    Load all tracked trader wallets from MongoDB.
+    Load all tracked REAL trader wallets from MongoDB (exclude CEX/treasury/whales).
 
     Returns:
         Set of lowercase wallet addresses for O(1) lookup
@@ -60,12 +60,12 @@ async def load_tracked_wallets(db) -> Set[str]:
     print(f"[{datetime.utcnow().isoformat()}] Loading tracked wallets...")
 
     traders = await db.top_traders.find(
-        {"status": "active"},
+        {"is_trader": True, "status": "active"},  # Only real traders
         {"wallet_address": 1}
     ).to_list(5000)
 
     tracked_wallets = {t["wallet_address"].lower() for t in traders}
-    print(f"✓ Loaded {len(tracked_wallets)} tracked wallets")
+    print(f"✓ Loaded {len(tracked_wallets)} real trader wallets")
 
     return tracked_wallets
 

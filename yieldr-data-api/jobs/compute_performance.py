@@ -46,14 +46,14 @@ async def compute_all_trader_performance():
     db = client.yieldr
 
     try:
-        # Step 1: Load all active traders
-        print(f"\n[{datetime.utcnow().isoformat()}] Loading active traders...")
+        # Step 1: Load all active REAL traders (exclude CEX/treasury/whales)
+        print(f"\n[{datetime.utcnow().isoformat()}] Loading active real traders...")
 
         traders = await db.top_traders.find(
-            {"status": "active"}
+            {"is_trader": True, "status": "active"}
         ).to_list(5000)
 
-        print(f"✓ Found {len(traders)} active traders")
+        print(f"✓ Found {len(traders)} real traders")
 
         if not traders:
             print("✗ No active traders found. Exiting.")
@@ -77,18 +77,13 @@ async def compute_all_trader_performance():
                     "timestamp": {"$gte": cutoff}
                 }).sort("timestamp", -1).to_list(1000)
 
-                # Compute current holdings value (simplified: sum from tokens array)
+                # Get current holdings from balance update job
+                # Format: {token_address: value_usd}
                 current_holdings = {}
-                for token in trader.get("tokens", []):
-                    token_addr = token["token_address"]
-                    holdings_value = 0.0
-
-                    # Use total_holdings × current price (if available)
-                    if token.get("total_holdings") and token.get("pnl_usd"):
-                        # Estimate value from holdings
-                        holdings_value = token.get("total_holdings", 0) * 1.0  # Placeholder
-
-                    current_holdings[token_addr] = holdings_value
+                for holding in trader.get("holdings", []):
+                    token_addr = holding.get("token_address", "").lower()
+                    value_usd = holding.get("value_usd", 0)
+                    current_holdings[token_addr] = value_usd
 
                 # Compute performance metrics
                 performance = compute_trader_performance(swaps, current_holdings)
