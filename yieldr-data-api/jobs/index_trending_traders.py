@@ -54,29 +54,41 @@ async def fetch_trending_tokens(limit: int = 100) -> List[Dict[str, Any]]:
 
         trending_tokens = []
         for idx, pool in enumerate(pools[:limit], start=1):
-            # Extract token info from pool data
-            base_token = pool.get("relationships", {}).get("base_token", {}).get("data", {})
-            token_address = base_token.get("id", "").split("_")[-1].lower()
+            try:
+                # Extract pool attributes
+                attrs = pool.get("attributes", {})
 
-            if not token_address:
+                # Extract base token info from relationships
+                base_token_rel = pool.get("relationships", {}).get("base_token", {}).get("data", {})
+                token_address = base_token_rel.get("id", "").split("_")[-1] if base_token_rel.get("id") else None
+
+                if not token_address:
+                    continue
+
+                # Get token symbol and name from attributes (GeckoTerminal format)
+                name = attrs.get("name", "Unknown Pool")
+                # Symbol is usually in the pool name, extract the first part
+                symbol = name.split("/")[0].strip() if "/" in name else "UNKNOWN"
+
+                token_data = {
+                    "token_address": token_address.lower(),
+                    "chain": "base",
+                    "symbol": symbol,
+                    "name": name,
+                    "price_usd": float(attrs.get("base_token_price_usd", 0) or 0),
+                    "volume_24h_usd": float(attrs.get("volume_usd", {}).get("h24", 0) or 0),
+                    "price_change_24h_pct": float(attrs.get("price_change_percentage", {}).get("h24", 0) or 0),
+                    "pool_address": pool.get("id", "").split("_")[-1].lower() if pool.get("id") else "",
+                    "dex": pool.get("relationships", {}).get("dex", {}).get("data", {}).get("id", "unknown").split("_")[-1] if pool.get("relationships", {}).get("dex", {}).get("data", {}).get("id") else "unknown",
+                    "rank": idx,
+                    "indexed_at": datetime.utcnow(),
+                    "trader_count": 0  # Will be updated after trader discovery
+                }
+
+                trending_tokens.append(token_data)
+            except Exception as e:
+                print(f"  ⚠ Error parsing pool {idx}: {e}")
                 continue
-
-            token_data = {
-                "token_address": token_address,
-                "chain": "base",
-                "symbol": pool.get("attributes", {}).get("base_token_symbol", "UNKNOWN"),
-                "name": pool.get("attributes", {}).get("base_token_name", "Unknown"),
-                "price_usd": float(pool.get("attributes", {}).get("base_token_price_usd", 0) or 0),
-                "volume_24h_usd": float(pool.get("attributes", {}).get("volume_usd", {}).get("h24", 0) or 0),
-                "price_change_24h_pct": float(pool.get("attributes", {}).get("price_change_percentage", {}).get("h24", 0) or 0),
-                "pool_address": pool.get("id", "").split("_")[-1].lower(),
-                "dex": pool.get("relationships", {}).get("dex", {}).get("data", {}).get("id", "unknown"),
-                "rank": idx,
-                "indexed_at": datetime.utcnow(),
-                "trader_count": 0  # Will be updated after trader discovery
-            }
-
-            trending_tokens.append(token_data)
 
         print(f"✓ Fetched {len(trending_tokens)} trending tokens")
         return trending_tokens

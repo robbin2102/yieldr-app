@@ -100,7 +100,7 @@ class MoralisClient:
 
         API: https://docs.moralis.com/web3-data-api/evm/reference/get-top-profitable-wallet-per-token
         """
-        url = f"{self.base_url}/tokens/{token_address}/top-profitable-wallets"
+        url = f"{self.base_url}/erc20/{token_address}/top-profitable-wallets"
         params = {
             "chain": self.chain,
             "days": days,

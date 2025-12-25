@@ -33,18 +33,35 @@ class GeckoTerminalClient:
             List of pool objects with complete data structure
 
         API: https://api.geckoterminal.com/api/v2/networks/{network}/trending_pools
+        Note: GeckoTerminal returns ~20 pools per page
         """
-        url = f"{self.base_url}/networks/{chain}/trending_pools"
-        params = {"page": page}
+        all_pools = []
+        pages_needed = (limit + 19) // 20  # Ceiling division (20 pools per page)
 
         async with httpx.AsyncClient(timeout=self.timeout) as client:
-            response = await client.get(url, params=params)
-            response.raise_for_status()
-            data = response.json()
+            for page_num in range(1, min(pages_needed + 1, 6)):  # Max 5 pages (100 pools)
+                url = f"{self.base_url}/networks/{chain}/trending_pools"
+                params = {"page": page_num}
 
-            # Return full pool data (will be parsed in the job)
-            pools = data.get("data", [])[:limit]
-            return pools
+                try:
+                    response = await client.get(url, params=params)
+                    response.raise_for_status()
+                    data = response.json()
+
+                    pools = data.get("data", [])
+                    if not pools:
+                        break  # No more pools
+
+                    all_pools.extend(pools)
+
+                    if len(all_pools) >= limit:
+                        break
+
+                except Exception as e:
+                    print(f"Error fetching page {page_num}: {e}")
+                    break
+
+        return all_pools[:limit]
 
 
 # Singleton instance
