@@ -5,8 +5,9 @@ Wallet Tagging Job - Classify traders vs non-traders
 Tags wallets as:
 - cex: Known exchange wallet
 - treasury: Project treasury/team wallet
-- whale_lp: Whale LP provider
-- contract: Smart contract
+- whale_vc: VC/whale investor (>$10M, low diversity)
+- whale_lp: LP provider (>$1M, very low diversity)
+- contract: Smart contract (>$100M)
 - trader: Real retail trader ✅
 
 Run: After balance updates (every 6h, offset by 45min)
@@ -34,15 +35,16 @@ settings = get_settings()
 
 async def tag_wallets():
     """
-    Tag all traders as CEX/treasury/LP/contract/trader.
+    Tag all traders as CEX/treasury/whale_vc/whale_lp/contract/trader.
 
-    Tagging rules:
+    Improved tagging rules to filter out non-retail wallets:
     1. Known CEX wallet → tag: cex
-    2. Single position > $10M → tag: treasury
-    3. Single position > $1M → tag: treasury
-    4. ≤2 positions + >$50M → tag: whale_lp
-    5. >$500M total value → tag: contract (likely error)
-    6. Otherwise → tag: trader ✅
+    2. Single position > $500K → tag: treasury
+    3. >$10M with ≤5 positions → tag: whale_vc (VC/institutional investor)
+    4. >$5M with ≤3 positions → tag: whale_lp (LP provider)
+    5. >$1M with ≤2 positions → tag: whale_lp (LP provider)
+    6. >$100M total value → tag: contract (likely error or contract)
+    7. Otherwise → tag: trader ✅ (real retail trader)
     """
     print("=" * 80)
     print("WALLET TAGGING JOB")
@@ -69,7 +71,7 @@ async def tag_wallets():
         # Tag each trader
         print(f"\n[{datetime.utcnow().isoformat()}] Tagging wallets...\n")
 
-        stats = {"cex": 0, "treasury": 0, "whale_lp": 0, "contract": 0, "trader": 0}
+        stats = {"cex": 0, "treasury": 0, "whale_vc": 0, "whale_lp": 0, "contract": 0, "trader": 0}
 
         for trader in traders:
             wallet = trader["wallet_address"].lower()
@@ -80,33 +82,38 @@ async def tag_wallets():
             tag = None
             reason = None
 
-            # Rule 1: Known CEX wallet
+            # Rule 1: Known CEX wallet (case-insensitive)
             is_cex, exchange = is_cex_wallet(wallet)
             if is_cex:
                 tag = "cex"
                 reason = f"Known {exchange} wallet"
 
-            # Rule 2: Single position > $10M = likely treasury
-            elif total_positions == 1 and total_value > 10_000_000:
+            # Rule 2: Single position > $500K = Treasury/team wallet
+            elif total_positions == 1 and total_value > 500_000:
                 tag = "treasury"
-                reason = f"Single position worth ${total_value:,.0f}"
+                reason = f"Single position ${total_value:,.0f}"
 
-            # Rule 3: Single position > $1M with >90% of holdings = treasury
-            elif total_positions == 1 and total_value > 1_000_000:
-                tag = "treasury"
-                reason = f"Single token holder, ${total_value:,.0f}"
+            # Rule 3: >$10M with ≤5 positions = VC/whale investor
+            elif total_value > 10_000_000 and total_positions <= 5:
+                tag = "whale_vc"
+                reason = f"${total_value:,.0f} in {total_positions} positions"
 
-            # Rule 4: Very few positions + very high value = LP/whale
-            elif total_positions <= 2 and total_value > 50_000_000:
+            # Rule 4: >$5M with ≤3 positions = LP provider
+            elif total_value > 5_000_000 and total_positions <= 3:
                 tag = "whale_lp"
-                reason = f"{total_positions} positions, ${total_value:,.0f} value"
+                reason = f"${total_value:,.0f} in {total_positions} positions"
 
-            # Rule 5: Unrealistic value (>$500M) = likely error or contract
-            elif total_value > 500_000_000:
+            # Rule 5: >$1M with ≤2 positions = LP provider
+            elif total_value > 1_000_000 and total_positions <= 2:
+                tag = "whale_lp"
+                reason = f"${total_value:,.0f} in {total_positions} positions"
+
+            # Rule 6: >$100M = likely contract or error
+            elif total_value > 100_000_000:
                 tag = "contract"
                 reason = f"Unrealistic value ${total_value:,.0f}"
 
-            # Otherwise: Real trader
+            # Rule 7: Real trader (diverse portfolio OR reasonable size)
             else:
                 tag = "trader"
                 reason = None
@@ -133,6 +140,7 @@ async def tag_wallets():
         print("-" * 80)
         print(f"CEX wallets:     {stats.get('cex', 0):4d}")
         print(f"Treasury:        {stats.get('treasury', 0):4d}")
+        print(f"Whale/VC:        {stats.get('whale_vc', 0):4d}")
         print(f"Whale/LP:        {stats.get('whale_lp', 0):4d}")
         print(f"Contracts:       {stats.get('contract', 0):4d}")
         print(f"Real traders:    {stats.get('trader', 0):4d} ✅")

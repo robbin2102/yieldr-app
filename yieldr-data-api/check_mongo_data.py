@@ -49,7 +49,7 @@ async def check_data():
     if tagged_count > 0:
         print(f"\n--- WALLET TAGGING BREAKDOWN ---")
 
-        tags = ["trader", "treasury", "cex", "whale_lp", "contract"]
+        tags = ["trader", "treasury", "whale_vc", "whale_lp", "cex", "contract"]
         for tag in tags:
             count = await db.top_traders.count_documents({"tag": tag})
             if count > 0:
