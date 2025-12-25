@@ -65,44 +65,73 @@ async def update_trader_balances():
 
         updated = 0
         errors = 0
+        dns_errors = 0
 
         for idx, trader in enumerate(traders, start=1):
             wallet = trader["wallet_address"]
 
             try:
-                # Fetch token balances (Alchemy + DeFiLlama)
-                holdings = await alchemy_service.get_wallet_tokens_with_values(
-                    wallet=wallet,
-                    chain=Chain.BASE,
-                    min_value_usd=0.1,  # $0.10 minimum
-                    include_native=True,  # Include native ETH
-                    limit=50
-                )
+                # Fetch token balances with retry logic for DNS errors
+                max_retries = 3
+                retry_delay = 1.0  # Start with 1 second
 
-                # Calculate total portfolio value
-                total_value = sum(h["value_usd"] for h in holdings)
+                for attempt in range(max_retries):
+                    try:
+                        # Fetch token balances (Alchemy + DeFiLlama)
+                        holdings = await alchemy_service.get_wallet_tokens_with_values(
+                            wallet=wallet,
+                            chain=Chain.BASE,
+                            min_value_usd=0.1,  # $0.10 minimum
+                            include_native=True,  # Include native ETH
+                            limit=50
+                        )
 
-                # Update trader record in MongoDB
-                await db.top_traders.update_one(
-                    {"wallet_address": wallet},
-                    {
-                        "$set": {
-                            "holdings": holdings,
-                            "total_value_usd": round(total_value, 2),
-                            "total_positions": len(holdings),
-                            "holdings_updated_at": datetime.utcnow()
-                        }
-                    }
-                )
+                        # Calculate total portfolio value
+                        total_value = sum(h["value_usd"] for h in holdings)
 
-                updated += 1
+                        # Update trader record in MongoDB
+                        await db.top_traders.update_one(
+                            {"wallet_address": wallet},
+                            {
+                                "$set": {
+                                    "holdings": holdings,
+                                    "total_value_usd": round(total_value, 2),
+                                    "total_positions": len(holdings),
+                                    "holdings_updated_at": datetime.utcnow()
+                                }
+                            }
+                        )
+
+                        updated += 1
+                        break  # Success - exit retry loop
+
+                    except Exception as e:
+                        error_msg = str(e)
+
+                        # Check if it's a DNS error
+                        if "nodename nor servname" in error_msg or "Name or service not known" in error_msg or "[Errno 8]" in error_msg:
+                            dns_errors += 1
+
+                            if attempt < max_retries - 1:
+                                # Retry with exponential backoff
+                                if dns_errors <= 3:  # Only print first 3 DNS errors
+                                    print(f"  ⚠ DNS error for {wallet[:12]}..., retrying in {retry_delay}s (attempt {attempt + 1}/{max_retries})")
+                                await asyncio.sleep(retry_delay)
+                                retry_delay *= 2  # Exponential backoff
+                            else:
+                                # Max retries reached
+                                raise e
+                        else:
+                            # Not a DNS error, don't retry
+                            raise e
 
                 # Log progress every 100 wallets
                 if idx % 100 == 0 or idx == len(traders):
-                    print(f"[{idx:4d}/{len(traders)}] Updated {updated} traders ({errors} errors)")
+                    print(f"[{idx:4d}/{len(traders)}] Updated {updated} traders ({errors} errors, {dns_errors} DNS errors)")
 
-                # Rate limit: ~10 wallets/sec to avoid API limits
-                await asyncio.sleep(0.1)
+                # Rate limit: Slower to avoid DNS overload
+                # 0.5s = ~2 wallets/sec (much safer than 0.1s = 10/sec)
+                await asyncio.sleep(0.5)
 
             except Exception as e:
                 errors += 1
@@ -117,7 +146,11 @@ async def update_trader_balances():
         print("-" * 80)
         print(f"Total traders: {len(traders)}")
         print(f"Updated: {updated}")
-        print(f"Errors: {errors}")
+        print(f"Failed: {errors}")
+        print(f"DNS errors: {dns_errors} (retried with backoff)")
+        print("-" * 80)
+        success_rate = (updated / len(traders) * 100) if len(traders) > 0 else 0
+        print(f"Success rate: {success_rate:.1f}%")
         print("=" * 80)
 
         return updated
