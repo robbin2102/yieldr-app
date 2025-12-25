@@ -255,7 +255,8 @@ async def backfill_token_swaps(
     to_block: int,
     tracked_wallets: Set[str],
     batch_size: int,
-    rate_limiter: RateLimiter
+    rate_limiter: RateLimiter,
+    global_stats: Dict[str, Any]
 ) -> Dict[str, Any]:
     """
     Backfill swaps for a single token across a block range.
@@ -283,6 +284,9 @@ async def backfill_token_swaps(
         "errors": 0
     }
 
+    # Calculate total batches for this token
+    total_batches = (to_block - from_block + batch_size - 1) // batch_size
+
     # Process in batches
     current_block = from_block
     all_swaps = []
@@ -300,7 +304,16 @@ async def backfill_token_swaps(
                 rate_limiter=rate_limiter
             )
 
+            # Increment global API call counter
+            global_stats["api_calls"] += 1
+
             stats["transfers_scanned"] += len(logs)
+            stats["batches_processed"] += 1
+
+            # Progress logging every 100 batches
+            if stats["batches_processed"] % 100 == 0:
+                progress_pct = (stats["batches_processed"] / total_batches * 100)
+                print(f"    {symbol}: {stats['batches_processed']}/{total_batches} batches ({progress_pct:.1f}%), {stats['swaps_found']} swaps found")
 
             # Filter by tracked wallets IN-MEMORY (free!)
             for log in logs:
@@ -348,8 +361,6 @@ async def backfill_token_swaps(
 
                 all_swaps.append(swap)
                 stats["swaps_found"] += 1
-
-            stats["batches_processed"] += 1
 
         except Exception as e:
             print(f"  ⚠ Error processing blocks {current_block}-{batch_end}: {e}")
@@ -438,6 +449,23 @@ async def backfill_swaps(days: int = 30, batch_size: int = 2000, parallel: int =
             "total_errors": 0
         }
 
+        # Global stats for real-time progress tracking
+        global_stats = {
+            "api_calls": 0,
+            "tokens_completed": 0
+        }
+
+        async def progress_reporter():
+            """Background task to print progress every 30 seconds."""
+            while global_stats["tokens_completed"] < len(trending_tokens):
+                await asyncio.sleep(30)
+                calls = global_stats["api_calls"]
+                completed = global_stats["tokens_completed"]
+                print(f"\n📊 Progress: {completed}/{len(trending_tokens)} tokens completed, {calls:,} API calls made\n")
+
+        # Start progress reporter in background
+        reporter_task = asyncio.create_task(progress_reporter())
+
         async def process_token(idx: int, token: Dict[str, Any]):
             """Process a single token with semaphore."""
             async with semaphore:
@@ -451,7 +479,8 @@ async def backfill_swaps(days: int = 30, batch_size: int = 2000, parallel: int =
                     to_block=to_block,
                     tracked_wallets=tracked_wallets,
                     batch_size=batch_size,
-                    rate_limiter=rate_limiter
+                    rate_limiter=rate_limiter,
+                    global_stats=global_stats
                 )
 
                 # Update backfill status in trending_tokens
@@ -460,13 +489,22 @@ async def backfill_swaps(days: int = 30, batch_size: int = 2000, parallel: int =
                     {"$set": {"backfill_completed_at": datetime.utcnow()}}
                 )
 
-                print(f"  ✓ {symbol}: {stats['swaps_found']} swaps found, {stats.get('swaps_stored', 0)} stored ({stats['batches_processed']} batches)")
+                global_stats["tokens_completed"] += 1
+
+                print(f"  ✓ {symbol}: {stats['swaps_found']} swaps found, {stats.get('swaps_stored', 0)} stored ({stats['batches_processed']} batches, {global_stats['api_calls']:,} total API calls)")
 
                 return stats
 
         # Process all tokens concurrently
         tasks = [process_token(idx, token) for idx, token in enumerate(trending_tokens, start=1)]
         results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Cancel progress reporter
+        reporter_task.cancel()
+        try:
+            await reporter_task
+        except asyncio.CancelledError:
+            pass
 
         # Aggregate results
         for result in results:
@@ -500,6 +538,7 @@ async def backfill_swaps(days: int = 30, batch_size: int = 2000, parallel: int =
         print(f"Finished at: {datetime.utcnow().isoformat()}")
         print("-" * 80)
         print(f"Tokens processed:      {total_stats['tokens_processed']}")
+        print(f"API calls made:        {global_stats['api_calls']:,}")
         print(f"Transfers scanned:     {total_stats['total_transfers_scanned']:,}")
         print(f"Swaps found:           {total_stats['total_swaps_found']:,}")
         print(f"Swaps stored:          {total_stats['total_swaps_stored']:,}")
@@ -507,7 +546,8 @@ async def backfill_swaps(days: int = 30, batch_size: int = 2000, parallel: int =
         print(f"Errors:                {total_stats['total_errors']}")
         print(f"Traders with swaps:    {len(wallets_with_swaps)}")
         print("-" * 80)
-        print(f"API calls: ~{total_stats['tokens_processed'] * days} (query by TOKEN strategy)")
+        credits_used = global_stats['api_calls'] * 50
+        print(f"QuickNode credits:     ~{credits_used:,} ({credits_used / 80_000_000 * 100:.2f}% of 80M Starter tier)")
         print("=" * 80)
 
     except Exception as e:
