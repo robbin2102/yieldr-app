@@ -103,13 +103,10 @@ async def discover_top_traders(
     token_symbol: str
 ) -> Dict[str, Any]:
     """
-    Discover top traders for a specific token.
+    Discover top whale traders for a specific token.
 
-    Combines:
-    - Top 10 profitable traders (30-day PnL)
-    - Top 10 whale holders (by balance)
-
-    Deduplicates and returns unique traders.
+    Note: Moralis profitable-wallets endpoint doesn't work on Base (only Ethereum mainnet).
+    We only use whale holders discovery.
 
     Args:
         token_address: Token contract address
@@ -122,35 +119,7 @@ async def discover_top_traders(
     """
     traders_map = {}  # wallet_address -> trader data
 
-    # 1. Fetch top 10 profitable traders (30-day basis)
-    try:
-        profitable = await moralis_client.get_top_profitable_wallets(
-            token_address=token_address,
-            days=30,
-            limit=10
-        )
-
-        for trader in profitable:
-            wallet = trader["wallet_address"]
-            traders_map[wallet] = {
-                "wallet_address": wallet,
-                "token_address": token_address,
-                "symbol": token_symbol,
-                "is_profitable": True,
-                "is_whale": False,
-                "pnl_usd": trader["total_usd_profit_loss"],
-                "avg_buy_price_usd": trader["avg_buy_price_usd"],
-                "avg_sell_price_usd": trader["avg_sell_price_usd"],
-                "total_bought": trader["total_tokens_bought"],
-                "total_sold": trader["total_tokens_sold"],
-                "total_holdings": None,
-                "holding_percentage": None
-            }
-
-    except Exception as e:
-        print(f"  ⚠ Error fetching profitable traders for {token_symbol}: {e}")
-
-    # 2. Fetch top 10 whale holders
+    # Fetch top 10 whale holders (only method that works on Base)
     try:
         whales = await moralis_client.get_top_token_holders(
             token_address=token_address,
@@ -160,27 +129,20 @@ async def discover_top_traders(
         for whale in whales:
             wallet = whale["wallet_address"]
 
-            if wallet in traders_map:
-                # Already in profitable list - mark as whale too
-                traders_map[wallet]["is_whale"] = True
-                traders_map[wallet]["total_holdings"] = float(whale["balance_formatted"])
-                traders_map[wallet]["holding_percentage"] = whale["percentage_relative_to_total_supply"]
-            else:
-                # New whale (not in profitable list)
-                traders_map[wallet] = {
-                    "wallet_address": wallet,
-                    "token_address": token_address,
-                    "symbol": token_symbol,
-                    "is_profitable": False,
-                    "is_whale": True,
-                    "pnl_usd": None,
-                    "avg_buy_price_usd": None,
-                    "avg_sell_price_usd": None,
-                    "total_bought": None,
-                    "total_sold": None,
-                    "total_holdings": float(whale["balance_formatted"]),
-                    "holding_percentage": whale["percentage_relative_to_total_supply"]
-                }
+            traders_map[wallet] = {
+                "wallet_address": wallet,
+                "token_address": token_address,
+                "symbol": token_symbol,
+                "is_profitable": False,  # Can't determine on Base
+                "is_whale": True,
+                "pnl_usd": None,
+                "avg_buy_price_usd": None,
+                "avg_sell_price_usd": None,
+                "total_bought": None,
+                "total_sold": None,
+                "total_holdings": float(whale["balance_formatted"]),
+                "holding_percentage": whale["percentage_relative_to_total_supply"]
+            }
 
     except Exception as e:
         print(f"  ⚠ Error fetching whale holders for {token_symbol}: {e}")
@@ -227,7 +189,7 @@ async def main():
             traders = result["traders"]
             count = result["count"]
 
-            print(f"  ✓ Found {count} unique traders ({sum(1 for t in traders if t['is_profitable'])} profitable, {sum(1 for t in traders if t['is_whale'])} whales)")
+            print(f"  ✓ Found {count} whale traders")
 
             # Update token's trader_count
             token["trader_count"] = count
