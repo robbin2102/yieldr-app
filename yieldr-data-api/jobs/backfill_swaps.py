@@ -11,19 +11,23 @@ This script:
 4. Identifies buy/sell swaps and stores in MongoDB
 
 Cost Efficiency:
-- 100 tokens × 30 days × 50 credits = 150K credits (0.5% of 300M free tier) ✅
+- 89 tokens × 130 batches × 50 credits = ~578K credits (0.7% of 80M Starter tier) ✅
+- Parallel processing: 10 concurrent tokens with 20 req/s rate limiting
+- Estimated time: ~15-25 minutes (vs 60+ minutes sequential)
 
 Usage:
     python jobs/backfill_swaps.py
 
 Options:
     --days N        Number of days to backfill (default: 30)
-    --batch-size N  Blocks per batch (default: 4320 = ~2 hours on Base)
+    --batch-size N  Blocks per batch (default: 2000 = ~1 hour on Base)
+    --parallel N    Number of concurrent tokens to process (default: 10)
 """
 
 import asyncio
 import argparse
 import sys
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Dict, Any, Set
@@ -34,8 +38,32 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from motor.motor_asyncio import AsyncIOMotorClient
 from services.quicknode import quicknode_client
 from config import get_settings
+import httpx
 
 settings = get_settings()
+
+
+class RateLimiter:
+    """Token bucket rate limiter for QuickNode API."""
+    def __init__(self, rate: int = 20):  # 20 req/s (safe margin for Starter plan)
+        self.rate = rate
+        self.tokens = rate
+        self.last_update = time.time()
+        self.lock = asyncio.Lock()
+
+    async def acquire(self):
+        async with self.lock:
+            now = time.time()
+            elapsed = now - self.last_update
+            self.tokens = min(self.rate, self.tokens + elapsed * self.rate)
+            self.last_update = now
+
+            if self.tokens < 1:
+                wait_time = (1 - self.tokens) / self.rate
+                await asyncio.sleep(wait_time)
+                self.tokens = 0
+            else:
+                self.tokens -= 1
 
 # ERC-20 Transfer event signature
 TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
@@ -152,13 +180,82 @@ def detect_swap_type(
         return (None, None)
 
 
+async def fetch_logs_with_retry(
+    token_address: str,
+    from_block: int,
+    to_block: int,
+    batch_size: int,
+    rate_limiter: RateLimiter,
+    max_retries: int = 3
+) -> List[Dict[str, Any]]:
+    """
+    Fetch logs with automatic retry and smaller batches on 413 errors.
+
+    Args:
+        token_address: Token contract address
+        from_block: Start block
+        to_block: End block
+        batch_size: Initial batch size
+        rate_limiter: Rate limiter instance
+        max_retries: Max retry attempts
+
+    Returns:
+        List of log entries
+    """
+    current_batch_size = batch_size
+
+    for attempt in range(max_retries):
+        try:
+            await rate_limiter.acquire()
+
+            logs = await quicknode_client.get_transfer_logs(
+                token_address=token_address,
+                from_block=hex(from_block),
+                to_block=hex(to_block)
+            )
+            return logs
+
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 413:
+                # Response too large - reduce batch size and retry
+                current_batch_size = max(500, current_batch_size // 2)
+
+                if current_batch_size < batch_size:
+                    # Split range into smaller chunks
+                    mid_block = (from_block + to_block) // 2
+
+                    # Recursively fetch both halves
+                    logs1 = await fetch_logs_with_retry(
+                        token_address, from_block, mid_block,
+                        current_batch_size, rate_limiter, max_retries - 1
+                    )
+                    logs2 = await fetch_logs_with_retry(
+                        token_address, mid_block + 1, to_block,
+                        current_batch_size, rate_limiter, max_retries - 1
+                    )
+
+                    return logs1 + logs2
+                else:
+                    raise
+            else:
+                raise
+        except Exception as e:
+            if attempt < max_retries - 1:
+                await asyncio.sleep(1 * (attempt + 1))  # Exponential backoff
+            else:
+                raise
+
+    return []
+
+
 async def backfill_token_swaps(
     db,
     token: Dict[str, Any],
     from_block: int,
     to_block: int,
     tracked_wallets: Set[str],
-    batch_size: int = 4320  # ~2 hours on Base (reduced from 43,200 to avoid 413 errors)
+    batch_size: int,
+    rate_limiter: RateLimiter
 ) -> Dict[str, Any]:
     """
     Backfill swaps for a single token across a block range.
@@ -186,7 +283,7 @@ async def backfill_token_swaps(
         "errors": 0
     }
 
-    # Process in batches (1 day at a time)
+    # Process in batches
     current_block = from_block
     all_swaps = []
 
@@ -194,11 +291,13 @@ async def backfill_token_swaps(
         batch_end = min(current_block + batch_size, to_block)
 
         try:
-            # Get ALL transfers for this token in this batch (1 API call)
-            logs = await quicknode_client.get_transfer_logs(
+            # Get ALL transfers for this token in this batch with retry logic
+            logs = await fetch_logs_with_retry(
                 token_address=token_address,
-                from_block=hex(current_block),
-                to_block=hex(batch_end)
+                from_block=current_block,
+                to_block=batch_end,
+                batch_size=batch_size,
+                rate_limiter=rate_limiter
             )
 
             stats["transfers_scanned"] += len(logs)
@@ -252,9 +351,6 @@ async def backfill_token_swaps(
 
             stats["batches_processed"] += 1
 
-            # Small delay to avoid rate limits
-            await asyncio.sleep(0.1)
-
         except Exception as e:
             print(f"  ⚠ Error processing blocks {current_block}-{batch_end}: {e}")
             stats["errors"] += 1
@@ -279,19 +375,25 @@ async def backfill_token_swaps(
     return stats
 
 
-async def backfill_swaps(days: int = 30, batch_size: int = 4320):
+async def backfill_swaps(days: int = 30, batch_size: int = 2000, parallel: int = 10):
     """
     Main backfill logic - fetches historical swaps for all trending tokens.
 
     Args:
         days: Number of days to backfill
-        batch_size: Blocks per batch (default: 4320 = ~2 hours on Base)
+        batch_size: Blocks per batch (default: 2000 = ~1 hour on Base)
+        parallel: Number of concurrent tokens to process (default: 10)
     """
     print("=" * 80)
     print("HISTORICAL SWAP BACKFILLING")
     print(f"Started at: {datetime.utcnow().isoformat()}")
     print(f"Backfilling: {days} days of swap history")
+    print(f"Parallel processing: {parallel} concurrent tokens")
     print("=" * 80)
+
+    # Initialize rate limiter and semaphore
+    rate_limiter = RateLimiter(rate=20)  # 20 req/s for safety
+    semaphore = asyncio.Semaphore(parallel)
 
     # Connect to MongoDB
     client = AsyncIOMotorClient(settings.mongodb_uri)
@@ -327,7 +429,7 @@ async def backfill_swaps(days: int = 30, batch_size: int = 4320):
         print(f"  Total blocks: {blocks_to_backfill:,}")
         print(f"  Batch size: {batch_size:,} blocks (~{batch_size / 1800:.1f} hours)\n")
 
-        # Step 4: Backfill each token
+        # Step 4: Backfill each token (parallel processing)
         total_stats = {
             "tokens_processed": 0,
             "total_swaps_found": 0,
@@ -336,33 +438,48 @@ async def backfill_swaps(days: int = 30, batch_size: int = 4320):
             "total_errors": 0
         }
 
-        for idx, token in enumerate(trending_tokens, start=1):
-            symbol = token.get("symbol", "UNKNOWN")
-            print(f"\n[{idx:3d}/{len(trending_tokens)}] Processing {symbol}...")
+        async def process_token(idx: int, token: Dict[str, Any]):
+            """Process a single token with semaphore."""
+            async with semaphore:
+                symbol = token.get("symbol", "UNKNOWN")
+                print(f"\n[{idx:3d}/{len(trending_tokens)}] Processing {symbol}...")
 
-            stats = await backfill_token_swaps(
-                db=db,
-                token=token,
-                from_block=from_block,
-                to_block=to_block,
-                tracked_wallets=tracked_wallets,
-                batch_size=batch_size
-            )
+                stats = await backfill_token_swaps(
+                    db=db,
+                    token=token,
+                    from_block=from_block,
+                    to_block=to_block,
+                    tracked_wallets=tracked_wallets,
+                    batch_size=batch_size,
+                    rate_limiter=rate_limiter
+                )
 
-            # Update totals
-            total_stats["tokens_processed"] += 1
-            total_stats["total_swaps_found"] += stats["swaps_found"]
-            total_stats["total_swaps_stored"] += stats.get("swaps_stored", 0)
-            total_stats["total_transfers_scanned"] += stats["transfers_scanned"]
-            total_stats["total_errors"] += stats["errors"]
+                # Update backfill status in trending_tokens
+                await db.trending_tokens.update_one(
+                    {"token_address": token["token_address"]},
+                    {"$set": {"backfill_completed_at": datetime.utcnow()}}
+                )
 
-            print(f"  ✓ {symbol}: {stats['swaps_found']} swaps found, {stats.get('swaps_stored', 0)} stored ({stats['batches_processed']} batches)")
+                print(f"  ✓ {symbol}: {stats['swaps_found']} swaps found, {stats.get('swaps_stored', 0)} stored ({stats['batches_processed']} batches)")
 
-            # Update backfill status in trending_tokens
-            await db.trending_tokens.update_one(
-                {"token_address": token["token_address"]},
-                {"$set": {"backfill_completed_at": datetime.utcnow()}}
-            )
+                return stats
+
+        # Process all tokens concurrently
+        tasks = [process_token(idx, token) for idx, token in enumerate(trending_tokens, start=1)]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Aggregate results
+        for result in results:
+            if isinstance(result, dict):
+                total_stats["tokens_processed"] += 1
+                total_stats["total_swaps_found"] += result["swaps_found"]
+                total_stats["total_swaps_stored"] += result.get("swaps_stored", 0)
+                total_stats["total_transfers_scanned"] += result["transfers_scanned"]
+                total_stats["total_errors"] += result["errors"]
+            else:
+                # Exception occurred
+                total_stats["total_errors"] += 1
+                print(f"  ⚠ Token processing failed: {result}")
 
         # Step 5: Update backfill status for traders
         print(f"\n[{datetime.utcnow().isoformat()}] Updating trader backfill status...")
@@ -403,10 +520,11 @@ async def backfill_swaps(days: int = 30, batch_size: int = 4320):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Backfill historical swap data")
+    parser = argparse.ArgumentParser(description="Backfill historical swap data with parallel processing")
     parser.add_argument("--days", type=int, default=30, help="Number of days to backfill (default: 30)")
-    parser.add_argument("--batch-size", type=int, default=4320, help="Blocks per batch (default: 4320 = ~2 hours)")
+    parser.add_argument("--batch-size", type=int, default=2000, help="Blocks per batch (default: 2000 = ~1 hour)")
+    parser.add_argument("--parallel", type=int, default=10, help="Number of concurrent tokens (default: 10)")
 
     args = parser.parse_args()
 
-    asyncio.run(backfill_swaps(days=args.days, batch_size=args.batch_size))
+    asyncio.run(backfill_swaps(days=args.days, batch_size=args.batch_size, parallel=args.parallel))
