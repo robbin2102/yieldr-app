@@ -18,7 +18,7 @@ Usage:
 
 Options:
     --days N        Number of days to backfill (default: 30)
-    --batch-size N  Blocks per batch (default: 43200 = ~1 day on Base)
+    --batch-size N  Blocks per batch (default: 4320 = ~2 hours on Base)
 """
 
 import asyncio
@@ -158,7 +158,7 @@ async def backfill_token_swaps(
     from_block: int,
     to_block: int,
     tracked_wallets: Set[str],
-    batch_size: int = 43200  # ~1 day on Base (2s block time)
+    batch_size: int = 4320  # ~2 hours on Base (reduced from 43,200 to avoid 413 errors)
 ) -> Dict[str, Any]:
     """
     Backfill swaps for a single token across a block range.
@@ -279,13 +279,13 @@ async def backfill_token_swaps(
     return stats
 
 
-async def backfill_swaps(days: int = 30, batch_size: int = 43200):
+async def backfill_swaps(days: int = 30, batch_size: int = 4320):
     """
     Main backfill logic - fetches historical swaps for all trending tokens.
 
     Args:
         days: Number of days to backfill
-        batch_size: Blocks per batch (default: 43200 = ~1 day on Base)
+        batch_size: Blocks per batch (default: 4320 = ~2 hours on Base)
     """
     print("=" * 80)
     print("HISTORICAL SWAP BACKFILLING")
@@ -325,7 +325,7 @@ async def backfill_swaps(days: int = 30, batch_size: int = 43200):
         print(f"  From: {from_block:,} (~ {days} days ago)")
         print(f"  To:   {to_block:,} (current)")
         print(f"  Total blocks: {blocks_to_backfill:,}")
-        print(f"  Batch size: {batch_size:,} blocks (~{batch_size // 43200} day)\n")
+        print(f"  Batch size: {batch_size:,} blocks (~{batch_size / 1800:.1f} hours)\n")
 
         # Step 4: Backfill each token
         total_stats = {
@@ -405,7 +405,7 @@ async def backfill_swaps(days: int = 30, batch_size: int = 43200):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Backfill historical swap data")
     parser.add_argument("--days", type=int, default=30, help="Number of days to backfill (default: 30)")
-    parser.add_argument("--batch-size", type=int, default=43200, help="Blocks per batch (default: 43200 = 1 day)")
+    parser.add_argument("--batch-size", type=int, default=4320, help="Blocks per batch (default: 4320 = ~2 hours)")
 
     args = parser.parse_args()
 
