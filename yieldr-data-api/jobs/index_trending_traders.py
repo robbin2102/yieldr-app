@@ -103,7 +103,7 @@ async def discover_top_traders(
     token_symbol: str
 ) -> Dict[str, Any]:
     """
-    Discover top whale traders for a specific token.
+    Discover top 20 whale traders for a specific token.
 
     Note: Moralis profitable-wallets endpoint doesn't work on Base (only Ethereum mainnet).
     We only use whale holders discovery.
@@ -119,11 +119,11 @@ async def discover_top_traders(
     """
     traders_map = {}  # wallet_address -> trader data
 
-    # Fetch top 10 whale holders (only method that works on Base)
+    # Fetch top 20 whale holders (increased from 10 to get more traders)
     try:
         whales = await moralis_client.get_top_token_holders(
             token_address=token_address,
-            limit=10
+            limit=20  # Changed from 10 to 20
         )
 
         for whale in whales:

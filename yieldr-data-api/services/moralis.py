@@ -80,14 +80,14 @@ class MoralisClient:
     async def get_top_token_holders(
         self,
         token_address: str,
-        limit: int = 10
+        limit: int = 20
     ) -> List[Dict[str, Any]]:
         """
         Get top token holders (whales) for a specific token.
 
         Args:
             token_address: The token contract address
-            limit: Number of holders to return (max 100)
+            limit: Number of holders to return (default: 20, max: 100)
 
         Returns:
             List of holder objects with:
