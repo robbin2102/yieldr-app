@@ -58,7 +58,60 @@ class QuickNodeClient:
 
             return data.get("result")
 
-    # Part 2: Event indexing methods will be added here
-    # async def eth_getLogs(...) -> List[Dict]:
-    #     """Get event logs for token swaps."""
-    #     pass
+    async def get_block_number(self) -> int:
+        """
+        Get the latest block number on Base.
+
+        Returns:
+            Current block number (integer)
+
+        Cost: ~10 credits
+        """
+        result = await self._rpc_call("eth_blockNumber", [])
+        return int(result, 16)
+
+    async def get_transfer_logs(
+        self,
+        token_address: str,
+        from_block: str,
+        to_block: str = "latest"
+    ) -> List[Dict[str, Any]]:
+        """
+        Get ERC-20 Transfer events for a specific token.
+
+        This is used to detect swaps by monitoring token transfers.
+        Query by TOKEN (not wallet) to minimize API credits.
+
+        Args:
+            token_address: Token contract address (checksummed or lowercase)
+            from_block: Starting block (hex string like "0x1a2b3c")
+            to_block: Ending block (hex string or "latest")
+
+        Returns:
+            List of log objects:
+              - address: Token address
+              - topics: [Transfer signature, from, to]
+              - data: Amount (hex)
+              - blockNumber: Block number (hex)
+              - transactionHash: Tx hash
+              - logIndex: Log index (hex)
+
+        Cost: ~50 credits per call
+
+        API: eth_getLogs
+        """
+        # ERC-20 Transfer event signature
+        TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+
+        logs = await self._rpc_call("eth_getLogs", [{
+            "fromBlock": from_block,
+            "toBlock": to_block,
+            "address": token_address,
+            "topics": [TRANSFER_TOPIC]
+        }])
+
+        return logs or []
+
+
+# Singleton instance
+quicknode_client = QuickNodeClient()

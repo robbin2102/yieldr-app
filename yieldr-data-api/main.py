@@ -8,6 +8,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from db.mongodb import connect_db, close_db
 from api.spot.router import router as spot_router
+from api.trending.tokens import router as trending_router
+from api.trader.top import router as trader_router
 from config import get_settings
 
 settings = get_settings()
@@ -65,7 +67,9 @@ async def health_check():
 
 
 # Register API routers
-app.include_router(spot_router, prefix="/api/v1")
+app.include_router(spot_router, prefix="/api/v1", tags=["Spot Wallet Scanning"])
+app.include_router(trending_router, prefix="/api/v1/trending", tags=["Trending Tokens"])
+app.include_router(trader_router, prefix="/api/v1/trader", tags=["Top Traders"])
 
 
 if __name__ == "__main__":

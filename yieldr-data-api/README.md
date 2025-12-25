@@ -197,19 +197,29 @@ Open `http://localhost:8000/docs` in your browser for Swagger UI documentation.
 yieldr-data-api/
 ├── api/
 │   ├── dependencies.py       # API key authentication
-│   └── spot/
-│       ├── router.py          # Spot endpoints router
-│       └── scan.py            # Wallet scanning endpoint
-├── core/
-│   └── utils.py               # Utility functions
+│   ├── spot/
+│   │   ├── router.py          # Spot endpoints router
+│   │   └── scan.py            # Wallet scanning endpoint
+│   ├── trending/
+│   │   └── tokens.py          # Trending tokens endpoints
+│   └── trader/
+│       └── top.py             # Top traders endpoints
 ├── db/
 │   └── mongodb.py             # MongoDB connection management
+├── jobs/                      # Background jobs (cron scripts)
+│   ├── index_trending_traders.py  # 12h: Index trending tokens + traders
+│   ├── monitor_swaps.py           # 15min: Monitor trader swaps
+│   └── compute_performance.py     # 1h: Compute trader metrics
+├── models/
+│   └── schemas.py             # MongoDB collection schemas
 ├── services/
 │   ├── alchemy.py             # Alchemy API client (token balances)
 │   ├── defillama.py           # DeFiLlama API client (token prices)
-│   ├── geckoterminal.py       # GeckoTerminal (Part 2: trending pools)
-│   ├── quicknode.py           # QuickNode (Part 2: eth_getLogs)
-│   └── moralis.py             # Moralis (Part 2: top traders)
+│   ├── geckoterminal.py       # GeckoTerminal (trending pools)
+│   ├── quicknode.py           # QuickNode (eth_getLogs for swaps)
+│   └── moralis.py             # Moralis (top traders discovery)
+├── utils/
+│   └── performance.py         # Performance metrics computation
 ├── config.py                  # Configuration management
 ├── main.py                    # FastAPI application
 ├── requirements.txt           # Python dependencies
@@ -230,14 +240,335 @@ yieldr-data-api/
 
 ---
 
-## What's Next?
+## Part 2: Trader Discovery & Indexing ✅
 
-**Part 2** will implement:
-- Indexing script for trending tokens (GeckoTerminal)
-- Top profitable traders discovery (Moralis)
-- Token transfer event indexing (QuickNode `eth_getLogs`)
-- `/api/v1/trader/top` endpoint
-- MongoDB storage for indexed data
+Part 2 implements automated trader discovery, swap monitoring, and performance computation using **GeckoTerminal** (trending tokens), **Moralis** (top traders), and **QuickNode** (swap events).
+
+### Features Implemented
+- ✅ **12h cron job** - Index top 100 trending tokens + discover top traders
+- ✅ **15min cron job** - Monitor swaps for ~2K tracked traders (query by TOKEN strategy)
+- ✅ **Performance computation** - PnL, ROI, win rate, risk metrics from swap history
+- ✅ **API endpoints** - Trending tokens, top traders, trader profiles, swap history
+- ✅ **MongoDB collections** - `trending_tokens`, `top_traders`, `trader_swaps`
+
+### Trader Discovery Strategy
+
+**Every 12 hours:**
+1. Fetch top 100 trending tokens from GeckoTerminal (Base only)
+2. For each trending token:
+   - Fetch top 10 profitable traders (30-day PnL from Moralis)
+   - Fetch top 10 whale holders (from Moralis)
+   - Merge and deduplicate → ~20 unique traders per token
+3. Total tracked traders: **~2,000 unique wallets**
+
+### Swap Monitoring Strategy
+
+**Every 15 minutes** (optimized for API efficiency):
+- ✅ **Query by TOKEN** (100 calls), not by wallet (2K calls)
+- Fetch Transfer events for each trending token via `eth_getLogs`
+- Filter transfers by tracked wallets **in-memory** (free!)
+- Store buy/sell swaps in MongoDB
+
+**Cost efficiency:**
+- 100 tokens × 96 polls/day × 50 credits = **480K credits/day**
+- **14.4M credits/month** (18% of 80M QuickNode free tier) ✅
+
+---
+
+## New Endpoints (Part 2)
+
+### `GET /api/v1/trending/tokens`
+Get current trending tokens on Base.
+
+**Headers:** `X-API-Key`
+
+**Query Parameters:**
+- `limit` (optional): Max tokens (default: 100, max: 100)
+- `min_volume` (optional): Min 24h volume in USD (default: 0)
+
+**Example:**
+```bash
+curl -H "X-API-Key: your-key" \
+  "http://localhost:8000/api/v1/trending/tokens?limit=50"
+```
+
+**Response:**
+```json
+{
+  "chain": "base",
+  "totalTokens": 50,
+  "tokens": [
+    {
+      "tokenAddress": "0x...",
+      "symbol": "TOKEN",
+      "name": "Token Name",
+      "priceUSD": 1.23,
+      "volume24hUSD": 1000000,
+      "priceChange24hPct": 15.5,
+      "poolAddress": "0x...",
+      "dex": "aerodrome",
+      "rank": 1,
+      "traderCount": 18,
+      "indexedAt": "2025-12-24T10:00:00Z"
+    }
+  ]
+}
+```
+
+---
+
+### `GET /api/v1/trending/tokens/{token_address}`
+Get details for a specific trending token.
+
+**Headers:** `X-API-Key`
+
+**Example:**
+```bash
+curl -H "X-API-Key: your-key" \
+  "http://localhost:8000/api/v1/trending/tokens/0x..."
+```
+
+---
+
+### `GET /api/v1/trader/top`
+Get top traders leaderboard.
+
+**Headers:** `X-API-Key`
+
+**Query Parameters:**
+- `token_address` (optional): Filter by specific token
+- `limit` (optional): Max traders (default: 20, max: 100)
+- `min_pnl` (optional): Min 30d PnL in USD (default: 0)
+
+**Example:**
+```bash
+curl -H "X-API-Key: your-key" \
+  "http://localhost:8000/api/v1/trader/top?limit=10"
+```
+
+**Response:**
+```json
+{
+  "totalTraders": 10,
+  "token": null,
+  "traders": [
+    {
+      "walletAddress": "0x...",
+      "chain": "base",
+      "tokens": [
+        {
+          "tokenAddress": "0x...",
+          "symbol": "TOKEN",
+          "isProfitable": true,
+          "isWhale": true,
+          "pnlUSD": 50000,
+          "avgBuyPriceUSD": 0.50,
+          "avgSellPriceUSD": 0.75
+        }
+      ],
+      "performance": {
+        "totalAUMUSD": 2400000,
+        "totalPositions": 47,
+        "roi30dPct": 5.92,
+        "pnl30dUSD": 142190,
+        "winRatePct": 68,
+        "totalTrades": 247,
+        "avgWinUSD": 2800,
+        "avgLossUSD": 1100,
+        "sharpeRatio": 1.85,
+        "maxDrawdownPct": 8.5
+      }
+    }
+  ]
+}
+```
+
+---
+
+### `GET /api/v1/trader/{wallet}/profile`
+Get detailed profile for a specific trader.
+
+**Headers:** `X-API-Key`
+
+**Example:**
+```bash
+curl -H "X-API-Key: your-key" \
+  "http://localhost:8000/api/v1/trader/0x.../profile"
+```
+
+---
+
+### `GET /api/v1/trader/{wallet}/swaps`
+Get recent swap history for a trader.
+
+**Headers:** `X-API-Key`
+
+**Query Parameters:**
+- `days` (optional): Days to look back (default: 7, max: 30)
+- `limit` (optional): Max swaps (default: 50, max: 100)
+
+**Example:**
+```bash
+curl -H "X-API-Key: your-key" \
+  "http://localhost:8000/api/v1/trader/0x.../swaps?days=30"
+```
+
+**Response:**
+```json
+{
+  "wallet": "0x...",
+  "totalSwaps": 50,
+  "days": 30,
+  "swaps": [
+    {
+      "tokenAddress": "0x...",
+      "tokenSymbol": "TOKEN",
+      "type": "buy",
+      "amount": 1000.0,
+      "valueUSD": 5000.0,
+      "dex": "uniswap_v3",
+      "txHash": "0x...",
+      "blockNumber": 12345,
+      "timestamp": "2025-12-24T10:30:00Z"
+    }
+  ]
+}
+```
+
+---
+
+## Background Jobs (Part 2)
+
+### 1. Trending Tokens + Traders Discovery (12h interval)
+```bash
+python jobs/index_trending_traders.py
+```
+
+**What it does:**
+- Fetches top 100 trending tokens from GeckoTerminal
+- For each token, finds top 10 profitable + top 10 whale traders
+- Stores in MongoDB (`trending_tokens`, `top_traders`)
+
+**Cron schedule:**
+```cron
+0 */12 * * * cd /path/to/yieldr-data-api && python jobs/index_trending_traders.py >> logs/trending.log 2>&1
+```
+
+---
+
+### 2. Swap Monitoring (15min interval)
+```bash
+python jobs/monitor_swaps.py
+```
+
+**What it does:**
+- Loads ~2K tracked trader wallets from MongoDB
+- Queries Transfer events for each trending token (last 15 min)
+- Filters by tracked wallets in-memory
+- Stores buy/sell swaps in MongoDB (`trader_swaps`)
+- Cleans up swaps older than 30 days
+
+**Cron schedule:**
+```cron
+*/15 * * * * cd /path/to/yieldr-data-api && python jobs/monitor_swaps.py >> logs/swaps.log 2>&1
+```
+
+---
+
+### 3. Performance Computation (1h interval)
+```bash
+python jobs/compute_performance.py
+```
+
+**What it does:**
+- Loads all active traders from MongoDB
+- Fetches swap history (last 30 days) for each trader
+- Computes performance metrics (PnL, ROI, win rate, risk metrics)
+- Updates `top_traders` collection with computed metrics
+
+**Cron schedule:**
+```cron
+0 * * * * cd /path/to/yieldr-data-api && python jobs/compute_performance.py >> logs/performance.log 2>&1
+```
+
+---
+
+## MongoDB Collections (Part 2)
+
+### `trending_tokens`
+Stores top 100 trending tokens from GeckoTerminal.
+
+**Fields:**
+- `token_address`, `chain`, `symbol`, `name`
+- `price_usd`, `volume_24h_usd`, `price_change_24h_pct`
+- `pool_address`, `dex`, `rank`
+- `trader_count` (number of tracked traders for this token)
+- `indexed_at`
+
+---
+
+### `top_traders`
+Stores tracked traders with their tokens and performance metrics.
+
+**Fields:**
+- `wallet_address`, `chain`, `status`
+- `tokens[]` - Array of token metadata (address, symbol, pnl, holdings, etc.)
+- `performance{}` - Computed metrics (PnL, ROI, win rate, Sharpe ratio, etc.)
+- `asset_performance[]` - Performance breakdown by asset
+- `indexed_at`, `last_swap_indexed`, `backfill_status`
+
+---
+
+### `trader_swaps`
+Stores swap transactions for tracked traders (30-day rolling window).
+
+**Fields:**
+- `wallet_address`, `chain`
+- `token_address`, `token_symbol`, `type` (buy/sell)
+- `amount`, `value_usd`
+- `from_address`, `to_address`, `dex`
+- `tx_hash`, `block_number`, `log_index`
+- `timestamp`, `indexed_at`, `processed`
+
+---
+
+## Performance Metrics Explained
+
+The system computes the following metrics for each trader:
+
+### Total AUM & Positions
+- `totalAUMUSD`: Total value of all current holdings
+- `totalPositions`: Number of unique token positions
+
+### ROI & PnL
+- `roi1dPct`, `roi7dPct`, `roi30dPct`: Return on investment percentages
+- `pnl1dUSD`, `pnl7dUSD`, `pnl30dUSD`: Profit/loss in USD
+
+### Win Rate
+- `winRatePct`: Percentage of profitable trades
+- `totalTrades`: Total completed trades
+- `totalWins`, `totalLosses`: Win/loss counts
+
+### Average Performance
+- `avgWinUSD`, `avgLossUSD`: Average profit/loss per trade
+- `bestTradeUSD`, `worstTradeUSD`: Best and worst trades
+
+### Risk Metrics
+- `sharpeRatio`: Risk-adjusted returns (higher is better)
+- `maxDrawdownPct`: Maximum peak-to-trough decline
+
+---
+
+## API Costs (Part 2)
+
+| Service | Purpose | Cost per Call | Monthly Free Tier | Part 2 Usage |
+|---------|---------|---------------|-------------------|--------------|
+| **GeckoTerminal** | Trending tokens | Free | 30/min | ✅ ~60 calls/month |
+| **Moralis** | Top traders | 2 CU | 40M CU/month | ✅ ~12K CU/month |
+| **QuickNode** | Swap events | ~50 credits | 80M credits/month | ✅ ~14.4M credits/month |
+| **DeFiLlama** | Token prices | Free | 500/min | ✅ Unlimited |
+
+**Total monthly cost for Part 2: $0** (within free tiers) 🎉
 
 ---
 
