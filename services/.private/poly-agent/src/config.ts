@@ -29,7 +29,7 @@ if (existsSync(envPolyagentPath)) {
 }
 
 export const config = {
-  // Target trader wallet
+  // Target trader wallet (comma-separated for multiple)
   targetWallet: process.env.TARGET_WALLET?.trim()!,
 
   // Bot wallet (our wallet)
@@ -49,8 +49,23 @@ export const config = {
   maxPositionUsdc: parseFloat(process.env.MAX_POSITION_USDC || '2000'),
   minTradeSize: parseFloat(process.env.MIN_TRADE_SIZE || '0'),  // DEPRECATED: Not used anymore
 
+  // Allocation (pro-rata based on max allocation per trader)
+  maxAllocationUsdc: parseFloat(process.env.MAX_ALLOCATION_USDC || '100'),
+
+  // Drift thresholds (percentage)
+  driftThresholdNew: parseFloat(process.env.DRIFT_THRESHOLD_NEW || '10'),         // New positions: copy if drift < 10%
+  driftThresholdExisting: parseFloat(process.env.DRIFT_THRESHOLD_EXISTING || '20'), // Existing: sync if drift < 20%
+  driftThresholdUnderwater: parseFloat(process.env.DRIFT_THRESHOLD_UNDERWATER || '-10'), // Skip if underwater > 10%
+
+  // Order execution
+  orderRetryDelayMs: parseInt(process.env.ORDER_RETRY_DELAY_MS || '500'),
+  maxOrderRetries: parseInt(process.env.MAX_ORDER_RETRIES || '5'),
+
+  // Initial sync
+  enableInitialSync: process.env.ENABLE_INITIAL_SYNC !== 'false',
+
   // Polling intervals
-  detectorIntervalMs: parseInt(process.env.DETECTOR_INTERVAL_MS || '3000'),
+  detectorIntervalMs: parseInt(process.env.DETECTOR_INTERVAL_MS || '30000'),  // 30s default
   reconcilerIntervalMs: parseInt(process.env.RECONCILER_INTERVAL_MS || '60000'),
 
   // Polymarket endpoints

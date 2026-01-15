@@ -8,26 +8,36 @@ import { Detector } from './modules/detector';
 import { Executor } from './modules/executor';
 import { Confirmer } from './modules/confirmer';
 import { Reconciler } from './modules/reconciler';
+import { InitialCopier } from './modules/initialCopier';
+import { Metrics } from './modules/metrics';
 import { PolyAgentSlippage } from './db/models/PolyAgentSlippage';
 
 /**
- * Poly-Agent v1 - Polymarket Copy Trading Agent
+ * Poly-Agent v2 - Polymarket Copy Trading Agent
  *
- * Simplified architecture with only orderbook cache:
- * - Detector: Poll /activity every 3s
- * - Executor: Risk checks + FOK orders
+ * Features:
+ * - InitialCopier: Sync existing positions on startup with drift check
+ * - Detector: Poll /activity every 30s for new trades
+ * - Executor: FAK orders with retry for 100% fills
  * - Confirmer: WSS User Channel for fills
  * - Reconciler: 60s position comparison
+ * - Metrics: Dashboard with PnL and drift tracking
+ *
+ * Drift thresholds:
+ * - New positions: copy if drift < 10%
+ * - Existing positions: sync if drift < 20%
+ * - Underwater positions: skip if drift < -10%
  */
 async function main() {
   console.log('═══════════════════════════════════════════════════════════════');
-  console.log('                    POLY-AGENT v1                               ');
+  console.log('                    POLY-AGENT v2                               ');
   console.log('═══════════════════════════════════════════════════════════════');
-  console.log(`Target:     ${config.targetWallet}`);
-  console.log(`Bot:        ${config.botWalletAddress}`);
-  console.log(`Copy Ratio: ${(config.copyRatio * 100).toFixed(1)}%`);
-  console.log(`Max Size:   $${config.maxPositionUsdc}`);
-  console.log(`Min Size:   ${config.minTradeSize} shares`);
+  console.log(`Target:      ${config.targetWallet}`);
+  console.log(`Bot:         ${config.botWalletAddress}`);
+  console.log(`Allocation:  $${config.maxAllocationUsdc}`);
+  console.log(`Drift (new): ${config.driftThresholdNew}%`);
+  console.log(`Drift (sync): ${config.driftThresholdExisting}%`);
+  console.log(`Poll:        ${config.detectorIntervalMs / 1000}s`);
   console.log('═══════════════════════════════════════════════════════════════\n');
 
   // ═══════════════════════════════════════════════════════════════
@@ -76,37 +86,30 @@ async function main() {
   reconciler.start();
 
   // ═══════════════════════════════════════════════════════════════
-  // 8. Stats logger (every 30 seconds)
+  // 8. Initialize Metrics
   // ═══════════════════════════════════════════════════════════════
-  setInterval(async () => {
-    try {
-      const slippage = await PolyAgentSlippage.findById('current').lean();
-      if (slippage) {
-        const buffer = slippage.bufferUsdc || 0;
-        const trades = slippage.totalTrades || 0;
-        const positive = slippage.totalPositiveSlippage || 0;
-        const negative = slippage.totalNegativeSlippage || 0;
-
-        console.log('\n[Stats] ────────────────────────────────────────');
-        console.log(`  Trades: ${trades} (${positive} positive, ${negative} negative)`);
-        console.log(`  Buffer: $${buffer.toFixed(2)}`);
-        if (slippage.totalExpectedCost > 0) {
-          const bufferPercent = (buffer / slippage.totalExpectedCost) * 100;
-          console.log(`  Buffer %: ${bufferPercent.toFixed(2)}%`);
-        }
-        console.log('────────────────────────────────────────────────\n');
-      } else {
-        console.log('\n[Stats] No trades yet\n');
-      }
-    } catch (error) {
-      console.error('[Stats] Error fetching stats:', error);
-    }
-  }, 30000);
-
-  console.log('\n✅ Poly-Agent is running. Listening for trades...\n');
+  console.log('[Main] Initializing Metrics...');
+  const metrics = new Metrics();
+  await metrics.initialize();
 
   // ═══════════════════════════════════════════════════════════════
-  // 9. Graceful shutdown
+  // 9. Run Initial Position Sync (if enabled)
+  // ═══════════════════════════════════════════════════════════════
+  if (config.enableInitialSync) {
+    console.log('[Main] Running initial position sync...');
+    const initialCopier = new InitialCopier(clobClient);
+    await initialCopier.syncPositions();
+  } else {
+    console.log('[Main] Initial sync disabled, skipping...');
+  }
+
+  console.log('\n✅ Poly-Agent v2 is running. Listening for trades...\n');
+
+  // Log initial metrics
+  await metrics.logSummary();
+
+  // ═══════════════════════════════════════════════════════════════
+  // 10. Graceful shutdown
   // ═══════════════════════════════════════════════════════════════
   process.on('SIGINT', async () => {
     console.log('\n\n[Main] Shutting down...');
@@ -114,6 +117,7 @@ async function main() {
     detector.stop();
     reconciler.stop();
     confirmer.disconnect();
+    await metrics.shutdown();
 
     await mongoose.connection.close();
 
@@ -127,6 +131,7 @@ async function main() {
     detector.stop();
     reconciler.stop();
     confirmer.disconnect();
+    await metrics.shutdown();
 
     await mongoose.connection.close();
 

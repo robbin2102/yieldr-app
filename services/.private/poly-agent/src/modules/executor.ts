@@ -6,7 +6,7 @@ import { PolyAgentTrade } from '../db/models/PolyAgentTrade';
 import { DetectedTrade } from '../types';
 
 /**
- * Executor - Executes copy trades with FOK orders
+ * Executor - Executes copy trades with FAK orders + retry
  *
  * CRITICAL FINANCIAL SYSTEM BEHAVIOR:
  * - NEVER skip trades - every trade the target wallet makes is copied
@@ -16,16 +16,16 @@ import { DetectedTrade } from '../types';
  * Flow:
  * 1. Receive 'trade:detected' event from Detector
  * 2. Try to insert to MongoDB (unique index handles dedup)
- * 3. Calculate copy size (trader size × copyRatio, fractional shares allowed)
- * 4. Get best price from orderbook (fetch if not cached)
- * 5. Cap at max position size if needed
- * 6. Build and submit FOK order to CLOB
+ * 3. Calculate copy size based on pro-rata allocation
+ * 4. Check drift threshold before executing
+ * 5. Get best price from orderbook (fetch if not cached)
+ * 6. Build and submit FAK order with retry for 100% fills
  * 7. Emit 'trade:submitted' for Confirmer to track fills
  *
- * Position Sizing:
- * - Copy ALL trades regardless of size (even 0.5 shares → 0.005 shares at 1%)
- * - Trader may place 100 small orders that add up - we copy all of them
- * - Only limit is MAX_POSITION_USDC per trade
+ * Order Execution:
+ * - Uses FAK (Fill-And-Kill) with retry for partial fills
+ * - Retries up to MAX_ORDER_RETRIES times with ORDER_RETRY_DELAY_MS between
+ * - Tracks avg fill price across all attempts
  */
 export class Executor {
   private clobClient: ClobClient;
@@ -154,7 +154,7 @@ export class Executor {
     }
 
     // ═══════════════════════════════════════════════════════════════
-    // EXECUTE FOK ORDER
+    // EXECUTE FAK ORDER WITH RETRY
     // ═══════════════════════════════════════════════════════════════
 
     tradeRecord.status = 'EXECUTING';
@@ -168,64 +168,59 @@ export class Executor {
     eventBus.emit('trade:executing', { tradeId: tradeRecord._id, trade, copySize, bestPrice });
 
     try {
-      console.log(`[Executor] Placing FOK: ${trade.side} ${copySize} @ $${bestPrice.toFixed(4)}`);
+      console.log(`[Executor] Placing FAK with retry: ${trade.side} ${copySize} @ $${bestPrice.toFixed(4)}`);
 
-      // Create market order based on side
-      let order;
-
-      if (trade.side === 'BUY') {
-        // BUY: use createMarketBuyOrder with amount in USDC
-        order = await this.clobClient.createMarketBuyOrder({
-          tokenID: trade.tokenId,
-          amount: orderCost,  // USDC to spend
-          price: bestPrice,   // Add price parameter per API requirements
-          feeRateBps: 0,
-          nonce: 0,
-        });
-      } else {
-        // SELL: use createOrder with explicit price and size
-        order = await this.clobClient.createOrder({
-          tokenID: trade.tokenId,
-          price: bestPrice,
-          size: copySize,  // Shares to sell
-          side: Side.SELL,
-          feeRateBps: 0,
-          nonce: 0,
-        });
-      }
-
-      console.log(`[Executor] Order created: ${JSON.stringify({
-        side: trade.side,
-        tokenID: trade.tokenId.slice(0, 16) + '...',
-        amount: trade.side === 'BUY' ? orderCost : copySize,
-        price: bestPrice,
-      })}`);
-
-      // Submit as Fill-Or-Kill (immediate full fill or cancel)
-      const response = await this.clobClient.postOrder(order, OrderType.FOK);
-
-      // Check if response is valid
-      if (!response || !response.orderID) {
-        throw new Error('No orderID returned from API - order may have been rejected');
-      }
+      // Execute with FAK and retry for 100% fills
+      const result = await this.executeWithRetry(trade.side, trade.tokenId, copySize, orderCost);
 
       const latencyMs = Date.now() - startTime;
-      console.log(`[Executor] ✅ Submitted: ${response.orderID} (${latencyMs}ms)`);
 
-      // Update trade record
-      tradeRecord.copy.orderId = response.orderID;
-      tradeRecord.executedAt = new Date();
-      tradeRecord.latencyMs = latencyMs;
-      await tradeRecord.save();
+      if (result.success) {
+        console.log(`[Executor] ✅ Filled: ${result.filledSize.toFixed(4)} shares @ $${result.avgPrice.toFixed(4)} (${result.attempts} attempts, ${latencyMs}ms)`);
 
-      // Emit for Confirmer to track fill
-      eventBus.emit('trade:submitted', {
-        tradeId: tradeRecord._id.toString(),
-        orderId: response.orderID,
-        expectedSize: copySize,
-        expectedPrice: bestPrice,
-        originalTrade: trade,
-      });
+        // Calculate drift vs trader's price
+        const priceDrift = trade.price > 0 ? ((result.avgPrice - trade.price) / trade.price) * 100 : 0;
+
+        // Update trade record
+        tradeRecord.copy.orderId = result.lastOrderId;
+        tradeRecord.copy.filledSize = result.filledSize;
+        tradeRecord.copy.avgPrice = result.avgPrice;
+        tradeRecord.copy.attempts = result.attempts;
+        tradeRecord.copy.priceDrift = priceDrift;
+        tradeRecord.status = 'FILLED';
+        tradeRecord.executedAt = new Date();
+        tradeRecord.latencyMs = latencyMs;
+        await tradeRecord.save();
+
+        // Emit for Confirmer/Metrics
+        eventBus.emit('trade:filled', {
+          tradeId: tradeRecord._id.toString(),
+          filledSize: result.filledSize,
+          avgPrice: result.avgPrice,
+          priceDrift,
+          attempts: result.attempts,
+          originalTrade: trade,
+        });
+      } else if (result.filledSize > 0) {
+        console.log(`[Executor] ⚠️ Partial: ${result.filledSize.toFixed(4)}/${copySize.toFixed(4)} shares @ $${result.avgPrice.toFixed(4)}`);
+
+        tradeRecord.copy.filledSize = result.filledSize;
+        tradeRecord.copy.avgPrice = result.avgPrice;
+        tradeRecord.copy.attempts = result.attempts;
+        tradeRecord.status = 'PARTIAL';
+        tradeRecord.executedAt = new Date();
+        tradeRecord.latencyMs = latencyMs;
+        await tradeRecord.save();
+
+        eventBus.emit('trade:partial', {
+          tradeId: tradeRecord._id.toString(),
+          filledSize: result.filledSize,
+          remainingSize: result.remainingSize,
+          originalTrade: trade,
+        });
+      } else {
+        throw new Error(`Failed to fill after ${result.attempts} attempts`);
+      }
 
     } catch (error: any) {
       console.error(`[Executor] ❌ Order failed:`, error.message);
@@ -244,6 +239,157 @@ export class Executor {
         error: error.response?.data?.error || error.message
       });
     }
+  }
+
+  /**
+   * Execute FAK order with retry for 100% fills
+   */
+  private async executeWithRetry(
+    side: 'BUY' | 'SELL',
+    tokenId: string,
+    targetSize: number,
+    orderCostUsdc: number
+  ): Promise<{
+    success: boolean;
+    filledSize: number;
+    avgPrice: number;
+    attempts: number;
+    remainingSize: number;
+    lastOrderId: string;
+  }> {
+    let remainingSize = targetSize;
+    let totalFilled = 0;
+    let totalCost = 0;
+    let attempts = 0;
+    let lastOrderId = '';
+
+    while (remainingSize > 0.01 && attempts < config.maxOrderRetries) {
+      attempts++;
+
+      // Get fresh best price for each attempt
+      const bestPrice = await orderbookCache.getBestPrice(tokenId, side);
+
+      if (!bestPrice) {
+        console.error(`[Executor] Failed to get best price, attempt ${attempts}`);
+        await this.sleep(config.orderRetryDelayMs);
+        continue;
+      }
+
+      console.log(`[Executor] Attempt ${attempts}: ${side} ${remainingSize.toFixed(4)} @ $${bestPrice.toFixed(4)}`);
+
+      try {
+        let order;
+        const currentOrderCost = remainingSize * bestPrice;
+
+        if (side === 'BUY') {
+          order = await this.clobClient.createMarketBuyOrder({
+            tokenID: tokenId,
+            amount: Math.max(currentOrderCost, 1), // Min $1 for buy orders
+            price: bestPrice,
+            feeRateBps: 0,
+            nonce: 0,
+          });
+        } else {
+          order = await this.clobClient.createOrder({
+            tokenID: tokenId,
+            price: bestPrice,
+            size: remainingSize,
+            side: Side.SELL,
+            feeRateBps: 0,
+            nonce: 0,
+          });
+        }
+
+        // Submit as FAK (Fill-And-Kill)
+        const response = await this.clobClient.postOrder(order, OrderType.FAK);
+
+        if (response && response.orderID) {
+          lastOrderId = response.orderID;
+
+          // Wait for fill status
+          const fill = await this.waitForFillStatus(response.orderID);
+
+          if (fill.filledSize > 0) {
+            totalFilled += fill.filledSize;
+            totalCost += fill.filledSize * fill.avgPrice;
+            remainingSize -= fill.filledSize;
+
+            console.log(`[Executor] Filled ${fill.filledSize.toFixed(4)} @ $${fill.avgPrice.toFixed(4)} (remaining: ${remainingSize.toFixed(4)})`);
+          }
+        }
+      } catch (error: any) {
+        console.error(`[Executor] Attempt ${attempts} error:`, error.message);
+      }
+
+      // Wait before retry if needed
+      if (remainingSize > 0.01 && attempts < config.maxOrderRetries) {
+        await this.sleep(config.orderRetryDelayMs);
+      }
+    }
+
+    return {
+      success: remainingSize < 0.01,
+      filledSize: totalFilled,
+      avgPrice: totalFilled > 0 ? totalCost / totalFilled : 0,
+      attempts,
+      remainingSize,
+      lastOrderId,
+    };
+  }
+
+  /**
+   * Wait for order fill status via polling
+   */
+  private async waitForFillStatus(orderId: string): Promise<{
+    filledSize: number;
+    avgPrice: number;
+  }> {
+    const maxAttempts = 10;
+    const pollInterval = 200; // 200ms
+
+    for (let i = 0; i < maxAttempts; i++) {
+      try {
+        const response = await fetch(
+          `${config.clobApiBase}/order/${orderId}`,
+          {
+            headers: {
+              'POLY_API_KEY': config.apiKey,
+              'POLY_SIGNATURE': config.apiSecret,
+              'POLY_TIMESTAMP': Date.now().toString(),
+              'POLY_PASSPHRASE': config.passphrase,
+            },
+          }
+        );
+
+        if (response.ok) {
+          const order = await response.json() as any;
+
+          if (order.status === 'MATCHED' || order.status === 'FILLED') {
+            return {
+              filledSize: parseFloat(order.size_matched) || 0,
+              avgPrice: parseFloat(order.price) || 0,
+            };
+          }
+
+          if (order.status === 'CANCELED' || order.status === 'EXPIRED') {
+            return {
+              filledSize: parseFloat(order.size_matched) || 0,
+              avgPrice: parseFloat(order.price) || 0,
+            };
+          }
+        }
+      } catch {
+        // Continue polling
+      }
+
+      await this.sleep(pollInterval);
+    }
+
+    return { filledSize: 0, avgPrice: 0 };
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
   /**

@@ -22,13 +22,8 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
-# Environment files - BLOCK ALL .env* files (maximum security)
+# Environment files - BLOCK ALL .env* files (including examples)
 .env*
-
-# EXCEPT: Allow template/example files (these are safe to commit)
-!.env.example
-!.env.*.example
-!**/.env.*.example
 
 # Vercel
 .vercel
