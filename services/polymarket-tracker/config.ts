@@ -3,8 +3,9 @@
  */
 
 export const CONFIG = {
-  // API Base URL
+  // API Base URLs
   API_BASE: 'https://data-api.polymarket.com',
+  GAMMA_API_BASE: 'https://gamma-api.polymarket.com',
 
   // Rate Limiting
   API_DELAY_MS: parseInt(process.env.POLYMARKET_API_DELAY_MS || '300'),
@@ -19,12 +20,21 @@ export const CONFIG = {
     CLOSED_POSITIONS: 50,     // Max per call
     ACTIVITY: 500,            // Max per call for historical fetch
     POLLING: 50,              // Limit for 60s polling (efficient)
+    MARKETS: 99,              // Max markets per call (using max-1 for safety)
+    HOLDERS: 20,              // Max holders per token (API cap)
   },
 
   // Time Ranges
   DAYS: {
     CLOSED_POSITIONS: 30,     // Fetch last 30 days of closed positions
     HISTORICAL_TRADES: 30,    // Fetch last 30 days of trades
+    MARKET_END_WINDOW: 30,    // Fetch markets ending within 30 days
+  },
+
+  // Market Indexer Config
+  MARKET_INDEX: {
+    MIN_VOLUME: 50000,        // $50k minimum volume
+    MIN_HOLDERS_BALANCE: 1,   // Minimum balance for holders
   },
 
   // Tracked Wallets (comma-separated in env)
