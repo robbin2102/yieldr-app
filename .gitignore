@@ -37,3 +37,18 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 venv/
+
+# Local documentation (not to be pushed)
+/docs/local/
+**/LOCAL_*.md
+**/IMPLEMENTATION_*.md
+**/DRAFT_*.md
+WORK-SUMMARY.md
+IMPLEMENTATION-PLAN.md
+IMPLEMENTATION-SUMMARY.md
+BUILD-IN-PUBLIC-TRANSPARENCY.md
+
+# Service-specific docs (keep READMEs, ignore internal docs)
+services/**/*_NOTES.md
+services/**/*_TODO.md
+services/**/*_DRAFT.md
