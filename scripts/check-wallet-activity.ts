@@ -12,6 +12,7 @@
 
 const wallet = process.argv[2] || '0x6a72f61820b26b1fe4d956e17b6dc2a1ea3033ee';
 const days = parseInt(process.argv[3] || '7');
+const MAX_ACTIVITIES = 10000; // Safety limit
 
 // Calculate time range
 const now = Math.floor(Date.now() / 1000);
@@ -40,33 +41,26 @@ async function main() {
   let offset = 0;
   let done = false;
 
-  while (!done) {
+  while (!done && allActivities.length < MAX_ACTIVITIES) {
     const batch = await fetchActivity(offset);
     if (batch.length === 0) break;
-
-    // Debug: Check first activity to understand timestamp format
-    if (offset === 0 && batch[0]) {
-      console.log(`\n[DEBUG] First activity sample:`);
-      console.log(`  timestamp field: ${batch[0].timestamp}`);
-      console.log(`  As date: ${new Date(batch[0].timestamp * 1000).toISOString()}`);
-      console.log(`  startTs: ${startTs} (${new Date(startTs * 1000).toISOString()})`);
-      console.log(`  Keys: ${Object.keys(batch[0]).join(', ')}\n`);
-    }
 
     // Check last activity in batch
     const lastActivity = batch[batch.length - 1];
     const lastTs = lastActivity?.timestamp;
-    console.log(`Fetching offset ${offset}... last_ts=${lastTs} (${lastTs ? new Date(lastTs * 1000).toISOString().split('T')[0] : 'N/A'})`);
+    console.log(`Fetching offset ${offset}... last_ts=${lastTs} (${lastTs ? new Date(lastTs * 1000).toISOString().split('T')[0] : 'N/A'}) [${allActivities.length} collected]`);
 
     // Filter batch to only include activities within time range
     for (const activity of batch) {
+      if (allActivities.length >= MAX_ACTIVITIES) {
+        console.log(`\n⚠️  Hit MAX_ACTIVITIES limit (${MAX_ACTIVITIES})`);
+        done = true;
+        break;
+      }
       if (activity.timestamp >= startTs) {
         allActivities.push(activity);
       } else {
         // Activities are sorted DESC, so once we hit one older than startTs, we're done
-        console.log(`\n[DEBUG] Found activity older than cutoff:`);
-        console.log(`  activity.timestamp: ${activity.timestamp} (${new Date(activity.timestamp * 1000).toISOString()})`);
-        console.log(`  startTs cutoff: ${startTs} (${new Date(startTs * 1000).toISOString()})`);
         done = true;
         break;
       }
