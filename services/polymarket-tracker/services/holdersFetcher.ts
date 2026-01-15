@@ -63,32 +63,28 @@ function parseOutcomes(outcomes: string | undefined): string[] {
 }
 
 /**
- * Fetch and save holders for a single market
+ * Fetch holders for a single market (returns bulk ops for batch write)
  */
-async function fetchAndSaveHoldersForMarket(market: IPolyMarket): Promise<{
-  inserted: number;
-  updated: number;
-  failed: boolean;
+async function fetchHoldersForMarket(market: IPolyMarket): Promise<{
+  bulkOps: any[];
   wallets: string[];
+  failed: boolean;
 }> {
   const wallets: string[] = [];
+  const bulkOps: any[] = [];
 
   try {
     // Fetch holders using conditionId
     const tokenHolders = await fetchMarketHolders(market.conditionId);
 
     if (tokenHolders.length === 0) {
-      logger.debug(`No holders found for market ${market.slug}`);
-      return { inserted: 0, updated: 0, failed: false, wallets };
+      return { bulkOps: [], wallets, failed: false };
     }
 
     // Parse outcomes for mapping
     const outcomes = parseOutcomes(market.outcomes);
 
-    let inserted = 0;
-    let updated = 0;
-
-    // Save each token's holders
+    // Build bulk ops for each token's holders
     for (const th of tokenHolders) {
       // Determine outcome name from token position
       const tokenIds = parseClobTokenIds(market.clobTokenIds);
@@ -111,52 +107,47 @@ async function fetchAndSaveHoldersForMarket(market: IPolyMarket): Promise<{
         th.holders[0]
       );
 
-      // Upsert holders document
-      const result = await PolyMarketHolder.findOneAndUpdate(
-        { conditionId: market.conditionId, tokenId: th.token },
-        {
-          $set: {
-            marketId: market.id,
-            marketQuestion: market.question,
-            marketSlug: market.slug,
-            marketCategory: market.category,
-            marketEndDate: market.endDate,
-            outcome,
-            outcomeIndex: tokenIndex >= 0 ? tokenIndex : undefined,
-            holders: th.holders.map((h) => ({
-              proxyWallet: h.proxyWallet,
-              name: h.name,
-              pseudonym: h.pseudonym,
-              bio: h.bio,
-              amount: h.amount,
-              displayUsernamePublic: h.displayUsernamePublic,
-              outcomeIndex: h.outcomeIndex,
-              profileImage: h.profileImage,
-              profileImageOptimized: h.profileImageOptimized,
-              asset: h.asset,
-            })),
-            totalHolders: th.holders.length,
-            totalAmount,
-            topHolderAmount: topHolder?.amount,
-            topHolderWallet: topHolder?.proxyWallet,
-            fetchedAt: new Date(),
+      // Add bulk operation
+      bulkOps.push({
+        updateOne: {
+          filter: { conditionId: market.conditionId, tokenId: th.token },
+          update: {
+            $set: {
+              marketId: market.id,
+              marketQuestion: market.question,
+              marketSlug: market.slug,
+              marketCategory: market.category,
+              marketEndDate: market.endDate,
+              outcome,
+              outcomeIndex: tokenIndex >= 0 ? tokenIndex : undefined,
+              holders: th.holders.map((h) => ({
+                proxyWallet: h.proxyWallet,
+                name: h.name,
+                pseudonym: h.pseudonym,
+                bio: h.bio,
+                amount: h.amount,
+                displayUsernamePublic: h.displayUsernamePublic,
+                outcomeIndex: h.outcomeIndex,
+                profileImage: h.profileImage,
+                profileImageOptimized: h.profileImageOptimized,
+                asset: h.asset,
+              })),
+              totalHolders: th.holders.length,
+              totalAmount,
+              topHolderAmount: topHolder?.amount,
+              topHolderWallet: topHolder?.proxyWallet,
+              fetchedAt: new Date(),
+            },
           },
+          upsert: true,
         },
-        { upsert: true, new: true }
-      );
-
-      // Check if insert or update
-      if (result.createdAt?.getTime() === result.updatedAt?.getTime()) {
-        inserted++;
-      } else {
-        updated++;
-      }
+      });
     }
 
-    return { inserted, updated, failed: false, wallets };
+    return { bulkOps, wallets, failed: false };
   } catch (error: any) {
     logger.error(`Failed to fetch holders for ${market.slug}: ${error.message}`);
-    return { inserted: 0, updated: 0, failed: true, wallets };
+    return { bulkOps: [], wallets, failed: true };
   }
 }
 
@@ -191,33 +182,75 @@ export async function fetchHoldersForAllMarkets(): Promise<HoldersFetchResult> {
   let totalUpdated = 0;
   let failed = 0;
   const allWallets = new Set<string>();
+  let pendingBulkOps: any[] = [];
+  const processedMarketIds: string[] = [];
+  const BATCH_SIZE = 100;
 
-  // Process each market
+  // Process each market - fetch from API
   for (let i = 0; i < markets.length; i++) {
     const market = markets[i];
     const progress = `[${i + 1}/${markets.length}]`;
 
-    logger.info(`${progress} Processing: ${market.question?.substring(0, 50)}...`);
+    logger.info(`${progress} Fetching: ${market.question?.substring(0, 50)}...`);
 
-    const result = await fetchAndSaveHoldersForMarket(market);
+    const result = await fetchHoldersForMarket(market);
 
     if (result.failed) {
       failed++;
     } else {
-      totalInserted += result.inserted;
-      totalUpdated += result.updated;
+      pendingBulkOps.push(...result.bulkOps);
       result.wallets.forEach((w) => allWallets.add(w));
-
-      // Mark market as indexed
-      await markMarketHoldersIndexed(market.id);
+      processedMarketIds.push(market.id);
     }
 
-    // Log progress every 10 markets
-    if ((i + 1) % 10 === 0 || i === markets.length - 1) {
-      logger.info(`\n📊 Progress: ${i + 1}/${markets.length} markets processed`);
-      logger.info(`   Holders: ${totalInserted} inserted, ${totalUpdated} updated`);
+    // Write to DB in batches of 100 bulk ops
+    if (pendingBulkOps.length >= BATCH_SIZE) {
+      logger.info(`  Writing batch of ${pendingBulkOps.length} holder records...`);
+      try {
+        const writeResult = await PolyMarketHolder.bulkWrite(pendingBulkOps, { ordered: false });
+        totalInserted += writeResult.upsertedCount;
+        totalUpdated += writeResult.modifiedCount;
+      } catch (error: any) {
+        logger.error(`Batch write failed: ${error.message}`);
+      }
+      pendingBulkOps = [];
+
+      // Mark processed markets as indexed
+      if (processedMarketIds.length > 0) {
+        await PolyMarket.updateMany(
+          { id: { $in: processedMarketIds } },
+          { $set: { holdersIndexed: true, holdersIndexedAt: new Date() } }
+        );
+        processedMarketIds.length = 0;
+      }
+    }
+
+    // Log progress every 50 markets
+    if ((i + 1) % 50 === 0 || i === markets.length - 1) {
+      logger.info(`\n📊 Progress: ${i + 1}/${markets.length} markets fetched`);
+      logger.info(`   Pending writes: ${pendingBulkOps.length}`);
       logger.info(`   Unique wallets: ${allWallets.size}\n`);
     }
+  }
+
+  // Write any remaining bulk ops
+  if (pendingBulkOps.length > 0) {
+    logger.info(`  Writing final batch of ${pendingBulkOps.length} holder records...`);
+    try {
+      const writeResult = await PolyMarketHolder.bulkWrite(pendingBulkOps, { ordered: false });
+      totalInserted += writeResult.upsertedCount;
+      totalUpdated += writeResult.modifiedCount;
+    } catch (error: any) {
+      logger.error(`Final batch write failed: ${error.message}`);
+    }
+  }
+
+  // Mark any remaining processed markets as indexed
+  if (processedMarketIds.length > 0) {
+    await PolyMarket.updateMany(
+      { id: { $in: processedMarketIds } },
+      { $set: { holdersIndexed: true, holdersIndexedAt: new Date() } }
+    );
   }
 
   const durationMs = Date.now() - startTime;
@@ -258,16 +291,27 @@ export async function refreshHoldersForMarkets(marketIds: string[]): Promise<Hol
   let totalUpdated = 0;
   let failed = 0;
   const allWallets = new Set<string>();
+  const allBulkOps: any[] = [];
 
   for (const market of markets) {
-    const result = await fetchAndSaveHoldersForMarket(market);
+    const result = await fetchHoldersForMarket(market);
 
     if (result.failed) {
       failed++;
     } else {
-      totalInserted += result.inserted;
-      totalUpdated += result.updated;
+      allBulkOps.push(...result.bulkOps);
       result.wallets.forEach((w) => allWallets.add(w));
+    }
+  }
+
+  // Write all at once
+  if (allBulkOps.length > 0) {
+    try {
+      const writeResult = await PolyMarketHolder.bulkWrite(allBulkOps, { ordered: false });
+      totalInserted = writeResult.upsertedCount;
+      totalUpdated = writeResult.modifiedCount;
+    } catch (error: any) {
+      logger.error(`Bulk write failed: ${error.message}`);
     }
   }
 
