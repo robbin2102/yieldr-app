@@ -35,15 +35,27 @@ async function main() {
   console.log(`Period:  Last ${days} days (${startDate} to ${endDate})`);
   console.log('═══════════════════════════════════════════════════════════════\n');
 
-  // Fetch activities with pagination
+  // Fetch activities with pagination (stop when we hit activities older than startTs)
   let allActivities: any[] = [];
   let offset = 0;
+  let done = false;
 
-  while (true) {
+  while (!done) {
     console.log(`Fetching activities (offset ${offset})...`);
     const batch = await fetchActivity(offset);
     if (batch.length === 0) break;
-    allActivities = allActivities.concat(batch);
+
+    // Filter batch to only include activities within time range
+    for (const activity of batch) {
+      if (activity.timestamp >= startTs) {
+        allActivities.push(activity);
+      } else {
+        // Activities are sorted DESC, so once we hit one older than startTs, we're done
+        done = true;
+        break;
+      }
+    }
+
     if (batch.length < 500) break;
     offset += 500;
   }
