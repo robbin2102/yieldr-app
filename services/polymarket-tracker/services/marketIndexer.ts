@@ -297,39 +297,47 @@ export async function indexMarketsEndingWithinDays(
   const categories: Record<string, number> = {};
   const volumes: number[] = [];
 
-  logger.info(`\nProcessing ${markets.length} markets...`);
+  logger.info(`\nProcessing ${markets.length} markets using bulk write...`);
 
-  // Upsert each market
-  for (const market of markets) {
+  // Prepare bulk operations
+  const bulkOps = markets.map((market) => {
+    const doc = transformMarketToDocument(market);
+
+    // Track category
+    if (market.category) {
+      categories[market.category] = (categories[market.category] || 0) + 1;
+    }
+
+    // Track volume
+    if (market.volumeNum) {
+      volumes.push(market.volumeNum);
+    }
+
+    return {
+      updateOne: {
+        filter: { id: market.id },
+        update: { $set: doc },
+        upsert: true,
+      },
+    };
+  });
+
+  // Execute bulk write in batches of 100
+  const BATCH_SIZE = 100;
+  for (let i = 0; i < bulkOps.length; i += BATCH_SIZE) {
+    const batch = bulkOps.slice(i, i + BATCH_SIZE);
+    const batchNum = Math.floor(i / BATCH_SIZE) + 1;
+    const totalBatches = Math.ceil(bulkOps.length / BATCH_SIZE);
+
+    logger.info(`  Writing batch ${batchNum}/${totalBatches} (${batch.length} markets)...`);
+
     try {
-      const doc = transformMarketToDocument(market);
-
-      // Track category
-      if (market.category) {
-        categories[market.category] = (categories[market.category] || 0) + 1;
-      }
-
-      // Track volume
-      if (market.volumeNum) {
-        volumes.push(market.volumeNum);
-      }
-
-      // Upsert: update if exists, insert if not
-      const result = await PolyMarket.findOneAndUpdate(
-        { id: market.id },
-        { $set: doc },
-        { upsert: true, new: true, setDefaultsOnInsert: true }
-      );
-
-      // Check if this was an insert or update
-      if (result.dbCreatedAt?.getTime() === result.dbUpdatedAt?.getTime()) {
-        inserted++;
-      } else {
-        updated++;
-      }
+      const result = await PolyMarket.bulkWrite(batch, { ordered: false });
+      inserted += result.upsertedCount;
+      updated += result.modifiedCount;
     } catch (error: any) {
-      logger.error(`Failed to upsert market ${market.id}: ${error.message}`);
-      failed++;
+      logger.error(`Batch ${batchNum} failed: ${error.message}`);
+      failed += batch.length;
     }
   }
 
