@@ -6,13 +6,13 @@ export interface ITradeAlert extends Document {
   traderLabel?: string;
 
   // Trade details
-  type: 'TRADE' | 'REDEEM';
+  type: 'TRADE' | 'REDEEM' | 'YIELD' | 'SPLIT' | 'MERGE' | 'REWARD' | 'CONVERSION';
   side?: 'BUY' | 'SELL';
   market: string;
   marketSlug?: string;
-  outcome: string;
-  conditionId: string;
-  tokenId: string;
+  outcome?: string;
+  conditionId?: string;
+  tokenId?: string;
 
   // Trade metrics
   size: number;
@@ -50,13 +50,13 @@ const TradeAlertSchema = new Schema<ITradeAlert>(
     traderLabel: { type: String },
 
     // Trade details
-    type: { type: String, required: true, enum: ['TRADE', 'REDEEM'] },
+    type: { type: String, required: true, enum: ['TRADE', 'REDEEM', 'YIELD', 'SPLIT', 'MERGE', 'REWARD', 'CONVERSION'] },
     side: { type: String, enum: ['BUY', 'SELL'] },
     market: { type: String, required: true },
     marketSlug: { type: String },
-    outcome: { type: String, required: true },
-    conditionId: { type: String, required: true },
-    tokenId: { type: String, required: true },
+    outcome: { type: String },
+    conditionId: { type: String },
+    tokenId: { type: String },
 
     // Trade metrics
     size: { type: Number, required: true },

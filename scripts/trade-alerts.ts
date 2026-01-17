@@ -4,7 +4,6 @@
  * Usage:
  *   npx tsx scripts/trade-alerts.ts              # Check once and exit
  *   npx tsx scripts/trade-alerts.ts --watch      # Continuous monitoring (60s interval)
- *   npx tsx scripts/trade-alerts.ts --debug      # Watch with verbose API logging
  *   npx tsx scripts/trade-alerts.ts --add <wallet> <label> [backfill_hours]  # Add trader
  *   npx tsx scripts/trade-alerts.ts --fix        # Sync all traders to API timestamps
  *   npx tsx scripts/trade-alerts.ts --list       # List tracked traders
@@ -13,8 +12,6 @@
  * Examples:
  *   --add 0x123... "Whale1"       # Add trader, start from latest API activity
  *   --add 0x123... "Whale1" 24    # Add trader, backfill last 24 hours
- *
- * Note: Polymarket Data API has 2-4 hour delay. --fix command syncs timestamps.
  *
  * Environment:
  *   MONGODB_URI - MongoDB connection string
@@ -31,13 +28,13 @@ const API_BASE = 'https://data-api.polymarket.com';
 // ═══════════════════════════════════════════════════════════════
 
 interface Activity {
-  conditionId: string;
-  asset: string;
+  conditionId?: string;
+  asset?: string;
   title: string;
   slug?: string;
-  outcome: string;
-  type: 'TRADE' | 'REDEEM' | 'SPLIT' | 'MERGE';
-  side?: 'BUY' | 'SELL';
+  outcome?: string;
+  type: 'TRADE' | 'REDEEM' | 'YIELD' | 'SPLIT' | 'MERGE' | 'REWARD' | 'CONVERSION';
+  side?: 'BUY' | 'SELL' | '';
   size: number;
   price: number;
   usdcSize: number;
@@ -80,50 +77,26 @@ async function fetchWithRetry(url: string, retries = 3): Promise<Response> {
   throw new Error('Fetch failed after retries');
 }
 
-async function fetchNewActivities(wallet: string, sinceTimestamp: number, debug = false): Promise<Activity[]> {
+async function fetchNewActivities(wallet: string, sinceTimestamp: number): Promise<Activity[]> {
   // Paginate to ensure we catch all activities since lastSeenTimestamp
   const LIMIT = 500;
   const MAX_OFFSET = 2000;
   let allActivities: Activity[] = [];
   let offset = 0;
 
-  if (debug) {
-    console.log(`    [DEBUG] sinceTimestamp: ${sinceTimestamp} (${new Date(sinceTimestamp * 1000).toISOString()})`);
-  }
-
   while (offset <= MAX_OFFSET) {
     const url = `${API_BASE}/activity?user=${wallet}&limit=${LIMIT}&offset=${offset}&sortBy=TIMESTAMP&sortDirection=DESC`;
     const response = await fetchWithRetry(url);
     const batch = (await response.json()) as Activity[];
 
-    if (debug && offset === 0) {
-      console.log(`    [DEBUG] API returned ${batch.length} activities`);
-      if (batch.length > 0) {
-        const newest = batch[0];
-        const oldest = batch[batch.length - 1];
-        console.log(`    [DEBUG] Newest: ${newest.type} at ${newest.timestamp} (${new Date(newest.timestamp * 1000).toISOString()})`);
-        console.log(`    [DEBUG] Oldest: ${oldest.type} at ${oldest.timestamp} (${new Date(oldest.timestamp * 1000).toISOString()})`);
-        console.log(`    [DEBUG] Need activities > ${sinceTimestamp}, newest is ${newest.timestamp}`);
-        console.log(`    [DEBUG] Is newest > sinceTimestamp? ${newest.timestamp > sinceTimestamp}`);
-      }
-    }
-
     if (batch.length === 0) break;
 
-    // Filter to trades/redeems newer than sinceTimestamp
+    // Collect all activities newer than sinceTimestamp
     for (const activity of batch) {
       if (activity.timestamp > sinceTimestamp) {
-        if (activity.type === 'TRADE' || activity.type === 'REDEEM') {
-          allActivities.push(activity);
-          if (debug) {
-            console.log(`    [DEBUG] Found: ${activity.type} ${activity.side || ''} at ${activity.timestamp}`);
-          }
-        }
+        allActivities.push(activity);
       } else {
         // Reached activities older than sinceTimestamp, stop
-        if (debug) {
-          console.log(`    [DEBUG] Reached old activity at ${activity.timestamp}, stopping`);
-        }
         return allActivities;
       }
     }
@@ -158,6 +131,11 @@ function determineCopyRecommendation(
 ): { recommendation: 'PRIORITY' | 'COPY' | 'CAUTIOUS' | 'SKIP'; reason: string; isHighConviction: boolean } {
   let isHighConviction = false;
 
+  // Non-TRADE types are informational only
+  if (activity.type !== 'TRADE') {
+    return { recommendation: 'SKIP', reason: `${activity.type} (informational)`, isHighConviction: false };
+  }
+
   // Check if this is a high-conviction (asymmetric) trade (>10x avg)
   if (avgTradeSize && activity.usdcSize >= avgTradeSize * 10) {
     isHighConviction = true;
@@ -171,11 +149,6 @@ function determineCopyRecommendation(
   // Skip SELL trades for BUY_AND_HOLD traders (unusual)
   if (trader.strategyLabel === 'BUY_AND_HOLD' && activity.side === 'SELL') {
     return { recommendation: 'CAUTIOUS', reason: 'SELL from BUY_AND_HOLD trader (unusual)', isHighConviction };
-  }
-
-  // REDEEM is always informational
-  if (activity.type === 'REDEEM') {
-    return { recommendation: 'SKIP', reason: 'REDEEM (market resolved)', isHighConviction: false };
   }
 
   // HIGH CONVICTION TRADE - always priority!
@@ -220,16 +193,19 @@ async function createAlert(trader: ITrackedTrader, activity: Activity): Promise<
     ? activity.usdcSize / trader.avgTradeSize
     : undefined;
 
+  // Handle empty string side (convert to undefined for valid enum)
+  const side = activity.side && activity.side !== '' ? activity.side : undefined;
+
   const alert = new TradeAlert({
     traderWallet: trader.wallet,
     traderLabel: trader.label,
     type: activity.type,
-    side: activity.side,
+    side,
     market: activity.title,
     marketSlug: activity.slug,
-    outcome: activity.outcome,
-    conditionId: activity.conditionId,
-    tokenId: activity.asset,
+    outcome: activity.outcome || undefined,
+    conditionId: activity.conditionId || undefined,
+    tokenId: activity.asset || undefined,
     size: activity.size,
     price: activity.price,
     usdcValue: activity.usdcSize,
@@ -251,7 +227,7 @@ async function createAlert(trader: ITrackedTrader, activity: Activity): Promise<
 // Main Functions
 // ═══════════════════════════════════════════════════════════════
 
-async function checkTraders(debug = false): Promise<number> {
+async function checkTraders(): Promise<number> {
   const traders = await TrackedTrader.find({ isActive: true });
 
   if (traders.length === 0) {
@@ -262,31 +238,29 @@ async function checkTraders(debug = false): Promise<number> {
   let totalNewAlerts = 0;
 
   for (const trader of traders) {
-    console.log(`Checking ${trader.label} (${trader.wallet.slice(0, 10)}...)...`);
+    const sinceTime = new Date(trader.lastSeenTimestamp * 1000).toISOString().split('T')[1].split('.')[0];
+    console.log(`Checking ${trader.label} (since ${sinceTime})...`);
 
     try {
-      const activities = await fetchNewActivities(trader.wallet, trader.lastSeenTimestamp, debug);
+      const activities = await fetchNewActivities(trader.wallet, trader.lastSeenTimestamp);
 
       if (activities.length > 0) {
-        console.log(`  Found ${activities.length} new activities`);
+        const newestTs = Math.max(...activities.map(a => a.timestamp));
+        const newestTime = new Date(newestTs * 1000).toISOString().split('T')[1].split('.')[0];
+        console.log(`  Found ${activities.length} activities (up to ${newestTime})`);
 
+        let savedCount = 0;
         for (const activity of activities) {
           const alert = await createAlert(trader, activity);
 
           if (alert) {
+            savedCount++;
             totalNewAlerts++;
             const emoji = alert.copyRecommendation === 'PRIORITY' ? '🔴' :
                           alert.copyRecommendation === 'COPY' ? '🟡' :
                           alert.copyRecommendation === 'CAUTIOUS' ? '🟠' : '⚪';
 
-            console.log(`  ${emoji} NEW: ${alert.side || alert.type} ${alert.outcome}`);
-            console.log(`       ${alert.market.substring(0, 50)}...`);
-            console.log(`       $${alert.usdcValue.toFixed(2)} @ ${(alert.price * 100).toFixed(0)}c`);
-            console.log(`       Recommendation: ${alert.copyRecommendation} - ${alert.reason}`);
-            if (alert.suggestedSize) {
-              console.log(`       Suggested copy: $${alert.suggestedSize.toFixed(2)}`);
-            }
-            console.log('');
+            console.log(`  ${emoji} ${alert.type} ${alert.side || ''} ${alert.outcome || ''} - $${alert.usdcValue.toFixed(2)}`);
           }
 
           // Update last seen timestamp
@@ -296,9 +270,10 @@ async function checkTraders(debug = false): Promise<number> {
         }
 
         // Save trader with updated timestamp and stats
-        trader.totalAlerts += activities.length;
+        trader.totalAlerts += savedCount;
         trader.lastUpdatedAt = new Date();
         await trader.save();
+        console.log(`  Saved ${savedCount} alerts to MongoDB`);
       } else {
         console.log('  No new activities');
       }
@@ -485,20 +460,20 @@ async function fixTraderTimestamps() {
   console.log('Done! All traders synced to API timestamps.\n');
 }
 
-async function watchMode(debug = false) {
+async function watchMode() {
   console.log('═══════════════════════════════════════════════════════════════');
   console.log('                    TRADE ALERTS - WATCH MODE                   ');
   console.log('═══════════════════════════════════════════════════════════════');
-  console.log(`Polling every 60 seconds. ${debug ? '[DEBUG MODE]' : ''} Press Ctrl+C to stop.\n`);
+  console.log('Polling every 60 seconds. Press Ctrl+C to stop.\n');
 
   while (true) {
     const timestamp = new Date().toISOString().split('T')[1].split('.')[0];
     console.log(`\n[${timestamp}] Checking for new trades...`);
 
-    const newAlerts = await checkTraders(debug);
+    const newAlerts = await checkTraders();
 
     if (newAlerts > 0) {
-      console.log(`\n🔔 ${newAlerts} NEW ALERT(S)!`);
+      console.log(`\n🔔 ${newAlerts} NEW ALERT(S) saved to MongoDB!`);
     }
 
     // Wait 60 seconds
@@ -527,7 +502,6 @@ async function main() {
   await connectDB();
 
   const args = process.argv.slice(2);
-  const debug = args.includes('--debug');
 
   if (args[0] === '--add' && args[1] && args[2]) {
     const backfillHours = args[3] ? parseInt(args[3]) : 0;
@@ -538,22 +512,21 @@ async function main() {
     await showPendingAlerts();
   } else if (args[0] === '--fix') {
     await fixTraderTimestamps();
-  } else if (args[0] === '--watch' || args[0] === '--debug') {
-    await watchMode(debug);
+  } else if (args[0] === '--watch') {
+    await watchMode();
   } else {
     // Default: check once
     console.log('═══════════════════════════════════════════════════════════════');
     console.log('                    TRADE ALERTS CHECK                          ');
     console.log('═══════════════════════════════════════════════════════════════\n');
 
-    const newAlerts = await checkTraders(debug);
+    const newAlerts = await checkTraders();
 
     console.log('\n───────────────────────────────────────────────────────────────');
     console.log(`Total new alerts: ${newAlerts}`);
     console.log('───────────────────────────────────────────────────────────────');
     console.log('Commands:');
     console.log('  --watch     Continuous monitoring (60s poll)');
-    console.log('  --debug     Debug mode (shows API responses)');
     console.log('  --fix       Sync all traders to latest API timestamps');
     console.log('  --add       Add trader: --add <wallet> <label> [backfill_hours]');
     console.log('  --list      List tracked traders with last activity');
