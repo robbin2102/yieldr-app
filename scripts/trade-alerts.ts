@@ -82,35 +82,49 @@ async function fetchNewActivities(wallet: string, sinceTimestamp: number): Promi
 
 function determineCopyRecommendation(
   trader: ITrackedTrader,
-  activity: Activity
-): { recommendation: 'PRIORITY' | 'COPY' | 'CAUTIOUS' | 'SKIP'; reason: string } {
-  // Skip small bets
+  activity: Activity,
+  avgTradeSize?: number
+): { recommendation: 'PRIORITY' | 'COPY' | 'CAUTIOUS' | 'SKIP'; reason: string; isHighConviction: boolean } {
+  let isHighConviction = false;
+
+  // Check if this is a high-conviction (asymmetric) trade (>10x avg)
+  if (avgTradeSize && activity.usdcSize >= avgTradeSize * 10) {
+    isHighConviction = true;
+  }
+
+  // Skip small bets (unless high conviction check overrides)
   if (trader.skipSmallBets && activity.usdcSize < trader.smallBetThreshold) {
-    return { recommendation: 'SKIP', reason: `Small bet ($${activity.usdcSize.toFixed(2)} < $${trader.smallBetThreshold})` };
+    return { recommendation: 'SKIP', reason: `Small bet ($${activity.usdcSize.toFixed(2)} < $${trader.smallBetThreshold})`, isHighConviction: false };
   }
 
   // Skip SELL trades for BUY_AND_HOLD traders (unusual)
   if (trader.strategyLabel === 'BUY_AND_HOLD' && activity.side === 'SELL') {
-    return { recommendation: 'CAUTIOUS', reason: 'SELL from BUY_AND_HOLD trader (unusual)' };
+    return { recommendation: 'CAUTIOUS', reason: 'SELL from BUY_AND_HOLD trader (unusual)', isHighConviction };
   }
 
   // REDEEM is always informational
   if (activity.type === 'REDEEM') {
-    return { recommendation: 'SKIP', reason: 'REDEEM (market resolved)' };
+    return { recommendation: 'SKIP', reason: 'REDEEM (market resolved)', isHighConviction: false };
+  }
+
+  // HIGH CONVICTION TRADE - always priority!
+  if (isHighConviction) {
+    const multiplier = avgTradeSize ? (activity.usdcSize / avgTradeSize).toFixed(1) : '10+';
+    return { recommendation: 'PRIORITY', reason: `🔥 HIGH CONVICTION (${multiplier}x avg size!)`, isHighConviction: true };
   }
 
   // Entry odds based priority (for BUY trades)
   if (activity.side === 'BUY') {
     if (activity.price < 0.40) {
-      return { recommendation: 'PRIORITY', reason: `Underdog entry (${(activity.price * 100).toFixed(0)}c)` };
+      return { recommendation: 'PRIORITY', reason: `Underdog entry (${(activity.price * 100).toFixed(0)}c)`, isHighConviction };
     }
     if (activity.price < 0.60) {
-      return { recommendation: 'COPY', reason: `Mid-range entry (${(activity.price * 100).toFixed(0)}c)` };
+      return { recommendation: 'COPY', reason: `Mid-range entry (${(activity.price * 100).toFixed(0)}c)`, isHighConviction };
     }
-    return { recommendation: 'CAUTIOUS', reason: `Favorite entry (${(activity.price * 100).toFixed(0)}c)` };
+    return { recommendation: 'CAUTIOUS', reason: `Favorite entry (${(activity.price * 100).toFixed(0)}c)`, isHighConviction };
   }
 
-  return { recommendation: 'COPY', reason: 'Standard trade' };
+  return { recommendation: 'COPY', reason: 'Standard trade', isHighConviction };
 }
 
 async function createAlert(trader: ITrackedTrader, activity: Activity): Promise<ITradeAlert | null> {
@@ -118,13 +132,22 @@ async function createAlert(trader: ITrackedTrader, activity: Activity): Promise<
   const existing = await TradeAlert.findOne({ txHash: activity.transactionHash });
   if (existing) return null;
 
-  const { recommendation, reason } = determineCopyRecommendation(trader, activity);
+  const { recommendation, reason, isHighConviction } = determineCopyRecommendation(
+    trader,
+    activity,
+    trader.avgTradeSize
+  );
 
   // Calculate suggested size
   let suggestedSize = activity.usdcSize * trader.copyMultiplier;
   if (suggestedSize > trader.maxCopySize) {
     suggestedSize = trader.maxCopySize;
   }
+
+  // Calculate size multiplier (how many times avg)
+  const sizeMultiplier = trader.avgTradeSize
+    ? activity.usdcSize / trader.avgTradeSize
+    : undefined;
 
   const alert = new TradeAlert({
     traderWallet: trader.wallet,
@@ -144,6 +167,8 @@ async function createAlert(trader: ITrackedTrader, activity: Activity): Promise<
     copyRecommendation: recommendation,
     suggestedSize: recommendation !== 'SKIP' ? suggestedSize : undefined,
     reason,
+    isHighConviction,
+    sizeMultiplier,
     alertedAt: new Date(),
   });
 

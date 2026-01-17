@@ -12,6 +12,7 @@ export interface ITrackedTrader extends Document {
   specialty?: string;
   winRate?: number;
   profitFactor?: number;
+  avgTradeSize?: number;  // For high-conviction detection (>10x = high conviction)
 
   // Copy rules
   copyMultiplier: number; // 1.0 = same size, 0.5 = half size
@@ -47,6 +48,7 @@ const TrackedTraderSchema = new Schema<ITrackedTrader>(
     specialty: { type: String },
     winRate: { type: Number },
     profitFactor: { type: Number },
+    avgTradeSize: { type: Number },
 
     // Copy rules
     copyMultiplier: { type: Number, default: 1.0 },

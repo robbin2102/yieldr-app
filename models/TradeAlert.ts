@@ -25,6 +25,8 @@ export interface ITradeAlert extends Document {
   copyRecommendation: 'PRIORITY' | 'COPY' | 'CAUTIOUS' | 'SKIP';
   suggestedSize?: number;
   reason?: string;
+  isHighConviction: boolean;
+  sizeMultiplier?: number; // How many times avg trade size
 
   // Alert status
   alertedAt: Date;
@@ -72,6 +74,8 @@ const TradeAlertSchema = new Schema<ITradeAlert>(
     },
     suggestedSize: { type: Number },
     reason: { type: String },
+    isHighConviction: { type: Boolean, default: false, index: true },
+    sizeMultiplier: { type: Number },
 
     // Alert status
     alertedAt: { type: Date, default: Date.now },

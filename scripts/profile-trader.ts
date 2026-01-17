@@ -606,6 +606,57 @@ async function main() {
   console.log(`  Median Trade Size:  $${medianTradeSize.toFixed(2)}`);
   console.log(`  Max Trade Size:     $${maxTradeSize.toFixed(2)}`);
 
+  // ═══════════════════════════════════════════════════════════════
+  // ASYMMETRIC TRADE DETECTION (>10x avg size = HIGH CONVICTION)
+  // ═══════════════════════════════════════════════════════════════
+  const ASYMMETRIC_MULTIPLIER = 10;
+  const asymmetricThreshold = avgTradeSize * ASYMMETRIC_MULTIPLIER;
+
+  // Find all high-conviction trades
+  const asymmetricTrades = activities
+    .filter(a => a.type === 'TRADE' && a.usdcSize >= asymmetricThreshold)
+    .sort((a, b) => b.usdcSize - a.usdcSize); // Sort by size desc
+
+  const asymmetricVolume = asymmetricTrades.reduce((sum, t) => sum + t.usdcSize, 0);
+  const asymmetricPct = totalTrades > 0 ? (asymmetricTrades.length / totalTrades) * 100 : 0;
+  const asymmetricVolumePct = tradeSizes.reduce((a, b) => a + b, 0) > 0
+    ? (asymmetricVolume / tradeSizes.reduce((a, b) => a + b, 0)) * 100
+    : 0;
+
+  console.log('\n═══════════════════════════════════════════════════════════════');
+  console.log('                    HIGH CONVICTION TRADES (>10x avg)           ');
+  console.log('═══════════════════════════════════════════════════════════════');
+  console.log(`  Threshold:          $${asymmetricThreshold.toFixed(2)} (10x avg)`);
+  console.log(`  Count:              ${asymmetricTrades.length} trades (${asymmetricPct.toFixed(2)}% of all trades)`);
+  console.log(`  Volume:             $${asymmetricVolume.toFixed(2)} (${asymmetricVolumePct.toFixed(1)}% of total volume)`);
+
+  if (asymmetricTrades.length > 0) {
+    console.log('\n  🎯 RECENT HIGH CONVICTION TRADES (copy these!):');
+    console.log('  ─────────────────────────────────────────────────────────────');
+
+    // Show top 15 most recent high-conviction trades
+    const recentAsymmetric = asymmetricTrades
+      .sort((a, b) => b.timestamp - a.timestamp)
+      .slice(0, 15);
+
+    for (const trade of recentAsymmetric) {
+      const date = new Date(trade.timestamp * 1000).toISOString().split('T')[0];
+      const time = new Date(trade.timestamp * 1000).toISOString().split('T')[1].slice(0, 5);
+      const multiplier = (trade.usdcSize / avgTradeSize).toFixed(1);
+
+      console.log(`\n  📍 ${date} ${time} | ${trade.side} $${trade.usdcSize.toFixed(2)} (${multiplier}x avg)`);
+      console.log(`     ${trade.title.substring(0, 55)}...`);
+      console.log(`     ${trade.outcome} @ ${(trade.price * 100).toFixed(0)}c`);
+      console.log(`     TX: ${trade.transactionHash.slice(0, 20)}...`);
+    }
+
+    if (asymmetricTrades.length > 15) {
+      console.log(`\n  ... and ${asymmetricTrades.length - 15} more high-conviction trades`);
+    }
+  } else {
+    console.log('\n  No high-conviction trades detected (all trades < 10x avg)');
+  }
+
   if (strengths.length > 0) {
     console.log('\n═══════════════════════════════════════════════════════════════');
     console.log('                    STRENGTHS (Profitable Markets)             ');
