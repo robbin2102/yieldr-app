@@ -3,13 +3,19 @@
  *
  * Usage:
  *   npx tsx scripts/profile-trader.ts <wallet_address> [days]
+ *   npx tsx scripts/profile-trader.ts <wallet_address> [days] --save  # Save to MongoDB
  *
  * Examples:
  *   npx tsx scripts/profile-trader.ts 0xb8cd777114b6cc4d488e79eff1fef91e1c521f4b
- *   npx tsx scripts/profile-trader.ts 0xb8cd777114b6cc4d488e79eff1fef91e1c521f4b 30
+ *   npx tsx scripts/profile-trader.ts 0xb8cd777114b6cc4d488e79eff1fef91e1c521f4b 30 --save
  */
 
+import mongoose from 'mongoose';
+import { TraderProfile } from '../models/TraderProfile';
+
 const API_BASE = 'https://data-api.polymarket.com';
+const MAX_RETRIES = 3;
+const RETRY_DELAY_MS = 2000;
 
 // ═══════════════════════════════════════════════════════════════
 // Types
@@ -75,7 +81,7 @@ interface EntryOddsPerformance {
   avgRoi: number;
 }
 
-interface TraderProfile {
+interface TraderProfileResult {
   wallet: string;
   period: { days: number; start: string; end: string };
 
@@ -134,6 +140,119 @@ interface TraderProfile {
 
   // Stop conditions
   stopConditions: string[];
+}
+
+// Polymarket user profile (from /profiles endpoint)
+interface UserProfile {
+  profileId: string;
+  proxyWallets?: string[];
+  name?: string;
+  pseudonym?: string;
+  bio?: string;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Helper Functions
+// ═══════════════════════════════════════════════════════════════
+
+async function fetchWithRetry<T>(
+  url: string,
+  retries = MAX_RETRIES
+): Promise<T> {
+  let lastError: Error | null = null;
+
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      const response = await fetch(url);
+      if (!response.ok) {
+        throw new Error(`API error: ${response.status}`);
+      }
+      return await response.json() as T;
+    } catch (error: any) {
+      lastError = error;
+      if (attempt < retries) {
+        const delay = RETRY_DELAY_MS * attempt;
+        console.log(`  [RETRY] Attempt ${attempt} failed, retrying in ${delay}ms...`);
+        await new Promise(r => setTimeout(r, delay));
+      }
+    }
+  }
+
+  throw lastError || new Error('Fetch failed after retries');
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Proxy Wallet Discovery
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Discover all related wallets (proxy wallets) for a user.
+ * Polymarket uses proxy wallets for trading - the main wallet might not have
+ * the actual positions.
+ */
+async function discoverRelatedWallets(wallet: string): Promise<string[]> {
+  console.log('  [DEBUG] Discovering related wallets...');
+
+  const wallets = [wallet.toLowerCase()];
+
+  try {
+    // Try the /profiles endpoint to get proxy wallets
+    const profileUrl = `${API_BASE}/profiles/${wallet.toLowerCase()}`;
+    console.log(`  [DEBUG] Fetching profile: ${profileUrl}`);
+
+    const profile = await fetchWithRetry<any>(profileUrl);
+
+    if (profile) {
+      console.log(`  [DEBUG] Profile found: ${profile.name || profile.pseudonym || 'Unknown'}`);
+
+      // Check for proxyWallets array in profile
+      if (profile.proxyWallets && Array.isArray(profile.proxyWallets)) {
+        for (const proxy of profile.proxyWallets) {
+          const proxyAddr = (proxy.address || proxy).toLowerCase();
+          if (!wallets.includes(proxyAddr)) {
+            wallets.push(proxyAddr);
+          }
+        }
+        console.log(`  [DEBUG] Found ${profile.proxyWallets.length} proxy wallets`);
+      }
+
+      // Also check for linked EOA wallets
+      if (profile.linkedWallets && Array.isArray(profile.linkedWallets)) {
+        for (const linked of profile.linkedWallets) {
+          const linkedAddr = (linked.address || linked).toLowerCase();
+          if (!wallets.includes(linkedAddr)) {
+            wallets.push(linkedAddr);
+          }
+        }
+      }
+    }
+  } catch (error: any) {
+    console.log(`  [DEBUG] Could not fetch profile (may not exist): ${error.message}`);
+  }
+
+  // Also try the /related-wallets endpoint if available
+  try {
+    const relatedUrl = `${API_BASE}/related-wallets?user=${wallet.toLowerCase()}`;
+    const related = await fetchWithRetry<any[]>(relatedUrl);
+
+    if (related && Array.isArray(related)) {
+      for (const w of related) {
+        const addr = (w.address || w.wallet || w).toLowerCase();
+        if (typeof addr === 'string' && !wallets.includes(addr)) {
+          wallets.push(addr);
+        }
+      }
+    }
+  } catch {
+    // Endpoint might not exist, ignore
+  }
+
+  if (wallets.length > 1) {
+    console.log(`  [DEBUG] Total wallets to query: ${wallets.length}`);
+    wallets.forEach((w, i) => console.log(`    ${i === 0 ? '(main)' : '(proxy)'} ${w}`));
+  }
+
+  return wallets;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -233,30 +352,46 @@ async function fetchClosedPositions(wallet: string, days: number): Promise<Close
   const LIMIT = 50;          // API max per request (closed-positions max is 50!)
   const MAX_OFFSET = 100000; // API max offset
 
+  console.log(`  [DEBUG] fetchClosedPositions: startTs=${startTs} (${new Date(startTs * 1000).toISOString()})`);
+
   let allPositions: ClosedPosition[] = [];
   let offset = 0;
   let done = false;
 
   while (!done && offset <= MAX_OFFSET) {
+    // Note: API docs show /v1/closed-positions but /closed-positions also works
     const url = `${API_BASE}/closed-positions?user=${wallet}&limit=${LIMIT}&offset=${offset}&sortBy=TIMESTAMP&sortDirection=DESC`;
+    console.log(`  [DEBUG] URL: ${url}`);
+
     const response = await fetch(url);
     if (!response.ok) throw new Error(`API error: ${response.status}`);
 
     const batch = await response.json() as ClosedPosition[];
+    console.log(`  [DEBUG] Batch returned: ${batch.length} items`);
+
     if (batch.length === 0) break;
 
+    // Debug first item
+    if (batch[0]) {
+      console.log(`  [DEBUG] First item: ts=${batch[0].timestamp} (${new Date(batch[0].timestamp * 1000).toISOString()}), pnl=${batch[0].realizedPnl}, title=${batch[0].title?.substring(0, 40)}`);
+    }
+
     const lastTs = batch[batch.length - 1]?.timestamp;
-    console.log(`  Fetching offset ${offset}... [${allPositions.length} positions] (${lastTs ? new Date(lastTs * 1000).toISOString().split('T')[0] : 'N/A'})`);
+    console.log(`  Fetching offset ${offset}... last_ts=${lastTs} (${lastTs ? new Date(lastTs * 1000).toISOString().split('T')[0] : 'N/A'})`);
 
     // Filter to time range
+    let batchAdded = 0;
     for (const pos of batch) {
       if (pos.timestamp >= startTs) {
         allPositions.push(pos);
+        batchAdded++;
       } else {
+        console.log(`  [DEBUG] Stopping: pos.timestamp=${pos.timestamp} < startTs=${startTs}`);
         done = true;
         break;
       }
     }
+    console.log(`  [DEBUG] Added ${batchAdded} from this batch, total now: ${allPositions.length}`);
 
     if (batch.length < LIMIT) break;
     offset += LIMIT;
@@ -268,6 +403,92 @@ async function fetchClosedPositions(wallet: string, days: number): Promise<Close
     console.log(`  Hit API offset limit (${MAX_OFFSET}) - may have more closed positions`);
   }
 
+  return allPositions;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Multi-Wallet Aggregation Functions
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Fetch activities from all related wallets and deduplicate by txHash
+ */
+async function fetchAllActivities(wallets: string[], days: number): Promise<Activity[]> {
+  const allActivities: Activity[] = [];
+  const seenTxHashes = new Set<string>();
+
+  for (const wallet of wallets) {
+    console.log(`  Fetching activities for ${wallet.slice(0, 10)}...`);
+    try {
+      const activities = await fetchActivities(wallet, days);
+      for (const a of activities) {
+        if (!seenTxHashes.has(a.transactionHash)) {
+          seenTxHashes.add(a.transactionHash);
+          allActivities.push(a);
+        }
+      }
+    } catch (error: any) {
+      console.log(`  [WARN] Failed to fetch activities for ${wallet.slice(0, 10)}: ${error.message}`);
+    }
+  }
+
+  // Sort by timestamp desc
+  allActivities.sort((a, b) => b.timestamp - a.timestamp);
+  return allActivities;
+}
+
+/**
+ * Fetch open positions from all related wallets and deduplicate by conditionId+asset
+ */
+async function fetchAllOpenPositions(wallets: string[]): Promise<OpenPosition[]> {
+  const allPositions: OpenPosition[] = [];
+  const seenKeys = new Set<string>();
+
+  for (const wallet of wallets) {
+    console.log(`  Fetching open positions for ${wallet.slice(0, 10)}...`);
+    try {
+      const positions = await fetchOpenPositions(wallet);
+      for (const p of positions) {
+        const key = `${p.conditionId}_${p.asset}`;
+        if (!seenKeys.has(key)) {
+          seenKeys.add(key);
+          allPositions.push(p);
+        }
+      }
+    } catch (error: any) {
+      console.log(`  [WARN] Failed to fetch open positions for ${wallet.slice(0, 10)}: ${error.message}`);
+    }
+  }
+
+  return allPositions;
+}
+
+/**
+ * Fetch closed positions from all related wallets and deduplicate by conditionId+asset+timestamp
+ */
+async function fetchAllClosedPositions(wallets: string[], days: number): Promise<ClosedPosition[]> {
+  const allPositions: ClosedPosition[] = [];
+  const seenKeys = new Set<string>();
+
+  for (const wallet of wallets) {
+    console.log(`  Fetching closed positions for ${wallet.slice(0, 10)}...`);
+    try {
+      const positions = await fetchClosedPositions(wallet, days);
+      for (const p of positions) {
+        // Create composite key - some positions might appear for same market/asset at same timestamp
+        const key = `${p.conditionId}_${p.asset}_${p.timestamp}`;
+        if (!seenKeys.has(key)) {
+          seenKeys.add(key);
+          allPositions.push(p);
+        }
+      }
+    } catch (error: any) {
+      console.log(`  [WARN] Failed to fetch closed positions for ${wallet.slice(0, 10)}: ${error.message}`);
+    }
+  }
+
+  // Sort by timestamp desc
+  allPositions.sort((a, b) => b.timestamp - a.timestamp);
   return allPositions;
 }
 
@@ -428,7 +649,7 @@ function analyzeEntryOdds(activities: Activity[]): EntryOddsPerformance[] {
   }).filter(r => r.trades > 0);
 }
 
-function determineTraderLabel(profile: Partial<TraderProfile>): string {
+function determineTraderLabel(profile: Partial<TraderProfileResult>): string {
   const labels: string[] = [];
 
   // Volume-based
@@ -455,18 +676,55 @@ function determineTraderLabel(profile: Partial<TraderProfile>): string {
 }
 
 // ═══════════════════════════════════════════════════════════════
+// Database
+// ═══════════════════════════════════════════════════════════════
+
+async function connectDB(): Promise<boolean> {
+  // Load env
+  const dotenv = await import('dotenv');
+  dotenv.config({ path: '.env.local' });
+
+  const uri = process.env.MONGODB_URI;
+  if (!uri) {
+    console.log('[DB] MONGODB_URI not set - skipping MongoDB save');
+    return false;
+  }
+
+  try {
+    await mongoose.connect(uri);
+    console.log('[DB] Connected to MongoDB\n');
+    return true;
+  } catch (error: any) {
+    console.log(`[DB] Failed to connect: ${error.message}`);
+    return false;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
 // Main
 // ═══════════════════════════════════════════════════════════════
 
 async function main() {
-  console.log('[DEBUG] Script version: 2026-01-17-v2 with pagination');
+  console.log('[DEBUG] Script version: 2026-01-17-v3 with proxy wallet discovery');
 
-  const wallet = process.argv[2];
-  const days = parseInt(process.argv[3] || '30');
+  const args = process.argv.slice(2);
+  const saveToDb = args.includes('--save');
+  const wallet = args.find(a => !a.startsWith('--') && isNaN(parseInt(a)));
+  const daysArg = args.find(a => !a.startsWith('--') && !isNaN(parseInt(a)));
+  const days = parseInt(daysArg || '30');
 
   if (!wallet) {
-    console.log('Usage: npx tsx scripts/profile-trader.ts <wallet_address> [days]');
+    console.log('Usage: npx tsx scripts/profile-trader.ts <wallet_address> [days] [--save]');
+    console.log('');
+    console.log('Options:');
+    console.log('  --save    Save profile to MongoDB (polymarket-traderProfiles)');
     process.exit(1);
+  }
+
+  // Connect to DB if saving
+  let dbConnected = false;
+  if (saveToDb) {
+    dbConnected = await connectDB();
   }
 
   const now = Math.floor(Date.now() / 1000);
@@ -478,20 +736,26 @@ async function main() {
   console.log('═══════════════════════════════════════════════════════════════');
   console.log(`Wallet:  ${wallet}`);
   console.log(`Period:  Last ${days} days (${startDate} to ${endDate})`);
+  if (saveToDb) console.log(`Save:    ${dbConnected ? 'Yes (MongoDB)' : 'No (DB connection failed)'}`);
   console.log('═══════════════════════════════════════════════════════════════\n');
 
-  // Fetch data
-  console.log('Fetching activities...');
-  const activities = await fetchActivities(wallet, days);
-  console.log(`  Found ${activities.length} activities\n`);
+  // Discover proxy wallets
+  console.log('Discovering related wallets (proxy wallets)...');
+  const wallets = await discoverRelatedWallets(wallet);
+  console.log(`  Found ${wallets.length} wallet(s) to query\n`);
 
-  console.log('Fetching open positions...');
-  const openPositions = await fetchOpenPositions(wallet);
-  console.log(`  Found ${openPositions.length} open positions\n`);
+  // Fetch data from ALL wallets
+  console.log('Fetching activities from all wallets...');
+  const activities = await fetchAllActivities(wallets, days);
+  console.log(`  Total: ${activities.length} activities\n`);
 
-  console.log('Fetching closed positions...');
-  const closedPositions = await fetchClosedPositions(wallet, days);
-  console.log(`  Found ${closedPositions.length} closed positions\n`);
+  console.log('Fetching open positions from all wallets...');
+  const openPositions = await fetchAllOpenPositions(wallets);
+  console.log(`  Total: ${openPositions.length} open positions\n`);
+
+  console.log('Fetching closed positions from all wallets...');
+  const closedPositions = await fetchAllClosedPositions(wallets, days);
+  console.log(`  Total: ${closedPositions.length} closed positions\n`);
 
   // Count activities by type
   let buyCount = 0, sellCount = 0, redeemCount = 0, otherCount = 0;
@@ -734,6 +998,116 @@ async function main() {
       console.log(`     Entry: ${(p.avgPrice * 100).toFixed(0)}c | Current: ${(p.curPrice * 100).toFixed(0)}c`);
       console.log('');
     });
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // Save to MongoDB (if --save flag provided)
+  // ═══════════════════════════════════════════════════════════════
+  if (saveToDb && dbConnected) {
+    console.log('\n═══════════════════════════════════════════════════════════════');
+    console.log('                    SAVING TO MONGODB                           ');
+    console.log('═══════════════════════════════════════════════════════════════');
+
+    try {
+      // Build recent high-conviction trades for storage
+      const recentHighConvictionTrades = asymmetricTrades
+        .sort((a, b) => b.timestamp - a.timestamp)
+        .slice(0, 20)
+        .map(t => ({
+          timestamp: new Date(t.timestamp * 1000),
+          side: t.side || 'UNKNOWN',
+          market: t.title,
+          outcome: t.outcome,
+          price: t.price,
+          usdcSize: t.usdcSize,
+          sizeMultiplier: avgTradeSize > 0 ? t.usdcSize / avgTradeSize : 0,
+          txHash: t.transactionHash,
+        }));
+
+      // Entry odds breakdown for storage
+      const entryOddsBreakdown = entryOddsPerformance.map(e => ({
+        range: e.range,
+        trades: e.trades,
+      }));
+
+      const profile = new TraderProfile({
+        wallet: wallet.toLowerCase(),
+        profiledAt: new Date(),
+        periodDays: days,
+
+        // Basic stats
+        totalActivities: activities.length,
+        buyCount,
+        sellCount,
+        redeemCount,
+        otherCount,
+
+        // Classification
+        tradesPerDay,
+        volumeLabel,
+        buyRatio,
+        strategyLabel,
+
+        // Performance
+        closedPositionsCount: closedPositions.length,
+        wins,
+        losses,
+        winRate,
+        grossProfit,
+        grossLoss,
+        netPnl,
+        profitFactor: profitFactor === Infinity ? 999999 : profitFactor,
+
+        // Open positions
+        openPositionsCount: openPositions.length,
+        openValue,
+        unrealizedPnl,
+
+        // Trade sizing
+        avgTradeSize,
+        medianTradeSize,
+        maxTradeSize,
+
+        // High conviction
+        asymmetricThreshold,
+        asymmetricTradesCount: asymmetricTrades.length,
+        asymmetricVolume,
+        asymmetricVolumePercent: asymmetricVolumePct,
+
+        // Market specialization
+        strengths: strengths.map(s => ({
+          category: s.category,
+          trades: s.trades,
+          winRate: s.winRate,
+          totalPnl: s.totalPnl,
+        })),
+        weaknesses: weaknesses.map(w => ({
+          category: w.category,
+          trades: w.trades,
+          winRate: w.winRate,
+          totalPnl: w.totalPnl,
+        })),
+
+        // Entry odds
+        entryOddsBreakdown,
+
+        // Label
+        label,
+
+        // Recent high-conviction trades
+        recentHighConvictionTrades,
+      });
+
+      await profile.save();
+      console.log(`  ✅ Profile saved to MongoDB (polymarket-traderProfiles)`);
+      console.log(`     ID: ${profile._id}`);
+    } catch (error: any) {
+      console.error(`  ❌ Failed to save profile: ${error.message}`);
+    }
+
+    // Close DB connection
+    await mongoose.connection.close();
+    console.log('  [DB] Connection closed\n');
   }
 }
 

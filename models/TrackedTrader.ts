@@ -14,6 +14,10 @@ export interface ITrackedTrader extends Document {
   profitFactor?: number;
   avgTradeSize?: number;  // For high-conviction detection (>10x = high conviction)
 
+  // High-conviction alerts settings
+  enableHighConvictionAlerts: boolean;
+  asymmetricMultiplier: number; // Default 10 (trades >10x avg = high conviction)
+
   // Copy rules
   copyMultiplier: number; // 1.0 = same size, 0.5 = half size
   maxCopySize: number; // Max USDC per trade
@@ -49,6 +53,10 @@ const TrackedTraderSchema = new Schema<ITrackedTrader>(
     winRate: { type: Number },
     profitFactor: { type: Number },
     avgTradeSize: { type: Number },
+
+    // High-conviction alerts settings
+    enableHighConvictionAlerts: { type: Boolean, default: false },
+    asymmetricMultiplier: { type: Number, default: 10 },
 
     // Copy rules
     copyMultiplier: { type: Number, default: 1.0 },
