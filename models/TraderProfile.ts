@@ -164,7 +164,7 @@ const TraderProfileSchema = new Schema<ITraderProfile>(
   },
   {
     timestamps: true,
-    collection: 'polymarket-traderProfiles',
+    collection: 'polymarket-test-traderProfiles',
   }
 );
 

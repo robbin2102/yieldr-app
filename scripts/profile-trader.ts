@@ -1,13 +1,13 @@
 /**
  * Trader Profiler - Deep analysis of a Polymarket trader
+ * Automatically saves/updates profile in MongoDB (polymarket-test-traderProfiles)
  *
  * Usage:
  *   npx tsx scripts/profile-trader.ts <wallet_address> [days]
- *   npx tsx scripts/profile-trader.ts <wallet_address> [days] --save
  *
  * Examples:
  *   npx tsx scripts/profile-trader.ts 0xb8cd777114b6cc4d488e79eff1fef91e1c521f4b
- *   npx tsx scripts/profile-trader.ts 0xb8cd777114b6cc4d488e79eff1fef91e1c521f4b 30 --save
+ *   npx tsx scripts/profile-trader.ts 0xb8cd777114b6cc4d488e79eff1fef91e1c521f4b 30
  */
 
 import dotenv from 'dotenv';
@@ -469,34 +469,28 @@ function determineTraderLabel(profile: Partial<TraderProfile>): string {
 // ═══════════════════════════════════════════════════════════════
 
 async function main() {
-  console.log('[DEBUG] Script version: 2026-01-17-v5 with MongoDB save');
+  console.log('[DEBUG] Script version: 2026-01-17-v6 with auto-save');
 
   const wallet = process.argv[2];
   const days = parseInt(process.argv[3] || '30');
-  const saveToDb = process.argv.includes('--save');
 
   if (!wallet) {
-    console.log('Usage: npx tsx scripts/profile-trader.ts <wallet_address> [days] [--save]');
-    console.log('');
-    console.log('Options:');
-    console.log('  --save    Save profile to MongoDB (polymarket-traderProfiles)');
+    console.log('Usage: npx tsx scripts/profile-trader.ts <wallet_address> [days]');
     process.exit(1);
   }
 
-  // Connect to MongoDB if --save flag provided
+  // Always connect to MongoDB
   let dbConnected = false;
-  if (saveToDb) {
-    const mongoUri = process.env.MONGO_URI;
-    if (!mongoUri) {
-      console.log('[DB] MONGO_URI not set in env.polyagent - skipping save');
-    } else {
-      try {
-        await mongoose.connect(mongoUri);
-        dbConnected = true;
-        console.log('[DB] Connected to MongoDB');
-      } catch (err: any) {
-        console.log(`[DB] Failed to connect: ${err.message}`);
-      }
+  const mongoUri = process.env.MONGO_URI;
+  if (!mongoUri) {
+    console.log('[DB] WARNING: MONGO_URI not set in env.polyagent - profile will NOT be saved');
+  } else {
+    try {
+      await mongoose.connect(mongoUri);
+      dbConnected = true;
+      console.log('[DB] Connected to MongoDB');
+    } catch (err: any) {
+      console.log(`[DB] Failed to connect: ${err.message} - profile will NOT be saved`);
     }
   }
 
@@ -509,7 +503,7 @@ async function main() {
   console.log('═══════════════════════════════════════════════════════════════');
   console.log(`Wallet:  ${wallet}`);
   console.log(`Period:  Last ${days} days (${startDate} to ${endDate})`);
-  if (saveToDb) console.log(`Save:    ${dbConnected ? 'Yes (MongoDB)' : 'No (connection failed)'}`);
+  console.log(`Save:    ${dbConnected ? 'Yes (MongoDB)' : 'No (not connected)'}`);
   console.log('═══════════════════════════════════════════════════════════════\n');
 
   // Fetch data
@@ -769,9 +763,9 @@ async function main() {
   }
 
   // ═══════════════════════════════════════════════════════════════
-  // Save to MongoDB (if --save flag provided)
+  // Save to MongoDB (always if connected)
   // ═══════════════════════════════════════════════════════════════
-  if (saveToDb && dbConnected) {
+  if (dbConnected) {
     console.log('\n═══════════════════════════════════════════════════════════════');
     console.log('                    SAVING TO MONGODB                           ');
     console.log('═══════════════════════════════════════════════════════════════');
@@ -798,7 +792,8 @@ async function main() {
         trades: e.trades,
       }));
 
-      const profile = new TraderProfile({
+      // Upsert profile (update if exists, insert if new)
+      const profileData = {
         wallet: wallet.toLowerCase(),
         profiledAt: new Date(),
         periodDays: days,
@@ -864,11 +859,17 @@ async function main() {
 
         // Recent high-conviction trades
         recentHighConvictionTrades,
-      });
+      };
 
-      await profile.save();
-      console.log(`  ✅ Profile saved to MongoDB (polymarket-traderProfiles)`);
-      console.log(`     ID: ${profile._id}`);
+      const result = await TraderProfile.findOneAndUpdate(
+        { wallet: wallet.toLowerCase() },
+        { $set: profileData },
+        { upsert: true, new: true }
+      );
+
+      console.log(`  ✅ Profile saved to MongoDB (polymarket-test-traderProfiles)`);
+      console.log(`     Wallet: ${result.wallet}`);
+      console.log(`     ID: ${result._id}`);
     } catch (error: any) {
       console.error(`  ❌ Failed to save profile: ${error.message}`);
     }
