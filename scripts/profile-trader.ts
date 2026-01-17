@@ -481,9 +481,9 @@ async function main() {
 
   // Always connect to MongoDB
   let dbConnected = false;
-  const mongoUri = process.env.MONGO_URI;
+  const mongoUri = process.env.MONGODB_URI;
   if (!mongoUri) {
-    console.log('[DB] WARNING: MONGO_URI not set in env.polyagent - profile will NOT be saved');
+    console.log('[DB] WARNING: MONGODB_URI not set in env.polyagent - profile will NOT be saved');
   } else {
     try {
       await mongoose.connect(mongoUri);
