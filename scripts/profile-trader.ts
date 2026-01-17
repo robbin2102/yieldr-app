@@ -182,81 +182,9 @@ async function fetchWithRetry<T>(
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Proxy Wallet Discovery
-// ═══════════════════════════════════════════════════════════════
-
-/**
- * Discover all related wallets (proxy wallets) for a user.
- * Polymarket uses proxy wallets for trading - the main wallet might not have
- * the actual positions.
- */
-async function discoverRelatedWallets(wallet: string): Promise<string[]> {
-  console.log('  [DEBUG] Discovering related wallets...');
-
-  const wallets = [wallet.toLowerCase()];
-
-  try {
-    // Try the /profiles endpoint to get proxy wallets
-    const profileUrl = `${API_BASE}/profiles/${wallet.toLowerCase()}`;
-    console.log(`  [DEBUG] Fetching profile: ${profileUrl}`);
-
-    const profile = await fetchWithRetry<any>(profileUrl);
-
-    if (profile) {
-      console.log(`  [DEBUG] Profile found: ${profile.name || profile.pseudonym || 'Unknown'}`);
-
-      // Check for proxyWallets array in profile
-      if (profile.proxyWallets && Array.isArray(profile.proxyWallets)) {
-        for (const proxy of profile.proxyWallets) {
-          const proxyAddr = (proxy.address || proxy).toLowerCase();
-          if (!wallets.includes(proxyAddr)) {
-            wallets.push(proxyAddr);
-          }
-        }
-        console.log(`  [DEBUG] Found ${profile.proxyWallets.length} proxy wallets`);
-      }
-
-      // Also check for linked EOA wallets
-      if (profile.linkedWallets && Array.isArray(profile.linkedWallets)) {
-        for (const linked of profile.linkedWallets) {
-          const linkedAddr = (linked.address || linked).toLowerCase();
-          if (!wallets.includes(linkedAddr)) {
-            wallets.push(linkedAddr);
-          }
-        }
-      }
-    }
-  } catch (error: any) {
-    console.log(`  [DEBUG] Could not fetch profile (may not exist): ${error.message}`);
-  }
-
-  // Also try the /related-wallets endpoint if available
-  try {
-    const relatedUrl = `${API_BASE}/related-wallets?user=${wallet.toLowerCase()}`;
-    const related = await fetchWithRetry<any[]>(relatedUrl);
-
-    if (related && Array.isArray(related)) {
-      for (const w of related) {
-        const addr = (w.address || w.wallet || w).toLowerCase();
-        if (typeof addr === 'string' && !wallets.includes(addr)) {
-          wallets.push(addr);
-        }
-      }
-    }
-  } catch {
-    // Endpoint might not exist, ignore
-  }
-
-  if (wallets.length > 1) {
-    console.log(`  [DEBUG] Total wallets to query: ${wallets.length}`);
-    wallets.forEach((w, i) => console.log(`    ${i === 0 ? '(main)' : '(proxy)'} ${w}`));
-  }
-
-  return wallets;
-}
-
-// ═══════════════════════════════════════════════════════════════
 // API Functions
+// Note: API already returns data from all proxy wallets when querying
+// with the user profile address - no need to discover proxy wallets
 // ═══════════════════════════════════════════════════════════════
 
 async function fetchActivities(wallet: string, days: number): Promise<Activity[]> {
@@ -359,8 +287,8 @@ async function fetchClosedPositions(wallet: string, days: number): Promise<Close
   let done = false;
 
   while (!done && offset <= MAX_OFFSET) {
-    // Note: API docs show /v1/closed-positions but /closed-positions also works
-    const url = `${API_BASE}/closed-positions?user=${wallet}&limit=${LIMIT}&offset=${offset}&sortBy=TIMESTAMP&sortDirection=DESC`;
+    // Use /v1/closed-positions endpoint (returns data across all proxy wallets)
+    const url = `${API_BASE}/v1/closed-positions?user=${wallet}&limit=${LIMIT}&offset=${offset}&sortBy=TIMESTAMP&sortDirection=DESC`;
     console.log(`  [DEBUG] URL: ${url}`);
 
     const response = await fetch(url);
@@ -403,92 +331,6 @@ async function fetchClosedPositions(wallet: string, days: number): Promise<Close
     console.log(`  Hit API offset limit (${MAX_OFFSET}) - may have more closed positions`);
   }
 
-  return allPositions;
-}
-
-// ═══════════════════════════════════════════════════════════════
-// Multi-Wallet Aggregation Functions
-// ═══════════════════════════════════════════════════════════════
-
-/**
- * Fetch activities from all related wallets and deduplicate by txHash
- */
-async function fetchAllActivities(wallets: string[], days: number): Promise<Activity[]> {
-  const allActivities: Activity[] = [];
-  const seenTxHashes = new Set<string>();
-
-  for (const wallet of wallets) {
-    console.log(`  Fetching activities for ${wallet.slice(0, 10)}...`);
-    try {
-      const activities = await fetchActivities(wallet, days);
-      for (const a of activities) {
-        if (!seenTxHashes.has(a.transactionHash)) {
-          seenTxHashes.add(a.transactionHash);
-          allActivities.push(a);
-        }
-      }
-    } catch (error: any) {
-      console.log(`  [WARN] Failed to fetch activities for ${wallet.slice(0, 10)}: ${error.message}`);
-    }
-  }
-
-  // Sort by timestamp desc
-  allActivities.sort((a, b) => b.timestamp - a.timestamp);
-  return allActivities;
-}
-
-/**
- * Fetch open positions from all related wallets and deduplicate by conditionId+asset
- */
-async function fetchAllOpenPositions(wallets: string[]): Promise<OpenPosition[]> {
-  const allPositions: OpenPosition[] = [];
-  const seenKeys = new Set<string>();
-
-  for (const wallet of wallets) {
-    console.log(`  Fetching open positions for ${wallet.slice(0, 10)}...`);
-    try {
-      const positions = await fetchOpenPositions(wallet);
-      for (const p of positions) {
-        const key = `${p.conditionId}_${p.asset}`;
-        if (!seenKeys.has(key)) {
-          seenKeys.add(key);
-          allPositions.push(p);
-        }
-      }
-    } catch (error: any) {
-      console.log(`  [WARN] Failed to fetch open positions for ${wallet.slice(0, 10)}: ${error.message}`);
-    }
-  }
-
-  return allPositions;
-}
-
-/**
- * Fetch closed positions from all related wallets and deduplicate by conditionId+asset+timestamp
- */
-async function fetchAllClosedPositions(wallets: string[], days: number): Promise<ClosedPosition[]> {
-  const allPositions: ClosedPosition[] = [];
-  const seenKeys = new Set<string>();
-
-  for (const wallet of wallets) {
-    console.log(`  Fetching closed positions for ${wallet.slice(0, 10)}...`);
-    try {
-      const positions = await fetchClosedPositions(wallet, days);
-      for (const p of positions) {
-        // Create composite key - some positions might appear for same market/asset at same timestamp
-        const key = `${p.conditionId}_${p.asset}_${p.timestamp}`;
-        if (!seenKeys.has(key)) {
-          seenKeys.add(key);
-          allPositions.push(p);
-        }
-      }
-    } catch (error: any) {
-      console.log(`  [WARN] Failed to fetch closed positions for ${wallet.slice(0, 10)}: ${error.message}`);
-    }
-  }
-
-  // Sort by timestamp desc
-  allPositions.sort((a, b) => b.timestamp - a.timestamp);
   return allPositions;
 }
 
@@ -705,7 +547,7 @@ async function connectDB(): Promise<boolean> {
 // ═══════════════════════════════════════════════════════════════
 
 async function main() {
-  console.log('[DEBUG] Script version: 2026-01-17-v3 with proxy wallet discovery');
+  console.log('[DEBUG] Script version: 2026-01-17-v4 with /v1/ API endpoints');
 
   const args = process.argv.slice(2);
   const saveToDb = args.includes('--save');
@@ -739,23 +581,18 @@ async function main() {
   if (saveToDb) console.log(`Save:    ${dbConnected ? 'Yes (MongoDB)' : 'No (DB connection failed)'}`);
   console.log('═══════════════════════════════════════════════════════════════\n');
 
-  // Discover proxy wallets
-  console.log('Discovering related wallets (proxy wallets)...');
-  const wallets = await discoverRelatedWallets(wallet);
-  console.log(`  Found ${wallets.length} wallet(s) to query\n`);
+  // Fetch data (API returns data across all proxy wallets automatically)
+  console.log('Fetching activities...');
+  const activities = await fetchActivities(wallet, days);
+  console.log(`  Found ${activities.length} activities\n`);
 
-  // Fetch data from ALL wallets
-  console.log('Fetching activities from all wallets...');
-  const activities = await fetchAllActivities(wallets, days);
-  console.log(`  Total: ${activities.length} activities\n`);
+  console.log('Fetching open positions...');
+  const openPositions = await fetchOpenPositions(wallet);
+  console.log(`  Found ${openPositions.length} open positions\n`);
 
-  console.log('Fetching open positions from all wallets...');
-  const openPositions = await fetchAllOpenPositions(wallets);
-  console.log(`  Total: ${openPositions.length} open positions\n`);
-
-  console.log('Fetching closed positions from all wallets...');
-  const closedPositions = await fetchAllClosedPositions(wallets, days);
-  console.log(`  Total: ${closedPositions.length} closed positions\n`);
+  console.log('Fetching closed positions...');
+  const closedPositions = await fetchClosedPositions(wallet, days);
+  console.log(`  Found ${closedPositions.length} closed positions\n`);
 
   // Count activities by type
   let buyCount = 0, sellCount = 0, redeemCount = 0, otherCount = 0;
