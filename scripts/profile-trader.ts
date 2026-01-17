@@ -218,7 +218,7 @@ async function fetchClosedPositions(wallet: string, days: number): Promise<Close
   let done = false;
 
   while (!done) {
-    const url = `${API_BASE}/closed-positions?user=${wallet}&limit=100&offset=${offset}&sortBy=TIMESTAMP&sortDirection=DESC`;
+    const url = `${API_BASE}/closed-positions?user=${wallet}&limit=500&offset=${offset}&sortBy=TIMESTAMP&sortDirection=DESC`;
     const response = await fetch(url);
     if (!response.ok) throw new Error(`API error: ${response.status}`);
 
@@ -238,8 +238,8 @@ async function fetchClosedPositions(wallet: string, days: number): Promise<Close
       }
     }
 
-    if (batch.length < 100) break;
-    offset += 100;
+    if (batch.length < 500) break;
+    offset += 500;
 
     await new Promise(r => setTimeout(r, 100));
   }
