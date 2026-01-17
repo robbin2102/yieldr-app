@@ -3,11 +3,12 @@
  * Automatically saves/updates profile in MongoDB (polymarket-test-traderProfiles)
  *
  * Usage:
- *   npx tsx scripts/profile-trader.ts <wallet_address> [days]
+ *   npx tsx scripts/profile-trader.ts <wallet_address> [days] [conviction_multiplier]
  *
  * Examples:
  *   npx tsx scripts/profile-trader.ts 0xb8cd777114b6cc4d488e79eff1fef91e1c521f4b
  *   npx tsx scripts/profile-trader.ts 0xb8cd777114b6cc4d488e79eff1fef91e1c521f4b 30
+ *   npx tsx scripts/profile-trader.ts 0xb8cd777114b6cc4d488e79eff1fef91e1c521f4b 30 20  # 20x threshold
  */
 
 import dotenv from 'dotenv';
@@ -471,9 +472,11 @@ function determineTraderLabel(profile: Partial<TraderProfile>): string {
 async function main() {
   const wallet = process.argv[2];
   const days = parseInt(process.argv[3] || '30');
+  const convictionMultiplier = parseInt(process.argv[4] || '10'); // Default 10x avg trade size
 
   if (!wallet) {
-    console.log('Usage: npx tsx scripts/profile-trader.ts <wallet_address> [days]');
+    console.log('Usage: npx tsx scripts/profile-trader.ts <wallet_address> [days] [conviction_multiplier]');
+    console.log('  conviction_multiplier: trades > Nx avg size are "high conviction" (default: 10)');
     process.exit(1);
   }
 
@@ -659,10 +662,9 @@ async function main() {
   console.log(`  Max Trade Size:     $${maxTradeSize.toFixed(2)}`);
 
   // ═══════════════════════════════════════════════════════════════
-  // ASYMMETRIC TRADE DETECTION (>10x avg size = HIGH CONVICTION)
+  // ASYMMETRIC TRADE DETECTION (>Nx avg size = HIGH CONVICTION)
   // ═══════════════════════════════════════════════════════════════
-  const ASYMMETRIC_MULTIPLIER = 10;
-  const asymmetricThreshold = avgTradeSize * ASYMMETRIC_MULTIPLIER;
+  const asymmetricThreshold = avgTradeSize * convictionMultiplier;
 
   // Find all high-conviction trades
   const asymmetricTrades = activities
@@ -676,9 +678,9 @@ async function main() {
     : 0;
 
   console.log('\n═══════════════════════════════════════════════════════════════');
-  console.log('                    HIGH CONVICTION TRADES (>10x avg)           ');
+  console.log(`                    HIGH CONVICTION TRADES (>${convictionMultiplier}x avg)           `);
   console.log('═══════════════════════════════════════════════════════════════');
-  console.log(`  Threshold:          $${asymmetricThreshold.toFixed(2)} (10x avg)`);
+  console.log(`  Threshold:          $${asymmetricThreshold.toFixed(2)} (${convictionMultiplier}x avg)`);
   console.log(`  Count:              ${asymmetricTrades.length} trades (${asymmetricPct.toFixed(2)}% of all trades)`);
   console.log(`  Volume:             $${asymmetricVolume.toFixed(2)} (${asymmetricVolumePct.toFixed(1)}% of total volume)`);
 
@@ -706,7 +708,7 @@ async function main() {
       console.log(`\n  ... and ${asymmetricTrades.length - 15} more high-conviction trades`);
     }
   } else {
-    console.log('\n  No high-conviction trades detected (all trades < 10x avg)');
+    console.log(`\n  No high-conviction trades detected (all trades < ${convictionMultiplier}x avg)`);
   }
 
   if (strengths.length > 0) {
