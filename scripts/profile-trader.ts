@@ -141,10 +141,14 @@ interface TraderProfile {
 // ═══════════════════════════════════════════════════════════════
 
 async function fetchActivities(wallet: string, days: number): Promise<Activity[]> {
+  console.log(`  [DEBUG] fetchActivities called: wallet=${wallet.slice(0,10)}..., days=${days}`);
+
   const now = Math.floor(Date.now() / 1000);
   const startTs = now - (days * 24 * 60 * 60);
   const LIMIT = 500;       // API max per request
   const MAX_OFFSET = 10000; // API max offset
+
+  console.log(`  [DEBUG] Time range: ${new Date(startTs * 1000).toISOString()} to ${new Date(now * 1000).toISOString()}`);
 
   let allActivities: Activity[] = [];
   let offset = 0;
@@ -152,10 +156,16 @@ async function fetchActivities(wallet: string, days: number): Promise<Activity[]
 
   while (!done && offset <= MAX_OFFSET) {
     const url = `${API_BASE}/activity?user=${wallet}&limit=${LIMIT}&offset=${offset}&sortBy=TIMESTAMP&sortDirection=DESC`;
+    console.log(`  [DEBUG] Fetching: ${url.substring(0, 80)}...`);
+
     const response = await fetch(url);
+    console.log(`  [DEBUG] Response status: ${response.status}`);
+
     if (!response.ok) throw new Error(`API error: ${response.status}`);
 
     const batch = await response.json() as Activity[];
+    console.log(`  [DEBUG] Batch size: ${batch.length}`);
+
     if (batch.length === 0) break;
 
     // Check last activity in batch for progress
@@ -449,6 +459,8 @@ function determineTraderLabel(profile: Partial<TraderProfile>): string {
 // ═══════════════════════════════════════════════════════════════
 
 async function main() {
+  console.log('[DEBUG] Script version: 2026-01-17-v2 with pagination');
+
   const wallet = process.argv[2];
   const days = parseInt(process.argv[3] || '30');
 
