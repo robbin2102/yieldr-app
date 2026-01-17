@@ -4,9 +4,13 @@
  * Usage:
  *   npx tsx scripts/trade-alerts.ts              # Check once and exit
  *   npx tsx scripts/trade-alerts.ts --watch      # Continuous monitoring (60s interval)
- *   npx tsx scripts/trade-alerts.ts --add <wallet> <label>  # Add trader to track
+ *   npx tsx scripts/trade-alerts.ts --add <wallet> <label> [backfill_hours]  # Add trader
  *   npx tsx scripts/trade-alerts.ts --list       # List tracked traders
  *   npx tsx scripts/trade-alerts.ts --pending    # Show pending alerts
+ *
+ * Examples:
+ *   --add 0x123... "Whale1"       # Add trader, start tracking from now
+ *   --add 0x123... "Whale1" 24    # Add trader, backfill last 24 hours
  *
  * Environment:
  *   MONGODB_URI - MongoDB connection string
@@ -73,18 +77,48 @@ async function fetchWithRetry(url: string, retries = 3): Promise<Response> {
 }
 
 async function fetchNewActivities(wallet: string, sinceTimestamp: number): Promise<Activity[]> {
-  // Fetch activities newer than sinceTimestamp
-  const url = `${API_BASE}/activity?user=${wallet}&limit=100&sortBy=TIMESTAMP&sortDirection=DESC`;
+  // Paginate to ensure we catch all activities since lastSeenTimestamp
+  const LIMIT = 500;
+  const MAX_OFFSET = 2000;
+  let allActivities: Activity[] = [];
+  let offset = 0;
 
-  const response = await fetchWithRetry(url);
-  const activities = (await response.json()) as Activity[];
+  while (offset <= MAX_OFFSET) {
+    const url = `${API_BASE}/activity?user=${wallet}&limit=${LIMIT}&offset=${offset}&sortBy=TIMESTAMP&sortDirection=DESC`;
+    const response = await fetchWithRetry(url);
+    const batch = (await response.json()) as Activity[];
 
-  // Filter to only new activities (TRADE and REDEEM types)
-  return activities.filter(
-    (a) =>
-      a.timestamp > sinceTimestamp &&
-      (a.type === 'TRADE' || a.type === 'REDEEM')
-  );
+    if (batch.length === 0) break;
+
+    // Filter to trades/redeems newer than sinceTimestamp
+    for (const activity of batch) {
+      if (activity.timestamp > sinceTimestamp) {
+        if (activity.type === 'TRADE' || activity.type === 'REDEEM') {
+          allActivities.push(activity);
+        }
+      } else {
+        // Reached activities older than sinceTimestamp, stop
+        return allActivities;
+      }
+    }
+
+    if (batch.length < LIMIT) break;
+    offset += LIMIT;
+    await new Promise(r => setTimeout(r, 100));
+  }
+
+  return allActivities;
+}
+
+async function fetchLatestActivity(wallet: string): Promise<Activity | null> {
+  const url = `${API_BASE}/activity?user=${wallet}&limit=1&sortBy=TIMESTAMP&sortDirection=DESC`;
+  try {
+    const response = await fetchWithRetry(url);
+    const activities = (await response.json()) as Activity[];
+    return activities[0] || null;
+  } catch {
+    return null;
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -253,24 +287,61 @@ async function checkTraders(): Promise<number> {
   return totalNewAlerts;
 }
 
-async function addTrader(wallet: string, label: string) {
+async function addTrader(wallet: string, label: string, backfillHours = 0) {
   const existing = await TrackedTrader.findOne({ wallet: wallet.toLowerCase() });
   if (existing) {
     console.log(`Trader ${wallet} already exists as "${existing.label}"`);
     return;
   }
 
+  // Determine starting timestamp
+  let lastSeenTimestamp = Math.floor(Date.now() / 1000);
+
+  if (backfillHours > 0) {
+    // Set lastSeenTimestamp to N hours ago to catch recent trades
+    lastSeenTimestamp = Math.floor(Date.now() / 1000) - (backfillHours * 60 * 60);
+    console.log(`Backfilling last ${backfillHours} hours of activity...`);
+  }
+
   const trader = new TrackedTrader({
     wallet: wallet.toLowerCase(),
     label,
-    lastSeenTimestamp: Math.floor(Date.now() / 1000), // Start from now
+    lastSeenTimestamp,
   });
 
   await trader.save();
   console.log(`Added trader: ${label} (${wallet})`);
+
+  // If backfilling, immediately check for activities
+  if (backfillHours > 0) {
+    const activities = await fetchNewActivities(wallet.toLowerCase(), lastSeenTimestamp);
+    if (activities.length > 0) {
+      console.log(`  Found ${activities.length} activities in last ${backfillHours}h`);
+      for (const activity of activities) {
+        const alert = await createAlert(trader, activity);
+        if (alert) {
+          console.log(`  📝 ${alert.side || alert.type} ${alert.outcome} - $${alert.usdcValue.toFixed(2)}`);
+        }
+        if (activity.timestamp > trader.lastSeenTimestamp) {
+          trader.lastSeenTimestamp = activity.timestamp;
+        }
+      }
+      trader.totalAlerts = activities.length;
+      trader.lastUpdatedAt = new Date();
+      await trader.save();
+    } else {
+      console.log(`  No activities found in last ${backfillHours}h`);
+    }
+  }
 }
 
 async function listTraders() {
+  // Show database info
+  const dbName = mongoose.connection.db?.databaseName || 'unknown';
+  console.log(`[DB] Database: ${dbName}`);
+  console.log(`[DB] Traders collection: polymarket-trackedTraders`);
+  console.log(`[DB] Alerts collection: polymarket-tradeAlerts\n`);
+
   const traders = await TrackedTrader.find({}).sort({ addedAt: -1 });
 
   if (traders.length === 0) {
@@ -287,9 +358,21 @@ async function listTraders() {
     console.log(`\n${status} ${t.label}`);
     console.log(`   Wallet: ${t.wallet}`);
     console.log(`   Strategy: ${t.strategyLabel} | Volume: ${t.volumeLabel}`);
-    console.log(`   Copy: ${t.copyMultiplier}x (max $${t.maxCopySize})`);
     console.log(`   Alerts: ${t.totalAlerts} | Copied: ${t.totalCopied}`);
     console.log(`   Last check: ${new Date(t.lastSeenTimestamp * 1000).toISOString()}`);
+
+    // Fetch last activity from API to show when trader was last active
+    const lastActivity = await fetchLatestActivity(t.wallet);
+    if (lastActivity) {
+      const lastTradeTime = new Date(lastActivity.timestamp * 1000);
+      const ageMinutes = Math.floor((Date.now() - lastTradeTime.getTime()) / 1000 / 60);
+      const ageStr = ageMinutes < 60 ? `${ageMinutes}m ago` :
+                     ageMinutes < 1440 ? `${Math.floor(ageMinutes / 60)}h ago` :
+                     `${Math.floor(ageMinutes / 1440)}d ago`;
+      console.log(`   Last trade: ${lastActivity.type} ${lastActivity.outcome?.substring(0, 20) || ''} (${ageStr})`);
+    } else {
+      console.log(`   Last trade: Unable to fetch`);
+    }
   }
 
   console.log('\n═══════════════════════════════════════════════════════════════\n');
@@ -380,7 +463,8 @@ async function main() {
   const args = process.argv.slice(2);
 
   if (args[0] === '--add' && args[1] && args[2]) {
-    await addTrader(args[1], args[2]);
+    const backfillHours = args[3] ? parseInt(args[3]) : 0;
+    await addTrader(args[1], args[2], backfillHours);
   } else if (args[0] === '--list') {
     await listTraders();
   } else if (args[0] === '--pending') {
@@ -399,9 +483,9 @@ async function main() {
     console.log(`Total new alerts: ${newAlerts}`);
     console.log('───────────────────────────────────────────────────────────────');
     console.log('Commands:');
-    console.log('  --watch     Continuous monitoring');
-    console.log('  --add       Add trader: --add <wallet> <label>');
-    console.log('  --list      List tracked traders');
+    console.log('  --watch     Continuous monitoring (60s poll)');
+    console.log('  --add       Add trader: --add <wallet> <label> [backfill_hours]');
+    console.log('  --list      List tracked traders with last activity');
     console.log('  --pending   Show pending alerts');
     console.log('───────────────────────────────────────────────────────────────\n');
   }
