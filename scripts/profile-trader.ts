@@ -15,8 +15,19 @@ import mongoose from 'mongoose';
 import path from 'path';
 import { TraderProfile } from '../models/TraderProfile';
 
-// Load env.polyagent for MONGO_URI
-dotenv.config({ path: path.resolve(process.cwd(), 'env.polyagent') });
+// Load env.polyagent for MONGODB_URI
+const envPath = path.resolve(process.cwd(), 'env.polyagent');
+console.log(`[DEBUG] Loading env from: ${envPath}`);
+const result = dotenv.config({ path: envPath });
+if (result.error) {
+  console.log(`[DEBUG] Error loading env file: ${result.error.message}`);
+} else {
+  console.log(`[DEBUG] Env file loaded successfully`);
+}
+console.log(`[DEBUG] MONGODB_URI defined: ${!!process.env.MONGODB_URI}`);
+if (process.env.MONGODB_URI) {
+  console.log(`[DEBUG] MONGODB_URI starts with: ${process.env.MONGODB_URI.substring(0, 30)}...`);
+}
 
 const API_BASE = 'https://data-api.polymarket.com';
 
@@ -482,15 +493,20 @@ async function main() {
   // Always connect to MongoDB
   let dbConnected = false;
   const mongoUri = process.env.MONGODB_URI;
+  console.log(`[DB DEBUG] mongoUri from env: ${mongoUri ? 'SET' : 'NOT SET'}`);
   if (!mongoUri) {
     console.log('[DB] WARNING: MONGODB_URI not set in env.polyagent - profile will NOT be saved');
   } else {
     try {
+      console.log(`[DB DEBUG] Attempting to connect to MongoDB...`);
       await mongoose.connect(mongoUri);
       dbConnected = true;
       console.log('[DB] Connected to MongoDB');
+      console.log(`[DB DEBUG] Connection state: ${mongoose.connection.readyState}`);
+      console.log(`[DB DEBUG] Database name: ${mongoose.connection.db?.databaseName}`);
     } catch (err: any) {
       console.log(`[DB] Failed to connect: ${err.message} - profile will NOT be saved`);
+      console.log(`[DB DEBUG] Full error:`, err);
     }
   }
 
@@ -765,12 +781,16 @@ async function main() {
   // ═══════════════════════════════════════════════════════════════
   // Save to MongoDB (always if connected)
   // ═══════════════════════════════════════════════════════════════
+  console.log(`\n[SAVE DEBUG] dbConnected = ${dbConnected}`);
+  console.log(`[SAVE DEBUG] mongoose.connection.readyState = ${mongoose.connection.readyState}`);
+
   if (dbConnected) {
     console.log('\n═══════════════════════════════════════════════════════════════');
     console.log('                    SAVING TO MONGODB                           ');
     console.log('═══════════════════════════════════════════════════════════════');
 
     try {
+      console.log(`[SAVE DEBUG] About to save profile for wallet: ${wallet.toLowerCase()}`);
       // Build recent high-conviction trades for storage
       const recentHighConvictionTrades = asymmetricTrades
         .sort((a, b) => b.timestamp - a.timestamp)
@@ -861,17 +881,22 @@ async function main() {
         recentHighConvictionTrades,
       };
 
+      console.log(`[SAVE DEBUG] Calling TraderProfile.findOneAndUpdate...`);
+      console.log(`[SAVE DEBUG] TraderProfile model collection: ${TraderProfile.collection?.collectionName}`);
+
       const result = await TraderProfile.findOneAndUpdate(
         { wallet: wallet.toLowerCase() },
         { $set: profileData },
         { upsert: true, new: true }
       );
 
+      console.log(`[SAVE DEBUG] findOneAndUpdate returned:`, result ? 'document' : 'null');
       console.log(`  ✅ Profile saved to MongoDB (polymarket-test-traderProfiles)`);
       console.log(`     Wallet: ${result.wallet}`);
       console.log(`     ID: ${result._id}`);
     } catch (error: any) {
       console.error(`  ❌ Failed to save profile: ${error.message}`);
+      console.error(`[SAVE DEBUG] Full error:`, error);
     }
 
     // Close DB connection
