@@ -60,7 +60,7 @@ const TrackedTraderSchema = new Schema<ITrackedTrader>(
 
     // Copy rules
     copyMultiplier: { type: Number, default: 1.0 },
-    maxCopySize: { type: Number, default: 100 },
+    maxCopySize: { type: Number, default: 10000 }, // High default - user decides manually
     skipSmallBets: { type: Boolean, default: true },
     smallBetThreshold: { type: Number, default: 50 },
 

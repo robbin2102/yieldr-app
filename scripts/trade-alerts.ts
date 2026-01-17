@@ -57,15 +57,26 @@ async function connectDB() {
 // API Functions
 // ═══════════════════════════════════════════════════════════════
 
-async function fetchNewActivities(wallet: string, sinceTimestamp: number): Promise<Activity[]> {
-  const now = Math.floor(Date.now() / 1000);
+async function fetchWithRetry(url: string, retries = 3): Promise<Response> {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`API error: ${response.status}`);
+      return response;
+    } catch (error: any) {
+      if (attempt === retries) throw error;
+      const delay = attempt * 2000; // 2s, 4s, 6s
+      await new Promise(r => setTimeout(r, delay));
+    }
+  }
+  throw new Error('Fetch failed after retries');
+}
 
+async function fetchNewActivities(wallet: string, sinceTimestamp: number): Promise<Activity[]> {
   // Fetch activities newer than sinceTimestamp
   const url = `${API_BASE}/activity?user=${wallet}&limit=100&sortBy=TIMESTAMP&sortDirection=DESC`;
 
-  const response = await fetch(url);
-  if (!response.ok) throw new Error(`API error: ${response.status}`);
-
+  const response = await fetchWithRetry(url);
   const activities = (await response.json()) as Activity[];
 
   // Filter to only new activities (TRADE and REDEEM types)
