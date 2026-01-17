@@ -143,14 +143,15 @@ interface TraderProfile {
 async function fetchActivities(wallet: string, days: number): Promise<Activity[]> {
   const now = Math.floor(Date.now() / 1000);
   const startTs = now - (days * 24 * 60 * 60);
-  const MAX_ACTIVITIES = 20000; // Increased limit
+  const LIMIT = 500;       // API max per request
+  const MAX_OFFSET = 10000; // API max offset
 
   let allActivities: Activity[] = [];
   let offset = 0;
   let done = false;
 
-  while (!done && allActivities.length < MAX_ACTIVITIES) {
-    const url = `${API_BASE}/activity?user=${wallet}&limit=500&offset=${offset}&sortBy=TIMESTAMP&sortDirection=DESC`;
+  while (!done && offset <= MAX_OFFSET) {
+    const url = `${API_BASE}/activity?user=${wallet}&limit=${LIMIT}&offset=${offset}&sortBy=TIMESTAMP&sortDirection=DESC`;
     const response = await fetch(url);
     if (!response.ok) throw new Error(`API error: ${response.status}`);
 
@@ -171,26 +172,29 @@ async function fetchActivities(wallet: string, days: number): Promise<Activity[]
       }
     }
 
-    if (batch.length < 500) break;
-    offset += 500;
+    if (batch.length < LIMIT) break;
+    offset += LIMIT;
 
     // Rate limiting
     await new Promise(r => setTimeout(r, 100));
   }
 
-  if (allActivities.length >= MAX_ACTIVITIES) {
-    console.log(`  Hit MAX_ACTIVITIES limit (${MAX_ACTIVITIES})`);
+  if (offset > MAX_OFFSET && !done) {
+    console.log(`  Hit API offset limit (${MAX_OFFSET}) - may have more activities`);
   }
 
   return allActivities;
 }
 
 async function fetchOpenPositions(wallet: string): Promise<OpenPosition[]> {
+  const LIMIT = 500;        // API max per request
+  const MAX_OFFSET = 10000; // API max offset
+
   let allPositions: OpenPosition[] = [];
   let offset = 0;
 
-  while (true) {
-    const url = `${API_BASE}/positions?user=${wallet}&sizeThreshold=0.1&limit=500&offset=${offset}`;
+  while (offset <= MAX_OFFSET) {
+    const url = `${API_BASE}/positions?user=${wallet}&sizeThreshold=0.1&limit=${LIMIT}&offset=${offset}`;
     const response = await fetch(url);
     if (!response.ok) throw new Error(`API error: ${response.status}`);
 
@@ -200,10 +204,14 @@ async function fetchOpenPositions(wallet: string): Promise<OpenPosition[]> {
     if (batch.length === 0) break;
     allPositions = allPositions.concat(batch);
 
-    if (batch.length < 500) break;
-    offset += 500;
+    if (batch.length < LIMIT) break;
+    offset += LIMIT;
 
     await new Promise(r => setTimeout(r, 100));
+  }
+
+  if (offset > MAX_OFFSET) {
+    console.log(`  Hit API offset limit (${MAX_OFFSET}) - may have more positions`);
   }
 
   return allPositions;
@@ -212,13 +220,15 @@ async function fetchOpenPositions(wallet: string): Promise<OpenPosition[]> {
 async function fetchClosedPositions(wallet: string, days: number): Promise<ClosedPosition[]> {
   const now = Math.floor(Date.now() / 1000);
   const startTs = now - (days * 24 * 60 * 60);
+  const LIMIT = 50;          // API max per request (closed-positions max is 50!)
+  const MAX_OFFSET = 100000; // API max offset
 
   let allPositions: ClosedPosition[] = [];
   let offset = 0;
   let done = false;
 
-  while (!done) {
-    const url = `${API_BASE}/closed-positions?user=${wallet}&limit=500&offset=${offset}&sortBy=TIMESTAMP&sortDirection=DESC`;
+  while (!done && offset <= MAX_OFFSET) {
+    const url = `${API_BASE}/closed-positions?user=${wallet}&limit=${LIMIT}&offset=${offset}&sortBy=TIMESTAMP&sortDirection=DESC`;
     const response = await fetch(url);
     if (!response.ok) throw new Error(`API error: ${response.status}`);
 
@@ -238,10 +248,14 @@ async function fetchClosedPositions(wallet: string, days: number): Promise<Close
       }
     }
 
-    if (batch.length < 500) break;
-    offset += 500;
+    if (batch.length < LIMIT) break;
+    offset += LIMIT;
 
     await new Promise(r => setTimeout(r, 100));
+  }
+
+  if (offset > MAX_OFFSET && !done) {
+    console.log(`  Hit API offset limit (${MAX_OFFSET}) - may have more closed positions`);
   }
 
   return allPositions;
