@@ -76,17 +76,33 @@ async function fetchWithRetry(url: string, retries = 3): Promise<Response> {
   throw new Error('Fetch failed after retries');
 }
 
-async function fetchNewActivities(wallet: string, sinceTimestamp: number): Promise<Activity[]> {
+async function fetchNewActivities(wallet: string, sinceTimestamp: number, debug = false): Promise<Activity[]> {
   // Paginate to ensure we catch all activities since lastSeenTimestamp
   const LIMIT = 500;
   const MAX_OFFSET = 2000;
   let allActivities: Activity[] = [];
   let offset = 0;
 
+  if (debug) {
+    console.log(`    [DEBUG] sinceTimestamp: ${sinceTimestamp} (${new Date(sinceTimestamp * 1000).toISOString()})`);
+  }
+
   while (offset <= MAX_OFFSET) {
     const url = `${API_BASE}/activity?user=${wallet}&limit=${LIMIT}&offset=${offset}&sortBy=TIMESTAMP&sortDirection=DESC`;
     const response = await fetchWithRetry(url);
     const batch = (await response.json()) as Activity[];
+
+    if (debug && offset === 0) {
+      console.log(`    [DEBUG] API returned ${batch.length} activities`);
+      if (batch.length > 0) {
+        const newest = batch[0];
+        const oldest = batch[batch.length - 1];
+        console.log(`    [DEBUG] Newest: ${newest.type} at ${newest.timestamp} (${new Date(newest.timestamp * 1000).toISOString()})`);
+        console.log(`    [DEBUG] Oldest: ${oldest.type} at ${oldest.timestamp} (${new Date(oldest.timestamp * 1000).toISOString()})`);
+        console.log(`    [DEBUG] Need activities > ${sinceTimestamp}, newest is ${newest.timestamp}`);
+        console.log(`    [DEBUG] Is newest > sinceTimestamp? ${newest.timestamp > sinceTimestamp}`);
+      }
+    }
 
     if (batch.length === 0) break;
 
@@ -95,9 +111,15 @@ async function fetchNewActivities(wallet: string, sinceTimestamp: number): Promi
       if (activity.timestamp > sinceTimestamp) {
         if (activity.type === 'TRADE' || activity.type === 'REDEEM') {
           allActivities.push(activity);
+          if (debug) {
+            console.log(`    [DEBUG] Found: ${activity.type} ${activity.side || ''} at ${activity.timestamp}`);
+          }
         }
       } else {
         // Reached activities older than sinceTimestamp, stop
+        if (debug) {
+          console.log(`    [DEBUG] Reached old activity at ${activity.timestamp}, stopping`);
+        }
         return allActivities;
       }
     }
@@ -225,7 +247,7 @@ async function createAlert(trader: ITrackedTrader, activity: Activity): Promise<
 // Main Functions
 // ═══════════════════════════════════════════════════════════════
 
-async function checkTraders(): Promise<number> {
+async function checkTraders(debug = false): Promise<number> {
   const traders = await TrackedTrader.find({ isActive: true });
 
   if (traders.length === 0) {
@@ -239,7 +261,7 @@ async function checkTraders(): Promise<number> {
     console.log(`Checking ${trader.label} (${trader.wallet.slice(0, 10)}...)...`);
 
     try {
-      const activities = await fetchNewActivities(trader.wallet, trader.lastSeenTimestamp);
+      const activities = await fetchNewActivities(trader.wallet, trader.lastSeenTimestamp, debug);
 
       if (activities.length > 0) {
         console.log(`  Found ${activities.length} new activities`);
@@ -419,17 +441,17 @@ async function showPendingAlerts() {
   console.log('═══════════════════════════════════════════════════════════════\n');
 }
 
-async function watchMode() {
+async function watchMode(debug = false) {
   console.log('═══════════════════════════════════════════════════════════════');
   console.log('                    TRADE ALERTS - WATCH MODE                   ');
   console.log('═══════════════════════════════════════════════════════════════');
-  console.log('Polling every 60 seconds. Press Ctrl+C to stop.\n');
+  console.log(`Polling every 60 seconds. ${debug ? '[DEBUG MODE]' : ''} Press Ctrl+C to stop.\n`);
 
   while (true) {
     const timestamp = new Date().toISOString().split('T')[1].split('.')[0];
     console.log(`\n[${timestamp}] Checking for new trades...`);
 
-    const newAlerts = await checkTraders();
+    const newAlerts = await checkTraders(debug);
 
     if (newAlerts > 0) {
       console.log(`\n🔔 ${newAlerts} NEW ALERT(S)!`);
@@ -461,6 +483,7 @@ async function main() {
   await connectDB();
 
   const args = process.argv.slice(2);
+  const debug = args.includes('--debug');
 
   if (args[0] === '--add' && args[1] && args[2]) {
     const backfillHours = args[3] ? parseInt(args[3]) : 0;
@@ -469,21 +492,22 @@ async function main() {
     await listTraders();
   } else if (args[0] === '--pending') {
     await showPendingAlerts();
-  } else if (args[0] === '--watch') {
-    await watchMode();
+  } else if (args[0] === '--watch' || args[0] === '--debug') {
+    await watchMode(debug);
   } else {
     // Default: check once
     console.log('═══════════════════════════════════════════════════════════════');
     console.log('                    TRADE ALERTS CHECK                          ');
     console.log('═══════════════════════════════════════════════════════════════\n');
 
-    const newAlerts = await checkTraders();
+    const newAlerts = await checkTraders(debug);
 
     console.log('\n───────────────────────────────────────────────────────────────');
     console.log(`Total new alerts: ${newAlerts}`);
     console.log('───────────────────────────────────────────────────────────────');
     console.log('Commands:');
     console.log('  --watch     Continuous monitoring (60s poll)');
+    console.log('  --debug     Debug mode (shows API responses)');
     console.log('  --add       Add trader: --add <wallet> <label> [backfill_hours]');
     console.log('  --list      List tracked traders with last activity');
     console.log('  --pending   Show pending alerts');
