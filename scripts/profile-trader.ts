@@ -143,12 +143,13 @@ interface TraderProfile {
 async function fetchActivities(wallet: string, days: number): Promise<Activity[]> {
   const now = Math.floor(Date.now() / 1000);
   const startTs = now - (days * 24 * 60 * 60);
-  const MAX_ACTIVITIES = 5000;
+  const MAX_ACTIVITIES = 20000; // Increased limit
 
   let allActivities: Activity[] = [];
   let offset = 0;
+  let done = false;
 
-  while (allActivities.length < MAX_ACTIVITIES) {
+  while (!done && allActivities.length < MAX_ACTIVITIES) {
     const url = `${API_BASE}/activity?user=${wallet}&limit=500&offset=${offset}&sortBy=TIMESTAMP&sortDirection=DESC`;
     const response = await fetch(url);
     if (!response.ok) throw new Error(`API error: ${response.status}`);
@@ -156,12 +157,17 @@ async function fetchActivities(wallet: string, days: number): Promise<Activity[]
     const batch = await response.json() as Activity[];
     if (batch.length === 0) break;
 
+    // Check last activity in batch for progress
+    const lastTs = batch[batch.length - 1]?.timestamp;
+    console.log(`  Fetching offset ${offset}... [${allActivities.length} collected] (${lastTs ? new Date(lastTs * 1000).toISOString().split('T')[0] : 'N/A'})`);
+
     // Filter to time range
     for (const activity of batch) {
       if (activity.timestamp >= startTs) {
         allActivities.push(activity);
       } else {
-        return allActivities; // Done - older than range
+        done = true;
+        break;
       }
     }
 
@@ -172,14 +178,35 @@ async function fetchActivities(wallet: string, days: number): Promise<Activity[]
     await new Promise(r => setTimeout(r, 100));
   }
 
+  if (allActivities.length >= MAX_ACTIVITIES) {
+    console.log(`  Hit MAX_ACTIVITIES limit (${MAX_ACTIVITIES})`);
+  }
+
   return allActivities;
 }
 
 async function fetchOpenPositions(wallet: string): Promise<OpenPosition[]> {
-  const url = `${API_BASE}/positions?user=${wallet}&sizeThreshold=0.1`;
-  const response = await fetch(url);
-  if (!response.ok) throw new Error(`API error: ${response.status}`);
-  return response.json();
+  let allPositions: OpenPosition[] = [];
+  let offset = 0;
+
+  while (true) {
+    const url = `${API_BASE}/positions?user=${wallet}&sizeThreshold=0.1&limit=500&offset=${offset}`;
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`API error: ${response.status}`);
+
+    const batch = await response.json() as OpenPosition[];
+    console.log(`  Fetching offset ${offset}... [${allPositions.length + batch.length} positions]`);
+
+    if (batch.length === 0) break;
+    allPositions = allPositions.concat(batch);
+
+    if (batch.length < 500) break;
+    offset += 500;
+
+    await new Promise(r => setTimeout(r, 100));
+  }
+
+  return allPositions;
 }
 
 async function fetchClosedPositions(wallet: string, days: number): Promise<ClosedPosition[]> {
@@ -188,8 +215,9 @@ async function fetchClosedPositions(wallet: string, days: number): Promise<Close
 
   let allPositions: ClosedPosition[] = [];
   let offset = 0;
+  let done = false;
 
-  while (true) {
+  while (!done) {
     const url = `${API_BASE}/closed-positions?user=${wallet}&limit=100&offset=${offset}&sortBy=TIMESTAMP&sortDirection=DESC`;
     const response = await fetch(url);
     if (!response.ok) throw new Error(`API error: ${response.status}`);
@@ -197,12 +225,16 @@ async function fetchClosedPositions(wallet: string, days: number): Promise<Close
     const batch = await response.json() as ClosedPosition[];
     if (batch.length === 0) break;
 
+    const lastTs = batch[batch.length - 1]?.timestamp;
+    console.log(`  Fetching offset ${offset}... [${allPositions.length} positions] (${lastTs ? new Date(lastTs * 1000).toISOString().split('T')[0] : 'N/A'})`);
+
     // Filter to time range
     for (const pos of batch) {
       if (pos.timestamp >= startTs) {
         allPositions.push(pos);
       } else {
-        return allPositions;
+        done = true;
+        break;
       }
     }
 
