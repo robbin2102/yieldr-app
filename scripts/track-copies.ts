@@ -194,8 +194,11 @@ function matchTradeToTrader(
   // 2. Same outcome
   // 3. Same side
   // 4. Within time window (30 minutes)
+  // 5. Pick the trader with the CLOSEST timestamp (not first match)
 
   const TIME_WINDOW = 30 * 60; // 30 minutes in seconds
+
+  let bestMatch: { wallet: string; label: string; timeDiff: number } | null = null;
 
   for (const trader of traders) {
     for (const traderTrade of trader.activities) {
@@ -203,15 +206,20 @@ function matchTradeToTrader(
         traderTrade.conditionId === myTrade.conditionId &&
         traderTrade.outcome === myTrade.outcome &&
         traderTrade.side === myTrade.side &&
-        Math.abs(traderTrade.timestamp - myTrade.timestamp) <= TIME_WINDOW &&
         traderTrade.timestamp <= myTrade.timestamp // Trader traded before or at same time
       ) {
-        return { wallet: trader.wallet, label: trader.label };
+        const timeDiff = myTrade.timestamp - traderTrade.timestamp;
+        if (timeDiff <= TIME_WINDOW) {
+          // Check if this is the closest match so far
+          if (!bestMatch || timeDiff < bestMatch.timeDiff) {
+            bestMatch = { wallet: trader.wallet, label: trader.label, timeDiff };
+          }
+        }
       }
     }
   }
 
-  return null;
+  return bestMatch ? { wallet: bestMatch.wallet, label: bestMatch.label } : null;
 }
 
 // ═══════════════════════════════════════════════════════════════
