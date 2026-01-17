@@ -3,11 +3,20 @@
  *
  * Usage:
  *   npx tsx scripts/profile-trader.ts <wallet_address> [days]
+ *   npx tsx scripts/profile-trader.ts <wallet_address> [days] --save
  *
  * Examples:
  *   npx tsx scripts/profile-trader.ts 0xb8cd777114b6cc4d488e79eff1fef91e1c521f4b
- *   npx tsx scripts/profile-trader.ts 0xb8cd777114b6cc4d488e79eff1fef91e1c521f4b 30
+ *   npx tsx scripts/profile-trader.ts 0xb8cd777114b6cc4d488e79eff1fef91e1c521f4b 30 --save
  */
+
+import dotenv from 'dotenv';
+import mongoose from 'mongoose';
+import path from 'path';
+import { TraderProfile } from '../models/TraderProfile';
+
+// Load env.polyagent for MONGO_URI
+dotenv.config({ path: path.resolve(process.cwd(), 'env.polyagent') });
 
 const API_BASE = 'https://data-api.polymarket.com';
 
@@ -460,14 +469,35 @@ function determineTraderLabel(profile: Partial<TraderProfile>): string {
 // ═══════════════════════════════════════════════════════════════
 
 async function main() {
-  console.log('[DEBUG] Script version: 2026-01-17-v2 with pagination');
+  console.log('[DEBUG] Script version: 2026-01-17-v5 with MongoDB save');
 
   const wallet = process.argv[2];
   const days = parseInt(process.argv[3] || '30');
+  const saveToDb = process.argv.includes('--save');
 
   if (!wallet) {
-    console.log('Usage: npx tsx scripts/profile-trader.ts <wallet_address> [days]');
+    console.log('Usage: npx tsx scripts/profile-trader.ts <wallet_address> [days] [--save]');
+    console.log('');
+    console.log('Options:');
+    console.log('  --save    Save profile to MongoDB (polymarket-traderProfiles)');
     process.exit(1);
+  }
+
+  // Connect to MongoDB if --save flag provided
+  let dbConnected = false;
+  if (saveToDb) {
+    const mongoUri = process.env.MONGO_URI;
+    if (!mongoUri) {
+      console.log('[DB] MONGO_URI not set in env.polyagent - skipping save');
+    } else {
+      try {
+        await mongoose.connect(mongoUri);
+        dbConnected = true;
+        console.log('[DB] Connected to MongoDB');
+      } catch (err: any) {
+        console.log(`[DB] Failed to connect: ${err.message}`);
+      }
+    }
   }
 
   const now = Math.floor(Date.now() / 1000);
@@ -479,6 +509,7 @@ async function main() {
   console.log('═══════════════════════════════════════════════════════════════');
   console.log(`Wallet:  ${wallet}`);
   console.log(`Period:  Last ${days} days (${startDate} to ${endDate})`);
+  if (saveToDb) console.log(`Save:    ${dbConnected ? 'Yes (MongoDB)' : 'No (connection failed)'}`);
   console.log('═══════════════════════════════════════════════════════════════\n');
 
   // Fetch data
@@ -735,6 +766,116 @@ async function main() {
       console.log(`     Entry: ${(p.avgPrice * 100).toFixed(0)}c | Current: ${(p.curPrice * 100).toFixed(0)}c`);
       console.log('');
     });
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // Save to MongoDB (if --save flag provided)
+  // ═══════════════════════════════════════════════════════════════
+  if (saveToDb && dbConnected) {
+    console.log('\n═══════════════════════════════════════════════════════════════');
+    console.log('                    SAVING TO MONGODB                           ');
+    console.log('═══════════════════════════════════════════════════════════════');
+
+    try {
+      // Build recent high-conviction trades for storage
+      const recentHighConvictionTrades = asymmetricTrades
+        .sort((a, b) => b.timestamp - a.timestamp)
+        .slice(0, 20)
+        .map(t => ({
+          timestamp: new Date(t.timestamp * 1000),
+          side: t.side || 'UNKNOWN',
+          market: t.title,
+          outcome: t.outcome,
+          price: t.price,
+          usdcSize: t.usdcSize,
+          sizeMultiplier: avgTradeSize > 0 ? t.usdcSize / avgTradeSize : 0,
+          txHash: t.transactionHash,
+        }));
+
+      // Entry odds breakdown for storage
+      const entryOddsBreakdown = entryOddsPerformance.map(e => ({
+        range: e.range,
+        trades: e.trades,
+      }));
+
+      const profile = new TraderProfile({
+        wallet: wallet.toLowerCase(),
+        profiledAt: new Date(),
+        periodDays: days,
+
+        // Basic stats
+        totalActivities: activities.length,
+        buyCount,
+        sellCount,
+        redeemCount,
+        otherCount,
+
+        // Classification
+        tradesPerDay,
+        volumeLabel,
+        buyRatio,
+        strategyLabel,
+
+        // Performance
+        closedPositionsCount: closedPositions.length,
+        wins,
+        losses,
+        winRate,
+        grossProfit,
+        grossLoss,
+        netPnl,
+        profitFactor: profitFactor === Infinity ? 999999 : profitFactor,
+
+        // Open positions
+        openPositionsCount: openPositions.length,
+        openValue,
+        unrealizedPnl,
+
+        // Trade sizing
+        avgTradeSize,
+        medianTradeSize,
+        maxTradeSize,
+
+        // High conviction
+        asymmetricThreshold,
+        asymmetricTradesCount: asymmetricTrades.length,
+        asymmetricVolume,
+        asymmetricVolumePercent: asymmetricVolumePct,
+
+        // Market specialization
+        strengths: strengths.map(s => ({
+          category: s.category,
+          trades: s.trades,
+          winRate: s.winRate,
+          totalPnl: s.totalPnl,
+        })),
+        weaknesses: weaknesses.map(w => ({
+          category: w.category,
+          trades: w.trades,
+          winRate: w.winRate,
+          totalPnl: w.totalPnl,
+        })),
+
+        // Entry odds
+        entryOddsBreakdown,
+
+        // Label
+        label,
+
+        // Recent high-conviction trades
+        recentHighConvictionTrades,
+      });
+
+      await profile.save();
+      console.log(`  ✅ Profile saved to MongoDB (polymarket-traderProfiles)`);
+      console.log(`     ID: ${profile._id}`);
+    } catch (error: any) {
+      console.error(`  ❌ Failed to save profile: ${error.message}`);
+    }
+
+    // Close DB connection
+    await mongoose.connection.close();
+    console.log('  [DB] Connection closed\n');
   }
 }
 
