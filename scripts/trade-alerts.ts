@@ -4,13 +4,17 @@
  * Usage:
  *   npx tsx scripts/trade-alerts.ts              # Check once and exit
  *   npx tsx scripts/trade-alerts.ts --watch      # Continuous monitoring (60s interval)
+ *   npx tsx scripts/trade-alerts.ts --debug      # Watch with verbose API logging
  *   npx tsx scripts/trade-alerts.ts --add <wallet> <label> [backfill_hours]  # Add trader
+ *   npx tsx scripts/trade-alerts.ts --fix        # Sync all traders to API timestamps
  *   npx tsx scripts/trade-alerts.ts --list       # List tracked traders
  *   npx tsx scripts/trade-alerts.ts --pending    # Show pending alerts
  *
  * Examples:
- *   --add 0x123... "Whale1"       # Add trader, start tracking from now
+ *   --add 0x123... "Whale1"       # Add trader, start from latest API activity
  *   --add 0x123... "Whale1" 24    # Add trader, backfill last 24 hours
+ *
+ * Note: Polymarket Data API has 2-4 hour delay. --fix command syncs timestamps.
  *
  * Environment:
  *   MONGODB_URI - MongoDB connection string
@@ -316,13 +320,25 @@ async function addTrader(wallet: string, label: string, backfillHours = 0) {
     return;
   }
 
-  // Determine starting timestamp
-  let lastSeenTimestamp = Math.floor(Date.now() / 1000);
+  // Get the latest activity from API to determine starting point
+  // This handles API delay - we start from where the API actually is, not "now"
+  const latestActivity = await fetchLatestActivity(wallet.toLowerCase());
+  let lastSeenTimestamp: number;
 
-  if (backfillHours > 0) {
-    // Set lastSeenTimestamp to N hours ago to catch recent trades
-    lastSeenTimestamp = Math.floor(Date.now() / 1000) - (backfillHours * 60 * 60);
-    console.log(`Backfilling last ${backfillHours} hours of activity...`);
+  if (latestActivity) {
+    if (backfillHours > 0) {
+      // Backfill: set to N hours before the latest activity
+      lastSeenTimestamp = latestActivity.timestamp - (backfillHours * 60 * 60);
+      console.log(`Starting from ${backfillHours}h before latest API activity...`);
+    } else {
+      // No backfill: start from the latest activity (won't alert on it, but will catch new ones)
+      lastSeenTimestamp = latestActivity.timestamp;
+      console.log(`Starting from latest API activity (${new Date(latestActivity.timestamp * 1000).toISOString()})`);
+    }
+  } else {
+    // Fallback if we can't fetch - use current time minus 1 hour to be safe
+    lastSeenTimestamp = Math.floor(Date.now() / 1000) - 3600;
+    console.log(`Could not fetch latest activity, starting from 1 hour ago`);
   }
 
   const trader = new TrackedTrader({
@@ -441,6 +457,34 @@ async function showPendingAlerts() {
   console.log('═══════════════════════════════════════════════════════════════\n');
 }
 
+async function fixTraderTimestamps() {
+  console.log('═══════════════════════════════════════════════════════════════');
+  console.log('                    FIX TRADER TIMESTAMPS                       ');
+  console.log('═══════════════════════════════════════════════════════════════');
+  console.log('Syncing all traders to latest API activity timestamp...\n');
+
+  const traders = await TrackedTrader.find({});
+
+  for (const trader of traders) {
+    const latestActivity = await fetchLatestActivity(trader.wallet);
+    if (latestActivity) {
+      const oldTs = trader.lastSeenTimestamp;
+      trader.lastSeenTimestamp = latestActivity.timestamp;
+      await trader.save();
+      console.log(`✅ ${trader.label}`);
+      console.log(`   Old: ${new Date(oldTs * 1000).toISOString()}`);
+      console.log(`   New: ${new Date(latestActivity.timestamp * 1000).toISOString()}`);
+      console.log(`   Latest: ${latestActivity.type} ${latestActivity.outcome?.substring(0, 25) || ''}`);
+      console.log('');
+    } else {
+      console.log(`❌ ${trader.label} - Could not fetch latest activity`);
+    }
+    await new Promise(r => setTimeout(r, 200));
+  }
+
+  console.log('Done! All traders synced to API timestamps.\n');
+}
+
 async function watchMode(debug = false) {
   console.log('═══════════════════════════════════════════════════════════════');
   console.log('                    TRADE ALERTS - WATCH MODE                   ');
@@ -492,6 +536,8 @@ async function main() {
     await listTraders();
   } else if (args[0] === '--pending') {
     await showPendingAlerts();
+  } else if (args[0] === '--fix') {
+    await fixTraderTimestamps();
   } else if (args[0] === '--watch' || args[0] === '--debug') {
     await watchMode(debug);
   } else {
@@ -508,6 +554,7 @@ async function main() {
     console.log('Commands:');
     console.log('  --watch     Continuous monitoring (60s poll)');
     console.log('  --debug     Debug mode (shows API responses)');
+    console.log('  --fix       Sync all traders to latest API timestamps');
     console.log('  --add       Add trader: --add <wallet> <label> [backfill_hours]');
     console.log('  --list      List tracked traders with last activity');
     console.log('  --pending   Show pending alerts');
