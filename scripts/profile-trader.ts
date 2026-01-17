@@ -510,8 +510,17 @@ async function main() {
   console.log(`  Found ${activities.length} activities\n`);
 
   console.log('Fetching open positions...');
-  const openPositions = await fetchOpenPositions(wallet);
-  console.log(`  Found ${openPositions.length} open positions\n`);
+  const allOpenPositions = await fetchOpenPositions(wallet);
+
+  // Separate truly active positions from resolved losses (curPrice === 0)
+  // Positions with 0¢ price are resolved markets where trader lost but hasn't redeemed
+  const RESOLVED_THRESHOLD = 0.001; // Treat < 0.1¢ as resolved
+  const openPositions = allOpenPositions.filter(p => p.curPrice >= RESOLVED_THRESHOLD);
+  const resolvedLosses = allOpenPositions.filter(p => p.curPrice < RESOLVED_THRESHOLD && p.size > 0);
+
+  console.log(`  Found ${allOpenPositions.length} positions total`);
+  console.log(`    - ${openPositions.length} truly active (curPrice > 0)`);
+  console.log(`    - ${resolvedLosses.length} resolved losses (curPrice = 0, unredeemed)\n`);
 
   console.log('Fetching closed positions...');
   const closedPositions = await fetchClosedPositions(wallet, days);
@@ -561,7 +570,21 @@ async function main() {
     }
   });
 
-  const winRate = closedPositions.length > 0 ? (wins / closedPositions.length) * 100 : 0;
+  // Add resolved losses (unredeemed 0¢ positions) to realized P&L
+  // These are markets that resolved against the trader but weren't redeemed yet
+  let unredeemedLossCount = 0;
+  let unredeemedLossAmount = 0;
+  resolvedLosses.forEach(p => {
+    // The loss is the initial investment (they paid avgPrice * size, now worth 0)
+    const lossAmount = p.initialValue;
+    unredeemedLossAmount += lossAmount;
+    unredeemedLossCount++;
+    losses++;
+    grossLoss += lossAmount;
+  });
+
+  const totalClosedCount = closedPositions.length + unredeemedLossCount;
+  const winRate = totalClosedCount > 0 ? (wins / totalClosedCount) * 100 : 0;
   const profitFactor = grossLoss > 0 ? grossProfit / grossLoss : grossProfit > 0 ? Infinity : 0;
   const netPnl = grossProfit - grossLoss;
 
@@ -606,9 +629,14 @@ async function main() {
   console.log(`  Primary Strategy:   ${strategyLabel} (${buyRatio.toFixed(1)}% buys)`);
 
   console.log('\n═══════════════════════════════════════════════════════════════');
-  console.log('                    PERFORMANCE (Closed Positions)              ');
+  console.log('                    PERFORMANCE (Closed + Resolved)             ');
   console.log('═══════════════════════════════════════════════════════════════');
-  console.log(`  Closed Positions:   ${closedPositions.length}`);
+  console.log(`  Redeemed Positions: ${closedPositions.length}`);
+  if (unredeemedLossCount > 0) {
+    console.log(`  Unredeemed Losses:  ${unredeemedLossCount} (resolved @ 0¢, not redeemed)`);
+    console.log(`                      -$${unredeemedLossAmount.toFixed(2)} in unredeemed losses`);
+  }
+  console.log(`  Total Resolved:     ${totalClosedCount}`);
   console.log(`  Wins / Losses:      ${wins} / ${losses}`);
   console.log(`  Win Rate:           ${winRate.toFixed(1)}%`);
   console.log(`  Gross Profit:       $${grossProfit.toFixed(2)}`);
@@ -743,7 +771,7 @@ async function main() {
 
   console.log('\n═══════════════════════════════════════════════════════════════\n');
 
-  // Top open positions
+  // Top open positions (truly active only)
   if (openPositions.length > 0) {
     console.log('═══════════════════════════════════════════════════════════════');
     console.log('                    TOP OPEN POSITIONS                         ');
@@ -758,6 +786,28 @@ async function main() {
       console.log(`     Entry: ${(p.avgPrice * 100).toFixed(0)}c | Current: ${(p.curPrice * 100).toFixed(0)}c`);
       console.log('');
     });
+  }
+
+  // Show unredeemed losses (resolved @ 0¢ but not redeemed)
+  if (resolvedLosses.length > 0) {
+    console.log('═══════════════════════════════════════════════════════════════');
+    console.log('                    UNREDEEMED LOSSES (Resolved @ 0¢)          ');
+    console.log('═══════════════════════════════════════════════════════════════');
+    console.log(`  ⚠️  ${resolvedLosses.length} positions resolved against trader but not redeemed`);
+    console.log(`  ⚠️  Total unredeemed loss: -$${unredeemedLossAmount.toFixed(2)}`);
+    console.log('');
+
+    // Show top 10 by loss amount
+    const sortedLosses = resolvedLosses.sort((a, b) => b.initialValue - a.initialValue).slice(0, 10);
+    sortedLosses.forEach((p, i) => {
+      console.log(`  ${i + 1}. ${p.title.substring(0, 50)}...`);
+      console.log(`     ${p.outcome} | Lost: -$${p.initialValue.toFixed(2)} (${p.size.toFixed(0)} shares @ ${(p.avgPrice * 100).toFixed(0)}c)`);
+      console.log('');
+    });
+
+    if (resolvedLosses.length > 10) {
+      console.log(`  ... and ${resolvedLosses.length - 10} more unredeemed losses`);
+    }
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -810,8 +860,11 @@ async function main() {
         buyRatio,
         strategyLabel,
 
-        // Performance
+        // Performance (includes unredeemed losses)
         closedPositionsCount: closedPositions.length,
+        unredeemedLossCount,
+        unredeemedLossAmount,
+        totalResolvedCount: totalClosedCount,
         wins,
         losses,
         winRate,
