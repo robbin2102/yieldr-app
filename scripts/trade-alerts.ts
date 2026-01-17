@@ -351,9 +351,18 @@ async function watchMode() {
 // ═══════════════════════════════════════════════════════════════
 
 async function main() {
-  // Load env
+  // Load env - try multiple locations
   const dotenv = await import('dotenv');
-  dotenv.config({ path: '.env.local' });
+  const path = await import('path');
+  const envLocations = [
+    path.resolve(process.cwd(), 'services/.private/poly-agent/.env.polyagent'),
+    path.resolve(process.cwd(), '.env.local'),
+    path.resolve(process.cwd(), '.env'),
+  ];
+  for (const envPath of envLocations) {
+    const result = dotenv.config({ path: envPath });
+    if (!result.error && process.env.MONGODB_URI) break;
+  }
 
   await connectDB();
 

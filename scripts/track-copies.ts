@@ -153,7 +153,7 @@ async function fetchClosedPositions(wallet: string, days: number): Promise<Close
   let offset = 0;
 
   while (true) {
-    const url = `${API_BASE}/closed-positions?user=${wallet}&limit=100&offset=${offset}&sortBy=TIMESTAMP&sortDirection=DESC`;
+    const url = `${API_BASE}/v1/closed-positions?user=${wallet}&limit=50&offset=${offset}&sortBy=TIMESTAMP&sortDirection=DESC`;
     const response = await fetch(url);
     if (!response.ok) throw new Error(`API error: ${response.status}`);
 
@@ -168,8 +168,8 @@ async function fetchClosedPositions(wallet: string, days: number): Promise<Close
       }
     }
 
-    if (batch.length < 100) break;
-    offset += 100;
+    if (batch.length < 50) break;
+    offset += 50;
     await new Promise(r => setTimeout(r, 100));
   }
 
@@ -219,9 +219,18 @@ function matchTradeToTrader(
 // ═══════════════════════════════════════════════════════════════
 
 async function main() {
-  // Load env
+  // Load env - try multiple locations
   const dotenv = await import('dotenv');
-  dotenv.config({ path: '.env.local' });
+  const path = await import('path');
+  const envLocations = [
+    path.resolve(process.cwd(), 'services/.private/poly-agent/.env.polyagent'),
+    path.resolve(process.cwd(), '.env.local'),
+    path.resolve(process.cwd(), '.env'),
+  ];
+  for (const envPath of envLocations) {
+    const result = dotenv.config({ path: envPath });
+    if (!result.error && process.env.MONGODB_URI) break;
+  }
 
   const myWallet = process.argv[2] || DEFAULT_WALLET;
   const days = parseInt(process.argv[3] || '7');
