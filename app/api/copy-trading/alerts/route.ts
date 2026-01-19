@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import clientPromise from '@/lib/mongodb';
+import clientPromise, { dbName } from '@/lib/mongodb';
 
 export const dynamic = 'force-dynamic';
 
@@ -12,7 +12,7 @@ export async function GET(request: NextRequest) {
     const unacknowledgedOnly = searchParams.get('unacknowledged') === 'true';
 
     const client = await clientPromise;
-    const db = client.db('polymarket-test');
+    const db = client.db(dbName);
 
     // Build query
     const query: any = {};
@@ -75,7 +75,7 @@ export async function PATCH(request: NextRequest) {
     }
 
     const client = await clientPromise;
-    const db = client.db('polymarket-test');
+    const db = client.db(dbName);
 
     const update: any = { updatedAt: new Date() };
 

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import clientPromise from '@/lib/mongodb';
+import clientPromise, { dbName } from '@/lib/mongodb';
 
 export const dynamic = 'force-dynamic';
 
@@ -109,7 +109,7 @@ export async function GET(request: NextRequest) {
     const days = parseInt(searchParams.get('days') || '30');
 
     const client = await clientPromise;
-    const db = client.db('polymarket-test');
+    const db = client.db(dbName);
 
     // Fetch tracked traders from DB
     const trackedTraders = await db.collection('polymarket-trackedTraders')

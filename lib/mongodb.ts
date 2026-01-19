@@ -7,6 +7,22 @@ if (!process.env.MONGODB_URI) {
 const uri = process.env.MONGODB_URI;
 const options = {};
 
+// Extract database name from URI (mongodb+srv://.../<dbname>?...)
+// Falls back to 'polymarket-test' if not specified
+function extractDbName(mongoUri: string): string {
+  try {
+    const url = new URL(mongoUri);
+    const dbName = url.pathname.replace('/', '');
+    return dbName || 'polymarket-test';
+  } catch {
+    // Fallback for non-standard URIs
+    const match = mongoUri.match(/\/([^/?]+)(\?|$)/);
+    return match?.[1] || 'polymarket-test';
+  }
+}
+
+export const dbName = extractDbName(uri);
+
 let client: MongoClient;
 let clientPromise: Promise<MongoClient>;
 

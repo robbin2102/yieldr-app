@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import clientPromise from '@/lib/mongodb';
+import clientPromise, { dbName } from '@/lib/mongodb';
 
 export const dynamic = 'force-dynamic';
 
@@ -7,7 +7,7 @@ export const dynamic = 'force-dynamic';
 export async function GET(request: NextRequest) {
   try {
     const client = await clientPromise;
-    const db = client.db('polymarket-test');
+    const db = client.db(dbName);
 
     const traders = await db.collection('polymarket-trackedTraders')
       .find({ isActive: true })
@@ -65,7 +65,7 @@ export async function POST(request: NextRequest) {
     }
 
     const client = await clientPromise;
-    const db = client.db('polymarket-test');
+    const db = client.db(dbName);
 
     // Check if already exists
     const existing = await db.collection('polymarket-trackedTraders')
@@ -130,7 +130,7 @@ export async function PATCH(request: NextRequest) {
     }
 
     const client = await clientPromise;
-    const db = client.db('polymarket-test');
+    const db = client.db(dbName);
 
     const allowedUpdates = [
       'label', 'notes', 'copyMultiplier', 'maxCopySize',
@@ -179,7 +179,7 @@ export async function DELETE(request: NextRequest) {
     }
 
     const client = await clientPromise;
-    const db = client.db('polymarket-test');
+    const db = client.db(dbName);
 
     // Soft delete - set isActive to false
     const result = await db.collection('polymarket-trackedTraders')
