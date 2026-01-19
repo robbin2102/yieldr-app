@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 
 interface Position {
   title: string;
@@ -24,8 +25,10 @@ interface TrackedTrader {
   winRate?: number;
   profitFactor?: number;
   avgTradeSize?: number;
+  netPnl?: number;
   lastSeenTimestamp?: number;
   isActive: boolean;
+  isTracking: boolean;
   totalAlerts: number;
   totalCopied: number;
   totalPnl: number;
@@ -41,9 +44,9 @@ export default function TradersPage() {
   const [traders, setTraders] = useState<TrackedTrader[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
-  const [newTrader, setNewTrader] = useState({ wallet: '', label: '', notes: '' });
-  const [adding, setAdding] = useState(false);
-  const [hoveredTrader, setHoveredTrader] = useState<string | null>(null);
+  const [newWallet, setNewWallet] = useState('');
+  const [newLabel, setNewLabel] = useState('');
+  const [profiling, setProfiling] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
   useEffect(() => {
@@ -67,36 +70,66 @@ export default function TradersPage() {
     }
   }
 
-  async function handleAddTrader(e: React.FormEvent) {
+  async function handleProfileTrader(e: React.FormEvent) {
     e.preventDefault();
-    if (!newTrader.wallet || !newTrader.label) return;
+    if (!newWallet) return;
 
-    setAdding(true);
+    setProfiling(true);
     try {
-      const response = await fetch('/api/copy-trading/traders', {
+      const response = await fetch('/api/copy-trading/profile-trader', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(newTrader),
+        body: JSON.stringify({
+          wallet: newWallet.trim().toLowerCase(),
+          label: newLabel.trim() || `Trader-${newWallet.slice(0, 6)}`,
+        }),
       });
       const data = await response.json();
 
       if (data.success) {
         await fetchTraders();
         setShowAddModal(false);
-        setNewTrader({ wallet: '', label: '', notes: '' });
+        setNewWallet('');
+        setNewLabel('');
       } else {
-        alert(data.error || 'Failed to add trader');
+        alert(data.error || 'Failed to profile trader');
       }
     } catch (error) {
-      console.error('Failed to add trader:', error);
+      console.error('Failed to profile trader:', error);
+      alert('Failed to profile trader');
     } finally {
-      setAdding(false);
+      setProfiling(false);
+    }
+  }
+
+  async function handleStartTracking(wallet: string) {
+    try {
+      await fetch('/api/copy-trading/traders', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ wallet, action: 'startTracking' }),
+      });
+      await fetchTraders();
+    } catch (error) {
+      console.error('Failed to start tracking:', error);
+    }
+  }
+
+  async function handleStopTracking(wallet: string) {
+    try {
+      await fetch('/api/copy-trading/traders', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ wallet, action: 'stopTracking' }),
+      });
+      await fetchTraders();
+    } catch (error) {
+      console.error('Failed to stop tracking:', error);
     }
   }
 
   async function handleRemoveTrader(wallet: string) {
-    if (!confirm('Remove this trader from tracking?')) return;
-
+    if (!confirm('Remove this trader completely?')) return;
     try {
       await fetch(`/api/copy-trading/traders?wallet=${wallet}`, { method: 'DELETE' });
       setTraders(prev => prev.filter(t => t.wallet !== wallet));
@@ -141,229 +174,239 @@ export default function TradersPage() {
   }
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-4">
       {/* Header */}
       <div className="flex items-center justify-between">
-        <h1 className="text-lg font-bold text-white">Tracked Traders</h1>
+        <h1 className="text-xl font-bold text-white">Tracked Traders</h1>
         <div className="flex gap-2">
           <button
             onClick={refreshPositions}
             disabled={refreshing}
-            className="px-3 py-1.5 bg-[#1A1A1A] text-[#9E9E9E] text-xs font-medium rounded-lg hover:bg-[#2A2A2A] transition-colors disabled:opacity-50"
+            className="px-3 py-2 bg-[#1A1A1A] text-[#9E9E9E] text-sm font-medium rounded-lg hover:bg-[#2A2A2A] transition-colors disabled:opacity-50"
           >
-            {refreshing ? 'Refreshing...' : 'Refresh'}
+            {refreshing ? 'Refreshing...' : '↻ Refresh'}
           </button>
           <button
             onClick={() => setShowAddModal(true)}
-            className="px-3 py-1.5 bg-primary-green text-black text-xs font-semibold rounded-lg hover:bg-primary-green/90 transition-colors"
+            className="px-4 py-2 bg-primary-green text-black text-sm font-semibold rounded-lg hover:bg-primary-green/90 transition-colors"
           >
-            + Add
+            + Profile Trader
           </button>
         </div>
       </div>
 
-      {/* Traders Grid - Compact 3x3 */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
+      {/* Traders Grid - 3x3 */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
         {traders.map((trader) => {
-          const isActive = trader.lastSeenTimestamp &&
+          const isRecentlyActive = trader.lastSeenTimestamp &&
             (Date.now() / 1000 - trader.lastSeenTimestamp) < 3600;
-          const isHovered = hoveredTrader === trader._id;
 
           return (
             <div
               key={trader._id}
-              className="relative bg-[#0A0A0A] border border-[#1E1E1E] rounded-lg p-2.5 hover:border-primary-green/30 transition-all cursor-pointer"
-              onMouseEnter={() => setHoveredTrader(trader._id)}
-              onMouseLeave={() => setHoveredTrader(null)}
+              className="bg-[#0A0A0A] border border-[#1E1E1E] rounded-xl overflow-hidden hover:border-primary-green/30 transition-all"
             >
-              {/* Header Row */}
-              <div className="flex items-center justify-between mb-1.5">
-                <div className="flex items-center gap-1.5">
-                  <div className={`w-1.5 h-1.5 rounded-full ${isActive ? 'bg-primary-green' : 'bg-[#4E4E4E]'}`} />
-                  <span className="font-semibold text-white text-xs">{trader.label}</span>
+              {/* Card Header */}
+              <Link
+                href={`/copy-trading/traders/${trader.wallet}`}
+                className="block p-4 hover:bg-[#111] transition-colors"
+              >
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-2">
+                    <div className={`w-2 h-2 rounded-full ${isRecentlyActive ? 'bg-primary-green' : 'bg-[#4E4E4E]'}`} />
+                    <span className="font-bold text-white text-base">{trader.label}</span>
+                    {trader.isTracking && (
+                      <span className="px-1.5 py-0.5 text-[10px] bg-primary-green/20 text-primary-green rounded">
+                        TRACKING
+                      </span>
+                    )}
+                  </div>
+                  <span className="text-xs text-[#6E6E6E]">{timeAgo(trader.lastSeenTimestamp)}</span>
                 </div>
-                <span className="text-[9px] text-[#6E6E6E]">{timeAgo(trader.lastSeenTimestamp)}</span>
-              </div>
 
-              {/* Stats Row - Compact */}
-              <div className="grid grid-cols-4 gap-1 mb-1.5">
-                <div className="text-center">
-                  <div className="text-[8px] text-[#6E6E6E]">Win</div>
-                  <div className="text-[10px] font-medium text-white">
-                    {trader.winRate ? `${trader.winRate.toFixed(0)}%` : '-'}
-                  </div>
-                </div>
-                <div className="text-center">
-                  <div className="text-[8px] text-[#6E6E6E]">Alerts</div>
-                  <div className="text-[10px] font-medium text-white">{trader.totalAlerts || 0}</div>
-                </div>
-                <div className="text-center">
-                  <div className="text-[8px] text-[#6E6E6E]">Value</div>
-                  <div className="text-[10px] font-medium text-white">
-                    {formatValue(trader.totalPositionValue || 0)}
-                  </div>
-                </div>
-                <div className="text-center">
-                  <div className="text-[8px] text-[#6E6E6E]">P&L</div>
-                  <div className={`text-[10px] font-medium ${(trader.totalUnrealizedPnl || 0) >= 0 ? 'text-primary-green' : 'text-red-400'}`}>
-                    {(trader.totalUnrealizedPnl || 0) >= 0 ? '+' : ''}{formatValue(trader.totalUnrealizedPnl || 0)}
-                  </div>
-                </div>
-              </div>
-
-              {/* Top Positions (compact scrollable) */}
-              <div className="max-h-[60px] overflow-y-auto border-t border-[#1E1E1E] pt-1.5 space-y-0.5">
-                {trader.topPositions && trader.topPositions.length > 0 ? (
-                  trader.topPositions.slice(0, 3).map((pos, idx) => (
-                    <div key={idx} className="flex items-center justify-between text-[9px]">
-                      <div className="truncate flex-1 text-[#9E9E9E]">
-                        {pos.outcome.substring(0, 15)} - {pos.title?.substring(0, 12)}...
-                      </div>
-                      <div className={`ml-1 font-mono ${pos.cashPnl >= 0 ? 'text-primary-green' : 'text-red-400'}`}>
-                        {pos.cashPnl >= 0 ? '+' : ''}{formatValue(pos.cashPnl)}
-                      </div>
+                {/* Key Metrics Row */}
+                <div className="grid grid-cols-4 gap-2 mb-3">
+                  <div className="text-center">
+                    <div className="text-[10px] text-[#6E6E6E] uppercase">Win Rate</div>
+                    <div className="text-sm font-semibold text-white">
+                      {trader.winRate ? `${trader.winRate.toFixed(0)}%` : '-'}
                     </div>
-                  ))
-                ) : (
-                  <div className="text-[9px] text-[#4E4E4E] text-center">
-                    {trader.positionCount > 0 ? `${trader.positionCount} pos` : 'No positions'}
+                  </div>
+                  <div className="text-center">
+                    <div className="text-[10px] text-[#6E6E6E] uppercase">Net P&L</div>
+                    <div className={`text-sm font-semibold ${(trader.netPnl || 0) >= 0 ? 'text-primary-green' : 'text-red-400'}`}>
+                      {formatValue(trader.netPnl || 0)}
+                    </div>
+                  </div>
+                  <div className="text-center">
+                    <div className="text-[10px] text-[#6E6E6E] uppercase">Value</div>
+                    <div className="text-sm font-semibold text-white">
+                      {formatValue(trader.totalPositionValue || 0)}
+                    </div>
+                  </div>
+                  <div className="text-center">
+                    <div className="text-[10px] text-[#6E6E6E] uppercase">Alerts</div>
+                    <div className="text-sm font-semibold text-white">{trader.totalAlerts || 0}</div>
+                  </div>
+                </div>
+
+                {/* Strategy Badge */}
+                {(trader.strategyLabel || trader.specialty) && (
+                  <div className="flex gap-1.5 mb-3">
+                    {trader.strategyLabel && (
+                      <span className="px-2 py-0.5 text-[10px] bg-[#1A1A1A] text-[#9E9E9E] rounded">
+                        {trader.strategyLabel.replace(/_/g, ' ')}
+                      </span>
+                    )}
+                    {trader.specialty && (
+                      <span className="px-2 py-0.5 text-[10px] bg-primary-green/10 text-primary-green rounded">
+                        {trader.specialty}
+                      </span>
+                    )}
                   </div>
                 )}
-              </div>
 
-              {/* Quick Actions */}
-              <div className="flex gap-1 mt-1.5 pt-1.5 border-t border-[#1E1E1E]">
+                {/* Open Positions */}
+                <div className="border-t border-[#1E1E1E] pt-3">
+                  <div className="text-[10px] text-[#6E6E6E] uppercase mb-2">
+                    Open Positions ({trader.positionCount || 0})
+                  </div>
+                  <div className="space-y-1.5 max-h-[100px] overflow-y-auto">
+                    {trader.topPositions && trader.topPositions.length > 0 ? (
+                      trader.topPositions.slice(0, 4).map((pos, idx) => (
+                        <div key={idx} className="flex items-center justify-between text-xs bg-[#111] rounded px-2 py-1.5">
+                          <div className="truncate flex-1 min-w-0">
+                            <div className="text-white truncate">{pos.outcome}</div>
+                            <div className="text-[#6E6E6E] text-[10px] truncate">{pos.title?.substring(0, 25)}...</div>
+                          </div>
+                          <div className="text-right ml-2 flex-shrink-0">
+                            <div className={`font-mono ${pos.cashPnl >= 0 ? 'text-primary-green' : 'text-red-400'}`}>
+                              {pos.cashPnl >= 0 ? '+' : ''}{formatValue(pos.cashPnl)}
+                            </div>
+                            <div className="text-[#6E6E6E] text-[10px]">
+                              {(pos.avgPrice * 100).toFixed(0)}¢→{(pos.curPrice * 100).toFixed(0)}¢
+                            </div>
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="text-xs text-[#4E4E4E] text-center py-2">
+                        No significant positions
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </Link>
+
+              {/* Action Buttons */}
+              <div className="flex border-t border-[#1E1E1E]">
+                {trader.isTracking ? (
+                  <button
+                    onClick={() => handleStopTracking(trader.wallet)}
+                    className="flex-1 px-3 py-2 text-xs font-medium text-[#9E9E9E] hover:bg-[#1A1A1A] transition-colors"
+                  >
+                    Stop Tracking
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => handleStartTracking(trader.wallet)}
+                    className="flex-1 px-3 py-2 text-xs font-medium text-primary-green hover:bg-primary-green/10 transition-colors"
+                  >
+                    Start Tracking
+                  </button>
+                )}
+                <div className="w-px bg-[#1E1E1E]" />
                 <button
                   onClick={() => handleRemoveTrader(trader.wallet)}
-                  className="flex-1 px-1.5 py-1 text-center bg-[#1A1A1A] text-[#6E6E6E] text-[9px] font-medium rounded hover:bg-red-500/20 hover:text-red-400 transition-colors"
+                  className="px-3 py-2 text-xs font-medium text-[#6E6E6E] hover:bg-red-500/10 hover:text-red-400 transition-colors"
                 >
                   Remove
                 </button>
               </div>
-
-              {/* Hover Card - Full Profile */}
-              {isHovered && (
-                <div className="absolute z-50 left-full ml-2 top-0 w-64 bg-[#111] border border-[#2A2A2A] rounded-lg p-3 shadow-xl pointer-events-none">
-                  <div className="text-sm font-semibold text-white mb-1">{trader.label}</div>
-                  <div className="text-[9px] text-[#6E6E6E] font-mono mb-2 break-all">
-                    {trader.wallet}
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-2 mb-2">
-                    <div>
-                      <div className="text-[8px] text-[#6E6E6E]">Win Rate</div>
-                      <div className="text-xs text-white">{trader.winRate?.toFixed(1) || '-'}%</div>
-                    </div>
-                    <div>
-                      <div className="text-[8px] text-[#6E6E6E]">Profit Factor</div>
-                      <div className="text-xs text-white">{trader.profitFactor?.toFixed(2) || '-'}</div>
-                    </div>
-                    <div>
-                      <div className="text-[8px] text-[#6E6E6E]">Avg Trade</div>
-                      <div className="text-xs text-white">{formatValue(trader.avgTradeSize || 0)}</div>
-                    </div>
-                    <div>
-                      <div className="text-[8px] text-[#6E6E6E]">Positions</div>
-                      <div className="text-xs text-white">{trader.positionCount || 0}</div>
-                    </div>
-                  </div>
-
-                  {trader.specialty && (
-                    <div className="mb-2">
-                      <span className="px-1.5 py-0.5 text-[8px] bg-primary-green/10 text-primary-green rounded">
-                        {trader.specialty}
-                      </span>
-                    </div>
-                  )}
-
-                  <div className="text-[8px] text-[#6E6E6E] mb-1">Top Positions</div>
-                  <div className="space-y-1 max-h-28 overflow-y-auto">
-                    {trader.topPositions?.slice(0, 5).map((pos, idx) => (
-                      <div key={idx} className="flex justify-between text-[9px] bg-[#0A0A0A] p-1.5 rounded">
-                        <div className="truncate flex-1 min-w-0">
-                          <div className="text-white truncate">{pos.outcome}</div>
-                          <div className="text-[#6E6E6E] truncate">{pos.title?.substring(0, 20)}...</div>
-                        </div>
-                        <div className="text-right ml-1 flex-shrink-0">
-                          <div className={pos.cashPnl >= 0 ? 'text-primary-green' : 'text-red-400'}>
-                            {pos.cashPnl >= 0 ? '+' : ''}{formatValue(pos.cashPnl)}
-                          </div>
-                          <div className="text-[#6E6E6E]">{(pos.avgPrice * 100).toFixed(0)}c→{(pos.curPrice * 100).toFixed(0)}c</div>
-                        </div>
-                      </div>
-                    ))}
-                    {(!trader.topPositions || trader.topPositions.length === 0) && (
-                      <div className="text-[9px] text-[#4E4E4E] text-center py-2">No significant positions</div>
-                    )}
-                  </div>
-                </div>
-              )}
             </div>
           );
         })}
 
         {traders.length === 0 && (
-          <div className="col-span-full bg-[#0A0A0A] border border-[#1E1E1E] rounded-lg p-6 text-center">
-            <div className="text-[#6E6E6E] text-sm mb-3">No traders tracked yet</div>
+          <div className="col-span-full bg-[#0A0A0A] border border-[#1E1E1E] rounded-xl p-8 text-center">
+            <div className="text-[#6E6E6E] text-sm mb-4">No traders profiled yet</div>
+            <p className="text-[#4E4E4E] text-xs mb-4">
+              Add a Polymarket wallet to profile the trader and view their stats.
+            </p>
             <button
               onClick={() => setShowAddModal(true)}
               className="px-4 py-2 bg-primary-green text-black text-sm font-semibold rounded-lg hover:bg-primary-green/90 transition-colors"
             >
-              + Add Your First Trader
+              + Profile Your First Trader
             </button>
           </div>
         )}
       </div>
 
-      {/* Add Trader Modal */}
+      {/* Add/Profile Trader Modal */}
       {showAddModal && (
         <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50">
-          <div className="bg-[#0A0A0A] border border-[#1E1E1E] rounded-xl p-4 w-full max-w-sm">
-            <h2 className="text-lg font-bold text-white mb-3">Add Trader</h2>
+          <div className="bg-[#0A0A0A] border border-[#1E1E1E] rounded-xl p-5 w-full max-w-md">
+            <h2 className="text-lg font-bold text-white mb-1">Profile Trader</h2>
+            <p className="text-xs text-[#6E6E6E] mb-4">
+              Enter a wallet address to analyze the trader's activity, win rate, and positions.
+            </p>
 
-            <form onSubmit={handleAddTrader} className="space-y-3">
+            <form onSubmit={handleProfileTrader} className="space-y-4">
               <div>
-                <label className="block text-[10px] font-semibold text-[#6E6E6E] uppercase mb-1">
-                  Wallet Address
+                <label className="block text-xs font-semibold text-[#6E6E6E] uppercase mb-1">
+                  Wallet Address *
                 </label>
                 <input
                   type="text"
-                  value={newTrader.wallet}
-                  onChange={(e) => setNewTrader(prev => ({ ...prev, wallet: e.target.value }))}
+                  value={newWallet}
+                  onChange={(e) => setNewWallet(e.target.value)}
                   placeholder="0x..."
-                  className="w-full px-3 py-2 bg-[#111] border border-[#2A2A2A] rounded-lg text-white text-sm placeholder-[#4E4E4E] focus:outline-none focus:border-primary-green"
+                  className="w-full px-3 py-2.5 bg-[#111] border border-[#2A2A2A] rounded-lg text-white text-sm placeholder-[#4E4E4E] focus:outline-none focus:border-primary-green font-mono"
                   required
                 />
               </div>
 
               <div>
-                <label className="block text-[10px] font-semibold text-[#6E6E6E] uppercase mb-1">
-                  Label
+                <label className="block text-xs font-semibold text-[#6E6E6E] uppercase mb-1">
+                  Label (optional)
                 </label>
                 <input
                   type="text"
-                  value={newTrader.label}
-                  onChange={(e) => setNewTrader(prev => ({ ...prev, label: e.target.value }))}
-                  placeholder="e.g. JC00, Whale1"
-                  className="w-full px-3 py-2 bg-[#111] border border-[#2A2A2A] rounded-lg text-white text-sm placeholder-[#4E4E4E] focus:outline-none focus:border-primary-green"
-                  required
+                  value={newLabel}
+                  onChange={(e) => setNewLabel(e.target.value)}
+                  placeholder="e.g. JC00, NBAWhale"
+                  className="w-full px-3 py-2.5 bg-[#111] border border-[#2A2A2A] rounded-lg text-white text-sm placeholder-[#4E4E4E] focus:outline-none focus:border-primary-green"
                 />
+              </div>
+
+              <div className="bg-[#111] border border-[#2A2A2A] rounded-lg p-3">
+                <div className="text-xs text-[#9E9E9E] mb-2">This will:</div>
+                <ul className="text-xs text-[#6E6E6E] space-y-1">
+                  <li>• Fetch last 30 days of activity</li>
+                  <li>• Calculate win rate, P&L, and trade sizing</li>
+                  <li>• Identify market strengths/weaknesses</li>
+                  <li>• Save profile to database</li>
+                </ul>
+                <div className="text-[10px] text-[#4E4E4E] mt-2">
+                  Tracking won't start until you click "Start Tracking".
+                </div>
               </div>
 
               <div className="flex gap-2 pt-1">
                 <button
                   type="button"
                   onClick={() => setShowAddModal(false)}
-                  className="flex-1 px-3 py-2 bg-[#1A1A1A] text-[#9E9E9E] text-sm font-medium rounded-lg hover:bg-[#2A2A2A] transition-colors"
+                  className="flex-1 px-4 py-2.5 bg-[#1A1A1A] text-[#9E9E9E] text-sm font-medium rounded-lg hover:bg-[#2A2A2A] transition-colors"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  disabled={adding}
-                  className="flex-1 px-3 py-2 bg-primary-green text-black text-sm font-semibold rounded-lg hover:bg-primary-green/90 transition-colors disabled:opacity-50"
+                  disabled={profiling || !newWallet}
+                  className="flex-1 px-4 py-2.5 bg-primary-green text-black text-sm font-semibold rounded-lg hover:bg-primary-green/90 transition-colors disabled:opacity-50"
                 >
-                  {adding ? 'Adding...' : 'Add'}
+                  {profiling ? 'Profiling...' : 'Profile Trader'}
                 </button>
               </div>
             </form>

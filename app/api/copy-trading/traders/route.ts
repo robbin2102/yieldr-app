@@ -71,10 +71,12 @@ export async function GET(request: NextRequest) {
         winRate: trader.winRate,
         profitFactor: trader.profitFactor,
         avgTradeSize: trader.avgTradeSize,
+        netPnl: trader.netPnl,
         copyMultiplier: trader.copyMultiplier,
         maxCopySize: trader.maxCopySize,
         lastSeenTimestamp: trader.lastSeenTimestamp,
         isActive: trader.isActive,
+        isTracking: trader.isTracking || false,
         totalAlerts: trader.totalAlerts,
         totalCopied: trader.totalCopied,
         totalPnl: trader.totalPnl,
@@ -169,11 +171,11 @@ export async function POST(request: NextRequest) {
   }
 }
 
-// PATCH - Update trader settings
+// PATCH - Update trader settings or start/stop tracking
 export async function PATCH(request: NextRequest) {
   try {
     const body = await request.json();
-    const { wallet, updates } = body;
+    const { wallet, action, updates } = body;
 
     if (!wallet) {
       return NextResponse.json(
@@ -185,6 +187,62 @@ export async function PATCH(request: NextRequest) {
     const client = await clientPromise;
     const db = client.db(dbName);
 
+    // Handle start/stop tracking actions
+    if (action === 'startTracking') {
+      // Get latest activity timestamp from API to start tracking from
+      let lastSeenTimestamp = Math.floor(Date.now() / 1000);
+      try {
+        const apiUrl = `https://data-api.polymarket.com/activity?user=${wallet.toLowerCase()}&limit=1&sortBy=TIMESTAMP&sortDirection=DESC`;
+        const response = await fetch(apiUrl);
+        if (response.ok) {
+          const activities = await response.json();
+          if (activities.length > 0) {
+            lastSeenTimestamp = activities[0].timestamp;
+          }
+        }
+      } catch (e) {
+        // Use current timestamp if API fails
+      }
+
+      const result = await db.collection('polymarket-trackedTraders')
+        .updateOne(
+          { wallet: wallet.toLowerCase() },
+          {
+            $set: {
+              isTracking: true,
+              lastSeenTimestamp,
+              lastUpdatedAt: new Date(),
+            }
+          }
+        );
+
+      return NextResponse.json({
+        success: true,
+        action: 'startTracking',
+        modifiedCount: result.modifiedCount,
+      });
+    }
+
+    if (action === 'stopTracking') {
+      const result = await db.collection('polymarket-trackedTraders')
+        .updateOne(
+          { wallet: wallet.toLowerCase() },
+          {
+            $set: {
+              isTracking: false,
+              lastUpdatedAt: new Date(),
+            }
+          }
+        );
+
+      return NextResponse.json({
+        success: true,
+        action: 'stopTracking',
+        modifiedCount: result.modifiedCount,
+      });
+    }
+
+    // Handle regular updates
     const allowedUpdates = [
       'label', 'notes', 'copyMultiplier', 'maxCopySize',
       'skipSmallBets', 'smallBetThreshold', 'isActive',
@@ -192,9 +250,11 @@ export async function PATCH(request: NextRequest) {
     ];
 
     const safeUpdates: any = { lastUpdatedAt: new Date() };
-    for (const key of allowedUpdates) {
-      if (updates[key] !== undefined) {
-        safeUpdates[key] = updates[key];
+    if (updates) {
+      for (const key of allowedUpdates) {
+        if (updates[key] !== undefined) {
+          safeUpdates[key] = updates[key];
+        }
       }
     }
 
