@@ -3,9 +3,12 @@ import clientPromise, { dbName } from '@/lib/mongodb';
 
 export const dynamic = 'force-dynamic';
 
-// GET - List all tracked traders
+// GET - List all tracked traders with their open positions
 export async function GET(request: NextRequest) {
   try {
+    const { searchParams } = new URL(request.url);
+    const includePositions = searchParams.get('positions') !== 'false'; // Default true
+
     const client = await clientPromise;
     const db = client.db(dbName);
 
@@ -14,27 +17,77 @@ export async function GET(request: NextRequest) {
       .sort({ lastSeenTimestamp: -1 })
       .toArray();
 
-    const formattedTraders = traders.map(trader => ({
-      _id: trader._id.toString(),
-      wallet: trader.wallet,
-      label: trader.label,
-      notes: trader.notes,
-      volumeLabel: trader.volumeLabel,
-      strategyLabel: trader.strategyLabel,
-      specialty: trader.specialty,
-      winRate: trader.winRate,
-      profitFactor: trader.profitFactor,
-      avgTradeSize: trader.avgTradeSize,
-      copyMultiplier: trader.copyMultiplier,
-      maxCopySize: trader.maxCopySize,
-      lastSeenTimestamp: trader.lastSeenTimestamp,
-      isActive: trader.isActive,
-      totalAlerts: trader.totalAlerts,
-      totalCopied: trader.totalCopied,
-      totalPnl: trader.totalPnl,
-      addedAt: trader.addedAt,
-      profiledAt: trader.profiledAt,
-    }));
+    // Fetch open positions for all traders in one query
+    let positionsByWallet: Record<string, any[]> = {};
+    if (includePositions && traders.length > 0) {
+      const wallets = traders.map(t => t.wallet.toLowerCase());
+      const allPositions = await db.collection('polymarket-openPositions')
+        .find({
+          walletAddress: { $in: wallets },
+          curPrice: { $gte: 0.01 }, // Active positions only
+        })
+        .sort({ currentValue: -1 })
+        .toArray();
+
+      // Group by wallet
+      for (const pos of allPositions) {
+        const wallet = pos.walletAddress;
+        if (!positionsByWallet[wallet]) {
+          positionsByWallet[wallet] = [];
+        }
+        positionsByWallet[wallet].push(pos);
+      }
+    }
+
+    const formattedTraders = traders.map(trader => {
+      const positions = positionsByWallet[trader.wallet.toLowerCase()] || [];
+      const totalPositionValue = positions.reduce((sum, p) => sum + (p.currentValue || 0), 0);
+
+      // Filter to significant positions (>10% of total value)
+      const significantPositions = positions.filter(p =>
+        totalPositionValue > 0 && (p.currentValue / totalPositionValue) >= 0.10
+      );
+
+      // Top 5 positions by value for display
+      const topPositions = significantPositions.slice(0, 5).map(p => ({
+        title: p.title,
+        outcome: p.outcome,
+        size: p.size,
+        avgPrice: p.avgPrice,
+        curPrice: p.curPrice,
+        currentValue: p.currentValue,
+        cashPnl: p.cashPnl,
+        percentPnl: p.percentPnl,
+      }));
+
+      return {
+        _id: trader._id.toString(),
+        wallet: trader.wallet,
+        label: trader.label,
+        notes: trader.notes,
+        volumeLabel: trader.volumeLabel,
+        strategyLabel: trader.strategyLabel,
+        specialty: trader.specialty,
+        winRate: trader.winRate,
+        profitFactor: trader.profitFactor,
+        avgTradeSize: trader.avgTradeSize,
+        copyMultiplier: trader.copyMultiplier,
+        maxCopySize: trader.maxCopySize,
+        lastSeenTimestamp: trader.lastSeenTimestamp,
+        isActive: trader.isActive,
+        totalAlerts: trader.totalAlerts,
+        totalCopied: trader.totalCopied,
+        totalPnl: trader.totalPnl,
+        addedAt: trader.addedAt,
+        profiledAt: trader.profiledAt,
+        // New position data
+        positionCount: positions.length,
+        totalPositionValue,
+        totalUnrealizedPnl: positions.reduce((sum, p) => sum + (p.cashPnl || 0), 0),
+        topPositions,
+        positionsUpdatedAt: positions[0]?.fetchedAt,
+      };
+    });
 
     return NextResponse.json({
       success: true,

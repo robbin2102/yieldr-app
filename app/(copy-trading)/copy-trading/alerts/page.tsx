@@ -21,9 +21,15 @@ interface Alert {
   copied?: boolean;
 }
 
+interface ConvictionSettings {
+  enabled: boolean;
+  multiplier: number;
+}
+
 // Filter options
 const SIDE_OPTIONS = ['ALL', 'BUY', 'SELL'];
 const TYPE_OPTIONS = ['ALL', 'TRADE', 'REDEEM', 'MERGE', 'SPLIT'];
+const CONVICTION_STORAGE_KEY = 'highConvictionSettings';
 
 export default function AlertsPage() {
   const [alerts, setAlerts] = useState<Alert[]>([]);
@@ -32,6 +38,27 @@ export default function AlertsPage() {
   const [typeFilter, setTypeFilter] = useState('TRADE');
   const [traderFilter, setTraderFilter] = useState('ALL');
   const [traders, setTraders] = useState<string[]>([]);
+  const [showSettings, setShowSettings] = useState(false);
+  const [convictionSettings, setConvictionSettings] = useState<ConvictionSettings>({
+    enabled: false,
+    multiplier: 10,
+  });
+
+  // Load conviction settings from localStorage
+  useEffect(() => {
+    const saved = localStorage.getItem(CONVICTION_STORAGE_KEY);
+    if (saved) {
+      try {
+        setConvictionSettings(JSON.parse(saved));
+      } catch {}
+    }
+  }, []);
+
+  // Save conviction settings to localStorage
+  function saveConvictionSettings(settings: ConvictionSettings) {
+    setConvictionSettings(settings);
+    localStorage.setItem(CONVICTION_STORAGE_KEY, JSON.stringify(settings));
+  }
 
   useEffect(() => {
     async function fetchAlerts() {
@@ -63,6 +90,12 @@ export default function AlertsPage() {
   const filteredAlerts = alerts.filter(alert => {
     if (sideFilter !== 'ALL' && alert.side !== sideFilter) return false;
     if (traderFilter !== 'ALL' && alert.traderLabel !== traderFilter) return false;
+    // High conviction filter - only show trades >= multiplier threshold
+    if (convictionSettings.enabled) {
+      if (!alert.sizeMultiplier || alert.sizeMultiplier < convictionSettings.multiplier) {
+        return false;
+      }
+    }
     return true;
   });
 
@@ -106,10 +139,102 @@ export default function AlertsPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-white">Trade Alerts</h1>
-        <div className="text-sm text-[#6E6E6E]">
-          {filteredAlerts.length} alerts
+        <div className="flex items-center gap-4">
+          <div className="text-sm text-[#6E6E6E]">
+            {filteredAlerts.length} alerts
+          </div>
+          <button
+            onClick={() => setShowSettings(!showSettings)}
+            className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
+              showSettings
+                ? 'bg-primary-green/20 text-primary-green'
+                : 'bg-[#1A1A1A] text-[#9E9E9E] hover:bg-[#2A2A2A]'
+            }`}
+          >
+            ⚙ Settings
+          </button>
         </div>
       </div>
+
+      {/* Settings Panel */}
+      {showSettings && (
+        <div className="bg-[#0A0A0A] border border-primary-green/30 rounded-xl p-4">
+          <h3 className="text-sm font-semibold text-white mb-3">High Conviction Settings</h3>
+          <div className="flex flex-wrap items-center gap-6">
+            {/* Toggle */}
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => saveConvictionSettings({
+                  ...convictionSettings,
+                  enabled: !convictionSettings.enabled,
+                })}
+                className={`relative w-10 h-5 rounded-full transition-colors ${
+                  convictionSettings.enabled ? 'bg-primary-green' : 'bg-[#2A2A2A]'
+                }`}
+              >
+                <div
+                  className={`absolute top-0.5 w-4 h-4 bg-white rounded-full transition-transform ${
+                    convictionSettings.enabled ? 'translate-x-5' : 'translate-x-0.5'
+                  }`}
+                />
+              </button>
+              <span className="text-sm text-[#9E9E9E]">
+                {convictionSettings.enabled ? 'Showing only high conviction' : 'Showing all trades'}
+              </span>
+            </div>
+
+            {/* Multiplier Threshold */}
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-[#6E6E6E] uppercase">Threshold:</span>
+              <div className="flex items-center gap-1">
+                {[5, 10, 15, 20].map((mult) => (
+                  <button
+                    key={mult}
+                    onClick={() => saveConvictionSettings({
+                      ...convictionSettings,
+                      multiplier: mult,
+                    })}
+                    className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors ${
+                      convictionSettings.multiplier === mult
+                        ? 'bg-primary-green/20 text-primary-green'
+                        : 'bg-[#1A1A1A] text-[#9E9E9E] hover:bg-[#2A2A2A]'
+                    }`}
+                  >
+                    {mult}x
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Custom input */}
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-[#6E6E6E]">Custom:</span>
+              <input
+                type="number"
+                min="1"
+                max="100"
+                value={convictionSettings.multiplier}
+                onChange={(e) => {
+                  const val = parseInt(e.target.value) || 10;
+                  saveConvictionSettings({
+                    ...convictionSettings,
+                    multiplier: Math.max(1, Math.min(100, val)),
+                  });
+                }}
+                className="w-16 px-2 py-1 text-xs bg-[#111] border border-[#2A2A2A] rounded text-white text-center focus:outline-none focus:border-primary-green"
+              />
+              <span className="text-xs text-[#6E6E6E]">x avg trade size</span>
+            </div>
+          </div>
+
+          <p className="text-xs text-[#4E4E4E] mt-3">
+            High conviction trades are {convictionSettings.multiplier}x or more of a trader's average trade size.
+            {convictionSettings.enabled
+              ? ` Currently filtering to show only ≥${convictionSettings.multiplier}x trades.`
+              : ' Currently showing all trades.'}
+          </p>
+        </div>
+      )}
 
       {/* Filters */}
       <div className="flex flex-wrap gap-4 p-4 bg-[#0A0A0A] border border-[#1E1E1E] rounded-xl">
@@ -167,6 +292,15 @@ export default function AlertsPage() {
             ))}
           </select>
         </div>
+
+        {/* High Conviction indicator */}
+        {convictionSettings.enabled && (
+          <div className="flex items-center gap-2 ml-auto">
+            <span className="px-2 py-1 text-xs font-medium rounded-md bg-orange-500/20 text-orange-400">
+              🔥 ≥{convictionSettings.multiplier}x only
+            </span>
+          </div>
+        )}
       </div>
 
       {/* Alerts Table */}
