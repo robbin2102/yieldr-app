@@ -210,6 +210,20 @@ export default function TraderProfilePage() {
     });
   };
 
+  // Relative time for high conviction trades (converts to local time)
+  const timeAgo = (dateStr: string) => {
+    const date = new Date(dateStr);
+    const now = new Date();
+    const seconds = Math.floor((now.getTime() - date.getTime()) / 1000);
+
+    if (seconds < 60) return 'Just now';
+    if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+    if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+    if (seconds < 604800) return `${Math.floor(seconds / 86400)}d ago`;
+    // If older than 7 days, show date
+    return formatDate(dateStr);
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-96">
@@ -507,7 +521,7 @@ export default function TraderProfilePage() {
                     <span className="text-xs text-orange-400">🔥 {trade.sizeMultiplier.toFixed(0)}x</span>
                   </div>
                   <div className="text-xs text-[#6E6E6E]">
-                    {formatDate(trade.timestamp)}
+                    {timeAgo(trade.timestamp)}
                   </div>
                 </div>
                 <div className="text-sm text-white">{trade.outcome}</div>

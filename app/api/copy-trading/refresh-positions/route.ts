@@ -47,13 +47,16 @@ async function fetchOpenPositions(wallet: string): Promise<OpenPosition[]> {
   return allPositions;
 }
 
-// POST - Refresh all tracked trader positions (call from cron)
+// POST - Refresh all tracked trader positions (call from cron or manual)
 export async function POST(request: NextRequest) {
   try {
-    // Verify cron secret if in production
+    // Verify cron secret only in production with strict mode
     const authHeader = request.headers.get('authorization');
     const cronSecret = process.env.CRON_SECRET;
-    if (cronSecret && authHeader !== `Bearer ${cronSecret}`) {
+    const isDev = process.env.NODE_ENV === 'development';
+
+    // Allow unauthenticated in dev mode, or if no secret is set
+    if (cronSecret && !isDev && authHeader !== `Bearer ${cronSecret}`) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
