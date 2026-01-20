@@ -98,19 +98,31 @@ export default function TraderProfilePage() {
   const [profile, setProfile] = useState<TraderProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [notFound, setNotFound] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [profiling, setProfiling] = useState(false);
+  const [labelInput, setLabelInput] = useState('');
+  const [profileProgress, setProfileProgress] = useState('');
 
   useEffect(() => {
     fetchProfile();
   }, [wallet]);
 
   async function fetchProfile() {
+    setLoading(true);
+    setNotFound(false);
+    setError(null);
     try {
       const response = await fetch(`/api/copy-trading/profile?wallet=${wallet}`);
       const data = await response.json();
 
       if (data.success) {
         setProfile(data.profile);
+        setLabelInput(data.profile.label || '');
+      } else if (response.status === 404 || data.error?.includes('not found')) {
+        setNotFound(true);
+        // Generate default label from wallet
+        setLabelInput(`Trader_${wallet.slice(2, 8)}`);
       } else {
         setError(data.error || 'Failed to load profile');
       }
@@ -118,6 +130,33 @@ export default function TraderProfilePage() {
       setError('Failed to load profile');
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function handleProfileTrader() {
+    if (!labelInput.trim()) return;
+    setProfiling(true);
+    setProfileProgress('Fetching trading activity...');
+    try {
+      const response = await fetch('/api/copy-trading/profile-trader', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ wallet, label: labelInput.trim() }),
+      });
+      setProfileProgress('Analyzing performance...');
+      const data = await response.json();
+      if (data.success) {
+        setProfileProgress('Profile complete!');
+        setNotFound(false);
+        await fetchProfile();
+      } else {
+        setError(data.error || 'Failed to profile trader');
+      }
+    } catch (err) {
+      setError('Failed to profile trader');
+    } finally {
+      setProfiling(false);
+      setProfileProgress('');
     }
   }
 
@@ -179,6 +218,73 @@ export default function TraderProfilePage() {
     );
   }
 
+  // Profile not found - show profiling UI
+  if (notFound) {
+    return (
+      <div className="space-y-6">
+        <Link href="/copy-trading/traders" className="text-sm text-[#6E6E6E] hover:text-white">
+          ← Back to Traders
+        </Link>
+
+        <div className="bg-[#0A0A0A] border border-[#1E1E1E] rounded-xl p-8">
+          <div className="max-w-md mx-auto text-center">
+            <div className="w-16 h-16 rounded-full bg-[#1A1A1A] flex items-center justify-center mx-auto mb-4">
+              <span className="text-2xl">📊</span>
+            </div>
+            <h2 className="text-xl font-bold text-white mb-2">Profile This Trader</h2>
+            <p className="text-sm text-[#6E6E6E] mb-6">
+              Analyze this wallet&apos;s trading history to see win rate, P&L, market specialty, and high conviction trades.
+            </p>
+
+            <div className="text-xs text-[#6E6E6E] font-mono mb-6 break-all">
+              {wallet}
+            </div>
+
+            {error && (
+              <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3 mb-4 text-red-400 text-sm">
+                {error}
+              </div>
+            )}
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm text-[#9E9E9E] mb-2 text-left">Label (for your reference)</label>
+                <input
+                  type="text"
+                  value={labelInput}
+                  onChange={(e) => setLabelInput(e.target.value)}
+                  placeholder="e.g., Whale_Politics, High_WR_Crypto"
+                  className="w-full px-4 py-3 bg-[#111] border border-[#2A2A2A] rounded-lg text-white text-sm placeholder-[#4E4E4E] focus:outline-none focus:border-primary-green"
+                  disabled={profiling}
+                />
+              </div>
+
+              <button
+                onClick={handleProfileTrader}
+                disabled={profiling || !labelInput.trim()}
+                className="w-full px-6 py-3 bg-primary-green text-black text-sm font-semibold rounded-lg hover:bg-primary-green/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {profiling ? (
+                  <span className="flex items-center justify-center gap-2">
+                    <span className="animate-spin rounded-full h-4 w-4 border-b-2 border-black" />
+                    {profileProgress || 'Profiling...'}
+                  </span>
+                ) : (
+                  'Profile Trader'
+                )}
+              </button>
+
+              <p className="text-xs text-[#4E4E4E]">
+                This will analyze the last 30 days of trading activity. Takes 10-30 seconds.
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Other errors
   if (error || !profile) {
     return (
       <div className="space-y-4">
@@ -186,10 +292,13 @@ export default function TraderProfilePage() {
           ← Back to Traders
         </Link>
         <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-6 text-center">
-          <div className="text-red-400 mb-2">{error || 'Profile not found'}</div>
-          <p className="text-xs text-[#6E6E6E]">
-            This trader may not have been profiled yet.
-          </p>
+          <div className="text-red-400 mb-2">{error || 'Failed to load profile'}</div>
+          <button
+            onClick={() => fetchProfile()}
+            className="mt-2 px-4 py-2 bg-[#1A1A1A] text-[#9E9E9E] text-sm rounded-lg hover:bg-[#2A2A2A] transition-colors"
+          >
+            Retry
+          </button>
         </div>
       </div>
     );
