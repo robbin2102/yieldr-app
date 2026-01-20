@@ -4,9 +4,8 @@ import clientPromise, { dbName } from '@/lib/mongodb';
 export const dynamic = 'force-dynamic';
 
 const API_BASE = 'https://data-api.polymarket.com';
-const DEFAULT_WALLET = '0x01ba1dfbf9dd83a6ee27eb4c33f2d540232ca4ba';
 
-interface Position {
+interface OpenPosition {
   conditionId: string;
   asset: string;
   title: string;
@@ -20,159 +19,149 @@ interface Position {
   percentPnl: number;
 }
 
-interface Activity {
-  conditionId: string;
-  outcome: string;
-  side: string;
-  timestamp: number;
-}
-
-// Fetch user's open positions from Polymarket
-async function fetchOpenPositions(wallet: string): Promise<Position[]> {
+// Fetch user's open positions from Polymarket to get current P&L
+async function fetchOpenPositions(wallet: string): Promise<OpenPosition[]> {
   const url = `${API_BASE}/positions?user=${wallet}&sizeThreshold=0.1&limit=500`;
   const response = await fetch(url);
   if (!response.ok) throw new Error(`API error: ${response.status}`);
   return response.json();
 }
 
-// Fetch user's activities for matching
-async function fetchActivities(wallet: string, days: number = 30): Promise<Activity[]> {
-  const now = Math.floor(Date.now() / 1000);
-  const startTs = now - (days * 24 * 60 * 60);
-  const url = `${API_BASE}/activity?user=${wallet}&limit=500&sortBy=TIMESTAMP&sortDirection=DESC`;
-
-  const response = await fetch(url);
-  if (!response.ok) throw new Error(`API error: ${response.status}`);
-
-  const activities = await response.json();
-  return activities.filter((a: any) => a.timestamp >= startTs);
-}
-
-// Fetch trader activities for matching
-async function fetchTraderActivities(wallet: string, days: number = 30): Promise<Activity[]> {
-  const now = Math.floor(Date.now() / 1000);
-  const startTs = now - (days * 24 * 60 * 60);
-  const url = `${API_BASE}/activity?user=${wallet}&limit=500&sortBy=TIMESTAMP&sortDirection=DESC`;
-
-  const response = await fetch(url);
-  if (!response.ok) return [];
-
-  const activities = await response.json();
-  return activities.filter((a: any) => a.timestamp >= startTs && a.type === 'TRADE');
-}
-
-// Match a position to a trader based on activity history
-function matchPositionToTrader(
-  position: Position,
-  myActivities: Activity[],
-  traders: { wallet: string; label: string; activities: Activity[] }[]
-): string | null {
-  const TIME_WINDOW = 30 * 60; // 30 minutes
-
-  // Find my buy activity for this position
-  const myBuy = myActivities.find(
-    a => a.conditionId === position.conditionId &&
-         a.outcome === position.outcome &&
-         a.side === 'BUY'
-  );
-
-  if (!myBuy) return null;
-
-  // Find trader who bought the same thing before me
-  let bestMatch: { label: string; timeDiff: number } | null = null;
-
-  for (const trader of traders) {
-    for (const traderActivity of trader.activities) {
-      if (
-        traderActivity.conditionId === position.conditionId &&
-        traderActivity.outcome === position.outcome &&
-        traderActivity.side === 'BUY' &&
-        traderActivity.timestamp <= myBuy.timestamp
-      ) {
-        const timeDiff = myBuy.timestamp - traderActivity.timestamp;
-        if (timeDiff <= TIME_WINDOW) {
-          if (!bestMatch || timeDiff < bestMatch.timeDiff) {
-            bestMatch = { label: trader.label, timeDiff };
-          }
-        }
-      }
-    }
-  }
-
-  return bestMatch?.label || null;
-}
-
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
-    const wallet = searchParams.get('wallet') || DEFAULT_WALLET;
-    const days = parseInt(searchParams.get('days') || '30');
+    const wallet = searchParams.get('wallet');
 
+    if (!wallet) {
+      return NextResponse.json(
+        { success: false, error: 'Wallet address required' },
+        { status: 400 }
+      );
+    }
+
+    const cleanWallet = wallet.toLowerCase();
     const client = await clientPromise;
     const db = client.db(dbName);
 
-    // Fetch tracked traders from DB
-    const trackedTraders = await db.collection('polymarket-trackedTraders')
-      .find({ isActive: true })
+    // First, check if we have saved copy positions in MongoDB
+    const savedCopyPositions = await db.collection('polymarket-copyPositions')
+      .find({ userWallet: cleanWallet })
+      .sort({ timestamp: -1 })
       .toArray();
 
-    // Fetch user positions and activities
-    const [positions, myActivities] = await Promise.all([
-      fetchOpenPositions(wallet),
-      fetchActivities(wallet, days),
-    ]);
+    // If we have saved copy positions, use those
+    if (savedCopyPositions.length > 0) {
+      // Fetch current open positions to update P&L
+      let currentPositions: OpenPosition[] = [];
+      try {
+        currentPositions = await fetchOpenPositions(cleanWallet);
+      } catch (e) {
+        // If API fails, use saved data as-is
+      }
 
-    // Filter out resolved positions (curPrice ~= 0)
-    const activePositions = positions.filter(p => p.curPrice >= 0.001);
-
-    // Fetch trader activities for matching
-    const tradersWithActivities = await Promise.all(
-      trackedTraders.map(async (trader) => ({
-        wallet: trader.wallet,
-        label: trader.label,
-        activities: await fetchTraderActivities(trader.wallet, days),
-      }))
-    );
-
-    // Match positions to traders
-    const positionsByTrader: Record<string, Position[]> = {};
-    const unmatchedPositions: Position[] = [];
-
-    for (const position of activePositions) {
-      const matchedTrader = matchPositionToTrader(
-        position,
-        myActivities,
-        tradersWithActivities
+      // Create lookup for current position data
+      const currentPosMap = new Map(
+        currentPositions.map(p => [`${p.outcome}`, p])
       );
 
-      if (matchedTrader) {
-        if (!positionsByTrader[matchedTrader]) {
-          positionsByTrader[matchedTrader] = [];
+      // Group by trader and update with current P&L
+      const positionsByTrader: Record<string, any[]> = {};
+      let totalPnl = 0;
+      let totalValue = 0;
+      let totalInvested = 0;
+      let openCount = 0;
+      let closedCount = 0;
+
+      for (const pos of savedCopyPositions) {
+        const traderLabel = pos.traderLabel || 'Unknown';
+        if (!positionsByTrader[traderLabel]) {
+          positionsByTrader[traderLabel] = [];
         }
-        positionsByTrader[matchedTrader].push(position);
-      } else {
-        unmatchedPositions.push(position);
+
+        // Try to get current data
+        const currentPos = currentPosMap.get(pos.outcome);
+
+        // Update status based on current data
+        let status = pos.status;
+        let currentValue = pos.currentValue || 0;
+        let cashPnl = pos.pnl || 0;
+        let curPrice = pos.price || 0;
+
+        if (currentPos) {
+          status = 'OPEN';
+          currentValue = currentPos.currentValue;
+          cashPnl = currentPos.cashPnl;
+          curPrice = currentPos.curPrice;
+          openCount++;
+        } else if (status === 'OPEN') {
+          // Position was open but now gone = likely closed/redeemed
+          status = 'CLOSED';
+          closedCount++;
+        } else {
+          closedCount++;
+        }
+
+        positionsByTrader[traderLabel].push({
+          conditionId: pos.conditionId,
+          title: pos.market,
+          outcome: pos.outcome,
+          side: pos.side,
+          size: pos.size,
+          avgPrice: pos.price,
+          curPrice,
+          initialValue: pos.usdcValue,
+          currentValue,
+          cashPnl,
+          percentPnl: pos.usdcValue > 0 ? (cashPnl / pos.usdcValue) * 100 : 0,
+          status,
+          timestamp: pos.timestamp,
+          traderWallet: pos.traderWallet,
+        });
+
+        if (status === 'OPEN') {
+          totalValue += currentValue;
+          totalInvested += pos.usdcValue || 0;
+        }
+        totalPnl += cashPnl;
       }
+
+      return NextResponse.json({
+        success: true,
+        source: 'mongodb',
+        positionsByTrader,
+        unmatchedPositions: [],
+        summary: {
+          totalPositions: savedCopyPositions.length,
+          matchedPositions: savedCopyPositions.length,
+          unmatchedCount: 0,
+          openPositions: openCount,
+          closedPositions: closedCount,
+          totalPnl,
+          totalValue,
+          totalInvested,
+          pnlPercent: totalInvested > 0 ? (totalPnl / totalInvested) * 100 : 0,
+        },
+      });
     }
 
-    // Calculate summary stats
-    const totalPnl = activePositions.reduce((sum, p) => sum + p.cashPnl, 0);
-    const totalValue = activePositions.reduce((sum, p) => sum + p.currentValue, 0);
-    const totalInvested = activePositions.reduce((sum, p) => sum + p.initialValue, 0);
-
+    // No saved positions - return empty with instruction
     return NextResponse.json({
       success: true,
-      positionsByTrader,
-      unmatchedPositions,
+      source: 'none',
+      positionsByTrader: {},
+      unmatchedPositions: [],
       summary: {
-        totalPositions: activePositions.length,
-        matchedPositions: activePositions.length - unmatchedPositions.length,
-        unmatchedCount: unmatchedPositions.length,
-        totalPnl,
-        totalValue,
-        totalInvested,
-        pnlPercent: totalInvested > 0 ? (totalPnl / totalInvested) * 100 : 0,
+        totalPositions: 0,
+        matchedPositions: 0,
+        unmatchedCount: 0,
+        openPositions: 0,
+        closedPositions: 0,
+        totalPnl: 0,
+        totalValue: 0,
+        totalInvested: 0,
+        pnlPercent: 0,
       },
+      message: 'No copy positions tracked. Run: npx tsx scripts/track-copies.ts <your_wallet> 30 --save',
     });
 
   } catch (error: any) {

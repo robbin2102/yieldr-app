@@ -5,6 +5,8 @@
  *   npx tsx scripts/track-copies.ts                    # Default wallet, last 7 days
  *   npx tsx scripts/track-copies.ts <your_wallet>      # Custom wallet
  *   npx tsx scripts/track-copies.ts <your_wallet> 30   # Custom period (days)
+ *   npx tsx scripts/track-copies.ts --save             # Save results to MongoDB
+ *   npx tsx scripts/track-copies.ts <wallet> 30 --save # Custom + save
  *
  * Environment:
  *   MONGODB_URI - MongoDB connection string
@@ -12,6 +14,7 @@
 
 import mongoose from 'mongoose';
 import { TrackedTrader } from '../models/TrackedTrader';
+import { CopyPosition } from '../models/CopyPosition';
 
 const API_BASE = 'https://data-api.polymarket.com';
 
@@ -240,8 +243,17 @@ async function main() {
     if (!result.error && process.env.MONGODB_URI) break;
   }
 
-  const myWallet = process.argv[2] || DEFAULT_WALLET;
-  const days = parseInt(process.argv[3] || '7');
+  // Parse args - support both positional and --save flag
+  const args = process.argv.slice(2);
+  const saveToDb = args.includes('--save');
+  const filteredArgs = args.filter(a => !a.startsWith('--'));
+
+  const myWallet = (filteredArgs[0] && filteredArgs[0].startsWith('0x'))
+    ? filteredArgs[0]
+    : DEFAULT_WALLET;
+  const days = parseInt(
+    filteredArgs.find(a => !a.startsWith('0x') && !isNaN(parseInt(a))) || '7'
+  );
 
   const now = Math.floor(Date.now() / 1000);
   const startDate = new Date((now - days * 24 * 60 * 60) * 1000).toISOString().split('T')[0];
@@ -252,6 +264,7 @@ async function main() {
   console.log('═══════════════════════════════════════════════════════════════');
   console.log(`Your Wallet:  ${myWallet}`);
   console.log(`Period:       Last ${days} days (${startDate} to ${endDate})`);
+  console.log(`Save to DB:   ${saveToDb ? 'YES' : 'NO (use --save to persist)'}`);
   console.log('═══════════════════════════════════════════════════════════════\n');
 
   await connectDB();
@@ -452,6 +465,76 @@ async function main() {
   console.log(`  Matched Trades:    ${myTrades.length - unmatchedTrades.length}`);
   console.log(`  Unmatched Trades:  ${unmatchedTrades.length}`);
   console.log('═══════════════════════════════════════════════════════════════\n');
+
+  // Save to MongoDB if --save flag is set
+  if (saveToDb) {
+    console.log('Saving to MongoDB...');
+
+    let savedCount = 0;
+    let updatedCount = 0;
+
+    for (const traderStats of Object.values(statsByTrader)) {
+      for (const trade of traderStats.trades) {
+        try {
+          const result = await CopyPosition.updateOne(
+            {
+              userWallet: myWallet.toLowerCase(),
+              conditionId: trade.market, // Using market as conditionId placeholder
+              outcome: trade.outcome,
+            },
+            {
+              $set: {
+                userWallet: myWallet.toLowerCase(),
+                traderWallet: traderStats.wallet,
+                traderLabel: traderStats.label,
+                conditionId: trade.market, // Will be updated with actual conditionId
+                market: trade.market,
+                outcome: trade.outcome,
+                side: trade.side as 'BUY' | 'SELL',
+                size: trade.size,
+                price: trade.price,
+                usdcValue: trade.usdcValue,
+                timestamp: trade.timestamp,
+                status: trade.status,
+                currentValue: trade.currentValue,
+                pnl: trade.pnl,
+                pnlPercent: trade.pnlPercent,
+                matchedAt: new Date(),
+              },
+            },
+            { upsert: true }
+          );
+
+          if (result.upsertedCount > 0) savedCount++;
+          else if (result.modifiedCount > 0) updatedCount++;
+        } catch (err: any) {
+          // Ignore duplicate key errors, log others
+          if (!err.message?.includes('duplicate key')) {
+            console.error(`  Error saving trade: ${err.message}`);
+          }
+        }
+      }
+    }
+
+    console.log(`  Saved ${savedCount} new positions, updated ${updatedCount} existing\n`);
+
+    // Also update trader copy stats in trackedTraders
+    for (const traderStats of Object.values(statsByTrader)) {
+      await TrackedTrader.updateOne(
+        { wallet: traderStats.wallet },
+        {
+          $set: {
+            totalCopied: traderStats.tradeCount,
+            totalPnl: traderStats.totalPnl,
+            lastUpdatedAt: new Date(),
+          },
+        }
+      );
+    }
+
+    console.log('  Updated trader copy stats');
+    console.log('═══════════════════════════════════════════════════════════════\n');
+  }
 
   await mongoose.connection.close();
 }

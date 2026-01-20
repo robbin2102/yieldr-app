@@ -19,6 +19,8 @@ interface PositionsSummary {
   totalPositions: number;
   matchedPositions: number;
   unmatchedCount: number;
+  openPositions?: number;
+  closedPositions?: number;
   totalPnl: number;
   totalValue: number;
   totalInvested: number;
@@ -278,10 +280,16 @@ export default function PositionsPage() {
 
         {Object.keys(positionsByTrader).length === 0 && !loading && (
           <div className="bg-[#0A0A0A] border border-[#1E1E1E] rounded-xl p-8 text-center">
-            <div className="text-[#6E6E6E] text-sm">No matched positions</div>
-            <div className="text-[#4E4E4E] text-xs mt-1">
-              Copy trades from tracked traders to see P&L attribution
+            <div className="text-[#6E6E6E] text-sm mb-2">No copy positions tracked yet</div>
+            <div className="text-[#4E4E4E] text-xs mb-4">
+              Run the track-copies script to save your copy trades to the database:
             </div>
+            <div className="bg-[#111] border border-[#2A2A2A] rounded-lg p-3 font-mono text-xs text-primary-green mb-4 mx-auto max-w-lg">
+              npx tsx scripts/track-copies.ts {wallet.slice(0, 10)}... 30 --save
+            </div>
+            <p className="text-[#4E4E4E] text-xs">
+              This will match your trades to tracked traders and save the P&L attribution.
+            </p>
           </div>
         )}
 
