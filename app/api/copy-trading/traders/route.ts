@@ -43,13 +43,8 @@ export async function GET(request: NextRequest) {
       const positions = positionsByWallet[trader.wallet.toLowerCase()] || [];
       const totalPositionValue = positions.reduce((sum, p) => sum + (p.currentValue || 0), 0);
 
-      // Filter to significant positions (>10% of total value)
-      const significantPositions = positions.filter(p =>
-        totalPositionValue > 0 && (p.currentValue / totalPositionValue) >= 0.10
-      );
-
-      // Top 5 positions by value for display
-      const topPositions = significantPositions.slice(0, 5).map(p => ({
+      // Show top 5 positions by value (no 10% threshold - let UI handle filtering)
+      const topPositions = positions.slice(0, 5).map(p => ({
         title: p.title,
         outcome: p.outcome,
         size: p.size,

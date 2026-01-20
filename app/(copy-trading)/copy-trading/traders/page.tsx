@@ -269,15 +269,15 @@ export default function TradersPage() {
                 {/* Open Positions */}
                 <div className="border-t border-[#1E1E1E] pt-3">
                   <div className="text-[10px] text-[#6E6E6E] uppercase mb-2">
-                    Open Positions ({trader.positionCount || 0})
+                    Top Positions ({trader.positionCount || 0} total)
                   </div>
-                  <div className="space-y-1.5 max-h-[100px] overflow-y-auto">
+                  <div className="space-y-1.5 max-h-[140px] overflow-y-auto scrollbar-thin">
                     {trader.topPositions && trader.topPositions.length > 0 ? (
-                      trader.topPositions.slice(0, 4).map((pos, idx) => (
+                      trader.topPositions.map((pos, idx) => (
                         <div key={idx} className="flex items-center justify-between text-xs bg-[#111] rounded px-2 py-1.5">
                           <div className="truncate flex-1 min-w-0">
                             <div className="text-white truncate">{pos.outcome}</div>
-                            <div className="text-[#6E6E6E] text-[10px] truncate">{pos.title?.substring(0, 25)}...</div>
+                            <div className="text-[#6E6E6E] text-[10px] truncate">{pos.title?.substring(0, 30)}...</div>
                           </div>
                           <div className="text-right ml-2 flex-shrink-0">
                             <div className={`font-mono ${pos.cashPnl >= 0 ? 'text-primary-green' : 'text-red-400'}`}>
