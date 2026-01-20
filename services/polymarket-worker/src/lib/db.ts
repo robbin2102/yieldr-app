@@ -37,6 +37,18 @@ async function ensureIndexes(database: Db): Promise<void> {
       await alertsCollection.dropIndex('txHash_1');
     }
 
+    // Clean up any documents with null/missing transactionHash before creating unique index
+    const cleanupResult = await alertsCollection.deleteMany({
+      $or: [
+        { transactionHash: null },
+        { transactionHash: { $exists: false } },
+        { transactionHash: '' }
+      ]
+    });
+    if (cleanupResult.deletedCount > 0) {
+      console.log(`[DB] Cleaned up ${cleanupResult.deletedCount} alerts with invalid transactionHash`);
+    }
+
     // Create proper unique index on transactionHash
     await alertsCollection.createIndex(
       { transactionHash: 1 },
