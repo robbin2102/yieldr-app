@@ -276,8 +276,8 @@ export default function TradersPage() {
                       trader.topPositions.map((pos, idx) => (
                         <div key={idx} className="flex items-center justify-between text-xs bg-[#111] rounded px-2 py-1.5">
                           <div className="truncate flex-1 min-w-0">
-                            <div className="text-white truncate">{pos.outcome}</div>
                             <div className="text-[#6E6E6E] text-[10px] truncate">{pos.title?.substring(0, 30)}...</div>
+                            <div className="text-white truncate">{pos.outcome}</div>
                           </div>
                           <div className="text-right ml-2 flex-shrink-0">
                             <div className={`font-mono ${pos.cashPnl >= 0 ? 'text-primary-green' : 'text-red-400'}`}>
