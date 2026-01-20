@@ -184,23 +184,35 @@ async function fetchTraderActivities(traderWallet: string, days: number): Promis
   return fetchActivities(traderWallet, days);
 }
 
+async function fetchTraderOpenPositions(traderWallet: string): Promise<OpenPosition[]> {
+  // Fetch trader's current open positions for position-based matching
+  return fetchOpenPositions(traderWallet);
+}
+
 // ═══════════════════════════════════════════════════════════════
 // Matching Logic
 // ═══════════════════════════════════════════════════════════════
 
-function matchTradeToTrader(
+interface TraderData {
+  wallet: string;
+  label: string;
+  activities: Activity[];
+  openPositions: OpenPosition[];
+}
+
+function matchTradeToTraderByActivity(
   myTrade: Activity,
-  traders: { wallet: string; label: string; activities: Activity[] }[],
+  traders: TraderData[],
   debug: boolean = false
-): { wallet: string; label: string } | null {
-  // Match based on:
+): { wallet: string; label: string; matchType: 'activity' } | null {
+  // Match based on recent activities:
   // 1. Same market (conditionId)
   // 2. Same outcome
   // 3. Same side
   // 4. Within time window (24 hours for copy trading - often delayed)
   // 5. Pick the trader with the CLOSEST timestamp (not first match)
 
-  const TIME_WINDOW = 24 * 60 * 60; // 24 hours in seconds (increased from 30 min)
+  const TIME_WINDOW = 24 * 60 * 60; // 24 hours in seconds
 
   let bestMatch: { wallet: string; label: string; timeDiff: number } | null = null;
 
@@ -229,7 +241,63 @@ function matchTradeToTrader(
     }
   }
 
-  return bestMatch ? { wallet: bestMatch.wallet, label: bestMatch.label } : null;
+  return bestMatch ? { wallet: bestMatch.wallet, label: bestMatch.label, matchType: 'activity' } : null;
+}
+
+function matchTradeToTraderByPosition(
+  myTrade: Activity,
+  traders: TraderData[],
+  debug: boolean = false
+): { wallet: string; label: string; matchType: 'position' } | null {
+  // Match based on trader's current open positions:
+  // If trader has an open position in the same market/outcome,
+  // and user is buying the same, consider it a copy trade.
+  // This catches copies of positions the trader opened long ago.
+
+  // Only match BUY trades (copying someone's position)
+  if (myTrade.side !== 'BUY') return null;
+
+  let bestMatch: { wallet: string; label: string; positionValue: number } | null = null;
+
+  for (const trader of traders) {
+    for (const position of trader.openPositions) {
+      const sameMarket = position.conditionId === myTrade.conditionId;
+      const sameOutcome = position.outcome === myTrade.outcome;
+
+      if (sameMarket && sameOutcome) {
+        // Prefer trader with largest position in this market (most likely the one being copied)
+        if (!bestMatch || position.currentValue > bestMatch.positionValue) {
+          bestMatch = {
+            wallet: trader.wallet,
+            label: trader.label,
+            positionValue: position.currentValue
+          };
+        }
+
+        if (debug) {
+          console.log(`    Position match: ${trader.label} has ${position.size.toFixed(0)} shares @ ${(position.avgPrice * 100).toFixed(0)}¢`);
+        }
+      }
+    }
+  }
+
+  return bestMatch ? { wallet: bestMatch.wallet, label: bestMatch.label, matchType: 'position' } : null;
+}
+
+function matchTradeToTrader(
+  myTrade: Activity,
+  traders: TraderData[],
+  debug: boolean = false
+): { wallet: string; label: string; matchType: 'activity' | 'position' } | null {
+  // Try activity-based matching first (more accurate - recent trades within time window)
+  const activityMatch = matchTradeToTraderByActivity(myTrade, traders, debug);
+  if (activityMatch) return activityMatch;
+
+  // Fallback to position-based matching (for older positions)
+  const positionMatch = matchTradeToTraderByPosition(myTrade, traders, debug);
+  if (positionMatch) return positionMatch;
+
+  return null;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -307,25 +375,33 @@ async function main() {
   const myClosedPositions = await fetchClosedPositions(myWallet, days);
   console.log(`  Found ${myOpenPositions.length} open, ${myClosedPositions.length} closed\n`);
 
-  // Fetch trader activities
-  console.log('Fetching trader activities...');
-  const tradersWithActivities: { wallet: string; label: string; activities: Activity[] }[] = [];
+  // Fetch trader activities AND open positions
+  console.log('Fetching trader data (activities + open positions)...');
+  const tradersData: TraderData[] = [];
 
   for (const trader of trackedTraders) {
     console.log(`  Fetching ${trader.label}...`);
+
+    // Fetch activities
     const activities = await fetchTraderActivities(trader.wallet, days);
     const trades = activities.filter(a => a.type === 'TRADE');
-    tradersWithActivities.push({
+    console.log(`    Found ${trades.length} trades (last ${days} days)`);
+
+    // Fetch open positions (for position-based matching)
+    const openPositions = await fetchTraderOpenPositions(trader.wallet);
+    console.log(`    Found ${openPositions.length} open positions`);
+
+    tradersData.push({
       wallet: trader.wallet,
       label: trader.label,
       activities: trades,
+      openPositions: openPositions,
     });
-    console.log(`    Found ${trades.length} trades`);
 
-    // Show recent markets
+    // Show recent markets from activities
     const recentMarkets = [...new Set(trades.slice(0, 10).map(t => t.title.substring(0, 40)))];
     if (recentMarkets.length > 0) {
-      console.log(`    Recent markets: ${recentMarkets.slice(0, 3).join(', ')}...`);
+      console.log(`    Recent activity: ${recentMarkets.slice(0, 3).join(', ')}...`);
     }
     await new Promise(r => setTimeout(r, 200));
   }
@@ -341,10 +417,16 @@ async function main() {
   // Match my trades to traders
   const statsByTrader: Record<string, TraderCopyStats> = {};
   let unmatchedTrades: Activity[] = [];
+  let activityMatches = 0;
+  let positionMatches = 0;
 
   console.log('Matching trades...');
   for (const trade of myTrades) {
-    const match = matchTradeToTrader(trade, tradersWithActivities);
+    const match = matchTradeToTrader(trade, tradersData);
+
+    // Track match type for summary
+    if (match?.matchType === 'activity') activityMatches++;
+    if (match?.matchType === 'position') positionMatches++;
 
     if (match) {
       if (!statsByTrader[match.wallet]) {
@@ -492,6 +574,8 @@ async function main() {
   console.log(`  Current Value:     $${totalCurrentValue.toFixed(2)}`);
   console.log(`  Total P&L:         ${totalPnlSign}$${totalPnl.toFixed(2)}`);
   console.log(`  Matched Trades:    ${myTrades.length - unmatchedTrades.length}`);
+  console.log(`    - By activity:   ${activityMatches} (trader traded recently)`);
+  console.log(`    - By position:   ${positionMatches} (trader has open position)`);
   console.log(`  Unmatched Trades:  ${unmatchedTrades.length}`);
   console.log('═══════════════════════════════════════════════════════════════\n');
 
