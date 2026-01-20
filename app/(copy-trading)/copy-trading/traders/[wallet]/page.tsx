@@ -34,6 +34,16 @@ interface HighConvictionTrade {
   txHash: string;
 }
 
+interface ClosedPosition {
+  title: string;
+  outcome: string;
+  size: number;
+  avgPrice: number;
+  realizedPnl: number;
+  timestamp: string;
+  status: 'REDEEMED' | 'WON' | 'LOST';
+}
+
 interface TraderProfile {
   wallet: string;
   label: string;
@@ -85,6 +95,9 @@ interface TraderProfile {
 
   // Top positions
   topOpenPositions: Position[];
+
+  // Recent closed positions
+  recentClosedPositions: ClosedPosition[];
 
   // Tracking status
   isTracking: boolean;
@@ -329,7 +342,11 @@ export default function TraderProfilePage() {
           <div className="flex items-center gap-3">
             <h1 className="text-2xl font-bold text-white">{profile.label}</h1>
             {profile.isTracking && (
-              <span className="px-2 py-1 text-xs bg-primary-green/20 text-primary-green rounded">
+              <span className="px-2 py-1 text-xs bg-primary-green/20 text-primary-green rounded flex items-center gap-1.5">
+                <span className="relative flex h-2 w-2">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary-green opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-primary-green"></span>
+                </span>
                 TRACKING
               </span>
             )}
@@ -497,6 +514,45 @@ export default function TraderProfilePage() {
           </div>
         </div>
       </div>
+
+      {/* Recent Closed Positions */}
+      {profile.recentClosedPositions && profile.recentClosedPositions.length > 0 && (
+        <div className="bg-[#0A0A0A] border border-[#1E1E1E] rounded-xl p-4">
+          <h3 className="text-sm font-semibold text-white mb-3">
+            Recent Closed Positions
+          </h3>
+          <div className="space-y-2 max-h-[300px] overflow-y-auto">
+            {profile.recentClosedPositions.map((pos, i) => (
+              <div key={i} className="bg-[#111] rounded-lg p-3">
+                <div className="flex items-start justify-between">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className={`px-1.5 py-0.5 text-[10px] font-semibold rounded ${
+                        pos.status === 'WON' || (pos.status === 'REDEEMED' && pos.realizedPnl >= 0)
+                          ? 'bg-primary-green/20 text-primary-green'
+                          : 'bg-red-500/20 text-red-400'
+                      }`}>
+                        {pos.status}
+                      </span>
+                      <span className="text-xs text-[#6E6E6E]">{timeAgo(pos.timestamp)}</span>
+                    </div>
+                    <div className="text-xs text-[#6E6E6E] truncate">{pos.title}</div>
+                    <div className="text-sm text-white">{pos.outcome}</div>
+                  </div>
+                  <div className="text-right ml-2">
+                    <div className={`text-sm font-mono ${pos.realizedPnl >= 0 ? 'text-primary-green' : 'text-red-400'}`}>
+                      {pos.realizedPnl >= 0 ? '+' : ''}{formatValue(pos.realizedPnl)}
+                    </div>
+                    <div className="text-xs text-[#6E6E6E]">
+                      {pos.size.toFixed(0)} @ {(pos.avgPrice * 100).toFixed(0)}¢
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* High Conviction Trades */}
       {profile.recentHighConvictionTrades.length > 0 && (

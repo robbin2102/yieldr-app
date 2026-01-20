@@ -216,7 +216,11 @@ export default function TradersPage() {
                     <div className={`w-2 h-2 rounded-full ${isRecentlyActive ? 'bg-primary-green' : 'bg-[#4E4E4E]'}`} />
                     <span className="font-bold text-white text-base">{trader.label}</span>
                     {trader.isTracking && (
-                      <span className="px-1.5 py-0.5 text-[10px] bg-primary-green/20 text-primary-green rounded">
+                      <span className="px-1.5 py-0.5 text-[10px] bg-primary-green/20 text-primary-green rounded flex items-center gap-1">
+                        <span className="relative flex h-1.5 w-1.5">
+                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary-green opacity-75"></span>
+                          <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-primary-green"></span>
+                        </span>
                         TRACKING
                       </span>
                     )}

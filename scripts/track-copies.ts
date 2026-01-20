@@ -269,11 +269,17 @@ async function main() {
 
   await connectDB();
 
-  // Get tracked traders
-  const trackedTraders = await TrackedTrader.find({ isActive: true }).lean();
+  // Get actively tracked traders (isTracking: true, not just profiled)
+  const allTrackers = await TrackedTrader.find({ isActive: true, isTracking: true }).lean();
+
+  // Filter to valid Ethereum addresses only
+  const trackedTraders = allTrackers.filter(t =>
+    t.wallet && /^0x[a-fA-F0-9]{40}$/.test(t.wallet)
+  );
 
   if (trackedTraders.length === 0) {
-    console.log('No traders being tracked. Use trade-alerts.ts --add to add traders.\n');
+    console.log('No traders being actively tracked.');
+    console.log('Go to the UI and click "Start Tracking" on a profiled trader.\n');
     await mongoose.connection.close();
     return;
   }

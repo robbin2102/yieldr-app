@@ -88,6 +88,9 @@ export async function GET(request: NextRequest) {
         // Top positions
         topOpenPositions: profile.topOpenPositions || [],
 
+        // Recent closed positions
+        recentClosedPositions: profile.recentClosedPositions || [],
+
         // Tracking status
         isTracking: trackedTrader?.isTracking || false,
       },

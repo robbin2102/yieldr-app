@@ -14,9 +14,30 @@ export async function GET(request: NextRequest) {
     const client = await clientPromise;
     const db = client.db(dbName);
 
-    // Build query
+    // Get list of actively tracked traders (isTracking: true and isActive: true)
+    const trackedTraders = await db.collection('polymarket-trackedTraders')
+      .find({ isActive: true, isTracking: true })
+      .project({ wallet: 1 })
+      .toArray();
+    const trackedWallets = trackedTraders.map(t => t.wallet.toLowerCase());
+
+    // Build query - only show alerts from tracked traders
     const query: any = {};
-    if (trader) query.traderWallet = trader.toLowerCase();
+
+    if (trader) {
+      query.traderWallet = trader.toLowerCase();
+    } else if (trackedWallets.length > 0) {
+      // Only show alerts from actively tracked traders
+      query.traderWallet = { $in: trackedWallets };
+    } else {
+      // No tracked traders, return empty
+      return NextResponse.json({
+        success: true,
+        alerts: [],
+        count: 0,
+      });
+    }
+
     if (type) query.type = type;
     if (unacknowledgedOnly) query.acknowledged = false;
 

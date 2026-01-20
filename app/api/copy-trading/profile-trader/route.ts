@@ -173,10 +173,21 @@ export async function POST(request: NextRequest) {
       fetchClosedPositions(cleanWallet, days),
     ]);
 
-    // Separate active positions from resolved losses
-    const RESOLVED_THRESHOLD = 0.001;
-    const openPositions = allOpenPositions.filter(p => p.curPrice >= RESOLVED_THRESHOLD);
-    const resolvedLosses = allOpenPositions.filter(p => p.curPrice < RESOLVED_THRESHOLD && p.size > 0);
+    // Separate active positions from resolved ones
+    // 0¢ = lost (market resolved against them, unredeemed)
+    // 100¢ = won (market resolved in their favor, unredeemed)
+    const LOSS_THRESHOLD = 0.01;  // <1¢ = resolved loss
+    const WIN_THRESHOLD = 0.99;   // >99¢ = resolved win
+
+    const openPositions = allOpenPositions.filter(p =>
+      p.curPrice >= LOSS_THRESHOLD && p.curPrice <= WIN_THRESHOLD
+    );
+    const resolvedLosses = allOpenPositions.filter(p =>
+      p.curPrice < LOSS_THRESHOLD && p.size > 0
+    );
+    const resolvedWins = allOpenPositions.filter(p =>
+      p.curPrice > WIN_THRESHOLD && p.size > 0
+    );
 
     // Count activities by type
     let buyCount = 0, sellCount = 0, redeemCount = 0, otherCount = 0;
@@ -222,7 +233,7 @@ export async function POST(request: NextRequest) {
       }
     });
 
-    // Add resolved losses
+    // Add resolved losses (unredeemed losing positions at 0¢)
     let unredeemedLossCount = 0;
     let unredeemedLossAmount = 0;
     resolvedLosses.forEach(p => {
@@ -233,7 +244,18 @@ export async function POST(request: NextRequest) {
       grossLoss += lossAmount;
     });
 
-    const totalClosedCount = closedPositions.length + unredeemedLossCount;
+    // Add resolved wins (unredeemed winning positions at 100¢)
+    let unredeemedWinCount = 0;
+    let unredeemedWinAmount = 0;
+    resolvedWins.forEach(p => {
+      const winAmount = p.currentValue - p.initialValue; // Profit
+      unredeemedWinAmount += winAmount;
+      unredeemedWinCount++;
+      wins++;
+      grossProfit += winAmount;
+    });
+
+    const totalClosedCount = closedPositions.length + unredeemedLossCount + unredeemedWinCount;
     const winRate = totalClosedCount > 0 ? (wins / totalClosedCount) * 100 : 0;
     const profitFactor = grossLoss > 0 ? grossProfit / grossLoss : grossProfit > 0 ? 999 : 0;
     const netPnl = grossProfit - grossLoss;
@@ -278,12 +300,46 @@ export async function POST(request: NextRequest) {
     // Determine specialty
     const specialty = strengths.length > 0 ? strengths[0].category : null;
 
-    // High conviction trades
+    // High conviction trades (no limit - show all)
     const asymmetricThreshold = avgTradeSize * 10;
     const asymmetricTrades = activities
       .filter(a => a.type === 'TRADE' && a.usdcSize >= asymmetricThreshold)
-      .sort((a, b) => b.timestamp - a.timestamp)
-      .slice(0, 10);
+      .sort((a, b) => b.timestamp - a.timestamp);
+
+    // Build recent closed positions (combine redeemed + resolved wins/losses)
+    const recentClosedPositions = [
+      // Official closed positions (redeemed)
+      ...closedPositions.map(p => ({
+        title: p.title,
+        outcome: p.outcome,
+        size: p.totalBought,
+        avgPrice: p.avgPrice,
+        realizedPnl: p.realizedPnl,
+        timestamp: new Date(p.timestamp * 1000),
+        status: 'REDEEMED' as const,
+      })),
+      // Resolved wins (100¢, not yet redeemed)
+      ...resolvedWins.map(p => ({
+        title: p.title,
+        outcome: p.outcome,
+        size: p.size,
+        avgPrice: p.avgPrice,
+        realizedPnl: p.currentValue - p.initialValue,
+        timestamp: new Date(), // Use now as timestamp since we don't have exact resolution time
+        status: 'WON' as const,
+      })),
+      // Resolved losses (0¢, not yet redeemed)
+      ...resolvedLosses.map(p => ({
+        title: p.title,
+        outcome: p.outcome,
+        size: p.size,
+        avgPrice: p.avgPrice,
+        realizedPnl: -p.initialValue, // Loss = negative initial value
+        timestamp: new Date(),
+        status: 'LOST' as const,
+      })),
+    ].sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime())
+      .slice(0, 20); // Show most recent 20
 
     // Build profile data
     const profileData = {
@@ -309,6 +365,8 @@ export async function POST(request: NextRequest) {
       closedPositionsCount: closedPositions.length,
       unredeemedLossCount,
       unredeemedLossAmount,
+      unredeemedWinCount,
+      unredeemedWinAmount,
       totalResolvedCount: totalClosedCount,
       wins,
       losses,
@@ -317,6 +375,9 @@ export async function POST(request: NextRequest) {
       grossLoss,
       netPnl,
       profitFactor,
+
+      // Recent closed positions (for display)
+      recentClosedPositions,
 
       // Open positions
       openPositionsCount: openPositions.length,
