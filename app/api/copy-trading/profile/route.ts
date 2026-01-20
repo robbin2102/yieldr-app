@@ -66,14 +66,15 @@ export async function GET(request: NextRequest) {
         profitFactor: profile.profitFactor,
 
         // Open positions - recalculate after filtering resolved
+        // Use 0.001 (0.1¢) threshold to allow sub-1¢ positions to show as active
         openPositionsCount: (profile.topOpenPositions || []).filter((p: any) =>
-          p.curPrice >= 0.01 && p.curPrice <= 0.99
+          p.curPrice >= 0.001 && p.curPrice <= 0.99
         ).length,
         openValue: (profile.topOpenPositions || [])
-          .filter((p: any) => p.curPrice >= 0.01 && p.curPrice <= 0.99)
+          .filter((p: any) => p.curPrice >= 0.001 && p.curPrice <= 0.99)
           .reduce((sum: number, p: any) => sum + (p.currentValue || 0), 0),
         unrealizedPnl: (profile.topOpenPositions || [])
-          .filter((p: any) => p.curPrice >= 0.01 && p.curPrice <= 0.99)
+          .filter((p: any) => p.curPrice >= 0.001 && p.curPrice <= 0.99)
           .reduce((sum: number, p: any) => sum + (p.cashPnl || 0), 0),
 
         // Trade sizing
@@ -91,17 +92,17 @@ export async function GET(request: NextRequest) {
         asymmetricTradesCount: profile.recentHighConvictionTrades?.length || profile.asymmetricTradesCount || 0,
         recentHighConvictionTrades: profile.recentHighConvictionTrades || [],
 
-        // Top positions - filter out resolved (0¢ and 100¢) on-the-fly
+        // Top positions - filter out resolved (<0.1¢ and >99¢) on-the-fly
         topOpenPositions: (profile.topOpenPositions || []).filter((p: any) =>
-          p.curPrice >= 0.01 && p.curPrice <= 0.99
+          p.curPrice >= 0.001 && p.curPrice <= 0.99
         ),
 
         // Recent closed positions - include newly resolved positions
         recentClosedPositions: [
           ...(profile.recentClosedPositions || []),
-          // Add positions that have now resolved (were open, now 0¢ or 100¢)
+          // Add positions that have now resolved (were open, now <0.1¢ or >99¢)
           ...(profile.topOpenPositions || [])
-            .filter((p: any) => p.curPrice < 0.01 || p.curPrice > 0.99)
+            .filter((p: any) => p.curPrice < 0.001 || p.curPrice > 0.99)
             .map((p: any) => ({
               title: p.title,
               outcome: p.outcome,

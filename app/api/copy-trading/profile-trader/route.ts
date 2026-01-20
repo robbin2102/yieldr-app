@@ -176,7 +176,7 @@ export async function POST(request: NextRequest) {
     // Separate active positions from resolved ones
     // 0¢ = lost (market resolved against them, unredeemed)
     // 100¢ = won (market resolved in their favor, unredeemed)
-    const LOSS_THRESHOLD = 0.01;  // <1¢ = resolved loss
+    const LOSS_THRESHOLD = 0.001;  // <0.1¢ = resolved loss (allows 0.1-1¢ positions to show as active)
     const WIN_THRESHOLD = 0.99;   // >99¢ = resolved win
 
     const openPositions = allOpenPositions.filter(p =>
