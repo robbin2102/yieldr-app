@@ -132,25 +132,65 @@ async function fetchClosedPositions(wallet: string, days: number): Promise<Close
 function categorizeMarket(title: string): string {
   const lower = title.toLowerCase();
 
-  if (lower.includes('nba') || lower.includes('lakers') || lower.includes('celtics') ||
-      lower.includes('bulls') || lower.includes('warriors') || lower.includes('knicks')) {
+  // NBA - All team names and variations
+  const nbaTeams = ['nba', 'basketball', 'lakers', 'celtics', 'bulls', 'heat', 'warriors', 'nuggets',
+    'clippers', 'spurs', 'mavericks', 'mavs', 'thunder', 'rockets', 'suns', 'knicks', 'nets', '76ers',
+    'sixers', 'bucks', 'cavaliers', 'cavs', 'grizzlies', 'timberwolves', 'wolves', 'pelicans',
+    'blazers', 'trail blazers', 'kings', 'jazz', 'hawks', 'hornets', 'magic', 'pistons', 'pacers',
+    'wizards', 'raptors'];
+  if (nbaTeams.some(team => lower.includes(team))) {
     return 'NBA';
   }
-  if (lower.includes('nfl') || lower.includes('super bowl') || lower.includes('chiefs') ||
-      lower.includes('eagles') || lower.includes('cowboys')) {
+
+  // NFL - All team names and variations
+  const nflTeams = ['nfl', 'football', 'super bowl', 'chiefs', 'eagles', 'bills', 'ravens', 'cowboys',
+    '49ers', 'niners', 'patriots', 'pats', 'broncos', 'packers', 'lions', 'dolphins', 'jets',
+    'raiders', 'chargers', 'steelers', 'bengals', 'browns', 'texans', 'colts', 'jaguars', 'jags',
+    'titans', 'saints', 'falcons', 'panthers', 'buccaneers', 'bucs', 'vikings', 'bears',
+    'commanders', 'giants', 'cardinals', 'seahawks', 'rams'];
+  if (nflTeams.some(team => lower.includes(team))) {
     return 'NFL';
   }
-  if (lower.includes('nhl') || lower.includes('hockey')) {
+
+  // NHL - All team names and variations
+  const nhlTeams = ['nhl', 'hockey', 'canucks', 'flames', 'oilers', 'maple leafs', 'leafs',
+    'canadiens', 'habs', 'senators', 'sens', 'jets', 'bruins', 'rangers', 'islanders', 'devils',
+    'flyers', 'penguins', 'pens', 'capitals', 'caps', 'hurricanes', 'canes', 'blue jackets',
+    'lightning', 'bolts', 'panthers', 'red wings', 'blackhawks', 'hawks', 'wild', 'blues',
+    'predators', 'preds', 'stars', 'avalanche', 'avs', 'coyotes', 'golden knights', 'knights',
+    'kraken', 'kings', 'ducks', 'sharks'];
+  if (nhlTeams.some(team => lower.includes(team))) {
     return 'NHL';
   }
+
+  // Soccer/Football - Major leagues and teams
+  const soccerTeams = ['premier league', 'la liga', 'bundesliga', 'serie a', 'ligue 1', 'champions league',
+    'manchester', 'liverpool', 'chelsea', 'arsenal', 'tottenham', 'barcelona', 'real madrid',
+    'bayern', 'juventus', 'psg', 'fc ', ' fc', 'united', 'city'];
+  if (soccerTeams.some(team => lower.includes(team))) {
+    return 'Soccer';
+  }
+
+  // MLB
+  if (lower.includes('mlb') || lower.includes('baseball')) {
+    return 'MLB';
+  }
+
+  // Politics
   if (lower.includes('trump') || lower.includes('biden') || lower.includes('election') ||
-      lower.includes('president')) {
+      lower.includes('president') || lower.includes('congress') || lower.includes('senate') ||
+      lower.includes('democrat') || lower.includes('republican') || lower.includes('governor') ||
+      lower.includes('vote') || lower.includes('poll')) {
     return 'Politics';
   }
+
+  // Crypto
   if (lower.includes('bitcoin') || lower.includes('ethereum') || lower.includes('crypto') ||
-      lower.includes('btc') || lower.includes('eth')) {
+      lower.includes('btc') || lower.includes('eth') || lower.includes('solana') ||
+      lower.includes('doge') || lower.includes('token')) {
     return 'Crypto';
   }
+
   return 'Other';
 }
 
@@ -270,8 +310,10 @@ export async function POST(request: NextRequest) {
     const medianTradeSize = tradeSizes.length > 0 ? tradeSizes[Math.floor(tradeSizes.length / 2)] : 0;
     const maxTradeSize = tradeSizes.length > 0 ? Math.max(...tradeSizes) : 0;
 
-    // Market specialization analysis
+    // Market specialization analysis - INCLUDE ALL resolved positions (redeemed + unredeemed)
     const byCategory: Record<string, { trades: number; wins: number; losses: number; totalPnl: number }> = {};
+
+    // 1. Add closed (redeemed) positions
     for (const pos of closedPositions) {
       const category = categorizeMarket(pos.title);
       if (!byCategory[category]) {
@@ -281,6 +323,29 @@ export async function POST(request: NextRequest) {
       byCategory[category].totalPnl += pos.realizedPnl;
       if (pos.realizedPnl >= 0) byCategory[category].wins++;
       else byCategory[category].losses++;
+    }
+
+    // 2. Add resolved losses (unredeemed 0¢ positions)
+    for (const pos of resolvedLosses) {
+      const category = categorizeMarket(pos.title);
+      if (!byCategory[category]) {
+        byCategory[category] = { trades: 0, wins: 0, losses: 0, totalPnl: 0 };
+      }
+      byCategory[category].trades++;
+      byCategory[category].totalPnl -= pos.initialValue; // Loss = negative
+      byCategory[category].losses++;
+    }
+
+    // 3. Add resolved wins (unredeemed 100¢ positions)
+    for (const pos of resolvedWins) {
+      const category = categorizeMarket(pos.title);
+      if (!byCategory[category]) {
+        byCategory[category] = { trades: 0, wins: 0, losses: 0, totalPnl: 0 };
+      }
+      byCategory[category].trades++;
+      const profit = pos.currentValue - pos.initialValue;
+      byCategory[category].totalPnl += profit;
+      byCategory[category].wins++;
     }
 
     const marketPerformance = Object.entries(byCategory)
