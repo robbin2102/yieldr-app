@@ -24,7 +24,7 @@ export async function GET(request: NextRequest) {
       const allPositions = await db.collection('polymarket-openPositions')
         .find({
           walletAddress: { $in: wallets },
-          curPrice: { $gte: 0.01 }, // Active positions only
+          curPrice: { $gte: 0.001 }, // Active positions only (>=0.1¢)
         })
         .sort({ currentValue: -1 })
         .toArray();

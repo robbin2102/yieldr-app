@@ -77,9 +77,9 @@ export async function POST(request: NextRequest) {
       try {
         const positions = await fetchOpenPositions(trader.wallet);
 
-        // Filter to active positions only (exclude resolved: 0¢ losses and 100¢ wins)
+        // Filter to active positions only (exclude resolved: <0.1¢ losses and >99¢ wins)
         const activePositions = positions.filter(p =>
-          p.curPrice >= 0.01 && p.curPrice <= 0.99
+          p.curPrice >= 0.001 && p.curPrice <= 0.99
         );
 
         if (activePositions.length > 0) {
