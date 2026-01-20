@@ -209,7 +209,8 @@ export default function TraderProfilePage() {
     }
   }
 
-  const formatValue = (v: number) => {
+  const formatValue = (v: number | undefined | null) => {
+    if (v === undefined || v === null) return '$0.00';
     if (Math.abs(v) >= 1000000) return `$${(v / 1000000).toFixed(1)}M`;
     if (Math.abs(v) >= 1000) return `$${(v / 1000).toFixed(1)}K`;
     return `$${v.toFixed(2)}`;
@@ -501,10 +502,10 @@ export default function TraderProfilePage() {
                     </div>
                   </div>
                   <div className="flex items-center gap-2 mt-2 text-xs text-[#6E6E6E]">
-                    <span>Entry: {(pos.avgPrice * 100).toFixed(0)}¢</span>
+                    <span>Entry: {((pos.avgPrice ?? 0) * 100).toFixed(0)}¢</span>
                     <span>→</span>
-                    <span>Now: {(pos.curPrice * 100).toFixed(0)}¢</span>
-                    <span className="ml-auto">{pos.size.toFixed(0)} shares</span>
+                    <span>Now: {((pos.curPrice ?? 0) * 100).toFixed(0)}¢</span>
+                    <span className="ml-auto">{(pos.size ?? 0).toFixed(0)} shares</span>
                   </div>
                 </div>
               ))
@@ -544,7 +545,7 @@ export default function TraderProfilePage() {
                       {pos.realizedPnl >= 0 ? '+' : ''}{formatValue(pos.realizedPnl)}
                     </div>
                     <div className="text-xs text-[#6E6E6E]">
-                      {pos.size.toFixed(0)} @ {(pos.avgPrice * 100).toFixed(0)}¢
+                      {(pos.size ?? 0).toFixed(0)} @ {((pos.avgPrice ?? 0) * 100).toFixed(0)}¢
                     </div>
                   </div>
                 </div>
@@ -574,7 +575,7 @@ export default function TraderProfilePage() {
                       {trade.side}
                     </span>
                     <span className="text-sm font-mono text-white">{formatValue(trade.usdcSize)}</span>
-                    <span className="text-xs text-orange-400">🔥 {trade.sizeMultiplier.toFixed(0)}x</span>
+                    <span className="text-xs text-orange-400">🔥 {(trade.sizeMultiplier ?? 0).toFixed(0)}x</span>
                   </div>
                   <div className="text-xs text-[#6E6E6E]">
                     {timeAgo(trade.timestamp)}
@@ -583,7 +584,7 @@ export default function TraderProfilePage() {
                 <div className="text-xs text-[#6E6E6E] truncate">{trade.market}</div>
                 <div className="text-sm text-white">{trade.outcome}</div>
                 <div className="flex items-center justify-between mt-2 text-xs text-[#6E6E6E]">
-                  <span>Entry: {(trade.price * 100).toFixed(0)}¢</span>
+                  <span>Entry: {((trade.price ?? 0) * 100).toFixed(0)}¢</span>
                   <a
                     href={`https://polygonscan.com/tx/${trade.txHash}`}
                     target="_blank"
