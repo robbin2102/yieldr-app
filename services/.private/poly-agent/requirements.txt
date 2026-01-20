@@ -1,0 +1,3 @@
+# Note: py-clob-client may not be available in PyPI
+# Use the TypeScript version (derive-keys.ts) instead, which is proven to work
+python-dotenv>=1.0.0

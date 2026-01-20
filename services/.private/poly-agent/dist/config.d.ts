@@ -1,0 +1,20 @@
+export declare const config: {
+    targetWallet: string;
+    botWalletAddress: string;
+    botPrivateKey: string;
+    apiKey: string;
+    apiSecret: string;
+    passphrase: string;
+    mongoUri: string;
+    copyRatio: number;
+    maxPositionUsdc: number;
+    minTradeSize: number;
+    detectorIntervalMs: number;
+    reconcilerIntervalMs: number;
+    dataApiBase: string;
+    clobApiBase: string;
+    wssMarket: string;
+    wssUser: string;
+    chainId: number;
+    polygonRpcUrl: string;
+};

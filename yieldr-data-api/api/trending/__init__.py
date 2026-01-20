@@ -1,0 +1,1 @@
+"""Trending tokens API module."""
