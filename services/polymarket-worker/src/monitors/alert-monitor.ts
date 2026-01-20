@@ -45,6 +45,12 @@ async function checkTraderForNewTrades(trader: TrackedTrader): Promise<number> {
     let latestTimestamp = trader.lastSeenTimestamp;
 
     for (const trade of newTrades) {
+      // Skip trades without a valid transactionHash
+      if (!trade.transactionHash) {
+        console.warn(`[Alert] Skipping trade without transactionHash for ${trader.label}`);
+        continue;
+      }
+
       // Create alert document
       const alert = {
         traderWallet: trader.wallet.toLowerCase(),
