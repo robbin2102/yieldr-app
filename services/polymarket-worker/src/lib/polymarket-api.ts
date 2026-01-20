@@ -116,7 +116,7 @@ export async function fetchOpenPositions(wallet: string): Promise<OpenPosition[]
     throw new Error(`API error: ${response.status}`);
   }
 
-  return response.json();
+  return await response.json() as OpenPosition[];
 }
 
 /**
