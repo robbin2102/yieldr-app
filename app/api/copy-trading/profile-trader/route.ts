@@ -408,10 +408,9 @@ export async function POST(request: NextRequest) {
         txHash: t.transactionHash,
       })),
 
-      // Top open positions
+      // Top open positions (no limit - save all for accurate display)
       topOpenPositions: openPositions
         .sort((a, b) => b.currentValue - a.currentValue)
-        .slice(0, 10)
         .map(p => ({
           title: p.title,
           outcome: p.outcome,
