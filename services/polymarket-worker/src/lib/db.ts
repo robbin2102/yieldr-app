@@ -18,7 +18,53 @@ export async function connectDB(): Promise<Db> {
   db = client.db(DB_NAME);
 
   console.log('[DB] Connected to MongoDB');
+
+  // Ensure proper indexes exist
+  await ensureIndexes(db);
+
   return db;
+}
+
+async function ensureIndexes(database: Db): Promise<void> {
+  try {
+    const alertsCollection = database.collection(COLLECTIONS.TRADE_ALERTS);
+
+    // Check if old txHash_1 index exists and drop it
+    const indexes = await alertsCollection.indexes();
+    const oldIndex = indexes.find(idx => idx.name === 'txHash_1');
+    if (oldIndex) {
+      console.log('[DB] Dropping old txHash_1 index...');
+      await alertsCollection.dropIndex('txHash_1');
+    }
+
+    // Clean up any documents with null/missing transactionHash before creating unique index
+    const cleanupResult = await alertsCollection.deleteMany({
+      $or: [
+        { transactionHash: null },
+        { transactionHash: { $exists: false } },
+        { transactionHash: '' }
+      ]
+    });
+    if (cleanupResult.deletedCount > 0) {
+      console.log(`[DB] Cleaned up ${cleanupResult.deletedCount} alerts with invalid transactionHash`);
+    }
+
+    // Create proper unique index on transactionHash
+    await alertsCollection.createIndex(
+      { transactionHash: 1 },
+      { unique: true, name: 'transactionHash_1' }
+    );
+
+    // Create index on traderWallet for faster queries
+    await alertsCollection.createIndex(
+      { traderWallet: 1, timestamp: -1 },
+      { name: 'traderWallet_timestamp' }
+    );
+
+    console.log('[DB] Indexes verified');
+  } catch (error: any) {
+    console.error('[DB] Index setup error:', error.message);
+  }
 }
 
 export async function getDB(): Promise<Db> {
