@@ -18,7 +18,7 @@ import { startProfileRefresher, stopProfileRefresher } from './monitors/profile-
 // Load environment variables
 dotenv.config();
 
-const WS_PORT = parseInt(process.env.WS_PORT || '8080');
+const WS_PORT = parseInt(process.env.WS_PORT || '5050');
 
 async function main() {
   console.log('');
