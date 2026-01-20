@@ -289,95 +289,76 @@ async function fetchClosedPositions(wallet: string, days: number): Promise<Close
 function categorizeMarket(title: string): string {
   const lower = title.toLowerCase();
 
-  if (lower.includes('nba') || lower.includes('basketball') ||
-      lower.includes('lakers') || lower.includes('celtics') ||
-      lower.includes('bulls') || lower.includes('heat') ||
-      lower.includes('warriors') || lower.includes('nuggets') ||
-      lower.includes('clippers') || lower.includes('spurs') ||
-      lower.includes('mavericks') || lower.includes('thunder') ||
-      lower.includes('rockets') || lower.includes('suns') ||
-      lower.includes('knicks') || lower.includes('nets') ||
-      lower.includes('76ers') || lower.includes('bucks') ||
-      lower.includes('cavaliers') || lower.includes('grizzlies') ||
-      lower.includes('timberwolves') || lower.includes('pelicans') ||
-      lower.includes('blazers') || lower.includes('kings') ||
-      lower.includes('jazz') || lower.includes('hawks') ||
-      lower.includes('hornets') || lower.includes('magic') ||
-      lower.includes('pistons') || lower.includes('pacers') ||
-      lower.includes('wizards') || lower.includes('raptors')) {
-    if (lower.includes('o/u') || lower.includes('over') || lower.includes('under') || lower.includes('total')) {
-      return 'NBA O/U';
-    }
-    if (lower.includes('spread') || lower.includes('+') || lower.includes('-')) {
-      return 'NBA Spread';
-    }
-    if (lower.includes('mvp') || lower.includes('roy') || lower.includes('finals') || lower.includes('champion')) {
-      return 'NBA Futures';
-    }
-    return 'NBA Moneyline';
+  // NBA - All team names and variations
+  const nbaTeams = ['nba', 'basketball', 'lakers', 'celtics', 'bulls', 'heat', 'warriors', 'nuggets',
+    'clippers', 'spurs', 'mavericks', 'mavs', 'thunder', 'rockets', 'suns', 'knicks', 'nets', '76ers',
+    'sixers', 'bucks', 'cavaliers', 'cavs', 'grizzlies', 'timberwolves', 'wolves', 'pelicans',
+    'blazers', 'trail blazers', 'kings', 'jazz', 'hawks', 'hornets', 'magic', 'pistons', 'pacers',
+    'wizards', 'raptors'];
+  if (nbaTeams.some(team => lower.includes(team))) {
+    return 'NBA';
   }
 
-  if (lower.includes('nfl') || lower.includes('football') ||
-      lower.includes('chiefs') || lower.includes('eagles') ||
-      lower.includes('bills') || lower.includes('ravens') ||
-      lower.includes('cowboys') || lower.includes('49ers') ||
-      lower.includes('patriots') || lower.includes('broncos') ||
-      lower.includes('packers') || lower.includes('lions') ||
-      lower.includes('dolphins') || lower.includes('jets') ||
-      lower.includes('raiders') || lower.includes('chargers') ||
-      lower.includes('steelers') || lower.includes('bengals') ||
-      lower.includes('browns') || lower.includes('texans') ||
-      lower.includes('colts') || lower.includes('jaguars') ||
-      lower.includes('titans') || lower.includes('saints') ||
-      lower.includes('falcons') || lower.includes('panthers') ||
-      lower.includes('buccaneers') || lower.includes('vikings') ||
-      lower.includes('bears') || lower.includes('commanders') ||
-      lower.includes('giants') || lower.includes('cardinals') ||
-      lower.includes('seahawks') || lower.includes('rams') ||
-      lower.includes('super bowl')) {
+  // NFL - All team names and variations
+  const nflTeams = ['nfl', 'football', 'super bowl', 'chiefs', 'eagles', 'bills', 'ravens', 'cowboys',
+    '49ers', 'niners', 'patriots', 'pats', 'broncos', 'packers', 'lions', 'dolphins', 'jets',
+    'raiders', 'chargers', 'steelers', 'bengals', 'browns', 'texans', 'colts', 'jaguars', 'jags',
+    'titans', 'saints', 'falcons', 'panthers', 'buccaneers', 'bucs', 'vikings', 'bears',
+    'commanders', 'giants', 'cardinals', 'seahawks', 'rams'];
+  if (nflTeams.some(team => lower.includes(team))) {
     return 'NFL';
   }
 
-  if (lower.includes('nhl') || lower.includes('hockey') ||
-      lower.includes('canucks') || lower.includes('flames') ||
-      lower.includes('oilers') || lower.includes('maple leafs') ||
-      lower.includes('canadiens') || lower.includes('senators') ||
-      lower.includes('jets') || lower.includes('bruins') ||
-      lower.includes('rangers') || lower.includes('islanders') ||
-      lower.includes('devils') || lower.includes('flyers') ||
-      lower.includes('penguins') || lower.includes('capitals') ||
-      lower.includes('hurricanes') || lower.includes('blue jackets') ||
-      lower.includes('lightning') || lower.includes('panthers') ||
-      lower.includes('red wings') || lower.includes('blackhawks') ||
-      lower.includes('wild') || lower.includes('blues') ||
-      lower.includes('predators') || lower.includes('stars') ||
-      lower.includes('avalanche') || lower.includes('coyotes') ||
-      lower.includes('golden knights') || lower.includes('kraken') ||
-      lower.includes('kings') || lower.includes('ducks') ||
-      lower.includes('sharks')) {
+  // NHL - All team names and variations
+  const nhlTeams = ['nhl', 'hockey', 'canucks', 'flames', 'oilers', 'maple leafs', 'leafs',
+    'canadiens', 'habs', 'senators', 'sens', 'jets', 'bruins', 'rangers', 'islanders', 'devils',
+    'flyers', 'penguins', 'pens', 'capitals', 'caps', 'hurricanes', 'canes', 'blue jackets',
+    'lightning', 'bolts', 'panthers', 'red wings', 'blackhawks', 'hawks', 'wild', 'blues',
+    'predators', 'preds', 'stars', 'avalanche', 'avs', 'coyotes', 'golden knights', 'knights',
+    'kraken', 'kings', 'ducks', 'sharks'];
+  if (nhlTeams.some(team => lower.includes(team))) {
     return 'NHL';
   }
 
+  // Soccer/Football - Major leagues and teams
+  const soccerTeams = ['premier league', 'la liga', 'bundesliga', 'serie a', 'ligue 1', 'champions league',
+    'manchester', 'liverpool', 'chelsea', 'arsenal', 'tottenham', 'barcelona', 'real madrid',
+    'bayern', 'juventus', 'psg', 'fc ', ' fc', 'united', 'city'];
+  if (soccerTeams.some(team => lower.includes(team))) {
+    return 'Soccer';
+  }
+
+  // MLB
   if (lower.includes('mlb') || lower.includes('baseball')) {
     return 'MLB';
   }
 
+  // Politics
   if (lower.includes('trump') || lower.includes('biden') || lower.includes('election') ||
-      lower.includes('president') || lower.includes('congress') || lower.includes('senate')) {
+      lower.includes('president') || lower.includes('congress') || lower.includes('senate') ||
+      lower.includes('democrat') || lower.includes('republican') || lower.includes('governor') ||
+      lower.includes('vote') || lower.includes('poll')) {
     return 'Politics';
   }
 
+  // Crypto
   if (lower.includes('bitcoin') || lower.includes('ethereum') || lower.includes('crypto') ||
-      lower.includes('btc') || lower.includes('eth')) {
+      lower.includes('btc') || lower.includes('eth') || lower.includes('solana') ||
+      lower.includes('doge') || lower.includes('token')) {
     return 'Crypto';
   }
 
   return 'Other';
 }
 
-function analyzeMarketPerformance(closedPositions: ClosedPosition[]): { strengths: MarketPerformance[]; weaknesses: MarketPerformance[] } {
+function analyzeMarketPerformance(
+  closedPositions: ClosedPosition[],
+  resolvedLosses: OpenPosition[] = [],
+  resolvedWins: OpenPosition[] = []
+): { strengths: MarketPerformance[]; weaknesses: MarketPerformance[] } {
   const byCategory: Record<string, { trades: number; wins: number; losses: number; totalPnl: number }> = {};
 
+  // 1. Add closed (redeemed) positions
   for (const pos of closedPositions) {
     const category = categorizeMarket(pos.title);
     if (!byCategory[category]) {
@@ -392,6 +373,29 @@ function analyzeMarketPerformance(closedPositions: ClosedPosition[]): { strength
     } else {
       byCategory[category].losses++;
     }
+  }
+
+  // 2. Add resolved losses (unredeemed 0¢ positions)
+  for (const pos of resolvedLosses) {
+    const category = categorizeMarket(pos.title);
+    if (!byCategory[category]) {
+      byCategory[category] = { trades: 0, wins: 0, losses: 0, totalPnl: 0 };
+    }
+    byCategory[category].trades++;
+    byCategory[category].totalPnl -= pos.initialValue; // Loss = negative
+    byCategory[category].losses++;
+  }
+
+  // 3. Add resolved wins (unredeemed 100¢ positions)
+  for (const pos of resolvedWins) {
+    const category = categorizeMarket(pos.title);
+    if (!byCategory[category]) {
+      byCategory[category] = { trades: 0, wins: 0, losses: 0, totalPnl: 0 };
+    }
+    byCategory[category].trades++;
+    const profit = pos.currentValue - pos.initialValue;
+    byCategory[category].totalPnl += profit;
+    byCategory[category].wins++;
   }
 
   const performances: MarketPerformance[] = Object.entries(byCategory).map(([category, stats]) => ({
@@ -515,15 +519,19 @@ async function main() {
   console.log('Fetching open positions...');
   const allOpenPositions = await fetchOpenPositions(wallet);
 
-  // Separate truly active positions from resolved losses (curPrice === 0)
-  // Positions with 0¢ price are resolved markets where trader lost but hasn't redeemed
-  const RESOLVED_THRESHOLD = 0.001; // Treat < 0.1¢ as resolved
-  const openPositions = allOpenPositions.filter(p => p.curPrice >= RESOLVED_THRESHOLD);
-  const resolvedLosses = allOpenPositions.filter(p => p.curPrice < RESOLVED_THRESHOLD && p.size > 0);
+  // Separate truly active positions from resolved positions
+  // 0¢ = lost (market resolved against them, unredeemed)
+  // 100¢ = won (market resolved in their favor, unredeemed)
+  const LOSS_THRESHOLD = 0.001;  // < 0.1¢ = resolved loss
+  const WIN_THRESHOLD = 0.99;    // > 99¢ = resolved win
+  const openPositions = allOpenPositions.filter(p => p.curPrice >= LOSS_THRESHOLD && p.curPrice <= WIN_THRESHOLD);
+  const resolvedLosses = allOpenPositions.filter(p => p.curPrice < LOSS_THRESHOLD && p.size > 0);
+  const resolvedWins = allOpenPositions.filter(p => p.curPrice > WIN_THRESHOLD && p.size > 0);
 
   console.log(`  Found ${allOpenPositions.length} positions total`);
-  console.log(`    - ${openPositions.length} truly active (curPrice > 0)`);
-  console.log(`    - ${resolvedLosses.length} resolved losses (curPrice = 0, unredeemed)\n`);
+  console.log(`    - ${openPositions.length} truly active`);
+  console.log(`    - ${resolvedLosses.length} resolved losses (0¢, unredeemed)`);
+  console.log(`    - ${resolvedWins.length} resolved wins (100¢, unredeemed)\n`);
 
   console.log('Fetching closed positions...');
   const closedPositions = await fetchClosedPositions(wallet, days);
@@ -586,7 +594,19 @@ async function main() {
     grossLoss += lossAmount;
   });
 
-  const totalClosedCount = closedPositions.length + unredeemedLossCount;
+  // Add resolved wins (unredeemed 100¢ positions) to realized P&L
+  let unredeemedWinCount = 0;
+  let unredeemedWinAmount = 0;
+  resolvedWins.forEach(p => {
+    // The profit is the difference between current value and initial investment
+    const winAmount = p.currentValue - p.initialValue;
+    unredeemedWinAmount += winAmount;
+    unredeemedWinCount++;
+    wins++;
+    grossProfit += winAmount;
+  });
+
+  const totalClosedCount = closedPositions.length + unredeemedLossCount + unredeemedWinCount;
   const winRate = totalClosedCount > 0 ? (wins / totalClosedCount) * 100 : 0;
   const profitFactor = grossLoss > 0 ? grossProfit / grossLoss : grossProfit > 0 ? Infinity : 0;
   const netPnl = grossProfit - grossLoss;
@@ -601,8 +621,8 @@ async function main() {
   const medianTradeSize = tradeSizes.length > 0 ? tradeSizes[Math.floor(tradeSizes.length / 2)] : 0;
   const maxTradeSize = tradeSizes.length > 0 ? Math.max(...tradeSizes) : 0;
 
-  // Market analysis
-  const { strengths, weaknesses } = analyzeMarketPerformance(closedPositions);
+  // Market analysis (includes all resolved positions)
+  const { strengths, weaknesses } = analyzeMarketPerformance(closedPositions, resolvedLosses, resolvedWins);
 
   // Entry odds analysis
   const entryOddsPerformance = analyzeEntryOdds(activities);
