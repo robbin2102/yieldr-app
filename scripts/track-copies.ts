@@ -190,34 +190,41 @@ async function fetchTraderActivities(traderWallet: string, days: number): Promis
 
 function matchTradeToTrader(
   myTrade: Activity,
-  traders: { wallet: string; label: string; activities: Activity[] }[]
+  traders: { wallet: string; label: string; activities: Activity[] }[],
+  debug: boolean = false
 ): { wallet: string; label: string } | null {
   // Match based on:
   // 1. Same market (conditionId)
   // 2. Same outcome
   // 3. Same side
-  // 4. Within time window (30 minutes)
+  // 4. Within time window (24 hours for copy trading - often delayed)
   // 5. Pick the trader with the CLOSEST timestamp (not first match)
 
-  const TIME_WINDOW = 30 * 60; // 30 minutes in seconds
+  const TIME_WINDOW = 24 * 60 * 60; // 24 hours in seconds (increased from 30 min)
 
   let bestMatch: { wallet: string; label: string; timeDiff: number } | null = null;
 
   for (const trader of traders) {
     for (const traderTrade of trader.activities) {
-      if (
-        traderTrade.conditionId === myTrade.conditionId &&
-        traderTrade.outcome === myTrade.outcome &&
-        traderTrade.side === myTrade.side &&
-        traderTrade.timestamp <= myTrade.timestamp // Trader traded before or at same time
-      ) {
+      const sameMarket = traderTrade.conditionId === myTrade.conditionId;
+      const sameOutcome = traderTrade.outcome === myTrade.outcome;
+      const sameSide = traderTrade.side === myTrade.side;
+      const traderFirst = traderTrade.timestamp <= myTrade.timestamp;
+
+      if (sameMarket && sameOutcome && sameSide && traderFirst) {
         const timeDiff = myTrade.timestamp - traderTrade.timestamp;
         if (timeDiff <= TIME_WINDOW) {
-          // Check if this is the closest match so far
           if (!bestMatch || timeDiff < bestMatch.timeDiff) {
             bestMatch = { wallet: trader.wallet, label: trader.label, timeDiff };
           }
         }
+      }
+
+      // Debug: Show near misses
+      if (debug && sameMarket && !bestMatch) {
+        console.log(`    Near miss: ${trader.label}`);
+        console.log(`      Market: ${sameMarket}, Outcome: ${sameOutcome} (${traderTrade.outcome} vs ${myTrade.outcome})`);
+        console.log(`      Side: ${sameSide} (${traderTrade.side} vs ${myTrade.side}), TraderFirst: ${traderFirst}`);
       }
     }
   }
@@ -307,19 +314,35 @@ async function main() {
   for (const trader of trackedTraders) {
     console.log(`  Fetching ${trader.label}...`);
     const activities = await fetchTraderActivities(trader.wallet, days);
+    const trades = activities.filter(a => a.type === 'TRADE');
     tradersWithActivities.push({
       wallet: trader.wallet,
       label: trader.label,
-      activities: activities.filter(a => a.type === 'TRADE'),
+      activities: trades,
     });
+    console.log(`    Found ${trades.length} trades`);
+
+    // Show recent markets
+    const recentMarkets = [...new Set(trades.slice(0, 10).map(t => t.title.substring(0, 40)))];
+    if (recentMarkets.length > 0) {
+      console.log(`    Recent markets: ${recentMarkets.slice(0, 3).join(', ')}...`);
+    }
     await new Promise(r => setTimeout(r, 200));
   }
+  console.log('');
+
+  // Show your recent trades for comparison
+  console.log('Your recent trades:');
+  myTrades.slice(0, 5).forEach(t => {
+    console.log(`  ${t.side} ${t.outcome} - ${t.title.substring(0, 40)}...`);
+  });
   console.log('');
 
   // Match my trades to traders
   const statsByTrader: Record<string, TraderCopyStats> = {};
   let unmatchedTrades: Activity[] = [];
 
+  console.log('Matching trades...');
   for (const trade of myTrades) {
     const match = matchTradeToTrader(trade, tradersWithActivities);
 

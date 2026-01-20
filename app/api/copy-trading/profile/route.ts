@@ -65,10 +65,16 @@ export async function GET(request: NextRequest) {
         netPnl: profile.netPnl,
         profitFactor: profile.profitFactor,
 
-        // Open positions
-        openPositionsCount: profile.openPositionsCount,
-        openValue: profile.openValue,
-        unrealizedPnl: profile.unrealizedPnl,
+        // Open positions - recalculate after filtering resolved
+        openPositionsCount: (profile.topOpenPositions || []).filter((p: any) =>
+          p.curPrice >= 0.01 && p.curPrice <= 0.99
+        ).length,
+        openValue: (profile.topOpenPositions || [])
+          .filter((p: any) => p.curPrice >= 0.01 && p.curPrice <= 0.99)
+          .reduce((sum: number, p: any) => sum + (p.currentValue || 0), 0),
+        unrealizedPnl: (profile.topOpenPositions || [])
+          .filter((p: any) => p.curPrice >= 0.01 && p.curPrice <= 0.99)
+          .reduce((sum: number, p: any) => sum + (p.cashPnl || 0), 0),
 
         // Trade sizing
         avgTradeSize: profile.avgTradeSize,
@@ -80,16 +86,34 @@ export async function GET(request: NextRequest) {
         strengths: profile.strengths || [],
         weaknesses: profile.weaknesses || [],
 
-        // High conviction
+        // High conviction - return all trades (no limit)
         asymmetricThreshold: profile.asymmetricThreshold,
-        asymmetricTradesCount: profile.asymmetricTradesCount,
+        asymmetricTradesCount: profile.recentHighConvictionTrades?.length || profile.asymmetricTradesCount || 0,
         recentHighConvictionTrades: profile.recentHighConvictionTrades || [],
 
-        // Top positions
-        topOpenPositions: profile.topOpenPositions || [],
+        // Top positions - filter out resolved (0¢ and 100¢) on-the-fly
+        topOpenPositions: (profile.topOpenPositions || []).filter((p: any) =>
+          p.curPrice >= 0.01 && p.curPrice <= 0.99
+        ),
 
-        // Recent closed positions
-        recentClosedPositions: profile.recentClosedPositions || [],
+        // Recent closed positions - include newly resolved positions
+        recentClosedPositions: [
+          ...(profile.recentClosedPositions || []),
+          // Add positions that have now resolved (were open, now 0¢ or 100¢)
+          ...(profile.topOpenPositions || [])
+            .filter((p: any) => p.curPrice < 0.01 || p.curPrice > 0.99)
+            .map((p: any) => ({
+              title: p.title,
+              outcome: p.outcome,
+              size: p.size,
+              avgPrice: p.avgPrice,
+              realizedPnl: p.curPrice > 0.99
+                ? (p.currentValue - (p.size * p.avgPrice)) // Won: value - cost
+                : -(p.size * p.avgPrice), // Lost: negative cost
+              timestamp: new Date().toISOString(),
+              status: p.curPrice > 0.99 ? 'WON' : 'LOST',
+            })),
+        ].slice(0, 20), // Limit to 20 most recent
 
         // Tracking status
         isTracking: trackedTrader?.isTracking || false,
