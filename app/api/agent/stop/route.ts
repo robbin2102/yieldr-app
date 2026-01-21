@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import connectDB from '@/lib/mongodb';
+import clientPromise from '@/lib/mongodb';
 import MonitoredWallet from '@/models/MonitoredWallet';
 
 export const dynamic = 'force-dynamic';
@@ -17,7 +17,7 @@ interface StopAgentRequest {
  */
 export async function POST(request: NextRequest) {
   try {
-    await connectDB();
+    await clientPromise;
 
     const body: StopAgentRequest = await request.json();
     const { walletAddress, market, platform } = body;
