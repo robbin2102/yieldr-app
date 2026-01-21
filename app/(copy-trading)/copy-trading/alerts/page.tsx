@@ -118,8 +118,22 @@ export default function AlertsPage() {
     }
   };
 
-  const timeAgo = (date: Date) => {
-    const seconds = Math.floor((Date.now() - new Date(date).getTime()) / 1000);
+  const timeAgo = (timestamp: Date | number) => {
+    // Handle Unix seconds vs milliseconds
+    let ms: number;
+    if (typeof timestamp === 'number') {
+      // If timestamp is less than year 2000 in ms, it's likely Unix seconds
+      ms = timestamp < 1000000000000 ? timestamp * 1000 : timestamp;
+    } else {
+      ms = new Date(timestamp).getTime();
+      // Check if the date is way in the past (timestamp was in seconds)
+      if (ms < 1000000000000) {
+        ms = ms * 1000;
+      }
+    }
+
+    const seconds = Math.floor((Date.now() - ms) / 1000);
+    if (seconds < 0) return 'now';
     if (seconds < 60) return `${seconds}s`;
     if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
     if (seconds < 86400) return `${Math.floor(seconds / 3600)}h`;
