@@ -352,13 +352,12 @@ function categorizeMarket(title: string): string {
 }
 
 function analyzeMarketPerformance(
-  closedPositions: ClosedPosition[],
-  resolvedLosses: OpenPosition[] = [],
-  resolvedWins: OpenPosition[] = []
+  closedPositions: ClosedPosition[]
 ): { strengths: MarketPerformance[]; weaknesses: MarketPerformance[] } {
+  // Only analyze time-filtered closed positions
+  // Resolved positions from /positions API are ALL-TIME and shouldn't be included
   const byCategory: Record<string, { trades: number; wins: number; losses: number; totalPnl: number }> = {};
 
-  // 1. Add closed (redeemed) positions
   for (const pos of closedPositions) {
     const category = categorizeMarket(pos.title);
     if (!byCategory[category]) {
@@ -373,29 +372,6 @@ function analyzeMarketPerformance(
     } else {
       byCategory[category].losses++;
     }
-  }
-
-  // 2. Add resolved losses (unredeemed 0¢ positions)
-  for (const pos of resolvedLosses) {
-    const category = categorizeMarket(pos.title);
-    if (!byCategory[category]) {
-      byCategory[category] = { trades: 0, wins: 0, losses: 0, totalPnl: 0 };
-    }
-    byCategory[category].trades++;
-    byCategory[category].totalPnl -= pos.initialValue; // Loss = negative
-    byCategory[category].losses++;
-  }
-
-  // 3. Add resolved wins (unredeemed 100¢ positions)
-  for (const pos of resolvedWins) {
-    const category = categorizeMarket(pos.title);
-    if (!byCategory[category]) {
-      byCategory[category] = { trades: 0, wins: 0, losses: 0, totalPnl: 0 };
-    }
-    byCategory[category].trades++;
-    const profit = pos.currentValue - pos.initialValue;
-    byCategory[category].totalPnl += profit;
-    byCategory[category].wins++;
   }
 
   const performances: MarketPerformance[] = Object.entries(byCategory).map(([category, stats]) => ({
@@ -570,6 +546,9 @@ async function main() {
   else strategyLabel = 'ACTIVE_TRADER';
 
   // Closed positions analysis
+  // IMPORTANT: Only use /v1/closed-positions for realized P&L because it supports time filtering
+  // The /positions API returns ALL-TIME data and cannot be filtered by date
+  // Including resolved positions from /positions would mix all-time losses with 30-day gains
   let grossProfit = 0, grossLoss = 0, wins = 0, losses = 0;
   closedPositions.forEach(p => {
     if (p.realizedPnl >= 0) {
@@ -581,32 +560,15 @@ async function main() {
     }
   });
 
-  // Add resolved losses (unredeemed 0¢ positions) to realized P&L
-  // These are markets that resolved against the trader but weren't redeemed yet
-  let unredeemedLossCount = 0;
-  let unredeemedLossAmount = 0;
-  resolvedLosses.forEach(p => {
-    // The loss is the initial investment (they paid avgPrice * size, now worth 0)
-    const lossAmount = p.initialValue;
-    unredeemedLossAmount += lossAmount;
-    unredeemedLossCount++;
-    losses++;
-    grossLoss += lossAmount;
-  });
+  // Track resolved positions for informational purposes only (NOT for P&L calculation)
+  // These are ALL-TIME counts, not time-filtered, so they shouldn't affect period P&L
+  const unredeemedLossCount = resolvedLosses.length;
+  const unredeemedLossAmount = resolvedLosses.reduce((sum, p) => sum + p.initialValue, 0);
+  const unredeemedWinCount = resolvedWins.length;
+  const unredeemedWinAmount = resolvedWins.reduce((sum, p) => sum + (p.currentValue - p.initialValue), 0);
 
-  // Add resolved wins (unredeemed 100¢ positions) to realized P&L
-  let unredeemedWinCount = 0;
-  let unredeemedWinAmount = 0;
-  resolvedWins.forEach(p => {
-    // The profit is the difference between current value and initial investment
-    const winAmount = p.currentValue - p.initialValue;
-    unredeemedWinAmount += winAmount;
-    unredeemedWinCount++;
-    wins++;
-    grossProfit += winAmount;
-  });
-
-  const totalClosedCount = closedPositions.length + unredeemedLossCount + unredeemedWinCount;
+  // Win rate and profit factor based on time-filtered closed positions only
+  const totalClosedCount = closedPositions.length;
   const winRate = totalClosedCount > 0 ? (wins / totalClosedCount) * 100 : 0;
   const profitFactor = grossLoss > 0 ? grossProfit / grossLoss : grossProfit > 0 ? Infinity : 0;
   const netPnl = grossProfit - grossLoss;
@@ -621,8 +583,9 @@ async function main() {
   const medianTradeSize = tradeSizes.length > 0 ? tradeSizes[Math.floor(tradeSizes.length / 2)] : 0;
   const maxTradeSize = tradeSizes.length > 0 ? Math.max(...tradeSizes) : 0;
 
-  // Market analysis (includes all resolved positions)
-  const { strengths, weaknesses } = analyzeMarketPerformance(closedPositions, resolvedLosses, resolvedWins);
+  // Market analysis (only time-filtered closed positions)
+  // Resolved positions from /positions API are ALL-TIME and shouldn't be included
+  const { strengths, weaknesses } = analyzeMarketPerformance(closedPositions);
 
   // Entry odds analysis
   const entryOddsPerformance = analyzeEntryOdds(activities);
@@ -652,14 +615,9 @@ async function main() {
   console.log(`  Primary Strategy:   ${strategyLabel} (${buyRatio.toFixed(1)}% buys)`);
 
   console.log('\n═══════════════════════════════════════════════════════════════');
-  console.log('                    PERFORMANCE (Closed + Resolved)             ');
+  console.log(`                    PERFORMANCE (${days}-Day Period)             `);
   console.log('═══════════════════════════════════════════════════════════════');
-  console.log(`  Redeemed Positions: ${closedPositions.length}`);
-  if (unredeemedLossCount > 0) {
-    console.log(`  Unredeemed Losses:  ${unredeemedLossCount} (resolved @ 0¢, not redeemed)`);
-    console.log(`                      -$${unredeemedLossAmount.toFixed(2)} in unredeemed losses`);
-  }
-  console.log(`  Total Resolved:     ${totalClosedCount}`);
+  console.log(`  Closed Positions:   ${closedPositions.length} (from /v1/closed-positions)`);
   console.log(`  Wins / Losses:      ${wins} / ${losses}`);
   console.log(`  Win Rate:           ${winRate.toFixed(1)}%`);
   console.log(`  Gross Profit:       $${grossProfit.toFixed(2)}`);
@@ -810,13 +768,13 @@ async function main() {
     });
   }
 
-  // Show unredeemed losses (resolved @ 0¢ but not redeemed)
+  // Show unredeemed losses (resolved @ 0¢ but not redeemed) - ALL-TIME, not period-specific
   if (resolvedLosses.length > 0) {
     console.log('═══════════════════════════════════════════════════════════════');
-    console.log('                    UNREDEEMED LOSSES (Resolved @ 0¢)          ');
+    console.log('          UNREDEEMED LOSSES (ALL-TIME, Not in Period P&L)      ');
     console.log('═══════════════════════════════════════════════════════════════');
-    console.log(`  ⚠️  ${resolvedLosses.length} positions resolved against trader but not redeemed`);
-    console.log(`  ⚠️  Total unredeemed loss: -$${unredeemedLossAmount.toFixed(2)}`);
+    console.log(`  ℹ️  ${resolvedLosses.length} ALL-TIME positions resolved @ 0¢ (not redeemed)`);
+    console.log(`  ℹ️  Total: -$${unredeemedLossAmount.toFixed(2)} (NOT included in ${days}-day P&L)`);
     console.log('');
 
     // Show top 10 by loss amount

@@ -139,24 +139,47 @@ async function diagnose(wallet: string, label: string) {
     }
   }
 
-  // 3. Final calculation
-  console.log('\n3. TOTAL P&L CALCULATION:');
-  const netFromClosed = closedProfit - closedLoss;
-  const netFromResolvedLosses = -totalResolvedLoss;
-  const netFromResolvedWins = totalResolvedWin;
-  const totalRealizedPnl = netFromClosed + netFromResolvedLosses + netFromResolvedWins;
+  // 3. Final calculation - CORRECTED APPROACH
+  console.log('\n3. CORRECTED P&L CALCULATION (30-day period):');
+  console.log('   ─────────────────────────────────────');
+  console.log('   IMPORTANT: /positions API returns ALL-TIME data (no time filter)');
+  console.log('   Only /v1/closed-positions supports time filtering!');
+  console.log('   ─────────────────────────────────────');
 
-  console.log(`   From /closed-positions (redeemed): $${netFromClosed.toFixed(2)}`);
-  console.log(`   From resolved losses (0¢ unredeemed): $${netFromResolvedLosses.toFixed(2)}`);
-  console.log(`   From resolved wins (100¢ unredeemed): $${netFromResolvedWins.toFixed(2)}`);
-  console.log(`   ─────────────────────────────────────`);
-  console.log(`   TOTAL REALIZED P&L: $${totalRealizedPnl.toFixed(2)}`);
-  console.log(`   + Unrealized PnL: $${totalUnrealizedPnl.toFixed(2)}`);
-  console.log(`   ─────────────────────────────────────`);
-  console.log(`   TOTAL P&L: $${(totalRealizedPnl + totalUnrealizedPnl).toFixed(2)}`);
+  const netFromClosed = closedProfit - closedLoss;
+
+  console.log(`\n   ✅ CORRECT: Use /v1/closed-positions only (30-day filtered):`);
+  console.log(`      Realized P&L: $${netFromClosed.toFixed(2)}`);
+  console.log(`      + Unrealized PnL: $${totalUnrealizedPnl.toFixed(2)}`);
+  console.log(`      ─────────────────────────────────────`);
+  console.log(`      30-DAY TOTAL P&L: $${(netFromClosed + totalUnrealizedPnl).toFixed(2)}`);
+
+  // Show what the WRONG calculation looked like (mixing ALL-TIME with 30-day)
+  const wrongTotalRealizedPnl = netFromClosed - totalResolvedLoss + totalResolvedWin;
+  console.log(`\n   ❌ WRONG (old approach - mixing ALL-TIME with 30-day):`);
+  console.log(`      /closed-positions (30-day): $${netFromClosed.toFixed(2)}`);
+  console.log(`      + resolved losses (ALL-TIME): -$${totalResolvedLoss.toFixed(2)}`);
+  console.log(`      + resolved wins (ALL-TIME): +$${totalResolvedWin.toFixed(2)}`);
+  console.log(`      ─────────────────────────────────────`);
+  console.log(`      WRONG TOTAL: $${(wrongTotalRealizedPnl + totalUnrealizedPnl).toFixed(2)}`);
+
+  console.log(`\n   📊 The ${resolvedLosses.length} resolved losses are ALL-TIME losses`);
+  console.log(`      They should NOT be added to a 30-day P&L calculation!`);
+}
+
+async function showApiDocNote() {
+  console.log('\n═══════════════════════════════════════════════════════════════');
+  console.log('API DOCUMENTATION NOTE:');
+  console.log('═══════════════════════════════════════════════════════════════');
+  console.log('- /positions API: Returns ALL positions (no time filter available)');
+  console.log('- /v1/closed-positions API: Has timestamp field, can filter by time');
+  console.log('- For period-based P&L, ONLY use /v1/closed-positions');
+  console.log('- Resolved positions from /positions are ALL-TIME historical data');
+  console.log('═══════════════════════════════════════════════════════════════');
 }
 
 async function main() {
+  await showApiDocNote();
   await diagnose('0x6a72f61820b26b1fe4d956e17b6dc2a1ea3033ee', 'kch123');
   console.log('\n');
   await diagnose('0x1af1dfc2c523af1d7551597c985277cd11b30f7b', 'Pimping');

@@ -281,6 +281,9 @@ export async function POST(request: NextRequest) {
     else strategyLabel = 'ACTIVE_TRADER';
 
     // Closed positions analysis
+    // IMPORTANT: Only use /v1/closed-positions for realized P&L because it supports time filtering
+    // The /positions API returns ALL-TIME data and cannot be filtered by date
+    // Including resolved positions from /positions would mix all-time losses with 30-day gains
     let grossProfit = 0, grossLoss = 0, wins = 0, losses = 0;
     closedPositions.forEach(p => {
       if (p.realizedPnl >= 0) {
@@ -292,29 +295,15 @@ export async function POST(request: NextRequest) {
       }
     });
 
-    // Add resolved losses (unredeemed losing positions at 0¢)
-    let unredeemedLossCount = 0;
-    let unredeemedLossAmount = 0;
-    resolvedLosses.forEach(p => {
-      const lossAmount = p.initialValue;
-      unredeemedLossAmount += lossAmount;
-      unredeemedLossCount++;
-      losses++;
-      grossLoss += lossAmount;
-    });
+    // Track resolved positions for informational purposes only (NOT for P&L calculation)
+    // These are ALL-TIME counts, not time-filtered, so they shouldn't affect period P&L
+    const unredeemedLossCount = resolvedLosses.length;
+    const unredeemedLossAmount = resolvedLosses.reduce((sum, p) => sum + p.initialValue, 0);
+    const unredeemedWinCount = resolvedWins.length;
+    const unredeemedWinAmount = resolvedWins.reduce((sum, p) => sum + (p.currentValue - p.initialValue), 0);
 
-    // Add resolved wins (unredeemed winning positions at 100¢)
-    let unredeemedWinCount = 0;
-    let unredeemedWinAmount = 0;
-    resolvedWins.forEach(p => {
-      const winAmount = p.currentValue - p.initialValue; // Profit
-      unredeemedWinAmount += winAmount;
-      unredeemedWinCount++;
-      wins++;
-      grossProfit += winAmount;
-    });
-
-    const totalClosedCount = closedPositions.length + unredeemedLossCount + unredeemedWinCount;
+    // Win rate and profit factor based on time-filtered closed positions only
+    const totalClosedCount = closedPositions.length;
     const winRate = totalClosedCount > 0 ? (wins / totalClosedCount) * 100 : 0;
     const profitFactor = grossLoss > 0 ? grossProfit / grossLoss : grossProfit > 0 ? 999 : 0;
     const netPnl = grossProfit - grossLoss;
@@ -329,10 +318,10 @@ export async function POST(request: NextRequest) {
     const medianTradeSize = tradeSizes.length > 0 ? tradeSizes[Math.floor(tradeSizes.length / 2)] : 0;
     const maxTradeSize = tradeSizes.length > 0 ? Math.max(...tradeSizes) : 0;
 
-    // Market specialization analysis - INCLUDE ALL resolved positions (redeemed + unredeemed)
+    // Market specialization analysis - Only use time-filtered closed positions
+    // Resolved positions from /positions API are ALL-TIME and shouldn't be included
     const byCategory: Record<string, { trades: number; wins: number; losses: number; totalPnl: number }> = {};
 
-    // 1. Add closed (redeemed) positions
     for (const pos of closedPositions) {
       const category = categorizeMarket(pos.title);
       if (!byCategory[category]) {
@@ -342,29 +331,6 @@ export async function POST(request: NextRequest) {
       byCategory[category].totalPnl += pos.realizedPnl;
       if (pos.realizedPnl >= 0) byCategory[category].wins++;
       else byCategory[category].losses++;
-    }
-
-    // 2. Add resolved losses (unredeemed 0¢ positions)
-    for (const pos of resolvedLosses) {
-      const category = categorizeMarket(pos.title);
-      if (!byCategory[category]) {
-        byCategory[category] = { trades: 0, wins: 0, losses: 0, totalPnl: 0 };
-      }
-      byCategory[category].trades++;
-      byCategory[category].totalPnl -= pos.initialValue; // Loss = negative
-      byCategory[category].losses++;
-    }
-
-    // 3. Add resolved wins (unredeemed 100¢ positions)
-    for (const pos of resolvedWins) {
-      const category = categorizeMarket(pos.title);
-      if (!byCategory[category]) {
-        byCategory[category] = { trades: 0, wins: 0, losses: 0, totalPnl: 0 };
-      }
-      byCategory[category].trades++;
-      const profit = pos.currentValue - pos.initialValue;
-      byCategory[category].totalPnl += profit;
-      byCategory[category].wins++;
     }
 
     const marketPerformance = Object.entries(byCategory)
@@ -390,10 +356,10 @@ export async function POST(request: NextRequest) {
       .filter(a => a.type === 'TRADE' && a.usdcSize >= asymmetricThreshold)
       .sort((a, b) => b.timestamp - a.timestamp);
 
-    // Build recent closed positions (combine redeemed + resolved wins/losses)
-    const recentClosedPositions = [
-      // Official closed positions (redeemed)
-      ...closedPositions.map(p => ({
+    // Build recent closed positions (only time-filtered redeemed positions)
+    // Resolved positions from /positions API are ALL-TIME and can't be time-filtered
+    const recentClosedPositions = closedPositions
+      .map(p => ({
         title: p.title,
         outcome: p.outcome,
         size: p.totalBought,
@@ -401,28 +367,8 @@ export async function POST(request: NextRequest) {
         realizedPnl: p.realizedPnl,
         timestamp: new Date(p.timestamp * 1000),
         status: 'REDEEMED' as const,
-      })),
-      // Resolved wins (100¢, not yet redeemed)
-      ...resolvedWins.map(p => ({
-        title: p.title,
-        outcome: p.outcome,
-        size: p.size,
-        avgPrice: p.avgPrice,
-        realizedPnl: p.currentValue - p.initialValue,
-        timestamp: new Date(), // Use now as timestamp since we don't have exact resolution time
-        status: 'WON' as const,
-      })),
-      // Resolved losses (0¢, not yet redeemed)
-      ...resolvedLosses.map(p => ({
-        title: p.title,
-        outcome: p.outcome,
-        size: p.size,
-        avgPrice: p.avgPrice,
-        realizedPnl: -p.initialValue, // Loss = negative initial value
-        timestamp: new Date(),
-        status: 'LOST' as const,
-      })),
-    ].sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime())
+      }))
+      .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime())
       .slice(0, 20); // Show most recent 20
 
     // Build profile data
