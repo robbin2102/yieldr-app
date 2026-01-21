@@ -121,16 +121,25 @@ export async function GET(request: NextRequest) {
         console.error('Error fetching positions from API:', e);
       }
 
-      // Create lookup maps using conditionId + outcome as key (unique identifier)
-      const openPosMap = new Map(
-        currentPositions.map(p => [`${p.conditionId}:${p.outcome}`, p])
-      );
-      const closedPosMap = new Map(
-        closedPositions.map(p => [`${p.conditionId}:${p.outcome}`, p])
-      );
+      // Create lookup maps using multiple keys for matching
+      // We need both conditionId:outcome AND title:outcome because saved data is inconsistent
+      const openPosMap = new Map<string, OpenPosition>();
+      const openPosByTitle = new Map<string, OpenPosition>();
+      for (const p of currentPositions) {
+        openPosMap.set(`${p.conditionId}:${p.outcome}`, p);
+        openPosByTitle.set(`${p.title}:${p.outcome}`, p);
+      }
 
-      // CONSOLIDATE: Group saved trades by conditionId + outcome to combine duplicates
-      // Multiple trades for the same position should show as ONE position with combined values
+      const closedPosMap = new Map<string, ClosedPosition>();
+      const closedPosByTitle = new Map<string, ClosedPosition>();
+      for (const p of closedPositions) {
+        closedPosMap.set(`${p.conditionId}:${p.outcome}`, p);
+        closedPosByTitle.set(`${p.title}:${p.outcome}`, p);
+      }
+
+      // CONSOLIDATE: Group saved trades by market + outcome to combine duplicates
+      // Using market title + outcome is more reliable than conditionId because some entries
+      // have the market title stored as conditionId (data inconsistency bug)
       const consolidatedMap = new Map<string, {
         trades: typeof savedCopyPositions;
         conditionId: string;
@@ -141,16 +150,25 @@ export async function GET(request: NextRequest) {
       }>();
 
       for (const pos of savedCopyPositions) {
-        const key = `${pos.conditionId}:${pos.outcome}`;
+        // Use market + outcome as key (more reliable than conditionId due to data inconsistency)
+        const key = `${pos.market}:${pos.outcome}`;
         if (!consolidatedMap.has(key)) {
+          // Prefer the hash-style conditionId (starts with 0x) over title-style
+          const conditionId = pos.conditionId?.startsWith('0x') ? pos.conditionId : pos.market;
           consolidatedMap.set(key, {
             trades: [],
-            conditionId: pos.conditionId,
+            conditionId,
             outcome: pos.outcome,
             market: pos.market,
             traderLabel: pos.traderLabel || 'Unknown',
             traderWallet: pos.traderWallet,
           });
+        } else {
+          // Update conditionId if this entry has a proper hash and existing doesn't
+          const existing = consolidatedMap.get(key)!;
+          if (!existing.conditionId?.startsWith('0x') && pos.conditionId?.startsWith('0x')) {
+            existing.conditionId = pos.conditionId;
+          }
         }
         consolidatedMap.get(key)!.trades.push(pos);
       }
@@ -194,9 +212,11 @@ export async function GET(request: NextRequest) {
 
         const avgPrice = totalUsdcInvested > 0 ? weightedPrice / totalUsdcInvested : 0;
 
-        // Get current status from API
-        const openPos = openPosMap.get(key);
-        const closedPos = closedPosMap.get(key);
+        // Get current status from API - try both conditionId and title lookups
+        const conditionKey = `${consolidated.conditionId}:${consolidated.outcome}`;
+        const titleKey = `${consolidated.market}:${consolidated.outcome}`;
+        const openPos = openPosMap.get(conditionKey) || openPosByTitle.get(titleKey);
+        const closedPos = closedPosMap.get(conditionKey) || closedPosByTitle.get(titleKey);
 
         let status: 'OPEN' | 'CLOSED' | 'SOLD' = 'CLOSED';
         let currentValue = 0;
