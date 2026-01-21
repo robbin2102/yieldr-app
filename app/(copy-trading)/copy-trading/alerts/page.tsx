@@ -35,7 +35,7 @@ export default function AlertsPage() {
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [loading, setLoading] = useState(true);
   const [sideFilter, setSideFilter] = useState('ALL');
-  const [typeFilter, setTypeFilter] = useState('TRADE');
+  const [typeFilter, setTypeFilter] = useState('ALL'); // Default to ALL since alerts may not have type field
   const [traderFilter, setTraderFilter] = useState('ALL');
   const [traders, setTraders] = useState<string[]>([]);
   const [showSettings, setShowSettings] = useState(false);
