@@ -19,12 +19,69 @@ interface OpenPosition {
   percentPnl: number;
 }
 
-// Fetch user's open positions from Polymarket to get current P&L
+interface ClosedPosition {
+  conditionId: string;
+  asset: string;
+  title: string;
+  outcome: string;
+  totalBought: number;
+  avgPrice: number;
+  realizedPnl: number;
+  timestamp: number;
+}
+
+// Fetch user's open positions from Polymarket with pagination
 async function fetchOpenPositions(wallet: string): Promise<OpenPosition[]> {
-  const url = `${API_BASE}/positions?user=${wallet}&sizeThreshold=0.1&limit=500`;
-  const response = await fetch(url);
-  if (!response.ok) throw new Error(`API error: ${response.status}`);
-  return response.json();
+  let allPositions: OpenPosition[] = [];
+  let offset = 0;
+
+  while (offset <= 5000) {
+    const url = `${API_BASE}/positions?user=${wallet}&sizeThreshold=0.1&limit=500&offset=${offset}`;
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`API error: ${response.status}`);
+
+    const batch = await response.json() as OpenPosition[];
+    if (batch.length === 0) break;
+
+    allPositions = allPositions.concat(batch);
+    if (batch.length < 500) break;
+    offset += 500;
+    await new Promise(r => setTimeout(r, 50));
+  }
+
+  return allPositions;
+}
+
+// Fetch closed positions to get realized P&L
+async function fetchClosedPositions(wallet: string, days: number = 90): Promise<ClosedPosition[]> {
+  const now = Math.floor(Date.now() / 1000);
+  const startTs = now - (days * 24 * 60 * 60);
+
+  let allPositions: ClosedPosition[] = [];
+  let offset = 0;
+
+  while (true) {
+    const url = `${API_BASE}/v1/closed-positions?user=${wallet}&limit=50&offset=${offset}&sortBy=TIMESTAMP&sortDirection=DESC`;
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`API error: ${response.status}`);
+
+    const batch = await response.json() as ClosedPosition[];
+    if (batch.length === 0) break;
+
+    for (const pos of batch) {
+      if (pos.timestamp >= startTs) {
+        allPositions.push(pos);
+      } else {
+        return allPositions;
+      }
+    }
+
+    if (batch.length < 50) break;
+    offset += 50;
+    await new Promise(r => setTimeout(r, 50));
+  }
+
+  return allPositions;
 }
 
 export async function GET(request: NextRequest) {
@@ -51,20 +108,85 @@ export async function GET(request: NextRequest) {
 
     // If we have saved copy positions, use those
     if (savedCopyPositions.length > 0) {
-      // Fetch current open positions to update P&L
+      // Fetch current open positions and closed positions for accurate P&L
       let currentPositions: OpenPosition[] = [];
+      let closedPositions: ClosedPosition[] = [];
       try {
-        currentPositions = await fetchOpenPositions(cleanWallet);
+        [currentPositions, closedPositions] = await Promise.all([
+          fetchOpenPositions(cleanWallet),
+          fetchClosedPositions(cleanWallet, 90),
+        ]);
       } catch (e) {
         // If API fails, use saved data as-is
+        console.error('Error fetching positions from API:', e);
       }
 
-      // Create lookup for current position data
-      const currentPosMap = new Map(
-        currentPositions.map(p => [`${p.outcome}`, p])
-      );
+      // Create lookup maps using multiple keys for matching
+      // We need both conditionId:outcome AND title:outcome because saved data is inconsistent
+      const openPosMap = new Map<string, OpenPosition>();
+      const openPosByTitle = new Map<string, OpenPosition>();
+      for (const p of currentPositions) {
+        openPosMap.set(`${p.conditionId}:${p.outcome}`, p);
+        openPosByTitle.set(`${p.title}:${p.outcome}`, p);
+      }
 
-      // Group by trader and update with current P&L
+      const closedPosMap = new Map<string, ClosedPosition>();
+      const closedPosByTitle = new Map<string, ClosedPosition>();
+      for (const p of closedPositions) {
+        closedPosMap.set(`${p.conditionId}:${p.outcome}`, p);
+        closedPosByTitle.set(`${p.title}:${p.outcome}`, p);
+      }
+
+      // DEDUPLICATE: Remove duplicate trade records that were saved with different conditionId formats
+      // Same trade can be saved twice (once with title as conditionId, once with hash)
+      // Identify duplicates by: timestamp + size + price + outcome + market
+      const seenTrades = new Set<string>();
+      const dedupedPositions = savedCopyPositions.filter(pos => {
+        const tradeKey = `${pos.market}:${pos.outcome}:${pos.size}:${pos.price}:${new Date(pos.timestamp).getTime()}`;
+        if (seenTrades.has(tradeKey)) {
+          return false; // Skip duplicate
+        }
+        seenTrades.add(tradeKey);
+        return true;
+      });
+
+      // CONSOLIDATE: Group saved trades by market + outcome to combine multiple trades for same position
+      // Using market title + outcome is more reliable than conditionId because some entries
+      // have the market title stored as conditionId (data inconsistency bug)
+      const consolidatedMap = new Map<string, {
+        trades: typeof savedCopyPositions;
+        conditionId: string;
+        outcome: string;
+        market: string;
+        traderLabel: string;
+        traderWallet: string;
+      }>();
+
+      for (const pos of dedupedPositions) {
+        // Use market + outcome as key (more reliable than conditionId due to data inconsistency)
+        const key = `${pos.market}:${pos.outcome}`;
+        if (!consolidatedMap.has(key)) {
+          // Prefer the hash-style conditionId (starts with 0x) over title-style
+          const conditionId = pos.conditionId?.startsWith('0x') ? pos.conditionId : pos.market;
+          consolidatedMap.set(key, {
+            trades: [],
+            conditionId,
+            outcome: pos.outcome,
+            market: pos.market,
+            traderLabel: pos.traderLabel || 'Unknown',
+            traderWallet: pos.traderWallet,
+          });
+        } else {
+          // Update conditionId if this entry has a proper hash and existing doesn't
+          const existing = consolidatedMap.get(key)!;
+          if (!existing.conditionId?.startsWith('0x') && pos.conditionId?.startsWith('0x')) {
+            existing.conditionId = pos.conditionId;
+          }
+        }
+        consolidatedMap.get(key)!.trades.push(pos);
+      }
+
+      // Process consolidated positions
       const positionsByTrader: Record<string, any[]> = {};
       let totalPnl = 0;
       let totalValue = 0;
@@ -72,57 +194,115 @@ export async function GET(request: NextRequest) {
       let openCount = 0;
       let closedCount = 0;
 
-      for (const pos of savedCopyPositions) {
-        const traderLabel = pos.traderLabel || 'Unknown';
+      for (const [key, consolidated] of consolidatedMap) {
+        const traderLabel = consolidated.traderLabel;
         if (!positionsByTrader[traderLabel]) {
           positionsByTrader[traderLabel] = [];
         }
 
-        // Try to get current data
-        const currentPos = currentPosMap.get(pos.outcome);
+        // Calculate totals from all trades for this position
+        let totalSize = 0;
+        let totalUsdcInvested = 0;
+        let weightedPrice = 0;
+        let latestTimestamp = new Date(0);
+        let primarySide = 'BUY';
 
-        // Update status based on current data
-        let status = pos.status;
-        let currentValue = pos.currentValue || 0;
-        let cashPnl = pos.pnl || 0;
-        let curPrice = pos.price || 0;
+        for (const trade of consolidated.trades) {
+          if (trade.side === 'BUY') {
+            totalSize += trade.size || 0;
+            totalUsdcInvested += trade.usdcValue || 0;
+            weightedPrice += (trade.price || 0) * (trade.usdcValue || 0);
+          } else if (trade.side === 'SELL') {
+            totalSize -= trade.size || 0;
+            // For sells, we reduce our investment basis
+            totalUsdcInvested -= trade.usdcValue || 0;
+            primarySide = 'MIXED';
+          }
+          if (new Date(trade.timestamp) > latestTimestamp) {
+            latestTimestamp = new Date(trade.timestamp);
+          }
+        }
 
-        if (currentPos) {
+        const avgPrice = totalUsdcInvested > 0 ? weightedPrice / totalUsdcInvested : 0;
+
+        // Get current status from API - try both conditionId and title lookups
+        const conditionKey = `${consolidated.conditionId}:${consolidated.outcome}`;
+        const titleKey = `${consolidated.market}:${consolidated.outcome}`;
+        const openPos = openPosMap.get(conditionKey) || openPosByTitle.get(titleKey);
+        const closedPos = closedPosMap.get(conditionKey) || closedPosByTitle.get(titleKey);
+
+        let status: 'OPEN' | 'CLOSED' | 'SOLD' = 'CLOSED';
+        let currentValue = 0;
+        let cashPnl = 0;
+        let curPrice = 0;
+
+        if (openPos && openPos.size > 0.1) {
+          // Position is still open
           status = 'OPEN';
-          currentValue = currentPos.currentValue;
-          cashPnl = currentPos.cashPnl;
-          curPrice = currentPos.curPrice;
+          currentValue = openPos.currentValue;
+          cashPnl = openPos.cashPnl;
+          curPrice = openPos.curPrice;
           openCount++;
-        } else if (status === 'OPEN') {
-          // Position was open but now gone = likely closed/redeemed
+        } else if (closedPos) {
+          // Position was closed - use realized P&L from API
           status = 'CLOSED';
+          cashPnl = closedPos.realizedPnl;
+          closedCount++;
+        } else if (totalSize <= 0) {
+          // Position was sold (size reduced to 0 or negative from sells)
+          status = 'SOLD';
+          // For sold positions, calculate P&L from sell trades
+          let sellProceeds = 0;
+          let buyTotal = 0;
+          for (const trade of consolidated.trades) {
+            if (trade.side === 'SELL') {
+              sellProceeds += trade.usdcValue || 0;
+            } else {
+              buyTotal += trade.usdcValue || 0;
+            }
+          }
+          cashPnl = sellProceeds - buyTotal;
           closedCount++;
         } else {
+          // Position no longer exists - might have been redeemed
+          status = 'CLOSED';
           closedCount++;
         }
 
+        // Use the larger of calculated investment or actual trades value
+        const investedAmount = Math.max(totalUsdcInvested, 0);
+
         positionsByTrader[traderLabel].push({
-          conditionId: pos.conditionId,
-          title: pos.market,
-          outcome: pos.outcome,
-          side: pos.side,
-          size: pos.size,
-          avgPrice: pos.price,
+          conditionId: consolidated.conditionId,
+          title: consolidated.market,
+          outcome: consolidated.outcome,
+          side: primarySide === 'MIXED' ? 'MIXED' : 'BUY',
+          size: Math.max(totalSize, 0),
+          avgPrice: avgPrice || (consolidated.trades[0]?.price || 0),
           curPrice,
-          initialValue: pos.usdcValue,
+          initialValue: investedAmount,
           currentValue,
           cashPnl,
-          percentPnl: pos.usdcValue > 0 ? (cashPnl / pos.usdcValue) * 100 : 0,
+          percentPnl: investedAmount > 0 ? (cashPnl / investedAmount) * 100 : 0,
           status,
-          timestamp: pos.timestamp,
-          traderWallet: pos.traderWallet,
+          timestamp: latestTimestamp,
+          traderWallet: consolidated.traderWallet,
+          tradeCount: consolidated.trades.length,
         });
 
+        // Only count open positions for portfolio value
         if (status === 'OPEN') {
           totalValue += currentValue;
-          totalInvested += pos.usdcValue || 0;
+          totalInvested += investedAmount;
         }
         totalPnl += cashPnl;
+      }
+
+      // Sort positions within each trader by timestamp (newest first)
+      for (const trader of Object.keys(positionsByTrader)) {
+        positionsByTrader[trader].sort((a, b) =>
+          new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+        );
       }
 
       return NextResponse.json({
@@ -131,8 +311,8 @@ export async function GET(request: NextRequest) {
         positionsByTrader,
         unmatchedPositions: [],
         summary: {
-          totalPositions: savedCopyPositions.length,
-          matchedPositions: savedCopyPositions.length,
+          totalPositions: consolidatedMap.size,
+          matchedPositions: consolidatedMap.size,
           unmatchedCount: 0,
           openPositions: openCount,
           closedPositions: closedCount,
