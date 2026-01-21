@@ -137,7 +137,20 @@ export async function GET(request: NextRequest) {
         closedPosByTitle.set(`${p.title}:${p.outcome}`, p);
       }
 
-      // CONSOLIDATE: Group saved trades by market + outcome to combine duplicates
+      // DEDUPLICATE: Remove duplicate trade records that were saved with different conditionId formats
+      // Same trade can be saved twice (once with title as conditionId, once with hash)
+      // Identify duplicates by: timestamp + size + price + outcome + market
+      const seenTrades = new Set<string>();
+      const dedupedPositions = savedCopyPositions.filter(pos => {
+        const tradeKey = `${pos.market}:${pos.outcome}:${pos.size}:${pos.price}:${new Date(pos.timestamp).getTime()}`;
+        if (seenTrades.has(tradeKey)) {
+          return false; // Skip duplicate
+        }
+        seenTrades.add(tradeKey);
+        return true;
+      });
+
+      // CONSOLIDATE: Group saved trades by market + outcome to combine multiple trades for same position
       // Using market title + outcome is more reliable than conditionId because some entries
       // have the market title stored as conditionId (data inconsistency bug)
       const consolidatedMap = new Map<string, {
@@ -149,7 +162,7 @@ export async function GET(request: NextRequest) {
         traderWallet: string;
       }>();
 
-      for (const pos of savedCopyPositions) {
+      for (const pos of dedupedPositions) {
         // Use market + outcome as key (more reliable than conditionId due to data inconsistency)
         const key = `${pos.market}:${pos.outcome}`;
         if (!consolidatedMap.has(key)) {
