@@ -5,6 +5,7 @@
  * - Alert Monitor: Detects new trades every 10s
  * - Position Refresher: Updates prices every 60s
  * - Profile Refresher: Updates stats every 5 min
+ * - User Position Sync: Syncs user copy positions every 5 min
  * - WebSocket Server: Real-time updates to frontend
  */
 
@@ -14,6 +15,7 @@ import { wsManager } from './websocket/server';
 import { startAlertMonitor, stopAlertMonitor } from './monitors/alert-monitor';
 import { startPositionRefresher, stopPositionRefresher } from './monitors/position-refresher';
 import { startProfileRefresher, stopProfileRefresher } from './monitors/profile-refresher';
+import { startUserPositionSync, stopUserPositionSync } from './monitors/user-position-sync';
 
 // Load environment variables
 dotenv.config();
@@ -34,16 +36,17 @@ async function main() {
   wsManager.start(WS_PORT);
 
   // Start all monitors
-  startAlertMonitor();      // Every 10s
-  startPositionRefresher(); // Every 60s
-  startProfileRefresher();  // Every 5 min
+  startAlertMonitor();        // Every 10s
+  startPositionRefresher();   // Every 60s
+  startProfileRefresher();    // Every 5 min
+  startUserPositionSync();    // Every 5 min - syncs user copy positions
 
   console.log('');
   console.log('═══════════════════════════════════════════════════════════════');
   console.log('                    WORKER RUNNING                             ');
   console.log('═══════════════════════════════════════════════════════════════');
   console.log(`  WebSocket:  ws://localhost:${WS_PORT}`);
-  console.log('  Monitors:   Alert (10s), Positions (60s), Profiles (5min)');
+  console.log('  Monitors:   Alert (10s), Positions (60s), Profiles (5min), UserSync (5min)');
   console.log('═══════════════════════════════════════════════════════════════');
   console.log('');
 
@@ -61,6 +64,7 @@ async function shutdown(signal: string) {
   stopAlertMonitor();
   stopPositionRefresher();
   stopProfileRefresher();
+  stopUserPositionSync();
   wsManager.stop();
   await closeDB();
 
