@@ -17,9 +17,15 @@ export async function GET(request: NextRequest) {
     // Get list of actively tracked traders (isTracking: true and isActive: true)
     const trackedTraders = await db.collection('polymarket-trackedTraders')
       .find({ isActive: true, isTracking: true })
-      .project({ wallet: 1 })
+      .project({ wallet: 1, avgTradeSize: 1, label: 1 })
       .toArray();
     const trackedWallets = trackedTraders.map(t => t.wallet.toLowerCase());
+
+    // Create a map of trader wallet -> avgTradeSize for calculating sizeMultiplier
+    const traderAvgSizeMap = new Map<string, number>();
+    for (const t of trackedTraders) {
+      traderAvgSizeMap.set(t.wallet.toLowerCase(), t.avgTradeSize || 0);
+    }
 
     // Build query - only show alerts from tracked traders
     const query: any = {};
@@ -48,24 +54,33 @@ export async function GET(request: NextRequest) {
       .limit(limit)
       .toArray();
 
-    // Map to frontend format
-    const formattedAlerts = alerts.map(alert => ({
-      _id: alert._id.toString(),
-      traderWallet: alert.traderWallet,
-      traderLabel: alert.traderLabel || alert.traderWallet.slice(0, 8),
-      type: alert.type,
-      side: alert.side,
-      title: alert.market,
-      outcome: alert.outcome,
-      price: alert.price,
-      usdcSize: alert.usdcValue,
-      timestamp: alert.timestamp,
-      isHighConviction: alert.isHighConviction,
-      sizeMultiplier: alert.sizeMultiplier,
-      copyRecommendation: alert.copyRecommendation,
-      acknowledged: alert.acknowledged,
-      copied: alert.copied,
-    }));
+    // Map to frontend format and calculate sizeMultiplier
+    const formattedAlerts = alerts.map(alert => {
+      const avgTradeSize = traderAvgSizeMap.get(alert.traderWallet?.toLowerCase()) || 0;
+      const usdcValue = alert.usdcValue || 0;
+
+      // Calculate size multiplier (how many times avg trade size)
+      const sizeMultiplier = avgTradeSize > 0 ? usdcValue / avgTradeSize : 0;
+      const isHighConviction = sizeMultiplier >= 1; // 1x or more of avg is considered high conviction
+
+      return {
+        _id: alert._id.toString(),
+        traderWallet: alert.traderWallet,
+        traderLabel: alert.traderLabel || alert.traderWallet?.slice(0, 8),
+        type: alert.type,
+        side: alert.side,
+        title: alert.market,
+        outcome: alert.outcome,
+        price: alert.price,
+        usdcSize: usdcValue,
+        timestamp: alert.timestamp,
+        isHighConviction,
+        sizeMultiplier,
+        copyRecommendation: alert.copyRecommendation,
+        acknowledged: alert.acknowledged,
+        copied: alert.copied,
+      };
+    });
 
     return NextResponse.json({
       success: true,
