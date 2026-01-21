@@ -106,17 +106,35 @@ export async function fetchActivities(
 }
 
 /**
- * Fetch open positions for a wallet
+ * Fetch open positions for a wallet WITH PAGINATION
  */
 export async function fetchOpenPositions(wallet: string): Promise<OpenPosition[]> {
-  const url = `${API_BASE}/positions?user=${wallet}&sizeThreshold=0.1&limit=500`;
-  const response = await fetch(url);
+  const LIMIT = 500;
+  const MAX_OFFSET = 10000;
 
-  if (!response.ok) {
-    throw new Error(`API error: ${response.status}`);
+  let allPositions: OpenPosition[] = [];
+  let offset = 0;
+
+  while (offset <= MAX_OFFSET) {
+    const url = `${API_BASE}/positions?user=${wallet}&sizeThreshold=0.1&limit=${LIMIT}&offset=${offset}`;
+    const response = await fetch(url);
+
+    if (!response.ok) {
+      throw new Error(`API error: ${response.status}`);
+    }
+
+    const batch = await response.json() as OpenPosition[];
+    if (batch.length === 0) break;
+
+    allPositions = allPositions.concat(batch);
+
+    if (batch.length < LIMIT) break; // Last page
+    offset += LIMIT;
+
+    await new Promise(r => setTimeout(r, 50)); // Rate limiting
   }
 
-  return response.json();
+  return allPositions;
 }
 
 /**
