@@ -241,11 +241,30 @@ export async function POST(request: NextRequest) {
     const openPositions = allOpenPositions.filter(p =>
       p.curPrice >= LOSS_THRESHOLD && p.curPrice <= WIN_THRESHOLD
     );
-    const resolvedLosses = allOpenPositions.filter(p =>
+
+    // IMPORTANT: Cross-reference unredeemed positions with activities to filter by time period
+    // The /positions API returns ALL-TIME data and cannot be filtered by date
+    // We need to match unredeemed positions to activities within the time window
+    // to ensure unredeemed P&L is calculated for the same period as redeemed P&L
+    const activityConditionIds = new Set<string>();
+    for (const activity of activities) {
+      activityConditionIds.add(activity.conditionId);
+    }
+
+    // Filter resolved positions to only those with activity in the time period
+    const allResolvedLosses = allOpenPositions.filter(p =>
       p.curPrice < LOSS_THRESHOLD && p.size > 0
     );
-    const resolvedWins = allOpenPositions.filter(p =>
+    const allResolvedWins = allOpenPositions.filter(p =>
       p.curPrice > WIN_THRESHOLD && p.size > 0
+    );
+
+    // Only include unredeemed positions that have matching activities in the time window
+    const resolvedLosses = allResolvedLosses.filter(p =>
+      activityConditionIds.has(p.conditionId)
+    );
+    const resolvedWins = allResolvedWins.filter(p =>
+      activityConditionIds.has(p.conditionId)
     );
 
     // Count activities by type
@@ -297,12 +316,15 @@ export async function POST(request: NextRequest) {
 
     // Include unredeemed resolved positions in P&L calculation
     // These are positions where market resolved but trader hasn't redeemed yet
-    // Note: /positions API doesn't support time filtering, so these include all-time unredeemed positions
-    // For traders who started recently, this will still be accurate
+    // Now filtered by activity time window to match closed positions time period
     const unredeemedLossCount = resolvedLosses.length;
     const unredeemedLossAmount = resolvedLosses.reduce((sum, p) => sum + p.initialValue, 0);
     const unredeemedWinCount = resolvedWins.length;
     const unredeemedWinAmount = resolvedWins.reduce((sum, p) => sum + (p.currentValue - p.initialValue), 0);
+
+    // Track total unredeemed for debugging (shows how many were filtered out by time window)
+    const totalUnredeemedLosses = allResolvedLosses.length;
+    const totalUnredeemedWins = allResolvedWins.length;
 
     // Add unredeemed resolved positions to P&L totals
     // Unredeemed losses = lost entire initial investment
@@ -450,6 +472,11 @@ export async function POST(request: NextRequest) {
       unredeemedLossAmount,
       unredeemedWinCount,
       unredeemedWinAmount,
+      // Debug: Show how many unredeemed positions were filtered by time window
+      totalUnredeemedLosses,
+      totalUnredeemedWins,
+      filteredOutLosses: totalUnredeemedLosses - unredeemedLossCount,
+      filteredOutWins: totalUnredeemedWins - unredeemedWinCount,
       totalResolvedCount: totalClosedCount,
       wins,
       losses,
