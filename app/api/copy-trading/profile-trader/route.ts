@@ -252,6 +252,12 @@ export async function POST(request: NextRequest) {
       p.curPrice > WIN_THRESHOLD && p.size > 0
     );
 
+    // Build set of conditionIds for unredeemed wins (to add expected redemption value)
+    const unredeemedWinConditionIds = new Set<string>();
+    for (const pos of resolvedWins) {
+      unredeemedWinConditionIds.add(pos.conditionId);
+    }
+
     // Build set of conditionIds with activity in time window for filtering
     const activityConditionIds = new Set<string>();
     for (const activity of activities) {
@@ -267,12 +273,12 @@ export async function POST(request: NextRequest) {
     );
 
     // Count activities by type and calculate P&L from cash flows
-    // This is the SIMPLE and ACCURATE approach:
-    // P&L = (Cash received from SELLs + REDEEMs) - (Cash spent on BUYs)
+    // P&L = (Cash received from SELLs + REDEEMs + Unredeemed Wins) - (Cash spent on BUYs)
     // SPLIT/MERGE are neutral operations (no P&L impact)
     let buyCount = 0, sellCount = 0, redeemCount = 0, splitCount = 0, mergeCount = 0, otherCount = 0;
     let cashOut = 0;  // USDC spent (BUYs)
     let cashIn = 0;   // USDC received (SELLs + REDEEMs)
+    let unredeemedWinValue = 0;  // Expected redemption value from unredeemed wins
     const tradeSizes: number[] = [];
 
     activities.forEach(a => {
@@ -281,6 +287,11 @@ export async function POST(request: NextRequest) {
         if (a.side === 'BUY') {
           buyCount++;
           cashOut += a.usdcSize;
+          // If this BUY is for a position that won but hasn't been redeemed yet,
+          // add the expected redemption value (shares × $1.00)
+          if (unredeemedWinConditionIds.has(a.conditionId)) {
+            unredeemedWinValue += a.size;  // Each share redeems for $1.00
+          }
         } else if (a.side === 'SELL') {
           sellCount++;
           cashIn += a.usdcSize;
@@ -300,12 +311,12 @@ export async function POST(request: NextRequest) {
     });
 
     // Activity-based P&L calculation
-    // This naturally handles:
     // - Losses: BUYs where shares went to 0¢ (no REDEEM = loss is the BUY amount)
-    // - Wins: BUYs followed by REDEEMs (profit = REDEEM - BUY cost)
+    // - Redeemed wins: BUYs followed by REDEEMs (profit = REDEEM - BUY cost)
+    // - Unredeemed wins: BUYs where shares are at 100¢ (add expected redemption value)
     // - Trading profits: SELL > original BUY cost
-    const netPnl = cashIn - cashOut;
-    const grossProfit = cashIn;
+    const netPnl = cashIn + unredeemedWinValue - cashOut;
+    const grossProfit = cashIn + unredeemedWinValue;
     const grossLoss = cashOut;
 
     const totalTrades = buyCount + sellCount;
@@ -471,13 +482,14 @@ export async function POST(request: NextRequest) {
       strategyLabel,
 
       // Performance - Activity-based P&L calculation
-      // P&L = (SELLs + REDEEMs) - BUYs
+      // P&L = (SELLs + REDEEMs + UnredeemedWins) - BUYs
       // This is properly time-filtered since activities are fetched with time filter
-      cashOut,        // Total USDC spent on BUYs
-      cashIn,         // Total USDC received from SELLs + REDEEMs
-      netPnl,         // cashIn - cashOut
-      grossProfit,    // = cashIn
-      grossLoss,      // = cashOut
+      cashOut,              // Total USDC spent on BUYs
+      cashIn,               // Total USDC received from SELLs + REDEEMs
+      unredeemedWinValue,   // Expected redemption from unredeemed wins (shares bought in period × $1)
+      netPnl,               // cashIn + unredeemedWinValue - cashOut
+      grossProfit,          // = cashIn + unredeemedWinValue
+      grossLoss,            // = cashOut
       profitFactor,
 
       // Win/loss stats from closed positions
