@@ -53,7 +53,7 @@ async function fetchActivities(wallet: string, days: number): Promise<Activity[]
   const now = Math.floor(Date.now() / 1000);
   const startTs = now - (days * 24 * 60 * 60);
   const LIMIT = 500;
-  const MAX_OFFSET = 5000;
+  const MAX_OFFSET = 20000;  // Increased to handle high-volume traders
 
   let allActivities: Activity[] = [];
   let offset = 0;
