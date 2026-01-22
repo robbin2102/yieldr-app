@@ -252,10 +252,11 @@ export async function POST(request: NextRequest) {
       p.curPrice > WIN_THRESHOLD && p.size > 0
     );
 
-    // Build set of conditionIds for unredeemed wins (to add expected redemption value)
-    const unredeemedWinConditionIds = new Set<string>();
+    // Build set of conditionId:outcome for unredeemed wins (to add expected redemption value)
+    // Must match BOTH conditionId AND outcome since a market has Yes/No outcomes
+    const unredeemedWinKeys = new Set<string>();
     for (const pos of resolvedWins) {
-      unredeemedWinConditionIds.add(pos.conditionId);
+      unredeemedWinKeys.add(`${pos.conditionId}:${pos.outcome}`);
     }
 
     // Build set of conditionIds with activity in time window for filtering
@@ -289,7 +290,9 @@ export async function POST(request: NextRequest) {
           cashOut += a.usdcSize;
           // If this BUY is for a position that won but hasn't been redeemed yet,
           // add the expected redemption value (shares × $1.00)
-          if (unredeemedWinConditionIds.has(a.conditionId)) {
+          // Must match BOTH conditionId AND outcome
+          const buyKey = `${a.conditionId}:${a.outcome}`;
+          if (unredeemedWinKeys.has(buyKey)) {
             unredeemedWinValue += a.size;  // Each share redeems for $1.00
           }
         } else if (a.side === 'SELL') {
