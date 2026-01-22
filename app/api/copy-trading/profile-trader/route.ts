@@ -266,21 +266,47 @@ export async function POST(request: NextRequest) {
       activityConditionIds.has(p.conditionId)
     );
 
-    // Count activities by type
-    let buyCount = 0, sellCount = 0, redeemCount = 0, otherCount = 0;
+    // Count activities by type and calculate P&L from cash flows
+    // This is the SIMPLE and ACCURATE approach:
+    // P&L = (Cash received from SELLs + REDEEMs) - (Cash spent on BUYs)
+    // SPLIT/MERGE are neutral operations (no P&L impact)
+    let buyCount = 0, sellCount = 0, redeemCount = 0, splitCount = 0, mergeCount = 0, otherCount = 0;
+    let cashOut = 0;  // USDC spent (BUYs)
+    let cashIn = 0;   // USDC received (SELLs + REDEEMs)
     const tradeSizes: number[] = [];
 
     activities.forEach(a => {
       if (a.type === 'TRADE') {
         tradeSizes.push(a.usdcSize);
-        if (a.side === 'BUY') buyCount++;
-        else if (a.side === 'SELL') sellCount++;
+        if (a.side === 'BUY') {
+          buyCount++;
+          cashOut += a.usdcSize;
+        } else if (a.side === 'SELL') {
+          sellCount++;
+          cashIn += a.usdcSize;
+        }
       } else if (a.type === 'REDEEM') {
         redeemCount++;
+        cashIn += a.usdcSize;
+      } else if (a.type === 'SPLIT') {
+        splitCount++;
+        // SPLIT: USDC → Yes/No shares (neutral, no P&L)
+      } else if (a.type === 'MERGE') {
+        mergeCount++;
+        // MERGE: Yes/No shares → USDC (neutral, no P&L)
       } else {
         otherCount++;
       }
     });
+
+    // Activity-based P&L calculation
+    // This naturally handles:
+    // - Losses: BUYs where shares went to 0¢ (no REDEEM = loss is the BUY amount)
+    // - Wins: BUYs followed by REDEEMs (profit = REDEEM - BUY cost)
+    // - Trading profits: SELL > original BUY cost
+    const netPnl = cashIn - cashOut;
+    const grossProfit = cashIn;
+    const grossLoss = cashOut;
 
     const totalTrades = buyCount + sellCount;
 
@@ -298,39 +324,23 @@ export async function POST(request: NextRequest) {
     else if (buyRatio >= 60) strategyLabel = 'SWING_TRADER';
     else strategyLabel = 'ACTIVE_TRADER';
 
-    // Closed positions analysis
-    // IMPORTANT: Only use /v1/closed-positions for realized P&L because it supports time filtering
-    // The /positions API returns ALL-TIME data and cannot be filtered by date
-    // Including resolved positions from /positions would mix all-time losses with 30-day gains
-    let grossProfit = 0, grossLoss = 0, wins = 0, losses = 0;
+    // Win/loss counts from closed positions (for win rate display)
+    let wins = 0, losses = 0;
     closedPositions.forEach(p => {
-      if (p.realizedPnl >= 0) {
-        grossProfit += p.realizedPnl;
-        wins++;
-      } else {
-        grossLoss += Math.abs(p.realizedPnl);
-        losses++;
-      }
+      if (p.realizedPnl >= 0) wins++;
+      else losses++;
     });
 
-    // Unredeemed positions filtered by time window - MUST be added to P&L
-    // Traders often redeem wins but not losses, so /v1/closed-positions misses losses
+    // Add time-filtered unredeemed positions to win/loss counts
     const unredeemedLossCount = timeFilteredLosses.length;
-    const unredeemedLossAmount = timeFilteredLosses.reduce((sum, p) => sum + p.initialValue, 0);
     const unredeemedWinCount = timeFilteredWins.length;
-    const unredeemedWinAmount = timeFilteredWins.reduce((sum, p) => sum + (p.currentValue - p.initialValue), 0);
-
-    // Add unredeemed losses and wins to P&L totals
-    grossLoss += unredeemedLossAmount;
     losses += unredeemedLossCount;
-    grossProfit += unredeemedWinAmount;
     wins += unredeemedWinCount;
 
-    // Win rate and profit factor including unredeemed positions
+    // Win rate and profit factor
     const totalClosedCount = closedPositions.length + unredeemedLossCount + unredeemedWinCount;
     const winRate = totalClosedCount > 0 ? (wins / totalClosedCount) * 100 : 0;
     const profitFactor = grossLoss > 0 ? grossProfit / grossLoss : grossProfit > 0 ? 999 : 0;
-    const netPnl = grossProfit - grossLoss;
 
     // Open positions stats
     const openValue = openPositions.reduce((sum, p) => sum + p.currentValue, 0);
@@ -450,6 +460,8 @@ export async function POST(request: NextRequest) {
       buyCount,
       sellCount,
       redeemCount,
+      splitCount,
+      mergeCount,
       otherCount,
 
       // Classification
@@ -458,21 +470,24 @@ export async function POST(request: NextRequest) {
       buyRatio,
       strategyLabel,
 
-      // Performance (P&L from /v1/closed-positions only - properly time-filtered)
+      // Performance - Activity-based P&L calculation
+      // P&L = (SELLs + REDEEMs) - BUYs
+      // This is properly time-filtered since activities are fetched with time filter
+      cashOut,        // Total USDC spent on BUYs
+      cashIn,         // Total USDC received from SELLs + REDEEMs
+      netPnl,         // cashIn - cashOut
+      grossProfit,    // = cashIn
+      grossLoss,      // = cashOut
+      profitFactor,
+
+      // Win/loss stats from closed positions
       closedPositionsCount: closedPositions.length,
-      // Unredeemed positions shown for info but NOT included in P&L
       unredeemedLossCount,
-      unredeemedLossAmount,
       unredeemedWinCount,
-      unredeemedWinAmount,
       totalResolvedCount: totalClosedCount,
       wins,
       losses,
       winRate,
-      grossProfit,
-      grossLoss,
-      netPnl,
-      profitFactor,
 
       // Recent closed positions (for display)
       recentClosedPositions,
