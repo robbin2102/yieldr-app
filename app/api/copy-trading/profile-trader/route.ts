@@ -53,7 +53,7 @@ async function fetchActivities(wallet: string, days: number): Promise<Activity[]
   const now = Math.floor(Date.now() / 1000);
   const startTs = now - (days * 24 * 60 * 60);
   const LIMIT = 500;  // API max per request
-  const MAX_OFFSET = 9500;  // API limit is ~10k total (9500 + 500 = 10000)
+  const MAX_OFFSET = 5000;  // Keep conservative to avoid fetching beyond time window
 
   let allActivities: Activity[] = [];
   let offset = 0;
