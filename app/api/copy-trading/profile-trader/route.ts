@@ -232,7 +232,7 @@ export async function POST(request: NextRequest) {
       fetchClosedPositions(cleanWallet, days),
     ]);
 
-    // Separate active positions from resolved ones (for display only, NOT for P&L)
+    // Separate active positions from resolved ones
     // 0¢ = lost (market resolved against them, unredeemed)
     // 100¢ = won (market resolved in their favor, unredeemed)
     const LOSS_THRESHOLD = 0.001;  // <0.1¢ = resolved loss
@@ -242,14 +242,28 @@ export async function POST(request: NextRequest) {
       p.curPrice >= LOSS_THRESHOLD && p.curPrice <= WIN_THRESHOLD
     );
 
-    // Track unredeemed resolved positions for display purposes only
-    // NOTE: These are NOT included in P&L calculation because /positions API has no time filter
-    // P&L uses only /v1/closed-positions which has proper time filtering
+    // Unredeemed resolved positions - these MUST be included in P&L!
+    // Traders often redeem wins (to get USDC) but not losses (0¢ = nothing to claim)
+    // So /v1/closed-positions misses all unredeemed losses, causing inflated P&L
     const resolvedLosses = allOpenPositions.filter(p =>
       p.curPrice < LOSS_THRESHOLD && p.size > 0
     );
     const resolvedWins = allOpenPositions.filter(p =>
       p.curPrice > WIN_THRESHOLD && p.size > 0
+    );
+
+    // Build set of conditionIds with activity in time window for filtering
+    const activityConditionIds = new Set<string>();
+    for (const activity of activities) {
+      activityConditionIds.add(activity.conditionId);
+    }
+
+    // Filter unredeemed positions to only those with activity in the time period
+    const timeFilteredLosses = resolvedLosses.filter(p =>
+      activityConditionIds.has(p.conditionId)
+    );
+    const timeFilteredWins = resolvedWins.filter(p =>
+      activityConditionIds.has(p.conditionId)
     );
 
     // Count activities by type
@@ -299,15 +313,21 @@ export async function POST(request: NextRequest) {
       }
     });
 
-    // Track unredeemed counts for display (NOT added to P&L)
-    // P&L only uses /v1/closed-positions which has proper time filtering
-    const unredeemedLossCount = resolvedLosses.length;
-    const unredeemedLossAmount = resolvedLosses.reduce((sum, p) => sum + p.initialValue, 0);
-    const unredeemedWinCount = resolvedWins.length;
-    const unredeemedWinAmount = resolvedWins.reduce((sum, p) => sum + (p.currentValue - p.initialValue), 0);
+    // Unredeemed positions filtered by time window - MUST be added to P&L
+    // Traders often redeem wins but not losses, so /v1/closed-positions misses losses
+    const unredeemedLossCount = timeFilteredLosses.length;
+    const unredeemedLossAmount = timeFilteredLosses.reduce((sum, p) => sum + p.initialValue, 0);
+    const unredeemedWinCount = timeFilteredWins.length;
+    const unredeemedWinAmount = timeFilteredWins.reduce((sum, p) => sum + (p.currentValue - p.initialValue), 0);
 
-    // Win rate and profit factor from closed positions only
-    const totalClosedCount = closedPositions.length;
+    // Add unredeemed losses and wins to P&L totals
+    grossLoss += unredeemedLossAmount;
+    losses += unredeemedLossCount;
+    grossProfit += unredeemedWinAmount;
+    wins += unredeemedWinCount;
+
+    // Win rate and profit factor including unredeemed positions
+    const totalClosedCount = closedPositions.length + unredeemedLossCount + unredeemedWinCount;
     const winRate = totalClosedCount > 0 ? (wins / totalClosedCount) * 100 : 0;
     const profitFactor = grossLoss > 0 ? grossProfit / grossLoss : grossProfit > 0 ? 999 : 0;
     const netPnl = grossProfit - grossLoss;
@@ -322,10 +342,10 @@ export async function POST(request: NextRequest) {
     const medianTradeSize = tradeSizes.length > 0 ? tradeSizes[Math.floor(tradeSizes.length / 2)] : 0;
     const maxTradeSize = tradeSizes.length > 0 ? Math.max(...tradeSizes) : 0;
 
-    // Market specialization analysis - Only use closed positions (time-filtered)
+    // Market specialization analysis - Include both redeemed and unredeemed positions
     const byCategory: Record<string, { trades: number; wins: number; losses: number; totalPnl: number }> = {};
 
-    // Add closed positions only (from /v1/closed-positions with time filter)
+    // Add redeemed closed positions (from /v1/closed-positions with time filter)
     for (const pos of closedPositions) {
       const category = categorizeMarket(pos.title);
       if (!byCategory[category]) {
@@ -335,6 +355,28 @@ export async function POST(request: NextRequest) {
       byCategory[category].totalPnl += pos.realizedPnl;
       if (pos.realizedPnl >= 0) byCategory[category].wins++;
       else byCategory[category].losses++;
+    }
+
+    // Add time-filtered unredeemed losses
+    for (const pos of timeFilteredLosses) {
+      const category = categorizeMarket(pos.title);
+      if (!byCategory[category]) {
+        byCategory[category] = { trades: 0, wins: 0, losses: 0, totalPnl: 0 };
+      }
+      byCategory[category].trades++;
+      byCategory[category].losses++;
+      byCategory[category].totalPnl -= pos.initialValue;
+    }
+
+    // Add time-filtered unredeemed wins
+    for (const pos of timeFilteredWins) {
+      const category = categorizeMarket(pos.title);
+      if (!byCategory[category]) {
+        byCategory[category] = { trades: 0, wins: 0, losses: 0, totalPnl: 0 };
+      }
+      byCategory[category].trades++;
+      byCategory[category].wins++;
+      byCategory[category].totalPnl += (pos.currentValue - pos.initialValue);
     }
 
     const marketPerformance = Object.entries(byCategory)
@@ -360,9 +402,10 @@ export async function POST(request: NextRequest) {
       .filter(a => a.type === 'TRADE' && a.usdcSize >= asymmetricThreshold)
       .sort((a, b) => b.timestamp - a.timestamp);
 
-    // Build recent closed positions - only from /v1/closed-positions (time-filtered)
-    const recentClosedPositions = closedPositions
-      .map(p => ({
+    // Build recent closed positions - include redeemed and time-filtered unredeemed
+    const recentClosedPositions = [
+      // Redeemed positions (from /v1/closed-positions API)
+      ...closedPositions.map(p => ({
         title: p.title,
         outcome: p.outcome,
         size: p.totalBought,
@@ -370,7 +413,28 @@ export async function POST(request: NextRequest) {
         realizedPnl: p.realizedPnl,
         timestamp: new Date(p.timestamp * 1000),
         status: 'REDEEMED' as const,
-      }))
+      })),
+      // Time-filtered unredeemed losses
+      ...timeFilteredLosses.map(p => ({
+        title: p.title,
+        outcome: p.outcome,
+        size: p.size,
+        avgPrice: p.avgPrice,
+        realizedPnl: -p.initialValue,
+        timestamp: new Date(), // No timestamp available
+        status: 'LOST' as const,
+      })),
+      // Time-filtered unredeemed wins
+      ...timeFilteredWins.map(p => ({
+        title: p.title,
+        outcome: p.outcome,
+        size: p.size,
+        avgPrice: p.avgPrice,
+        realizedPnl: p.currentValue - p.initialValue,
+        timestamp: new Date(), // No timestamp available
+        status: 'WON' as const,
+      })),
+    ]
       .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime())
       .slice(0, 30); // Show most recent 30
 
