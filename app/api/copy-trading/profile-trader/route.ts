@@ -310,14 +310,19 @@ export async function POST(request: NextRequest) {
       }
     });
 
-    // Activity-based P&L calculation
-    // - Losses: BUYs where shares went to 0¢ (no REDEEM = loss is the BUY amount)
-    // - Redeemed wins: BUYs followed by REDEEMs (profit = REDEEM - BUY cost)
-    // - Unredeemed wins: BUYs where shares are at 100¢ (add expected redemption value)
-    // - Trading profits: SELL > original BUY cost
-    const netPnl = cashIn + unredeemedWinValue - cashOut;
-    const grossProfit = cashIn + unredeemedWinValue;
-    const grossLoss = cashOut;
+    // P&L calculation using positions (more accurate than activity-based)
+    // Formula: P&L = closedPositions.realizedPnl - unredeemedLosses.initialValue + unredeemedWins.profit
+    // This matches Polymarket's calculation:
+    // - closedPositions.realizedPnl: actual profit from redeemed positions (time-filtered)
+    // - unredeemedLosses: positions at 0¢ that trader lost (entire initialValue is lost)
+    // - unredeemedWins: positions at 100¢ not yet redeemed (profit = currentValue - initialValue)
+    const closedPnl = closedPositions.reduce((sum, p) => sum + p.realizedPnl, 0);
+    const unredeemedLossAmount = resolvedLosses.reduce((sum, p) => sum + p.initialValue, 0);
+    const unredeemedWinProfit = resolvedWins.reduce((sum, p) => sum + (p.currentValue - p.initialValue), 0);
+
+    const netPnl = closedPnl - unredeemedLossAmount + unredeemedWinProfit;
+    const grossProfit = closedPnl + unredeemedWinProfit;
+    const grossLoss = unredeemedLossAmount;
 
     const totalTrades = buyCount + sellCount;
 
@@ -335,21 +340,20 @@ export async function POST(request: NextRequest) {
     else if (buyRatio >= 60) strategyLabel = 'SWING_TRADER';
     else strategyLabel = 'ACTIVE_TRADER';
 
-    // Win/loss counts from closed positions (for win rate display)
+    // Win/loss counts from all positions (redeemed + unredeemed resolved)
     let wins = 0, losses = 0;
     closedPositions.forEach(p => {
       if (p.realizedPnl >= 0) wins++;
       else losses++;
     });
 
-    // Add time-filtered unredeemed positions to win/loss counts
-    const unredeemedLossCount = timeFilteredLosses.length;
-    const unredeemedWinCount = timeFilteredWins.length;
-    losses += unredeemedLossCount;
-    wins += unredeemedWinCount;
+    // Add ALL unredeemed resolved positions to win/loss counts
+    // (matches P&L calculation which uses all resolved positions)
+    losses += resolvedLosses.length;
+    wins += resolvedWins.length;
 
     // Win rate and profit factor
-    const totalClosedCount = closedPositions.length + unredeemedLossCount + unredeemedWinCount;
+    const totalClosedCount = closedPositions.length + resolvedLosses.length + resolvedWins.length;
     const winRate = totalClosedCount > 0 ? (wins / totalClosedCount) * 100 : 0;
     const profitFactor = grossLoss > 0 ? grossProfit / grossLoss : grossProfit > 0 ? 999 : 0;
 
@@ -378,8 +382,8 @@ export async function POST(request: NextRequest) {
       else byCategory[category].losses++;
     }
 
-    // Add time-filtered unredeemed losses
-    for (const pos of timeFilteredLosses) {
+    // Add ALL unredeemed losses (matches P&L calculation)
+    for (const pos of resolvedLosses) {
       const category = categorizeMarket(pos.title);
       if (!byCategory[category]) {
         byCategory[category] = { trades: 0, wins: 0, losses: 0, totalPnl: 0 };
@@ -389,8 +393,8 @@ export async function POST(request: NextRequest) {
       byCategory[category].totalPnl -= pos.initialValue;
     }
 
-    // Add time-filtered unredeemed wins
-    for (const pos of timeFilteredWins) {
+    // Add ALL unredeemed wins (matches P&L calculation)
+    for (const pos of resolvedWins) {
       const category = categorizeMarket(pos.title);
       if (!byCategory[category]) {
         byCategory[category] = { trades: 0, wins: 0, losses: 0, totalPnl: 0 };
@@ -481,21 +485,20 @@ export async function POST(request: NextRequest) {
       buyRatio,
       strategyLabel,
 
-      // Performance - Activity-based P&L calculation
-      // P&L = (SELLs + REDEEMs + UnredeemedWins) - BUYs
-      // This is properly time-filtered since activities are fetched with time filter
-      cashOut,              // Total USDC spent on BUYs
-      cashIn,               // Total USDC received from SELLs + REDEEMs
-      unredeemedWinValue,   // Expected redemption from unredeemed wins (shares bought in period × $1)
-      netPnl,               // cashIn + unredeemedWinValue - cashOut
-      grossProfit,          // = cashIn + unredeemedWinValue
-      grossLoss,            // = cashOut
+      // Performance - Position-based P&L calculation (matches Polymarket)
+      // P&L = closedPnl - unredeemedLossAmount + unredeemedWinProfit
+      closedPnl,            // Realized P&L from redeemed positions
+      unredeemedLossAmount, // Total lost from positions at 0¢
+      unredeemedWinProfit,  // Profit from positions at 100¢ not yet redeemed
+      netPnl,               // closedPnl - unredeemedLossAmount + unredeemedWinProfit
+      grossProfit,          // = closedPnl + unredeemedWinProfit
+      grossLoss,            // = unredeemedLossAmount
       profitFactor,
 
-      // Win/loss stats from closed positions
+      // Win/loss stats from positions
       closedPositionsCount: closedPositions.length,
-      unredeemedLossCount,
-      unredeemedWinCount,
+      unredeemedLossCount: resolvedLosses.length,
+      unredeemedWinCount: resolvedWins.length,
       totalResolvedCount: totalClosedCount,
       wins,
       losses,
