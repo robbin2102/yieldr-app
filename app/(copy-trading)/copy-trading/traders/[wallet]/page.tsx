@@ -64,13 +64,14 @@ interface TraderProfile {
 
   // Performance
   closedPositionsCount: number;
-  totalResolvedCount: number;
   wins: number;
   losses: number;
   winRate: number;
   grossProfit: number;
   grossLoss: number;
-  netPnl: number;
+  realizedPnl: number;
+  unrealizedPnl: number;
+  totalPnl: number;
   profitFactor: number;
 
   // Open positions
@@ -388,11 +389,11 @@ export default function TraderProfilePage() {
           <div className="text-xs text-[#6E6E6E]">{profile.wins}W / {profile.losses}L</div>
         </div>
         <div className="bg-[#0A0A0A] border border-[#1E1E1E] rounded-xl p-4">
-          <div className="text-xs text-[#6E6E6E] uppercase mb-1">Net P&L</div>
-          <div className={`text-xl font-bold ${profile.netPnl >= 0 ? 'text-primary-green' : 'text-red-400'}`}>
-            {profile.netPnl >= 0 ? '+' : ''}{formatValue(profile.netPnl)}
+          <div className="text-xs text-[#6E6E6E] uppercase mb-1">Realized P&L</div>
+          <div className={`text-xl font-bold ${profile.realizedPnl >= 0 ? 'text-primary-green' : 'text-red-400'}`}>
+            {profile.realizedPnl >= 0 ? '+' : ''}{formatValue(profile.realizedPnl)}
           </div>
-          <div className="text-xs text-[#6E6E6E]">Realized</div>
+          <div className="text-xs text-[#6E6E6E]">{profile.closedPositionsCount} closed</div>
         </div>
         <div className="bg-[#0A0A0A] border border-[#1E1E1E] rounded-xl p-4">
           <div className="text-xs text-[#6E6E6E] uppercase mb-1">Profit Factor</div>
