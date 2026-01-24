@@ -119,7 +119,7 @@ export async function getUserFills(
     throw new Error(`Hyperliquid API error: ${response.statusText}`);
   }
 
-  return await response.json();
+  return (await response.json()) as HyperliquidFillResponse[];
 }
 
 /**
@@ -145,7 +145,7 @@ export async function getClearinghouseState(
     throw new Error(`Hyperliquid API error: ${response.statusText}`);
   }
 
-  return await response.json();
+  return (await response.json()) as HyperliquidClearinghouseState;
 }
 
 /**
@@ -171,7 +171,7 @@ export async function getPortfolio(
     throw new Error(`Hyperliquid Portfolio API error: ${response.statusText}`);
   }
 
-  const rawData = await response.json();
+  const rawData = (await response.json()) as Array<[string, any]>;
 
   // Transform array response to structured object
   const portfolio: HyperliquidPortfolio = {
