@@ -62,7 +62,9 @@ async function initializeTrader(trader: TrackedTrader): Promise<void> {
 
     // Compute and save profile metrics
     const profile = await computeTraderMetrics(trader.wallet);
-    profile.label = trader.label;
+    if (trader.label) {
+      profile.label = trader.label;
+    }
     await saveTraderProfile(profile);
 
     // Update trader's lastIndexedAt
@@ -91,7 +93,9 @@ async function pollTrader(trader: TrackedTrader): Promise<void> {
 
     // Recompute profile metrics
     const profile = await computeTraderMetrics(trader.wallet);
-    profile.label = trader.label;
+    if (trader.label) {
+      profile.label = trader.label;
+    }
     await saveTraderProfile(profile);
 
     // Update lastIndexedAt
