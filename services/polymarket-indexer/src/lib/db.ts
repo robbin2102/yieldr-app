@@ -36,9 +36,11 @@ async function ensureIndexes(database: Db): Promise<void> {
     const openPosCollection = database.collection(COLLECTIONS.OPEN_POSITIONS);
 
     // Drop stale indexes - wrap each in try/catch
+    // These include indexes from both polymarket-indexer AND polymarket-worker
     const staleIndexes = [
       { collection: closedPosCollection, name: 'tradeId_1', desc: 'closedPositions.tradeId_1' },
       { collection: openPosCollection, name: 'wallet_1_conditionId_1', desc: 'openPositions.wallet_1_conditionId_1' },
+      { collection: openPosCollection, name: 'walletAddress_1_conditionId_1_asset_1', desc: 'openPositions.walletAddress_1_conditionId_1_asset_1' },
     ];
 
     for (const idx of staleIndexes) {
@@ -50,8 +52,10 @@ async function ensureIndexes(database: Db): Promise<void> {
       }
     }
 
-    // STEP 2: Clean up bad data (documents with null wallet)
-    const deleteResult = await openPosCollection.deleteMany({ wallet: null });
+    // STEP 2: Clean up bad data (documents with null wallet/walletAddress from both services)
+    const deleteResult = await openPosCollection.deleteMany({
+      $or: [{ wallet: null }, { walletAddress: null }]
+    });
     if (deleteResult.deletedCount > 0) {
       console.log(`[DB] Cleaned up ${deleteResult.deletedCount} documents with null wallet from openPositions`);
     }
