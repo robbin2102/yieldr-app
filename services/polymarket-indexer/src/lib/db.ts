@@ -31,17 +31,26 @@ export async function connectDB(): Promise<Db> {
 
 async function ensureIndexes(database: Db): Promise<void> {
   try {
-    // STEP 1: Drop stale indexes first
+    // STEP 1: Drop ALL stale indexes first
     const closedPosCollection = database.collection(COLLECTIONS.CLOSED_POSITIONS);
-    try {
-      await closedPosCollection.dropIndex('tradeId_1');
-      console.log('[DB] Dropped stale tradeId_1 index from closedPositions');
-    } catch {
-      // Index doesn't exist, ignore
+    const openPosCollection = database.collection(COLLECTIONS.OPEN_POSITIONS);
+
+    // Drop stale indexes - wrap each in try/catch
+    const staleIndexes = [
+      { collection: closedPosCollection, name: 'tradeId_1', desc: 'closedPositions.tradeId_1' },
+      { collection: openPosCollection, name: 'wallet_1_conditionId_1', desc: 'openPositions.wallet_1_conditionId_1' },
+    ];
+
+    for (const idx of staleIndexes) {
+      try {
+        await idx.collection.dropIndex(idx.name);
+        console.log(`[DB] Dropped stale index: ${idx.desc}`);
+      } catch {
+        // Index doesn't exist, ignore
+      }
     }
 
     // STEP 2: Clean up bad data (documents with null wallet)
-    const openPosCollection = database.collection(COLLECTIONS.OPEN_POSITIONS);
     const deleteResult = await openPosCollection.deleteMany({ wallet: null });
     if (deleteResult.deletedCount > 0) {
       console.log(`[DB] Cleaned up ${deleteResult.deletedCount} documents with null wallet from openPositions`);
@@ -66,8 +75,8 @@ async function ensureIndexes(database: Db): Promise<void> {
     await profilesCollection.createIndex({ 'metrics.profitFactor': -1 });
     await profilesCollection.createIndex({ 'specialty': 1 });
 
-    // Open positions collection indexes
-    await openPosCollection.createIndex({ wallet: 1, conditionId: 1 }, { unique: true });
+    // Open positions collection indexes - include outcome for Yes/No positions
+    await openPosCollection.createIndex({ wallet: 1, conditionId: 1, outcome: 1 }, { unique: true });
     await openPosCollection.createIndex({ wallet: 1 });
 
     // Trades collection indexes

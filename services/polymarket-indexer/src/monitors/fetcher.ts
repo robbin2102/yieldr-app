@@ -30,28 +30,41 @@ export async function fetchAndSaveOpenPositions(walletAddress: string) {
     (p) => p.curPrice >= LOSS_THRESHOLD && p.curPrice <= WIN_THRESHOLD
   );
 
-  // Clear old positions and insert new ones
+  // Clear old positions for this wallet
   await openPositions.deleteMany({ wallet: walletAddress.toLowerCase() });
 
   if (activePositions.length > 0) {
-    const docs = activePositions.map((p) => ({
-      wallet: walletAddress.toLowerCase(),
-      conditionId: p.conditionId,
-      asset: p.asset,
-      title: p.title,
-      slug: p.slug,
-      outcome: p.outcome,
-      size: p.size,
-      avgPrice: p.avgPrice,
-      curPrice: p.curPrice,
-      initialValue: p.initialValue,
-      currentValue: p.currentValue,
-      cashPnl: p.cashPnl,
-      percentPnl: p.percentPnl,
-      updatedAt: new Date(),
+    // Use bulkWrite with upsert to handle any race conditions
+    const bulkOps = activePositions.map((p) => ({
+      updateOne: {
+        filter: {
+          wallet: walletAddress.toLowerCase(),
+          conditionId: p.conditionId,
+          outcome: p.outcome,
+        },
+        update: {
+          $set: {
+            wallet: walletAddress.toLowerCase(),
+            conditionId: p.conditionId,
+            asset: p.asset,
+            title: p.title,
+            slug: p.slug,
+            outcome: p.outcome,
+            size: p.size,
+            avgPrice: p.avgPrice,
+            curPrice: p.curPrice,
+            initialValue: p.initialValue,
+            currentValue: p.currentValue,
+            cashPnl: p.cashPnl,
+            percentPnl: p.percentPnl,
+            updatedAt: new Date(),
+          },
+        },
+        upsert: true,
+      },
     }));
 
-    await openPositions.insertMany(docs);
+    await openPositions.bulkWrite(bulkOps, { ordered: false });
   }
 
   console.log(`[Fetcher] Saved ${activePositions.length} open positions`);
