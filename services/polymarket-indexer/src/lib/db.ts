@@ -54,6 +54,22 @@ async function ensureIndexes(database: Db): Promise<void> {
     await tradesCollection.createIndex({ wallet: 1, transactionHash: 1 }, { unique: true });
     await tradesCollection.createIndex({ wallet: 1, timestamp: -1 });
 
+    // Closed positions collection indexes
+    const closedPosCollection = database.collection(COLLECTIONS.CLOSED_POSITIONS);
+    // Drop stale tradeId index if it exists (from older code)
+    try {
+      await closedPosCollection.dropIndex('tradeId_1');
+      console.log('[DB] Dropped stale tradeId_1 index from closedPositions');
+    } catch {
+      // Index doesn't exist, ignore
+    }
+    // Create correct compound index
+    await closedPosCollection.createIndex(
+      { wallet: 1, conditionId: 1, outcome: 1 },
+      { unique: true }
+    );
+    await closedPosCollection.createIndex({ wallet: 1, timestamp: -1 });
+
     console.log('[DB] Indexes verified');
   } catch (error: any) {
     console.error('[DB] Index setup error:', error.message);
