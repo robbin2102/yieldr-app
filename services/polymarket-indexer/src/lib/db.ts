@@ -21,7 +21,7 @@ export async function connectDB(): Promise<Db> {
   await client.connect();
   db = client.db(DB_NAME);
 
-  console.log('[DB] Connected to MongoDB');
+  console.log('[DB] Connected to MongoDB (v2)');
 
   // Ensure indexes exist
   await ensureIndexes(db);
