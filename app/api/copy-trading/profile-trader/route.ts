@@ -416,6 +416,283 @@ export async function POST(request: NextRequest) {
       .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime())
       .slice(0, 30); // Show most recent 30
 
+    // ============================================================
+    // CONSISTENCY METRICS - Daily P&L, rolling periods, streaks
+    // ============================================================
+    const now = Math.floor(Date.now() / 1000);
+    const day7Ago = now - (7 * 24 * 60 * 60);
+    const day15Ago = now - (15 * 24 * 60 * 60);
+
+    // Group closed positions by day (UTC)
+    const pnlByDay: Record<string, number> = {};
+    const capitalByDay: Record<string, number> = {};
+
+    closedPositions.forEach(p => {
+      const day = new Date(p.timestamp * 1000).toISOString().split('T')[0];
+      pnlByDay[day] = (pnlByDay[day] || 0) + p.realizedPnl;
+    });
+
+    // Group BUY activities by day for capital deployed
+    activities.filter(a => a.type === 'TRADE' && a.side === 'BUY').forEach(a => {
+      const day = new Date(a.timestamp * 1000).toISOString().split('T')[0];
+      capitalByDay[day] = (capitalByDay[day] || 0) + a.usdcSize;
+    });
+
+    // Sort days chronologically
+    const allDays = Object.keys(pnlByDay).sort();
+    const dailyPnls = allDays.map(d => pnlByDay[d]);
+
+    // Rolling P&L calculations
+    const pnl7d = closedPositions
+      .filter(p => p.timestamp >= day7Ago)
+      .reduce((sum, p) => sum + p.realizedPnl, 0);
+
+    const pnl15d = closedPositions
+      .filter(p => p.timestamp >= day15Ago)
+      .reduce((sum, p) => sum + p.realizedPnl, 0);
+
+    // Profitable days
+    const profitableDays = dailyPnls.filter(p => p > 0).length;
+    const losingDays = dailyPnls.filter(p => p < 0).length;
+    const profitableDayRate = dailyPnls.length > 0 ? (profitableDays / dailyPnls.length) * 100 : 0;
+
+    // Consistency score (Sharpe-like: avgDailyPnl / stdDev)
+    const avgDailyPnl = dailyPnls.length > 0 ? dailyPnls.reduce((a, b) => a + b, 0) / dailyPnls.length : 0;
+    const variance = dailyPnls.length > 0
+      ? dailyPnls.reduce((sum, p) => sum + Math.pow(p - avgDailyPnl, 2), 0) / dailyPnls.length
+      : 0;
+    const stdDev = Math.sqrt(variance);
+    const consistencyScore = stdDev > 0 ? avgDailyPnl / stdDev : (avgDailyPnl > 0 ? 999 : 0);
+
+    // Win/loss streaks (based on daily P&L)
+    let currentStreak = 0;
+    let currentStreakType: 'win' | 'loss' | null = null;
+    let longestWinStreak = 0;
+    let longestLossStreak = 0;
+
+    for (const pnl of dailyPnls) {
+      if (pnl > 0) {
+        if (currentStreakType === 'win') {
+          currentStreak++;
+        } else {
+          currentStreak = 1;
+          currentStreakType = 'win';
+        }
+        longestWinStreak = Math.max(longestWinStreak, currentStreak);
+      } else if (pnl < 0) {
+        if (currentStreakType === 'loss') {
+          currentStreak++;
+        } else {
+          currentStreak = 1;
+          currentStreakType = 'loss';
+        }
+        longestLossStreak = Math.max(longestLossStreak, currentStreak);
+      }
+    }
+
+    // Current streak (from most recent days)
+    let recentStreak = 0;
+    let recentStreakType: 'win' | 'loss' | null = null;
+    for (let i = dailyPnls.length - 1; i >= 0; i--) {
+      const pnl = dailyPnls[i];
+      if (pnl > 0) {
+        if (recentStreakType === null) recentStreakType = 'win';
+        if (recentStreakType === 'win') recentStreak++;
+        else break;
+      } else if (pnl < 0) {
+        if (recentStreakType === null) recentStreakType = 'loss';
+        if (recentStreakType === 'loss') recentStreak++;
+        else break;
+      }
+    }
+
+    // ============================================================
+    // RISK METRICS - Drawdown, capital deployed
+    // ============================================================
+
+    // Max drawdown calculation (from cumulative P&L)
+    let maxDrawdown = 0;
+    let maxDrawdownPercent = 0;
+    let runningPnl = 0;
+    let peak = 0;
+
+    for (const day of allDays) {
+      runningPnl += pnlByDay[day];
+      if (runningPnl > peak) peak = runningPnl;
+      const drawdown = peak - runningPnl;
+      if (drawdown > maxDrawdown) {
+        maxDrawdown = drawdown;
+        maxDrawdownPercent = peak > 0 ? (drawdown / peak) * 100 : 0;
+      }
+    }
+
+    // Capital deployed metrics
+    const capitalDays = Object.keys(capitalByDay).sort();
+    const dailyCapitals = capitalDays.map(d => capitalByDay[d]);
+    const avgDailyCapital = dailyCapitals.length > 0
+      ? dailyCapitals.reduce((a, b) => a + b, 0) / dailyCapitals.length
+      : 0;
+
+    const capital7d = activities
+      .filter(a => a.type === 'TRADE' && a.side === 'BUY' && a.timestamp >= day7Ago)
+      .reduce((sum, a) => sum + a.usdcSize, 0);
+
+    const capital15d = activities
+      .filter(a => a.type === 'TRADE' && a.side === 'BUY' && a.timestamp >= day15Ago)
+      .reduce((sum, a) => sum + a.usdcSize, 0);
+
+    // Return on capital
+    const returnOnCapital7d = capital7d > 0 ? (pnl7d / capital7d) * 100 : 0;
+    const returnOnCapital15d = capital15d > 0 ? (pnl15d / capital15d) * 100 : 0;
+
+    // Largest single loss and average loss
+    const losingPositions = closedPositions.filter(p => p.realizedPnl < 0);
+    const largestSingleLoss = losingPositions.length > 0
+      ? Math.min(...losingPositions.map(p => p.realizedPnl))
+      : 0;
+    const avgLossSize = losingPositions.length > 0
+      ? losingPositions.reduce((sum, p) => sum + p.realizedPnl, 0) / losingPositions.length
+      : 0;
+
+    // ============================================================
+    // EDGE LOSS DETECTION - Signals for declining performance
+    // ============================================================
+
+    // Split positions into baseline (days 1-23) and recent (days 24-30)
+    const day23Ago = now - (23 * 24 * 60 * 60);
+    const baselinePositions = closedPositions.filter(p => p.timestamp < day7Ago);
+    const recentPositions = closedPositions.filter(p => p.timestamp >= day7Ago);
+
+    // Baseline win rate (days 1-23)
+    const baselineWins = baselinePositions.filter(p => p.realizedPnl >= 0).length;
+    const baselineWinRate = baselinePositions.length > 0
+      ? (baselineWins / baselinePositions.length) * 100
+      : 0;
+
+    // Recent win rate (last 7 days)
+    const recentWins = recentPositions.filter(p => p.realizedPnl >= 0).length;
+    const recentWinRate = recentPositions.length > 0
+      ? (recentWins / recentPositions.length) * 100
+      : 0;
+
+    // Win rate decline
+    const winRateDecline = baselineWinRate - recentWinRate;
+
+    // P&L trend (is recent P&L worse than baseline daily average?)
+    const baselinePnl = baselinePositions.reduce((sum, p) => sum + p.realizedPnl, 0);
+    const baselineDays = Math.max(1, days - 7);
+    const baselineAvgDailyPnl = baselinePnl / baselineDays;
+    const recentAvgDailyPnl = pnl7d / 7;
+    const pnlTrendDecline = baselineAvgDailyPnl - recentAvgDailyPnl;
+
+    // Recent average trade size vs historical
+    const recentTrades = activities.filter(a =>
+      a.type === 'TRADE' && a.timestamp >= day7Ago
+    );
+    const baselineTrades = activities.filter(a =>
+      a.type === 'TRADE' && a.timestamp < day7Ago
+    );
+    const recentAvgTradeSize = recentTrades.length > 0
+      ? recentTrades.reduce((sum, a) => sum + a.usdcSize, 0) / recentTrades.length
+      : 0;
+    const baselineAvgTradeSize = baselineTrades.length > 0
+      ? baselineTrades.reduce((sum, a) => sum + a.usdcSize, 0) / baselineTrades.length
+      : avgTradeSize;
+
+    // Volume spike detection (recent 7d capital vs average * 7)
+    const expectedCapital7d = avgDailyCapital * 7;
+    const volumeSpikeRatio = expectedCapital7d > 0 ? capital7d / expectedCapital7d : 1;
+
+    // Trade size increase (potential tilt indicator)
+    const tradeSizeIncreaseRatio = baselineAvgTradeSize > 0
+      ? recentAvgTradeSize / baselineAvgTradeSize
+      : 1;
+
+    // Category-specific edge loss (for significant categories >10% volume)
+    const totalVolume = closedPositions.length;
+    const categoryEdgeLoss: Array<{
+      category: string;
+      baselineWinRate: number;
+      recentWinRate: number;
+      decline: number;
+    }> = [];
+
+    // Build category stats for baseline and recent
+    const categoryBaseline: Record<string, { wins: number; total: number }> = {};
+    const categoryRecent: Record<string, { wins: number; total: number }> = {};
+
+    baselinePositions.forEach(p => {
+      const cat = categorizeMarket(p.title);
+      if (!categoryBaseline[cat]) categoryBaseline[cat] = { wins: 0, total: 0 };
+      categoryBaseline[cat].total++;
+      if (p.realizedPnl >= 0) categoryBaseline[cat].wins++;
+    });
+
+    recentPositions.forEach(p => {
+      const cat = categorizeMarket(p.title);
+      if (!categoryRecent[cat]) categoryRecent[cat] = { wins: 0, total: 0 };
+      categoryRecent[cat].total++;
+      if (p.realizedPnl >= 0) categoryRecent[cat].wins++;
+    });
+
+    // Check significant categories for edge loss
+    const significantCategories = marketPerformance
+      .filter(mp => totalVolume > 0 && (mp.trades / totalVolume) >= 0.10)
+      .slice(0, 3);
+
+    for (const cat of significantCategories) {
+      const baseline = categoryBaseline[cat.category];
+      const recent = categoryRecent[cat.category];
+
+      if (baseline && baseline.total >= 5 && recent && recent.total >= 2) {
+        const baseWR = (baseline.wins / baseline.total) * 100;
+        const recentWR = (recent.wins / recent.total) * 100;
+        const decline = baseWR - recentWR;
+
+        if (decline > 12) {  // >12% decline threshold
+          categoryEdgeLoss.push({
+            category: cat.category,
+            baselineWinRate: baseWR,
+            recentWinRate: recentWR,
+            decline,
+          });
+        }
+      }
+    }
+
+    // Compile edge loss signals with thresholds
+    const edgeLossSignals = {
+      // Win rate dropped >12%
+      winRateDecline: winRateDecline > 12,
+      winRateDeclineValue: winRateDecline,
+
+      // Recent P&L is negative
+      pnl7dNegative: pnl7d < 0,
+      pnl7dValue: pnl7d,
+
+      // Loss streak ≥4 consecutive days
+      lossStreakAlert: recentStreakType === 'loss' && recentStreak >= 4,
+      currentLossStreak: recentStreakType === 'loss' ? recentStreak : 0,
+
+      // Volume spike >1.75x normal
+      volumeSpike: volumeSpikeRatio > 1.75,
+      volumeSpikeRatio,
+
+      // Trade size increase >1.5x (potential tilt)
+      tradeSizeIncrease: tradeSizeIncreaseRatio > 1.5,
+      tradeSizeIncreaseRatio,
+
+      // Category-specific edge loss
+      categoryEdgeLoss,
+      hasCategoryEdgeLoss: categoryEdgeLoss.length > 0,
+
+      // Overall edge loss flag (any significant signal)
+      hasEdgeLossWarning: winRateDecline > 12 ||
+        (pnl7d < 0 && pnl15d < pnl7d) ||
+        (recentStreakType === 'loss' && recentStreak >= 4) ||
+        categoryEdgeLoss.length > 0,
+    };
+
     // Build profile data
     const profileData = {
       wallet: cleanWallet,
@@ -499,6 +776,80 @@ export async function POST(request: NextRequest) {
           cashPnl: p.cashPnl,
           percentPnl: p.percentPnl,
         })),
+
+      // ============================================================
+      // CONSISTENCY METRICS
+      // ============================================================
+      consistency: {
+        // Rolling P&L
+        pnl7d,
+        pnl15d,
+        avgDailyPnl,
+
+        // Daily performance
+        tradingDays: allDays.length,
+        profitableDays,
+        losingDays,
+        profitableDayRate,
+
+        // Consistency score (Sharpe-like: avgDailyPnl / stdDev)
+        consistencyScore,
+        stdDev,
+
+        // Streaks (based on daily P&L)
+        longestWinStreak,
+        longestLossStreak,
+        currentStreak: recentStreak,
+        currentStreakType: recentStreakType,
+      },
+
+      // ============================================================
+      // RISK METRICS
+      // ============================================================
+      risk: {
+        // Drawdown
+        maxDrawdown,
+        maxDrawdownPercent,
+
+        // Capital deployed
+        avgDailyCapital,
+        capital7d,
+        capital15d,
+
+        // Return on capital
+        returnOnCapital7d,
+        returnOnCapital15d,
+
+        // Loss analysis
+        largestSingleLoss,
+        avgLossSize,
+      },
+
+      // ============================================================
+      // EDGE LOSS SIGNALS
+      // ============================================================
+      edgeLoss: {
+        // Baseline vs recent comparison
+        baselineWinRate,
+        recentWinRate,
+        winRateDecline,
+
+        // P&L trend
+        baselineAvgDailyPnl,
+        recentAvgDailyPnl,
+        pnlTrendDecline,
+
+        // Volume and sizing changes
+        volumeSpikeRatio,
+        tradeSizeIncreaseRatio,
+        recentAvgTradeSize,
+
+        // Category-specific edge loss
+        categoryEdgeLoss,
+
+        // Alert signals
+        signals: edgeLossSignals,
+      },
     };
 
     // Save to MongoDB
