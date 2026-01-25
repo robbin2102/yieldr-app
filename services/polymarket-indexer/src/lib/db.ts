@@ -31,6 +31,28 @@ export async function connectDB(): Promise<Db> {
 
 async function ensureIndexes(database: Db): Promise<void> {
   try {
+    // STEP 1: Drop stale indexes first
+    const closedPosCollection = database.collection(COLLECTIONS.CLOSED_POSITIONS);
+    try {
+      await closedPosCollection.dropIndex('tradeId_1');
+      console.log('[DB] Dropped stale tradeId_1 index from closedPositions');
+    } catch {
+      // Index doesn't exist, ignore
+    }
+
+    // STEP 2: Clean up bad data (documents with null wallet)
+    const openPosCollection = database.collection(COLLECTIONS.OPEN_POSITIONS);
+    const deleteResult = await openPosCollection.deleteMany({ wallet: null });
+    if (deleteResult.deletedCount > 0) {
+      console.log(`[DB] Cleaned up ${deleteResult.deletedCount} documents with null wallet from openPositions`);
+    }
+
+    const closedDeleteResult = await closedPosCollection.deleteMany({ wallet: null });
+    if (closedDeleteResult.deletedCount > 0) {
+      console.log(`[DB] Cleaned up ${closedDeleteResult.deletedCount} documents with null wallet from closedPositions`);
+    }
+
+    // STEP 3: Create indexes
     // Tracked traders collection indexes
     const trackedCollection = database.collection(COLLECTIONS.TRACKED_TRADERS);
     await trackedCollection.createIndex({ wallet: 1 }, { unique: true });
@@ -45,7 +67,6 @@ async function ensureIndexes(database: Db): Promise<void> {
     await profilesCollection.createIndex({ 'specialty': 1 });
 
     // Open positions collection indexes
-    const openPosCollection = database.collection(COLLECTIONS.OPEN_POSITIONS);
     await openPosCollection.createIndex({ wallet: 1, conditionId: 1 }, { unique: true });
     await openPosCollection.createIndex({ wallet: 1 });
 
@@ -55,15 +76,6 @@ async function ensureIndexes(database: Db): Promise<void> {
     await tradesCollection.createIndex({ wallet: 1, timestamp: -1 });
 
     // Closed positions collection indexes
-    const closedPosCollection = database.collection(COLLECTIONS.CLOSED_POSITIONS);
-    // Drop stale tradeId index if it exists (from older code)
-    try {
-      await closedPosCollection.dropIndex('tradeId_1');
-      console.log('[DB] Dropped stale tradeId_1 index from closedPositions');
-    } catch {
-      // Index doesn't exist, ignore
-    }
-    // Create correct compound index
     await closedPosCollection.createIndex(
       { wallet: 1, conditionId: 1, outcome: 1 },
       { unique: true }
