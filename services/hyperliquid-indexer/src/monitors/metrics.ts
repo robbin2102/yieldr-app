@@ -193,9 +193,9 @@ export async function computeMetrics(
         pnl_allTime,
         volume_24h,
 
-        totalTrades: closingTrades.length,
-        wins: wins.length,
-        losses: losses.length,
+        totalTrades,
+        wins,
+        losses,
         winRate,
         avgWin,
         avgLoss,
