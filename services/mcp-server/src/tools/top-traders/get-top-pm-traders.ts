@@ -19,8 +19,8 @@ export interface GetTopPMTradersOutput {
   traders: Array<{
     wallet: string;
     label?: string;
-    specialty?: string;
-    labels?: string[];
+    volumeLabel?: string;
+    strategyLabel?: string;
     metrics: {
       totalTrades: number;
       winRate: number;
@@ -46,13 +46,13 @@ export async function executeGetTopPMTraders(
     traders: traders.map((t: PMTraderProfile) => ({
       wallet: t.wallet,
       label: t.label,
-      specialty: t.specialty,
-      labels: t.labels,
+      volumeLabel: t.volumeLabel,
+      strategyLabel: t.strategyLabel,
       metrics: {
-        totalTrades: t.metrics.totalTrades,
-        winRate: t.metrics.winRate,
-        netPnl: t.metrics.netPnl,
-        profitFactor: t.metrics.profitFactor,
+        totalTrades: t.buyCount + t.sellCount,
+        winRate: t.winRate,
+        netPnl: t.netPnl,
+        profitFactor: t.profitFactor,
       },
     })),
     totalFound,

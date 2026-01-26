@@ -11,10 +11,6 @@
       "schedule": "*/10 * * * *"
     },
     {
-      "path": "/api/monitors/check-wallets",
-      "schedule": "*/5 * * * *"
-    },
-    {
       "path": "/api/cron/check-traders",
       "schedule": "* * * * *"
     }

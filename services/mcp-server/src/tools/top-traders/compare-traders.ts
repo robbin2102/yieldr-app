@@ -48,10 +48,10 @@ export async function executeCompareTraders(
       wallet: t.wallet,
       label: t.label,
       metrics: {
-        winRate: t.metrics.winRate,
-        pnl: t.metrics.netPnl,
-        profitFactor: t.metrics.profitFactor,
-        totalTrades: t.metrics.totalTrades,
+        winRate: t.winRate,
+        pnl: t.netPnl,
+        profitFactor: t.profitFactor,
+        totalTrades: t.buyCount + t.sellCount,
       },
     }));
   } else {
