@@ -1,6 +1,7 @@
 /**
  * Perp Trader Queries
- * Queries the indexed hyperliquidmetrics collection
+ * Queries the indexed hyperliquidmetrics collection for HL
+ * Queries the managers collection for Avantis
  */
 
 import { getDB, COLLECTIONS } from '../mongodb.js';
@@ -31,17 +32,40 @@ export interface HLTraderMetrics {
   updatedAt: Date;
 }
 
+// Unified output format for both protocols
+export interface PerpTraderOutput {
+  wallet: string;
+  username?: string;
+  accountValue?: string;
+  pnl: {
+    day?: number;
+    week?: number;
+    month: number;
+    allTime?: number;
+  };
+  stats: {
+    totalTrades: number;
+    winRate: number;
+    sharpeRatio?: number;
+    maxDrawdown?: number;
+    roi30d?: number;
+    totalAUM?: number;
+  };
+  positions?: number;
+  volume24h?: string;
+}
+
 export interface GetTopPerpTradersParams {
   protocol: 'hyperliquid' | 'avantis';
   asset?: string;
-  sortBy?: 'pnl' | 'winRate' | 'sharpe' | 'volume';
+  sortBy?: 'pnl' | 'winRate' | 'sharpe' | 'volume' | 'roi' | 'aum';
   timeframe?: '7d' | '30d' | '90d';
   limit?: number;
 }
 
 export async function getTopPerpTraders(params: GetTopPerpTradersParams): Promise<{
   protocol: string;
-  traders: HLTraderMetrics[];
+  traders: PerpTraderOutput[];
   totalFound: number;
 }> {
   const db = await getDB();
@@ -53,12 +77,22 @@ export async function getTopPerpTraders(params: GetTopPerpTradersParams): Promis
     limit = 10,
   } = params;
 
-  // Select collection based on protocol
-  const collectionName = protocol === 'hyperliquid'
-    ? COLLECTIONS.HL_METRICS
-    : COLLECTIONS.AV_METRICS;
+  if (protocol === 'hyperliquid') {
+    return getTopHyperliquidTraders({ sortBy, timeframe, limit });
+  } else {
+    return getTopAvantisManagerTraders({ sortBy, limit });
+  }
+}
 
-  const collection = db.collection(collectionName);
+async function getTopHyperliquidTraders(params: {
+  sortBy: string;
+  timeframe: string;
+  limit: number;
+}): Promise<{ protocol: string; traders: PerpTraderOutput[]; totalFound: number }> {
+  const db = await getDB();
+  const collection = db.collection(COLLECTIONS.HL_METRICS);
+
+  const { sortBy, timeframe, limit } = params;
 
   // Map sortBy to field
   const sortFieldMap: Record<string, string> = {
@@ -71,7 +105,6 @@ export async function getTopPerpTraders(params: GetTopPerpTradersParams): Promis
   const sortField = sortFieldMap[sortBy] || 'pnl_30d';
   const sort: Record<string, 1 | -1> = { [sortField]: -1 };
 
-  // Execute query
   const traders = await collection
     .find({})
     .sort(sort)
@@ -80,7 +113,91 @@ export async function getTopPerpTraders(params: GetTopPerpTradersParams): Promis
 
   const totalFound = await collection.countDocuments({});
 
-  return { protocol, traders, totalFound };
+  // Transform to unified output format
+  const output: PerpTraderOutput[] = traders.map(t => ({
+    wallet: t.walletAddress,
+    accountValue: t.accountValue,
+    pnl: {
+      day: t.pnl_1d,
+      week: t.pnl_7d,
+      month: t.pnl_30d,
+      allTime: t.pnl_allTime,
+    },
+    stats: {
+      totalTrades: t.totalTrades,
+      winRate: t.winRate,
+      sharpeRatio: t.sharpeRatio,
+      maxDrawdown: t.maxDrawdown,
+    },
+    volume24h: t.volume_24h,
+  }));
+
+  return { protocol: 'hyperliquid', traders: output, totalFound };
+}
+
+async function getTopAvantisManagerTraders(params: {
+  sortBy: string;
+  limit: number;
+}): Promise<{ protocol: string; traders: PerpTraderOutput[]; totalFound: number }> {
+  const db = await getDB();
+  const collection = db.collection('managers');
+
+  const { sortBy, limit } = params;
+
+  // Map sortBy to managers collection fields
+  const sortFieldMap: Record<string, string> = {
+    pnl: 'metrics.totalPnL30d',
+    winRate: 'metrics.winRate',
+    roi: 'metrics.roi30d',
+    aum: 'metrics.totalAUM',
+  };
+
+  const sortField = sortFieldMap[sortBy] || 'metrics.totalPnL30d';
+  const sort: Record<string, 1 | -1> = { [sortField]: -1 };
+
+  // Filter for managers with Avantis platform
+  const filter = {
+    platforms: { $in: ['avantis', 'Avantis'] },
+  };
+
+  interface ManagerDoc {
+    walletAddress: string;
+    username?: string;
+    metrics: {
+      totalPnL30d: number;
+      roi30d: number;
+      winRate: number;
+      totalAUM: number;
+      totalTrades: number;
+    };
+    positions?: Array<unknown>;
+  }
+
+  const traders = await collection
+    .find(filter)
+    .sort(sort)
+    .limit(limit)
+    .toArray() as unknown as ManagerDoc[];
+
+  const totalFound = await collection.countDocuments(filter);
+
+  // Transform to unified output format
+  const output: PerpTraderOutput[] = traders.map(t => ({
+    wallet: t.walletAddress,
+    username: t.username,
+    pnl: {
+      month: t.metrics?.totalPnL30d || 0,
+    },
+    stats: {
+      totalTrades: t.metrics?.totalTrades || 0,
+      winRate: t.metrics?.winRate || 0,
+      roi30d: t.metrics?.roi30d || 0,
+      totalAUM: t.metrics?.totalAUM || 0,
+    },
+    positions: t.positions?.length || 0,
+  }));
+
+  return { protocol: 'avantis', traders: output, totalFound };
 }
 
 export async function getPerpTraderByWallet(
