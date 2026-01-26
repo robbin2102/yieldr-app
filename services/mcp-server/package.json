@@ -1,0 +1,28 @@
+{
+  "name": "yieldr-mcp-server",
+  "version": "1.0.0",
+  "description": "Yieldr MCP Server - DeFi trading intelligence tools",
+  "main": "dist/index.js",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx watch src/index.ts",
+    "lint": "eslint src --ext .ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "mongodb": "^6.3.0",
+    "zod": "^3.22.4",
+    "express": "^4.18.2"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.10.0",
+    "typescript": "^5.3.0",
+    "tsx": "^4.7.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
