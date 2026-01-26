@@ -19,14 +19,20 @@ export interface GetTopPMTradersOutput {
   traders: Array<{
     wallet: string;
     label?: string;
-    volumeLabel?: string;
+    specialty?: string;
     strategyLabel?: string;
+    volumeLabel?: string;
     metrics: {
       totalTrades: number;
       winRate: number;
       netPnl: number;
       profitFactor: number;
+      avgTradeSize: number;
     };
+    strengths?: Array<{ category: string; trades: number; winRate: number; totalPnl: number }>;
+    weaknesses?: Array<{ category: string; trades: number; winRate: number; totalPnl: number }>;
+    openPositionsCount?: number;
+    unrealizedPnl?: number;
   }>;
   totalFound: number;
   queryParams: GetTopPMTradersInput;
@@ -46,14 +52,20 @@ export async function executeGetTopPMTraders(
     traders: traders.map((t: PMTraderProfile) => ({
       wallet: t.wallet,
       label: t.label,
-      volumeLabel: t.volumeLabel,
+      specialty: t.strengths?.[0]?.category, // Top strength = specialty
       strategyLabel: t.strategyLabel,
+      volumeLabel: t.volumeLabel,
       metrics: {
         totalTrades: t.buyCount + t.sellCount,
         winRate: t.winRate,
         netPnl: t.netPnl,
         profitFactor: t.profitFactor,
+        avgTradeSize: t.avgTradeSize,
       },
+      strengths: t.strengths?.slice(0, 3),
+      weaknesses: t.weaknesses?.slice(0, 3),
+      openPositionsCount: t.openPositionsCount,
+      unrealizedPnl: t.unrealizedPnl,
     })),
     totalFound,
     queryParams: input,
