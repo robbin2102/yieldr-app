@@ -24,6 +24,7 @@ export interface MetricsDocument {
   pnl_30d: number;
   pnl_allTime: number;
   volume_24h: string;
+  // Trade stats (realized/closed only)
   totalTrades: number;
   wins: number;
   losses: number;
@@ -32,6 +33,11 @@ export interface MetricsDocument {
   avgLoss: number;
   bestTrade: number;
   worstTrade: number;
+  // Open position stats (separate from win rate)
+  openPositionsCount: number;
+  profitablePositionsCount: number;
+  unrealizedPnlTotal: number;
+  // Risk metrics
   sharpeRatio: number;
   maxDrawdown: number;
   avgLeverage: number;
@@ -113,50 +119,47 @@ export async function computeMetrics(
   const closingTrades = allFills.filter(
     (f: any) => f.closedPnl && parseFloat(f.closedPnl) !== 0
   );
-  const closedWins = closingTrades.filter((t: any) => parseFloat(t.closedPnl) > 0);
-  const closedLosses = closingTrades.filter((t: any) => parseFloat(t.closedPnl) < 0);
+  const wins = closingTrades.filter((t: any) => parseFloat(t.closedPnl) > 0);
+  const losses = closingTrades.filter((t: any) => parseFloat(t.closedPnl) < 0);
 
-  // Get current positions for position-based win rate
+  // Win rate from CLOSED trades only (realized PnL)
+  const totalTrades = closingTrades.length;
+  const winRate = totalTrades > 0 ? wins.length / totalTrades : 0;
+
+  // Get current positions for SEPARATE position stats
   const currentPositions = await positions
     .find({ walletAddress: walletAddress.toLowerCase() })
     .toArray();
 
-  // Count winning/losing open positions based on unrealizedPnl
-  const winningPositions = currentPositions.filter(
+  // Open position stats (separate from win rate)
+  const openPositionsCount = currentPositions.length;
+  const profitablePositions = currentPositions.filter(
     (p: any) => p.unrealizedPnl && parseFloat(p.unrealizedPnl) > 0
   );
-  const losingPositions = currentPositions.filter(
-    (p: any) => p.unrealizedPnl && parseFloat(p.unrealizedPnl) < 0
+  const profitablePositionsCount = profitablePositions.length;
+  const unrealizedPnlTotal = currentPositions.reduce(
+    (sum: number, p: any) => sum + (parseFloat(p.unrealizedPnl) || 0),
+    0
   );
-
-  // Combined win rate: closed trades + open positions
-  const totalWins = closedWins.length + winningPositions.length;
-  const totalLosses = closedLosses.length + losingPositions.length;
-  const totalTrades = totalWins + totalLosses;
 
   console.log(
-    `[Metrics] Fills: ${allFills.length}, Closing: ${closingTrades.length} (W:${closedWins.length}/L:${closedLosses.length}), Open positions: ${currentPositions.length} (W:${winningPositions.length}/L:${losingPositions.length})`
+    `[Metrics] Fills: ${allFills.length}, Closing: ${closingTrades.length} (W:${wins.length}/L:${losses.length}), Open: ${openPositionsCount} (${profitablePositionsCount} profitable, $${unrealizedPnlTotal.toFixed(2)} unrealized)`
   );
 
-  // Calculate combined win rate (closed trades + open positions)
-  const winRate = totalTrades > 0 ? totalWins / totalTrades : 0;
-  const wins = totalWins;
-  const losses = totalLosses;
-
-  // Trade stats from closed trades only (for avg/best/worst)
+  // Trade stats from closed trades only
   const avgWin =
-    closedWins.length > 0
-      ? closedWins.reduce((s: number, t: any) => s + parseFloat(t.closedPnl), 0) / closedWins.length
+    wins.length > 0
+      ? wins.reduce((s: number, t: any) => s + parseFloat(t.closedPnl), 0) / wins.length
       : 0;
   const avgLoss =
-    closedLosses.length > 0
-      ? closedLosses.reduce((s: number, t: any) => s + parseFloat(t.closedPnl), 0) / closedLosses.length
+    losses.length > 0
+      ? losses.reduce((s: number, t: any) => s + parseFloat(t.closedPnl), 0) / losses.length
       : 0;
   const bestTrade =
-    closedWins.length > 0 ? Math.max(...closedWins.map((t: any) => parseFloat(t.closedPnl))) : 0;
+    wins.length > 0 ? Math.max(...wins.map((t: any) => parseFloat(t.closedPnl))) : 0;
   const worstTrade =
-    closedLosses.length > 0
-      ? Math.min(...closedLosses.map((t: any) => parseFloat(t.closedPnl)))
+    losses.length > 0
+      ? Math.min(...losses.map((t: any) => parseFloat(t.closedPnl)))
       : 0;
 
   // Calculate Sharpe ratio from snapshots
@@ -194,13 +197,18 @@ export async function computeMetrics(
         volume_24h,
 
         totalTrades,
-        wins,
-        losses,
+        wins: wins.length,
+        losses: losses.length,
         winRate,
         avgWin,
         avgLoss,
         bestTrade,
         worstTrade,
+
+        // Open position stats (separate from trade win rate)
+        openPositionsCount,
+        profitablePositionsCount,
+        unrealizedPnlTotal,
 
         sharpeRatio,
         maxDrawdown,
@@ -214,7 +222,7 @@ export async function computeMetrics(
   );
 
   console.log(
-    `[Metrics] Saved - Win rate: ${(winRate * 100).toFixed(2)}%, Sharpe: ${sharpeRatio.toFixed(2)}, Max DD: ${(maxDrawdown * 100).toFixed(2)}%`
+    `[Metrics] Saved - Win rate: ${(winRate * 100).toFixed(2)}% (${wins.length}/${totalTrades}), Open: ${profitablePositionsCount}/${openPositionsCount} profitable, Sharpe: ${sharpeRatio.toFixed(2)}`
   );
 }
 
@@ -338,6 +346,9 @@ async function saveBasicMetrics(
         avgLoss: 0,
         bestTrade: 0,
         worstTrade: 0,
+        openPositionsCount: 0,
+        profitablePositionsCount: 0,
+        unrealizedPnlTotal: 0,
         sharpeRatio: 0,
         maxDrawdown: 0,
         avgLeverage: 0,

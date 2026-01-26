@@ -81,10 +81,8 @@ async function pollWallet(wallet: TrackedWallet): Promise<void> {
     // Fetch current positions
     const positionResult = await fetchAndSavePositions(wallet.walletAddress);
 
-    // Recompute metrics if there are new fills or position changes
-    if (newFills > 0 || positionResult.closedCoins.length > 0) {
-      await computeMetrics(wallet.walletAddress, positionResult.marginSummary);
-    }
+    // Always recompute metrics (positions and PnL change constantly)
+    await computeMetrics(wallet.walletAddress, positionResult.marginSummary);
 
     // Update lastCheckedTime
     const { trackedWallets } = await getCollections();

@@ -25,6 +25,11 @@ export interface HLTraderMetrics {
   avgLoss: number;
   bestTrade: number;
   worstTrade: number;
+  // Open position stats (separate from trade win rate)
+  openPositionsCount: number;
+  profitablePositionsCount: number;
+  unrealizedPnlTotal: number;
+  // Risk metrics
   sharpeRatio: number;
   maxDrawdown: number;
   avgLeverage: number;
@@ -51,7 +56,12 @@ export interface PerpTraderOutput {
     roi30d?: number;
     totalAUM?: number;
   };
-  positions?: number;
+  // Open position stats (separate from trade stats)
+  openPositions?: {
+    count: number;
+    profitable: number;
+    unrealizedPnl: number;
+  };
   volume24h?: string;
 }
 
@@ -128,6 +138,11 @@ async function getTopHyperliquidTraders(params: {
       winRate: t.winRate,
       sharpeRatio: t.sharpeRatio,
       maxDrawdown: t.maxDrawdown,
+    },
+    openPositions: {
+      count: t.openPositionsCount || 0,
+      profitable: t.profitablePositionsCount || 0,
+      unrealizedPnl: t.unrealizedPnlTotal || 0,
     },
     volume24h: t.volume_24h,
   }));
