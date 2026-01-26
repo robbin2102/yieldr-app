@@ -155,35 +155,46 @@ async function getTopAvantisManagerTraders(params: {
   const sortField = sortFieldMap[sortBy] || 'metrics.totalPnL30d';
   const sort: Record<string, 1 | -1> = { [sortField]: -1 };
 
-  // Filter for managers with Avantis platform
-  const filter = {
-    platforms: { $in: ['avantis', 'Avantis'] },
+  // Try with Avantis filter first (case-insensitive regex)
+  let filter: Record<string, unknown> = {
+    platforms: { $regex: /avantis/i },
   };
 
   interface ManagerDoc {
     walletAddress: string;
     username?: string;
-    metrics: {
-      totalPnL30d: number;
-      roi30d: number;
-      winRate: number;
-      totalAUM: number;
-      totalTrades: number;
+    metrics?: {
+      totalPnL30d?: number;
+      roi30d?: number;
+      winRate?: number;
+      totalAUM?: number;
+      totalTrades?: number;
     };
     positions?: Array<unknown>;
   }
 
-  const traders = await collection
+  let traders = await collection
     .find(filter)
     .sort(sort)
     .limit(limit)
     .toArray() as unknown as ManagerDoc[];
 
-  const totalFound = await collection.countDocuments(filter);
+  let totalFound = await collection.countDocuments(filter);
+
+  // If no results with Avantis filter, try without filter (return all managers)
+  if (traders.length === 0) {
+    filter = {};
+    traders = await collection
+      .find(filter)
+      .sort(sort)
+      .limit(limit)
+      .toArray() as unknown as ManagerDoc[];
+    totalFound = await collection.countDocuments(filter);
+  }
 
   // Transform to unified output format
   const output: PerpTraderOutput[] = traders.map(t => ({
-    wallet: t.walletAddress,
+    wallet: t.walletAddress || 'unknown',
     username: t.username,
     pnl: {
       month: t.metrics?.totalPnL30d || 0,

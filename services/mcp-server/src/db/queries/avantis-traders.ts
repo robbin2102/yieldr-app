@@ -68,18 +68,29 @@ export async function getTopAvantisTraders(params: GetTopAvantisTradersParams): 
   const sortField = sortFieldMap[sortBy] || 'metrics.totalPnL30d';
   const sort: Record<string, 1 | -1> = { [sortField]: -1 };
 
-  // Filter for managers with Avantis platform
-  const filter = {
-    platforms: { $in: ['avantis', 'Avantis'] },
+  // Try with Avantis filter first (case-insensitive regex)
+  let filter: Record<string, unknown> = {
+    platforms: { $regex: /avantis/i },
   };
 
-  const traders = await collection
+  let traders = await collection
     .find(filter)
     .sort(sort)
     .limit(limit)
     .toArray() as unknown as AvantisTraderProfile[];
 
-  const totalFound = await collection.countDocuments(filter);
+  let totalFound = await collection.countDocuments(filter);
+
+  // If no results with Avantis filter, return all managers
+  if (traders.length === 0) {
+    filter = {};
+    traders = await collection
+      .find(filter)
+      .sort(sort)
+      .limit(limit)
+      .toArray() as unknown as AvantisTraderProfile[];
+    totalFound = await collection.countDocuments(filter);
+  }
 
   return { traders, totalFound };
 }
