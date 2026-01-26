@@ -113,28 +113,50 @@ export async function computeMetrics(
   const closingTrades = allFills.filter(
     (f: any) => f.closedPnl && parseFloat(f.closedPnl) !== 0
   );
-  const wins = closingTrades.filter((t: any) => parseFloat(t.closedPnl) > 0);
-  const losses = closingTrades.filter((t: any) => parseFloat(t.closedPnl) < 0);
+  const closedWins = closingTrades.filter((t: any) => parseFloat(t.closedPnl) > 0);
+  const closedLosses = closingTrades.filter((t: any) => parseFloat(t.closedPnl) < 0);
 
-  console.log(
-    `[Metrics] Total fills: ${allFills.length}, Closing trades: ${closingTrades.length}, Wins: ${wins.length}, Losses: ${losses.length}`
+  // Get current positions for position-based win rate
+  const currentPositions = await positions
+    .find({ walletAddress: walletAddress.toLowerCase() })
+    .toArray();
+
+  // Count winning/losing open positions based on unrealizedPnl
+  const winningPositions = currentPositions.filter(
+    (p: any) => p.unrealizedPnl && parseFloat(p.unrealizedPnl) > 0
+  );
+  const losingPositions = currentPositions.filter(
+    (p: any) => p.unrealizedPnl && parseFloat(p.unrealizedPnl) < 0
   );
 
-  // Calculate win rate and trade statistics
-  const winRate = closingTrades.length > 0 ? wins.length / closingTrades.length : 0;
+  // Combined win rate: closed trades + open positions
+  const totalWins = closedWins.length + winningPositions.length;
+  const totalLosses = closedLosses.length + losingPositions.length;
+  const totalTrades = totalWins + totalLosses;
+
+  console.log(
+    `[Metrics] Fills: ${allFills.length}, Closing: ${closingTrades.length} (W:${closedWins.length}/L:${closedLosses.length}), Open positions: ${currentPositions.length} (W:${winningPositions.length}/L:${losingPositions.length})`
+  );
+
+  // Calculate combined win rate (closed trades + open positions)
+  const winRate = totalTrades > 0 ? totalWins / totalTrades : 0;
+  const wins = totalWins;
+  const losses = totalLosses;
+
+  // Trade stats from closed trades only (for avg/best/worst)
   const avgWin =
-    wins.length > 0
-      ? wins.reduce((s: number, t: any) => s + parseFloat(t.closedPnl), 0) / wins.length
+    closedWins.length > 0
+      ? closedWins.reduce((s: number, t: any) => s + parseFloat(t.closedPnl), 0) / closedWins.length
       : 0;
   const avgLoss =
-    losses.length > 0
-      ? losses.reduce((s: number, t: any) => s + parseFloat(t.closedPnl), 0) / losses.length
+    closedLosses.length > 0
+      ? closedLosses.reduce((s: number, t: any) => s + parseFloat(t.closedPnl), 0) / closedLosses.length
       : 0;
   const bestTrade =
-    wins.length > 0 ? Math.max(...wins.map((t: any) => parseFloat(t.closedPnl))) : 0;
+    closedWins.length > 0 ? Math.max(...closedWins.map((t: any) => parseFloat(t.closedPnl))) : 0;
   const worstTrade =
-    losses.length > 0
-      ? Math.min(...losses.map((t: any) => parseFloat(t.closedPnl)))
+    closedLosses.length > 0
+      ? Math.min(...closedLosses.map((t: any) => parseFloat(t.closedPnl)))
       : 0;
 
   // Calculate Sharpe ratio from snapshots
@@ -143,10 +165,7 @@ export async function computeMetrics(
   // Calculate max drawdown from snapshots
   const maxDrawdown = await calculateMaxDrawdown(walletAddress);
 
-  // Get current positions for leverage calc
-  const currentPositions = await positions
-    .find({ walletAddress: walletAddress.toLowerCase() })
-    .toArray();
+  // Leverage calc (currentPositions already fetched above)
   const avgLeverage =
     currentPositions.length > 0
       ? currentPositions.reduce((s: number, p: any) => s + (p.leverage?.value || 0), 0) /
