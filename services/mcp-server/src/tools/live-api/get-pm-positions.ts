@@ -6,6 +6,10 @@
 import { z } from 'zod';
 
 const POLYMARKET_API_BASE = 'https://data-api.polymarket.com';
+const RATE_LIMIT_DELAY = 300; // 300ms between requests
+
+// Helper for rate limiting
+const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
 export const getPMPositionsSchema = z.object({
   walletAddress: z.string().describe('Ethereum wallet address (0x...)'),
@@ -76,6 +80,9 @@ export async function executeGetPMPositions(
     }
 
     offset += limit;
+
+    // Rate limiting
+    await sleep(RATE_LIMIT_DELAY);
   }
 
   // Filter active positions (price between 0.1% and 99.9%)
