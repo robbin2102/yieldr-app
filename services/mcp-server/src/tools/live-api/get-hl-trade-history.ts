@@ -10,14 +10,14 @@ import { z } from 'zod';
 const HYPERLIQUID_API_URL = 'https://api.hyperliquid.xyz/info';
 
 // Rate limit: Higher delay for fills (weight 20+)
-// With 2000 fills returned = weight 20 + 100 = 120 total
-// Safe to call ~10 times per minute, so 6000ms between calls
 const HL_FILLS_RATE_LIMIT_DELAY = 500;
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
 export const getHLTradeHistorySchema = z.object({
   walletAddress: z.string().describe('Ethereum wallet address (0x...)'),
-  days: z.number().optional().default(30).describe('Number of days of history (default: 30, max: 30)'),
+  limit: z.number().optional().default(10).describe('Number of trades to return (default: 10, max: 100)'),
+  startTime: z.number().optional().describe('Start timestamp in ms (optional, defaults to 7 days ago)'),
+  endTime: z.number().optional().describe('End timestamp in ms (optional, defaults to now)'),
 });
 
 export type GetHLTradeHistoryInput = z.infer<typeof getHLTradeHistorySchema>;
@@ -50,27 +50,36 @@ interface HLTradeHistoryOutput {
 export async function executeGetHLTradeHistory(
   input: GetHLTradeHistoryInput
 ): Promise<HLTradeHistoryOutput> {
-  const { walletAddress, days = 30 } = input;
+  const { walletAddress, limit = 10, startTime: inputStartTime, endTime: inputEndTime } = input;
 
   // Validate address format
   if (!/^0x[a-fA-F0-9]{40}$/.test(walletAddress)) {
     throw new Error('Invalid Ethereum address format');
   }
 
-  // Calculate time range (max 30 days)
-  const effectiveDays = Math.min(days, 30);
+  // Calculate time range (default: last 7 days)
   const now = Date.now();
-  const startTime = now - effectiveDays * 24 * 60 * 60 * 1000;
+  const startTime = inputStartTime ?? (now - 7 * 24 * 60 * 60 * 1000);
+  const endTime = inputEndTime ?? now;
+
+  // Clamp limit to max 100
+  const effectiveLimit = Math.min(Math.max(limit, 1), 100);
+
+  // Build request payload
+  const payload: any = {
+    type: 'userFillsByTime',
+    user: walletAddress,
+    startTime,
+  };
+  if (inputEndTime) {
+    payload.endTime = endTime;
+  }
 
   // Fetch fills from Hyperliquid API
   const response = await fetch(HYPERLIQUID_API_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      type: 'userFillsByTime',
-      user: walletAddress,
-      startTime,
-    }),
+    body: JSON.stringify(payload),
   });
 
   if (!response.ok) {
@@ -110,7 +119,7 @@ export async function executeGetHLTradeHistory(
   return {
     wallet: walletAddress.toLowerCase(),
     totalTrades: trades.length,
-    trades: trades.slice(0, 100), // Return last 100 trades to avoid huge responses
+    trades: trades.slice(0, effectiveLimit), // Return limited trades
     summary: {
       totalRealizedPnl,
       totalFees,
@@ -123,7 +132,7 @@ export async function executeGetHLTradeHistory(
 
 export const getHLTradeHistoryTool = {
   name: 'get_hl_trade_history',
-  description: 'Get recent trade history from Hyperliquid for a wallet. Returns fills with realized PnL, useful for analyzing closed positions and trading performance.',
+  description: 'Get recent trade history from Hyperliquid for a wallet. Returns fills with realized PnL. Supports limit (default 10) and time range (startTime/endTime in ms).',
   inputSchema: getHLTradeHistorySchema,
   execute: executeGetHLTradeHistory,
 };
