@@ -35,6 +35,7 @@
     "polymarket:fetch-holders": "DOTENV_CONFIG_PATH=.env.local npx tsx scripts/index-polymarket-markets.ts --holders-only",
     "polymarket:full-index": "DOTENV_CONFIG_PATH=.env.local npx tsx scripts/index-polymarket-markets.ts",
     "polymarket:bulk-profile": "DOTENV_CONFIG_PATH=.env.local npx tsx scripts/bulk-profile-traders.ts",
+    "polymarket:filter-traders": "DOTENV_CONFIG_PATH=.env.local npx tsx scripts/filter-top-traders.ts",
     "backfill": "tsx scripts/backfill-all-managers.ts",
     "backfill:wallet": "tsx scripts/backfill-single-wallet.ts",
     "test:client": "tsx services/avantis-listener/test-client.ts",
