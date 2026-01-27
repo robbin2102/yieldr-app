@@ -464,23 +464,34 @@ async function main(): Promise<void> {
 
   try {
     // Pick one profitable trader (random from top 100)
-    console.log('Selecting test traders...\n');
+    // Filter for new schema profiles (with consistency object)
+    console.log('Selecting test traders (new schema only)...\n');
 
     const profitableTraders = await collection
-      .find({ totalPnl: { $gt: 10000 }, closedPositionCount: { $gte: 20 } })
+      .find({
+        totalPnl: { $gt: 10000 },
+        closedPositionsCount: { $gte: 20 },
+        consistency: { $exists: true }  // Only new schema
+      })
       .sort({ totalPnl: -1 })
       .limit(100)
       .toArray();
 
+    console.log(`Found ${profitableTraders.length} profitable traders with new schema`);
     const randomProfitable = profitableTraders[Math.floor(Math.random() * Math.min(50, profitableTraders.length))];
 
     // Pick one losing trader (random from bottom 100)
     const losingTraders = await collection
-      .find({ totalPnl: { $lt: -1000 }, closedPositionCount: { $gte: 20 } })
+      .find({
+        totalPnl: { $lt: -1000 },
+        closedPositionsCount: { $gte: 20 },
+        consistency: { $exists: true }  // Only new schema
+      })
       .sort({ totalPnl: 1 })
       .limit(100)
       .toArray();
 
+    console.log(`Found ${losingTraders.length} losing traders with new schema`);
     const randomLosing = losingTraders[Math.floor(Math.random() * Math.min(50, losingTraders.length))];
 
     console.log(`Selected PROFITABLE trader: ${randomProfitable?.wallet} (P&L: $${randomProfitable?.totalPnl?.toLocaleString()})`);
