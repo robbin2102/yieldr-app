@@ -182,6 +182,11 @@ export async function fetchAndSavePositions(walletAddress: string) {
     .toArray();
   const existingCoins = existingPositions.map((p: any) => p.coin);
 
+  // Log existing vs current for debugging
+  const currentCoinsFromApi = state.assetPositions.map((ap: any) => ap.position.coin);
+  console.log(`[Fetcher] DB has ${existingCoins.length} positions: [${existingCoins.join(', ')}]`);
+  console.log(`[Fetcher] API returned ${currentCoinsFromApi.length} positions: [${currentCoinsFromApi.join(', ')}]`);
+
   // Update/create current positions
   const currentCoins: string[] = [];
 
@@ -220,10 +225,15 @@ export async function fetchAndSavePositions(walletAddress: string) {
     (coin: string) => !currentCoins.includes(coin)
   );
 
+  // Log comparison result
+  if (closedCoins.length === 0) {
+    console.log(`[Fetcher] No closed positions (all ${existingCoins.length} DB positions still open)`);
+  } else {
+    console.log(`[Fetcher] CLOSED positions detected: ${closedCoins.join(', ')}`);
+  }
+
   // Save closed positions to closedPositions collection before removing from open
   if (closedCoins.length > 0) {
-    console.log(`[Fetcher] Closed positions detected: ${closedCoins.join(', ')}`);
-
     const { fills, closedPositions } = await getCollections();
 
     for (const coin of closedCoins) {
