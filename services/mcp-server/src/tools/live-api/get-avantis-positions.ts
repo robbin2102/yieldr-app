@@ -81,7 +81,7 @@ export async function executeGetAvantisPositions(
 
     // Map positions to simplified format
     const positions: AvantisPosition[] = (data.data?.positions || []).map((p: any) => ({
-      pair: p.pair || 'Unknown',
+      pair: p.asset || p.pair || 'Unknown',
       direction: p.direction || (p.isLong ? 'LONG' : 'SHORT'),
       positionSize: p.positionSize || p.size || 0,
       leverage: p.leverage || 1,
