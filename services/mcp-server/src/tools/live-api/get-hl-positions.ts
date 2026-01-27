@@ -1,11 +1,17 @@
 /**
  * Live Hyperliquid Positions Tool
  * Fetches real-time positions from Hyperliquid API
+ *
+ * Rate limits: 1200 weight/minute, clearinghouseState = weight 2
  */
 
 import { z } from 'zod';
 
 const HYPERLIQUID_API_URL = 'https://api.hyperliquid.xyz/info';
+
+// Rate limit: 100ms minimum between requests (600 req/min = safe margin for weight 2)
+const HL_RATE_LIMIT_DELAY = 100;
+const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
 export const getHLPositionsSchema = z.object({
   walletAddress: z.string().describe('Ethereum wallet address (0x...)'),
@@ -61,6 +67,9 @@ export async function executeGetHLPositions(
   if (!response.ok) {
     throw new Error(`Hyperliquid API error: ${response.status}`);
   }
+
+  // Rate limit delay after request
+  await sleep(HL_RATE_LIMIT_DELAY);
 
   const data = await response.json() as {
     assetPositions?: any[];

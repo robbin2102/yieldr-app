@@ -1,11 +1,19 @@
 /**
  * Live Hyperliquid Trade History Tool
  * Fetches recent trades/fills from Hyperliquid API
+ *
+ * Rate limits: 1200 weight/minute, userFillsByTime = weight 20 + 1 per 20 items
  */
 
 import { z } from 'zod';
 
 const HYPERLIQUID_API_URL = 'https://api.hyperliquid.xyz/info';
+
+// Rate limit: Higher delay for fills (weight 20+)
+// With 2000 fills returned = weight 20 + 100 = 120 total
+// Safe to call ~10 times per minute, so 6000ms between calls
+const HL_FILLS_RATE_LIMIT_DELAY = 500;
+const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
 export const getHLTradeHistorySchema = z.object({
   walletAddress: z.string().describe('Ethereum wallet address (0x...)'),
@@ -68,6 +76,9 @@ export async function executeGetHLTradeHistory(
   if (!response.ok) {
     throw new Error(`Hyperliquid API error: ${response.status}`);
   }
+
+  // Rate limit delay after request (high weight due to response size)
+  await sleep(HL_FILLS_RATE_LIMIT_DELAY);
 
   const fills = await response.json() as any[];
 
