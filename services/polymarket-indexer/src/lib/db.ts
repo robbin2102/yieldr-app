@@ -34,6 +34,7 @@ async function ensureIndexes(database: Db): Promise<void> {
     // STEP 1: Drop ALL stale indexes first
     const closedPosCollection = database.collection(COLLECTIONS.CLOSED_POSITIONS);
     const openPosCollection = database.collection(COLLECTIONS.OPEN_POSITIONS);
+    const tradesCollection = database.collection(COLLECTIONS.TRADES);
 
     // Drop stale indexes - wrap each in try/catch
     // These include indexes from both polymarket-indexer AND polymarket-worker
@@ -41,6 +42,8 @@ async function ensureIndexes(database: Db): Promise<void> {
       { collection: closedPosCollection, name: 'tradeId_1', desc: 'closedPositions.tradeId_1' },
       { collection: openPosCollection, name: 'wallet_1_conditionId_1', desc: 'openPositions.wallet_1_conditionId_1' },
       { collection: openPosCollection, name: 'walletAddress_1_conditionId_1_asset_1', desc: 'openPositions.walletAddress_1_conditionId_1_asset_1' },
+      // Old trades index using walletAddress instead of wallet
+      { collection: tradesCollection, name: 'walletAddress_1_transactionHash_1', desc: 'trades.walletAddress_1_transactionHash_1' },
     ];
 
     for (const idx of staleIndexes) {
@@ -65,6 +68,14 @@ async function ensureIndexes(database: Db): Promise<void> {
       console.log(`[DB] Cleaned up ${closedDeleteResult.deletedCount} documents with null wallet from closedPositions`);
     }
 
+    // Clean up trades with null wallet/walletAddress
+    const tradesDeleteResult = await tradesCollection.deleteMany({
+      $or: [{ wallet: null }, { walletAddress: null }]
+    });
+    if (tradesDeleteResult.deletedCount > 0) {
+      console.log(`[DB] Cleaned up ${tradesDeleteResult.deletedCount} documents with null wallet from trades`);
+    }
+
     // STEP 3: Create indexes
     // Tracked traders collection indexes
     const trackedCollection = database.collection(COLLECTIONS.TRACKED_TRADERS);
@@ -84,7 +95,6 @@ async function ensureIndexes(database: Db): Promise<void> {
     await openPosCollection.createIndex({ wallet: 1 });
 
     // Trades collection indexes
-    const tradesCollection = database.collection(COLLECTIONS.TRADES);
     await tradesCollection.createIndex({ wallet: 1, transactionHash: 1 }, { unique: true });
     await tradesCollection.createIndex({ wallet: 1, timestamp: -1 });
 
