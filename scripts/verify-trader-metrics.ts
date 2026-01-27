@@ -27,10 +27,12 @@ async function fetchClosedPositions(wallet: string, days: number): Promise<any[]
   let offset = 0;
 
   console.log(`    Fetching closed positions (last ${days} days)...`);
+  console.log(`    Using /v1/closed-positions endpoint (same as bulk profiler)`);
 
   while (offset <= MAX_OFFSET) {
     await sleep(150);
-    const url = `${API_BASE}/positions?user=${wallet}&limit=${LIMIT}&offset=${offset}&sortBy=LATEST_TRADE_TIMESTAMP&sortDirection=DESC&sizeThreshold=0&redeemed=true`;
+    // Use the same endpoint as bulk-profile-traders.ts
+    const url = `${API_BASE}/v1/closed-positions?user=${wallet}&limit=${LIMIT}&offset=${offset}&sortBy=TIMESTAMP&sortDirection=DESC`;
 
     try {
       const response = await fetch(url);
