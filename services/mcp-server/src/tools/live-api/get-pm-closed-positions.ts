@@ -10,6 +10,7 @@ const RATE_LIMIT_DELAY = 300; // 300ms between requests
 
 export const getPMClosedPositionsSchema = z.object({
   walletAddress: z.string().describe('Ethereum wallet address (0x...)'),
+  limit: z.number().optional().default(10).describe('Number of positions to return (default: 10, max: 100)'),
   days: z.number().optional().default(30).describe('Number of days of history (default: 30)'),
 });
 
@@ -44,7 +45,10 @@ const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 export async function executeGetPMClosedPositions(
   input: GetPMClosedPositionsInput
 ): Promise<PMClosedPositionsOutput> {
-  const { walletAddress, days = 30 } = input;
+  const { walletAddress, limit: inputLimit = 10, days = 30 } = input;
+
+  // Clamp limit to max 100
+  const effectiveLimit = Math.min(Math.max(inputLimit, 1), 100);
 
   // Validate address format
   if (!/^0x[a-fA-F0-9]{40}$/.test(walletAddress)) {
@@ -121,7 +125,7 @@ export async function executeGetPMClosedPositions(
   return {
     wallet: walletAddress.toLowerCase(),
     totalClosedPositions: positions.length,
-    positions,
+    positions: positions.slice(0, effectiveLimit), // Return limited positions
     summary: {
       totalRealizedPnl,
       wins,
@@ -133,7 +137,7 @@ export async function executeGetPMClosedPositions(
 
 export const getPMClosedPositionsTool = {
   name: 'get_pm_closed_positions',
-  description: 'Get closed positions from Polymarket for a wallet. Returns resolved markets with realized PnL, useful for analyzing trading performance.',
+  description: 'Get closed positions from Polymarket for a wallet. Returns resolved markets with realized PnL. Supports limit (default 10) and days (default 30) parameters.',
   inputSchema: getPMClosedPositionsSchema,
   execute: executeGetPMClosedPositions,
 };
