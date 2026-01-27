@@ -220,9 +220,42 @@ export async function fetchAndSavePositions(walletAddress: string) {
     (coin: string) => !currentCoins.includes(coin)
   );
 
-  // Delete closed positions from DB
+  // Save closed positions to closedPositions collection before removing from open
   if (closedCoins.length > 0) {
     console.log(`[Fetcher] Closed positions detected: ${closedCoins.join(', ')}`);
+
+    const { fills, closedPositions } = await getCollections();
+
+    for (const coin of closedCoins) {
+      // Get the position data before we delete it
+      const closedPosition = existingPositions.find((p: any) => p.coin === coin);
+
+      // Calculate total realized PnL from all fills for this coin
+      const coinFills = await fills
+        .find({ walletAddress: walletAddress.toLowerCase(), coin })
+        .toArray();
+
+      const totalRealizedPnl = coinFills.reduce(
+        (sum: number, f: any) => sum + (parseFloat(f.closedPnl) || 0),
+        0
+      );
+
+      // Save to closed positions collection
+      await closedPositions.insertOne({
+        walletAddress: walletAddress.toLowerCase(),
+        coin,
+        side: closedPosition?.side || 'UNKNOWN',
+        entryPx: closedPosition?.entryPx || '0',
+        totalRealizedPnl,
+        isWin: totalRealizedPnl > 0,
+        fillsCount: coinFills.length,
+        closedAt: new Date(),
+      });
+
+      console.log(`[Fetcher] Saved closed position: ${coin} | PnL: $${totalRealizedPnl.toFixed(2)} | ${totalRealizedPnl > 0 ? 'WIN' : 'LOSS'}`);
+    }
+
+    // Now delete from open positions
     await positionsCollection.deleteMany({
       walletAddress: walletAddress.toLowerCase(),
       coin: { $in: closedCoins },

@@ -17,18 +17,28 @@ export interface HLTraderMetrics {
   pnl_30d: number;
   pnl_allTime: number;
   volume_24h: string;
-  totalTrades: number;
-  wins: number;
-  losses: number;
-  winRate: number;
-  avgWin: number;
-  avgLoss: number;
-  bestTrade: number;
-  worstTrade: number;
-  // Open position stats (separate from trade win rate)
+
+  // Position-based win rate (open + closed positions)
+  positionWinRate: number;
+  positionWins: number;
+  positionLosses: number;
+  totalPositions: number;
+
+  // Profit factor (grossProfit / grossLoss)
+  profitFactor: number;
+  grossProfit: number;
+  grossLoss: number;
+
+  // Open position stats
   openPositionsCount: number;
   profitablePositionsCount: number;
   unrealizedPnlTotal: number;
+
+  // Closed position stats
+  closedPositionsCount: number;
+  closedPositionWins: number;
+  closedPositionLosses: number;
+
   // Risk metrics
   sharpeRatio: number;
   maxDrawdown: number;
@@ -49,18 +59,27 @@ export interface PerpTraderOutput {
     allTime?: number;
   };
   stats: {
-    totalTrades: number;
-    winRate: number;
+    // Position-based win rate (from actual positions, not fills)
+    positionWinRate: number;
+    totalPositions: number;
+    // Profit factor (grossProfit / grossLoss) - >1 means profitable
+    profitFactor: number;
     sharpeRatio?: number;
     maxDrawdown?: number;
     roi30d?: number;
     totalAUM?: number;
   };
-  // Open position stats (separate from trade stats)
+  // Open position stats
   openPositions?: {
     count: number;
     profitable: number;
     unrealizedPnl: number;
+  };
+  // Closed position stats
+  closedPositions?: {
+    count: number;
+    wins: number;
+    losses: number;
   };
   volume24h?: string;
 }
@@ -107,7 +126,7 @@ async function getTopHyperliquidTraders(params: {
   // Map sortBy to field
   const sortFieldMap: Record<string, string> = {
     pnl: timeframe === '7d' ? 'pnl_7d' : timeframe === '30d' ? 'pnl_30d' : 'pnl_allTime',
-    winRate: 'winRate',
+    winRate: 'positionWinRate',
     sharpe: 'sharpeRatio',
     volume: 'volume_24h',
   };
@@ -134,8 +153,9 @@ async function getTopHyperliquidTraders(params: {
       allTime: t.pnl_allTime,
     },
     stats: {
-      totalTrades: t.totalTrades,
-      winRate: t.winRate,
+      positionWinRate: t.positionWinRate || 0,
+      totalPositions: t.totalPositions || 0,
+      profitFactor: t.profitFactor || 0,
       sharpeRatio: t.sharpeRatio,
       maxDrawdown: t.maxDrawdown,
     },
@@ -143,6 +163,11 @@ async function getTopHyperliquidTraders(params: {
       count: t.openPositionsCount || 0,
       profitable: t.profitablePositionsCount || 0,
       unrealizedPnl: t.unrealizedPnlTotal || 0,
+    },
+    closedPositions: {
+      count: t.closedPositionsCount || 0,
+      wins: t.closedPositionWins || 0,
+      losses: t.closedPositionLosses || 0,
     },
     volume24h: t.volume_24h,
   }));
@@ -215,12 +240,17 @@ async function getTopAvantisManagerTraders(params: {
       month: t.metrics?.totalPnL30d || 0,
     },
     stats: {
-      totalTrades: t.metrics?.totalTrades || 0,
-      winRate: t.metrics?.winRate || 0,
+      positionWinRate: t.metrics?.winRate || 0,
+      totalPositions: t.metrics?.totalTrades || 0,
+      profitFactor: 0, // Not available for Avantis
       roi30d: t.metrics?.roi30d || 0,
       totalAUM: t.metrics?.totalAUM || 0,
     },
-    positions: t.positions?.length || 0,
+    openPositions: {
+      count: t.positions?.length || 0,
+      profitable: 0,
+      unrealizedPnl: 0,
+    },
   }));
 
   return { protocol: 'avantis', traders: output, totalFound };

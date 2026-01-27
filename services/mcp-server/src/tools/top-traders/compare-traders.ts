@@ -62,10 +62,11 @@ export async function executeCompareTraders(
     comparison = traders.map(t => ({
       wallet: t.walletAddress,
       metrics: {
-        winRate: t.winRate,
+        winRate: t.positionWinRate || 0,
         pnl: t.pnl_allTime,
+        profitFactor: t.profitFactor,
         sharpeRatio: t.sharpeRatio,
-        totalTrades: t.totalTrades,
+        totalTrades: t.totalPositions || 0,
       },
     }));
   }

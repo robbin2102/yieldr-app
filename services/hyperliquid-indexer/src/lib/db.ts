@@ -42,6 +42,11 @@ async function ensureIndexes(database: Db): Promise<void> {
     await positionsCollection.createIndex({ walletAddress: 1, coin: 1 }, { unique: true });
     await positionsCollection.createIndex({ walletAddress: 1 });
 
+    // Closed positions collection indexes
+    const closedPositionsCollection = database.collection(COLLECTIONS.CLOSED_POSITIONS);
+    await closedPositionsCollection.createIndex({ walletAddress: 1, coin: 1, closedAt: -1 });
+    await closedPositionsCollection.createIndex({ walletAddress: 1, isWin: 1 });
+
     // Metrics collection indexes
     const metricsCollection = database.collection(COLLECTIONS.METRICS);
     await metricsCollection.createIndex({ walletAddress: 1 }, { unique: true });
@@ -84,6 +89,7 @@ export async function closeDB(): Promise<void> {
 export const COLLECTIONS = {
   FILLS: 'hyperliquidfills',
   POSITIONS: 'hyperliquidpositions',
+  CLOSED_POSITIONS: 'hyperliquid-closedPositions',
   METRICS: 'hyperliquidmetrics',
   PNL_SNAPSHOTS: 'hyperliquidpnlsnapshots',
   TRACKED_WALLETS: 'hyperliquid-trackedWallets',
@@ -95,6 +101,7 @@ export async function getCollections() {
   return {
     fills: database.collection(COLLECTIONS.FILLS),
     positions: database.collection(COLLECTIONS.POSITIONS),
+    closedPositions: database.collection(COLLECTIONS.CLOSED_POSITIONS),
     metrics: database.collection(COLLECTIONS.METRICS),
     pnlSnapshots: database.collection(COLLECTIONS.PNL_SNAPSHOTS),
     trackedWallets: database.collection(COLLECTIONS.TRACKED_WALLETS),
