@@ -180,11 +180,11 @@ async function main() {
   console.log('================================================================');
   console.log('');
 
+  // Start health check server FIRST (Railway needs this immediately)
+  startHealthServer();
+
   // Connect to MongoDB
   await connectDB();
-
-  // Start health check server
-  startHealthServer();
 
   // Run initial polling cycle
   await runPollingCycle();
