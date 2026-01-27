@@ -6,6 +6,7 @@
 import { z } from 'zod';
 
 const AVANTIS_API_URL = 'https://yieldr-app-production.up.railway.app/fetch-positions';
+const BASE_RPC_URL = process.env.BASE_RPC_URL || 'https://mainnet.base.org';
 
 export const getAvantisPositionsSchema = z.object({
   walletAddress: z.string().describe('Ethereum wallet address (0x...)'),
@@ -57,7 +58,7 @@ export async function executeGetAvantisPositions(
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         walletAddress,
-        rpcUrl: 'https://mainnet.base.org',
+        rpcUrl: BASE_RPC_URL,
       }),
       signal: controller.signal,
     });
