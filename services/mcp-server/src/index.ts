@@ -14,15 +14,14 @@ import { logger } from './utils/index.js';
 const PORT = parseInt(process.env.PORT || '3000');
 
 async function main() {
-  // Connect to MongoDB
-  await connectDB();
-
   const app = express();
   app.use(express.json());
 
-  // Health check endpoint
+  let dbConnected = false;
+
+  // Health check endpoint - returns ok even before DB connects (Railway needs this fast)
   app.get('/health', (_req, res) => {
-    res.json({ status: 'ok', service: 'yieldr-mcp-server' });
+    res.json({ status: 'ok', service: 'yieldr-mcp-server', db: dbConnected ? 'connected' : 'connecting' });
   });
 
   // List available tools
@@ -99,8 +98,8 @@ async function main() {
     res.status(400).json({ error: `Unknown method: ${method}` });
   });
 
-  // Start HTTP server
-  app.listen(PORT, () => {
+  // Start HTTP server FIRST (Railway healthcheck needs port open immediately)
+  app.listen(PORT, async () => {
     console.log('================================================================');
     console.log('           YIELDR MCP SERVER                                    ');
     console.log('================================================================');
@@ -108,6 +107,17 @@ async function main() {
     console.log(`  Tools:  http://localhost:${PORT}/tools`);
     console.log(`  MCP:    http://localhost:${PORT}/mcp`);
     console.log('================================================================');
+
+    // Connect to MongoDB AFTER server is listening (so healthcheck passes)
+    try {
+      await connectDB();
+      dbConnected = true;
+      console.log('[DB] MongoDB connected successfully');
+    } catch (error) {
+      console.error('[DB] MongoDB connection failed:', error);
+      // Don't exit - let healthcheck continue working
+    }
+
     console.log('');
     console.log('Available Tools:');
     tools.forEach(t => {
