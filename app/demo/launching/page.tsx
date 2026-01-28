@@ -35,8 +35,9 @@ export default function LaunchingPage() {
   const [logs, setLogs] = useState<LogStep[]>([
     { id: 1, text: 'Initializing agent', status: 'pending' },
     { id: 2, text: 'Connecting wallet', status: 'pending' },
-    { id: 3, text: 'Scanning positions', status: 'pending' },
-    { id: 4, text: 'Following top traders', status: 'pending' },
+    { id: 3, text: 'Loading market context', status: 'pending' },
+    { id: 4, text: 'Scanning positions', status: 'pending' },
+    { id: 5, text: 'Following top traders', status: 'pending' },
   ]);
 
   const [positionData, setPositionData] = useState<PositionData>({
@@ -205,16 +206,22 @@ export default function LaunchingPage() {
       updateLog(1, { status: 'loading' });
       await new Promise(r => setTimeout(r, 1000));
       updateLog(1, { status: 'success' });
-      setProgress(25);
+      setProgress(20);
 
       // Step 2: Connect wallet
       updateLog(2, { status: 'loading' });
       await new Promise(r => setTimeout(r, 800));
       updateLog(2, { status: 'success', detail: shortWallet });
-      setProgress(50);
+      setProgress(40);
 
-      // Step 3: Scan positions
+      // Step 3: Load market context
       updateLog(3, { status: 'loading' });
+      await new Promise(r => setTimeout(r, 1200));
+      updateLog(3, { status: 'success', detail: 'BTC, ETH, SOL trends loaded' });
+      setProgress(60);
+
+      // Step 4: Scan positions
+      updateLog(4, { status: 'loading' });
       const positions = await scanPositions();
       setPositionData(positions);
 
@@ -230,11 +237,11 @@ export default function LaunchingPage() {
         posDetail = 'No positions found';
       }
 
-      updateLog(3, { status: 'success', detail: posDetail });
-      setProgress(75);
+      updateLog(4, { status: 'success', detail: posDetail });
+      setProgress(80);
 
-      // Step 4: Follow traders
-      updateLog(4, { status: 'loading' });
+      // Step 5: Follow traders
+      updateLog(5, { status: 'loading' });
       const traders = await fetchTopTraders();
       setTraderData(traders);
 
@@ -248,7 +255,7 @@ export default function LaunchingPage() {
         traderDetail = 'Following default traders';
       }
 
-      updateLog(4, { status: 'success', detail: traderDetail });
+      updateLog(5, { status: 'success', detail: traderDetail });
       setProgress(100);
 
       // Save agent
