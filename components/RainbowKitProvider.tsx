@@ -40,7 +40,7 @@ const connectors = connectorsForWallets(
   }
 );
 
-const config = createConfig({
+export const config = createConfig({
   connectors,
   chains: [base],
   transports: {

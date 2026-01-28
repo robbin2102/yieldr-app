@@ -15,6 +15,9 @@ import { getPMPositionsTool } from './live-api/get-pm-positions.js';
 import { getHLTradeHistoryTool } from './live-api/get-hl-trade-history.js';
 import { getPMClosedPositionsTool } from './live-api/get-pm-closed-positions.js';
 
+// Live API tools - Portfolio / PnL history
+import { getHLPortfolioTool } from './live-api/get-hl-portfolio.js';
+
 // Export individual tools
 export { getTopPMTradersTool } from './top-traders/index.js';
 export { getTopPerpTradersTool } from './top-traders/index.js';
@@ -25,6 +28,7 @@ export {
   getPMPositionsTool,
   getHLTradeHistoryTool,
   getPMClosedPositionsTool,
+  getHLPortfolioTool,
 } from './live-api/index.js';
 
 // Tool registry for MCP server
@@ -40,6 +44,8 @@ export const tools = [
   // Live API queries - Trade history / Closed positions
   getHLTradeHistoryTool,
   getPMClosedPositionsTool,
+  // Live API queries - Portfolio / PnL history
+  getHLPortfolioTool,
 ];
 
 // Tool map for quick lookup
