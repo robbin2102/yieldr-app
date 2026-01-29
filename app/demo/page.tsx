@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useAccount } from 'wagmi';
 import { ConnectButton } from '@rainbow-me/rainbowkit';
 import { useRouter } from 'next/navigation';
@@ -50,6 +50,30 @@ export default function CreateAgentPage() {
   const [agentName, setAgentName] = useState('');
   const [selectedMarkets, setSelectedMarkets] = useState<Market[]>([]);
   const [pendingConnect, setPendingConnect] = useState(false);
+  const [nameAvailable, setNameAvailable] = useState<boolean | null>(null);
+  const [nameChecking, setNameChecking] = useState(false);
+  const nameCheckTimer = useRef<NodeJS.Timeout | null>(null);
+
+  const checkNameAvailability = useCallback((name: string) => {
+    if (nameCheckTimer.current) clearTimeout(nameCheckTimer.current);
+    if (!name.trim()) { setNameAvailable(null); setNameChecking(false); return; }
+    setNameChecking(true);
+    nameCheckTimer.current = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/demo/agents/check-name?name=${encodeURIComponent(name.trim())}`);
+        if (res.ok) {
+          const data = await res.json();
+          setNameAvailable(data.available);
+        }
+      } catch {}
+      setNameChecking(false);
+    }, 500);
+  }, []);
+
+  const handleNameChange = (value: string) => {
+    setAgentName(value);
+    checkNameAvailability(value);
+  };
 
   useEffect(() => { setMounted(true); }, []);
 
@@ -87,7 +111,7 @@ export default function CreateAgentPage() {
     );
   };
 
-  const canContinue = agentName.trim().length > 0 && selectedMarkets.length > 0;
+  const canContinue = agentName.trim().length > 0 && selectedMarkets.length > 0 && nameAvailable !== false;
 
   const selectionText = (() => {
     if (selectedMarkets.length === 0) return '';
@@ -125,7 +149,7 @@ export default function CreateAgentPage() {
           <input
             type="text"
             value={agentName}
-            onChange={(e) => setAgentName(e.target.value)}
+            onChange={(e) => handleNameChange(e.target.value)}
             placeholder="e.g. AlphaHunter, YieldBot, TrendSeeker"
             maxLength={20}
             autoComplete="off"
@@ -141,9 +165,19 @@ export default function CreateAgentPage() {
               outline: 'none',
               transition: 'all 0.2s ease',
             }}
-            onFocus={(e) => { e.target.style.borderColor = '#00C805'; e.target.style.background = '#111111'; }}
-            onBlur={(e) => { e.target.style.borderColor = '#1E1E1E'; e.target.style.background = '#0A0A0A'; }}
+            onFocus={(e) => { e.target.style.borderColor = nameAvailable === false ? '#FF4444' : '#00C805'; e.target.style.background = '#111111'; }}
+            onBlur={(e) => { e.target.style.borderColor = nameAvailable === false ? '#FF4444' : '#1E1E1E'; e.target.style.background = '#0A0A0A'; }}
           />
+          {nameAvailable === false && agentName.trim() && (
+            <div style={{ fontSize: '0.7rem', color: '#FF4444', marginTop: '0.35rem' }}>
+              This name is already taken. Please choose another.
+            </div>
+          )}
+          {nameAvailable === true && agentName.trim() && !nameChecking && (
+            <div style={{ fontSize: '0.7rem', color: '#00C805', marginTop: '0.35rem' }}>
+              {'\u2713'} Name available
+            </div>
+          )}
         </div>
 
         {/* Market Selection */}

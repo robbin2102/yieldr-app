@@ -63,17 +63,11 @@ export default function LaunchingPage() {
 
   // Scan positions using existing production APIs + MCP for Polymarket
   const scanPositions = useCallback(async (walletAddress: string) => {
-    const mcpUrl = process.env.NEXT_PUBLIC_MCP_SERVER_URL || 'https://mcp-demo-production-59da.up.railway.app';
-
     const [avantisRes, hlRes, lpRes, pmRes] = await Promise.allSettled([
       fetch(`/api/avantis-positions?address=${walletAddress}`),
       fetch(`/api/hyperliquid-positions?address=${walletAddress}`),
       fetch(`/api/lp-positions?address=${walletAddress}`),
-      fetch(`${mcpUrl}/tools/get_pm_live_positions`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ walletAddress }),
-      }),
+      fetch(`/api/polymarket-positions?address=${walletAddress}`),
     ]);
 
     let avantisPositions: any[] = [];
