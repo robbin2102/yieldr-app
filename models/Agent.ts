@@ -13,17 +13,21 @@ export interface IAgentPosition {
 
 export interface IFollowedTrader {
   wallet: string;
-  protocol: 'avantis' | 'hyperliquid' | 'polymarket';
+  platform: 'avantis' | 'hyperliquid' | 'polymarket';
   username?: string;
   pnl30d?: number;
   winRate?: number;
+  roi30d?: number;
+  totalPositions?: number;
+  totalAUM?: number;
   followedAt: Date;
 }
 
 export interface IAgent extends Document {
   name: string;
   ownerWallet: string;
-  goals: ('invest' | 'improve' | 'fund')[];
+  markets: ('perps' | 'predictions' | 'liquidity')[];
+  goals?: ('invest' | 'improve' | 'fund')[];
   status: 'creating' | 'active' | 'paused';
 
   // Positions scanned at creation
@@ -75,7 +79,7 @@ const AgentPositionSchema = new Schema({
 
 const FollowedTraderSchema = new Schema({
   wallet: { type: String, required: true, lowercase: true },
-  protocol: {
+  platform: {
     type: String,
     enum: ['avantis', 'hyperliquid', 'polymarket'],
     required: true,
@@ -83,6 +87,9 @@ const FollowedTraderSchema = new Schema({
   username: { type: String },
   pnl30d: { type: Number },
   winRate: { type: Number },
+  roi30d: { type: Number },
+  totalPositions: { type: Number },
+  totalAUM: { type: Number },
   followedAt: { type: Date, default: Date.now },
 }, { _id: false });
 
@@ -98,6 +105,10 @@ const AgentSchema = new Schema<IAgent>({
     required: true,
     lowercase: true,
   },
+  markets: [{
+    type: String,
+    enum: ['perps', 'predictions', 'liquidity'],
+  }],
   goals: [{
     type: String,
     enum: ['invest', 'improve', 'fund'],

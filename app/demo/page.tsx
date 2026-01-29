@@ -98,28 +98,28 @@ export default function CreateAgentPage() {
   if (!mounted) return null;
 
   return (
-    <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '2rem' }}>
+    <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem' }}>
       <div style={{ maxWidth: 520, width: '100%' }}>
         {/* Logo */}
-        <div style={{ textAlign: 'center', marginBottom: '2.5rem' }}>
-          <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: '1.5rem', fontWeight: 700, color: '#00C805', letterSpacing: '-0.02em' }}>
+        <div style={{ textAlign: 'center', marginBottom: '1.5rem' }}>
+          <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: '1.25rem', fontWeight: 700, color: '#00C805', letterSpacing: '-0.02em' }}>
             YIELDR
           </span>
         </div>
 
         {/* Header */}
-        <div style={{ marginBottom: '2rem' }}>
-          <h1 style={{ fontSize: '1.75rem', fontWeight: 700, marginBottom: '0.5rem', letterSpacing: '-0.02em' }}>
+        <div style={{ marginBottom: '1.25rem' }}>
+          <h1 style={{ fontSize: '1.5rem', fontWeight: 700, marginBottom: '0.35rem', letterSpacing: '-0.02em' }}>
             Create Your AI Agent
           </h1>
-          <p style={{ fontSize: '0.9rem', color: '#9E9E9E', lineHeight: 1.5 }}>
+          <p style={{ fontSize: '0.85rem', color: '#9E9E9E', lineHeight: 1.5 }}>
             Your agent learns from top traders and helps you understand market moves.
           </p>
         </div>
 
         {/* Agent Name */}
-        <div style={{ marginBottom: '2rem' }}>
-          <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, marginBottom: '0.75rem', color: '#FFFFFF' }}>
+        <div style={{ marginBottom: '1.25rem' }}>
+          <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, marginBottom: '0.5rem', color: '#FFFFFF' }}>
             Name your agent
           </label>
           <input
@@ -131,12 +131,12 @@ export default function CreateAgentPage() {
             autoComplete="off"
             style={{
               width: '100%',
-              padding: '1rem 1.25rem',
+              padding: '0.75rem 1rem',
               background: '#0A0A0A',
               border: '2px solid #1E1E1E',
               borderRadius: 8,
               color: '#FFFFFF',
-              fontSize: '1rem',
+              fontSize: '0.95rem',
               fontFamily: "'Inter', sans-serif",
               outline: 'none',
               transition: 'all 0.2s ease',
@@ -147,12 +147,12 @@ export default function CreateAgentPage() {
         </div>
 
         {/* Market Selection */}
-        <div style={{ marginBottom: '2rem' }}>
-          <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, marginBottom: '0.75rem', color: '#FFFFFF' }}>
+        <div style={{ marginBottom: '1.25rem' }}>
+          <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, marginBottom: '0.5rem', color: '#FFFFFF' }}>
             Which markets will your agent focus on?
             <span style={{ fontWeight: 400, color: '#6E6E6E', marginLeft: '0.25rem' }}>(select one or more)</span>
           </label>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
             {marketConfig.map((market) => {
               const selected = selectedMarkets.includes(market.id);
               return (
@@ -164,7 +164,7 @@ export default function CreateAgentPage() {
                     background: selected ? 'rgba(0, 200, 5, 0.05)' : '#0A0A0A',
                     border: `2px solid ${selected ? '#00C805' : '#1E1E1E'}`,
                     borderRadius: 10,
-                    padding: '1.25rem',
+                    padding: '0.875rem 1rem',
                     cursor: 'pointer',
                     display: 'flex',
                     alignItems: 'center',
@@ -177,9 +177,9 @@ export default function CreateAgentPage() {
                 >
                   {/* Icon */}
                   <div style={{
-                    fontSize: '1.75rem',
-                    width: 48,
-                    height: 48,
+                    fontSize: '1.5rem',
+                    width: 40,
+                    height: 40,
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
@@ -252,7 +252,7 @@ export default function CreateAgentPage() {
         </div>
 
         {/* Actions */}
-        <div style={{ display: 'flex', gap: '0.75rem', marginTop: '2.5rem' }}>
+        <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1.5rem' }}>
           <button
             type="button"
             onClick={() => router.push('/')}
@@ -361,7 +361,7 @@ export default function CreateAgentPage() {
         </div>
 
         {/* Footer */}
-        <div style={{ textAlign: 'center', marginTop: '2rem', fontSize: '0.7rem', color: '#6E6E6E' }}>
+        <div style={{ textAlign: 'center', marginTop: '1.25rem', fontSize: '0.7rem', color: '#6E6E6E' }}>
           By connecting, you agree to our <a href="#" style={{ color: '#00C805', textDecoration: 'none' }}>Terms</a> and <a href="#" style={{ color: '#00C805', textDecoration: 'none' }}>Privacy Policy</a>
         </div>
       </div>

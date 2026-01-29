@@ -122,30 +122,42 @@ export default function LaunchingPage() {
     };
   }, []);
 
-  // Save positions to MongoDB using existing production API
-  const savePositions = useCallback(async (walletAddress: string, data: any) => {
-    try {
-      // Add polymarket positions to the existing save format
-      const allPositions = {
-        walletAddress,
-        lpPositions: data.lpPositions,
-        avantisPositions: data.avantisPositions,
-        hyperliquidPositions: data.hlPositions,
-        polymarketPositions: data.pmPositions,
-        metrics: {
-          totalPnL: 0,
-          totalAUM: data.totalValue,
-          totalROI: 0,
-        },
-      };
+  // Save positions to MongoDB - both /api/positions (production) and /api/demo/agents (agent record)
+  const saveData = useCallback(async (walletAddress: string, data: any) => {
+    const setup = JSON.parse(localStorage.getItem('agentSetup') || '{}');
 
+    // Save to production positions collection
+    try {
       await fetch('/api/positions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(allPositions),
+        body: JSON.stringify({
+          walletAddress,
+          lpPositions: data.lpPositions,
+          avantisPositions: data.avantisPositions,
+          hyperliquidPositions: data.hlPositions,
+          polymarketPositions: data.pmPositions,
+          metrics: { totalPnL: 0, totalAUM: data.totalValue, totalROI: 0 },
+        }),
       });
     } catch (error) {
       console.error('Error saving positions:', error);
+    }
+
+    // Save to agents collection
+    try {
+      await fetch('/api/demo/agents', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: setup.name || 'AlphaHunter',
+          ownerWallet: walletAddress,
+          markets: setup.markets || ['perps'],
+          positions: data,
+        }),
+      });
+    } catch (error) {
+      console.error('Error saving agent:', error);
     }
   }, []);
 
@@ -198,15 +210,31 @@ export default function LaunchingPage() {
       completeStep(4, posDetail, true);
       setProgress(80);
 
-      // Step 5: Follow top traders (placeholder)
+      // Save positions to MongoDB (before step 5 so agent exists)
+      await saveData(address, posData);
+
+      // Step 5: Follow top traders (real API call)
       await new Promise(r => setTimeout(r, 200));
       startStep(5);
-      await new Promise(r => setTimeout(r, 2000));
-      completeStep(5, 'Coming soon');
+      let followDetail = 'No traders found';
+      try {
+        const followRes = await fetch('/api/demo/agents/follow-traders', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ wallet: address }),
+        });
+        if (followRes.ok) {
+          const followData = await followRes.json();
+          const count = followData.count || 0;
+          if (count > 0) {
+            followDetail = `Following ${count} top traders`;
+          }
+        }
+      } catch (e) {
+        console.error('Follow traders failed:', e);
+      }
+      completeStep(5, followDetail, true);
       setProgress(100);
-
-      // Save positions to MongoDB
-      await savePositions(address, posData);
 
       // Show discovery
       const totalPositions = perpCount + posData.counts.lp + posData.counts.polymarket;
@@ -230,7 +258,7 @@ export default function LaunchingPage() {
     };
 
     run();
-  }, [mounted, address, startStep, completeStep, scanPositions, savePositions]);
+  }, [mounted, address, startStep, completeStep, scanPositions, saveData]);
 
   const handleLetsGo = () => {
     localStorage.setItem('agentCreated', JSON.stringify({
