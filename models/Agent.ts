@@ -1,16 +1,5 @@
 import mongoose, { Schema, Document } from 'mongoose';
 
-export interface IAgentPosition {
-  protocol: 'avantis' | 'hyperliquid' | 'polymarket';
-  asset: string;
-  direction: 'LONG' | 'SHORT' | 'YES' | 'NO';
-  size: number;
-  entryPrice: number;
-  currentPrice: number;
-  pnl: number;
-  leverage?: number;
-}
-
 export interface IFollowedTrader {
   wallet: string;
   platform: 'avantis' | 'hyperliquid' | 'polymarket';
@@ -30,14 +19,7 @@ export interface IAgent extends Document {
   goals?: ('invest' | 'improve' | 'fund')[];
   status: 'creating' | 'active' | 'paused';
 
-  // Positions scanned at creation
-  positions: {
-    avantis: IAgentPosition[];
-    hyperliquid: IAgentPosition[];
-    polymarket: IAgentPosition[];
-  };
-
-  // Portfolio summary
+  // Portfolio summary (positions live in positions collection)
   portfolioSummary: {
     totalValue: number;
     totalPnl: number;
@@ -47,35 +29,9 @@ export interface IAgent extends Document {
   // Traders being followed
   followedTraders: IFollowedTrader[];
 
-  // PnL history for context
-  pnlHistory: {
-    hyperliquid30d?: number;
-    polymarketRealized30d?: number;
-    polymarketUnrealized?: number;
-  };
-
   createdAt: Date;
   updatedAt: Date;
 }
-
-const AgentPositionSchema = new Schema({
-  protocol: {
-    type: String,
-    enum: ['avantis', 'hyperliquid', 'polymarket'],
-    required: true,
-  },
-  asset: { type: String, required: true },
-  direction: {
-    type: String,
-    enum: ['LONG', 'SHORT', 'YES', 'NO'],
-    required: true,
-  },
-  size: { type: Number, required: true },
-  entryPrice: { type: Number, required: true },
-  currentPrice: { type: Number, required: true },
-  pnl: { type: Number, required: true },
-  leverage: { type: Number },
-}, { _id: false });
 
 const FollowedTraderSchema = new Schema({
   wallet: { type: String, required: true, lowercase: true },
@@ -118,22 +74,12 @@ const AgentSchema = new Schema<IAgent>({
     enum: ['creating', 'active', 'paused'],
     default: 'creating',
   },
-  positions: {
-    avantis: [AgentPositionSchema],
-    hyperliquid: [AgentPositionSchema],
-    polymarket: [AgentPositionSchema],
-  },
   portfolioSummary: {
     totalValue: { type: Number, default: 0 },
     totalPnl: { type: Number, default: 0 },
     positionCount: { type: Number, default: 0 },
   },
   followedTraders: [FollowedTraderSchema],
-  pnlHistory: {
-    hyperliquid30d: { type: Number },
-    polymarketRealized30d: { type: Number },
-    polymarketUnrealized: { type: Number },
-  },
   createdAt: {
     type: Date,
     default: Date.now,
