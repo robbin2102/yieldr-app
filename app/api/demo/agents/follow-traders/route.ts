@@ -44,71 +44,55 @@ export async function POST(request: NextRequest) {
     const hasPerps = markets.includes('perps');
     const hasPredictions = markets.includes('predictions');
 
-    // --- Top 3 perp traders: 2 from Hyperliquid + 1 from Avantis ---
-    if (hasPerps) {
-      // Hyperliquid: query hyperliquidmetrics, sort by pnl_30d desc
-      const hlMetrics = db.collection('hyperliquidmetrics');
-      const hlTop = await hlMetrics
-        .find({})
-        .sort({ pnl_30d: -1 })
-        .limit(2)
-        .toArray();
+    // Run all queries in parallel
+    const [hlTop, avTop, pmTop] = await Promise.all([
+      hasPerps
+        ? db.collection('hyperliquidmetrics').find({}).sort({ pnl_30d: -1 }).limit(2).toArray()
+        : Promise.resolve([]),
+      hasPerps
+        ? db.collection('managers').find({}).sort({ 'metrics.totalPnL30d': -1 }).limit(1).toArray()
+        : Promise.resolve([]),
+      hasPredictions
+        ? db.collection('polymarket-traderProfiles').find({}).sort({ netPnl: -1 }).limit(3).toArray()
+        : Promise.resolve([]),
+    ]);
 
-      for (const t of hlTop) {
-        followedTraders.push({
-          wallet: t.walletAddress || t.wallet || 'unknown',
-          platform: 'hyperliquid',
-          pnl30d: t.pnl_30d || 0,
-          winRate: t.positionWinRate || 0,
-          totalPositions: t.totalPositions || 0,
-          totalAUM: parseFloat(t.accountValue) || 0,
-          followedAt: new Date(),
-        });
-      }
-
-      // Avantis: query managers collection, sort by metrics.totalPnL30d desc
-      const managers = db.collection('managers');
-      const avTop = await managers
-        .find({})
-        .sort({ 'metrics.totalPnL30d': -1 })
-        .limit(Math.max(1, 3 - hlTop.length))
-        .toArray();
-
-      for (const t of avTop) {
-        followedTraders.push({
-          wallet: t.walletAddress || 'unknown',
-          platform: 'avantis',
-          username: t.username,
-          pnl30d: t.metrics?.totalPnL30d || 0,
-          winRate: t.metrics?.winRate || 0,
-          roi30d: t.metrics?.roi30d || 0,
-          totalPositions: t.metrics?.totalTrades || 0,
-          totalAUM: t.metrics?.totalAUM || 0,
-          followedAt: new Date(),
-        });
-      }
+    for (const t of hlTop) {
+      followedTraders.push({
+        wallet: t.walletAddress || t.wallet || 'unknown',
+        platform: 'hyperliquid',
+        pnl30d: t.pnl_30d || 0,
+        winRate: t.positionWinRate || 0,
+        totalPositions: t.totalPositions || 0,
+        totalAUM: parseFloat(t.accountValue) || 0,
+        followedAt: new Date(),
+      });
     }
 
-    // --- Top 3 PM traders from polymarket-traderProfiles ---
-    if (hasPredictions) {
-      const pmProfiles = db.collection('polymarket-traderProfiles');
-      const pmTop = await pmProfiles
-        .find({})
-        .sort({ netPnl: -1 })
-        .limit(3)
-        .toArray();
+    for (const t of avTop) {
+      followedTraders.push({
+        wallet: t.walletAddress || 'unknown',
+        platform: 'avantis',
+        username: t.username,
+        pnl30d: t.metrics?.totalPnL30d || 0,
+        winRate: t.metrics?.winRate || 0,
+        roi30d: t.metrics?.roi30d || 0,
+        totalPositions: t.metrics?.totalTrades || 0,
+        totalAUM: t.metrics?.totalAUM || 0,
+        followedAt: new Date(),
+      });
+    }
 
-      for (const t of pmTop) {
-        followedTraders.push({
-          wallet: t.wallet || 'unknown',
-          platform: 'polymarket',
-          pnl30d: t.netPnl || 0,
-          winRate: t.winRate || 0,
-          totalPositions: t.totalActivities || 0,
-          totalAUM: t.openValue || 0,
-          followedAt: new Date(),
-        });
-      }
+    for (const t of pmTop) {
+      followedTraders.push({
+        wallet: t.wallet || 'unknown',
+        platform: 'polymarket',
+        pnl30d: t.netPnl || 0,
+        winRate: t.winRate || 0,
+        totalPositions: t.totalActivities || 0,
+        totalAUM: t.openValue || 0,
+        followedAt: new Date(),
+      });
     }
 
     // Update agent
