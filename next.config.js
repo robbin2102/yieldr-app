@@ -20,10 +20,10 @@ const nextConfig = {
         tls: false,
       };
 
-      // MetaMask SDK tries to import this React Native module - mock it for browser
+      // MetaMask SDK tries to import this React Native module - provide stub for browser
       config.resolve.alias = {
         ...config.resolve.alias,
-        '@react-native-async-storage/async-storage': false,
+        '@react-native-async-storage/async-storage': require.resolve('./lib/empty-async-storage.js'),
       };
     }
 
