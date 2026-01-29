@@ -89,12 +89,12 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // --- Top 3 PM traders from polymarket-trackedTraders ---
+    // --- Top 3 PM traders from polymarket-traderProfiles ---
     if (hasPredictions) {
-      const pmTraders = db.collection('polymarket-trackedTraders');
-      const pmTop = await pmTraders
-        .find({ isActive: true })
-        .sort({ totalPnl: -1 })
+      const pmProfiles = db.collection('polymarket-traderProfiles');
+      const pmTop = await pmProfiles
+        .find({})
+        .sort({ netPnl: -1 })
         .limit(3)
         .toArray();
 
@@ -102,10 +102,10 @@ export async function POST(request: NextRequest) {
         followedTraders.push({
           wallet: t.wallet || 'unknown',
           platform: 'polymarket',
-          username: t.label,
-          pnl30d: t.totalPnl || 0,
+          pnl30d: t.netPnl || 0,
           winRate: t.winRate || 0,
-          totalPositions: t.totalCopied || 0,
+          totalPositions: t.totalActivities || 0,
+          totalAUM: t.openValue || 0,
           followedAt: new Date(),
         });
       }
