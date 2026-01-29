@@ -142,10 +142,10 @@ export default function LaunchingPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           walletAddress,
-          lpPositions: data.lpPositions,
-          avantisPositions: data.avantisPositions,
-          hyperliquidPositions: data.hlPositions,
-          polymarketPositions: data.pmPositions,
+          lpPositions: data.lpPositions || [],
+          avantisPositions: data.avantisPositions || [],
+          hyperliquidPositions: data.hlPositions || [],
+          polymarketPositions: data.pmPositions || [],
           metrics: { totalPnL: 0, totalAUM: data.totalValue, totalROI: 0 },
         }),
       });

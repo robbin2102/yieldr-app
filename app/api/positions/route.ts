@@ -4,7 +4,7 @@ import clientPromise from '@/lib/mongodb';
 export async function POST(request: NextRequest) {
   try {
     const data = await request.json();
-    const { walletAddress, lpPositions, avantisPositions, hyperliquidPositions, metrics } = data;
+    const { walletAddress, lpPositions, avantisPositions, hyperliquidPositions, polymarketPositions, metrics } = data;
 
     if (!walletAddress) {
       return NextResponse.json(
@@ -97,6 +97,24 @@ export async function POST(request: NextRequest) {
       positionId: pos.positionId,
       createdAt: getCreatedAt('Hyperliquid', pos.positionId),
       updatedAt: new Date(),
+    })),
+    ...(polymarketPositions || []).map((pos: any) => ({
+      walletAddress: walletAddress.toLowerCase(),
+      type: 'PREDICTION',
+      platform: 'Polymarket',
+      market: pos.title || 'Unknown',
+      outcome: pos.outcome || 'Unknown',
+      size: pos.size || 0,
+      avgPrice: pos.avgPrice || 0,
+      currentPrice: pos.currentPrice || 0,
+      initialValue: pos.initialValue || 0,
+      currentValue: pos.currentValue || 0,
+      pnl: pos.pnl || 0,
+      pnlPercent: pos.pnlPercent || 0,
+      status: 'active',
+      positionId: pos.conditionId || `pm-${Date.now()}`,
+      createdAt: getCreatedAt('Polymarket', pos.conditionId || `pm-${Date.now()}`),
+      updatedAt: new Date(),
     }))
     ];
 
@@ -105,32 +123,38 @@ export async function POST(request: NextRequest) {
       await db.collection('positions').insertMany(allPositions);
     }
 
-    // Update user metrics
+    // Update user metrics (upsert to create user doc if it doesn't exist)
     await db.collection('users').updateOne(
       { walletAddress: walletAddress.toLowerCase() },
-      { 
+      {
         $set: {
           metrics: {
-            totalPnL30d: metrics.totalPnL,
-            roi30d: metrics.totalROI,
-            totalAUM: metrics.totalAUM,
+            totalPnL30d: metrics?.totalPnL || 0,
+            roi30d: metrics?.totalROI || 0,
+            totalAUM: metrics?.totalAUM || 0,
             totalPositions: allPositions.length,
-            lpPositions: lpPositions.length,
-            perpPositions: avantisPositions.length + (hyperliquidPositions || []).length,
-            avantisPositions: avantisPositions.length,
+            lpPositions: (lpPositions || []).length,
+            perpPositions: (avantisPositions || []).length + (hyperliquidPositions || []).length,
+            avantisPositions: (avantisPositions || []).length,
             hyperliquidPositions: (hyperliquidPositions || []).length,
-
+            polymarketPositions: (polymarketPositions || []).length,
             lastUpdated: new Date()
           },
           updatedAt: new Date()
+        },
+        $setOnInsert: {
+          walletAddress: walletAddress.toLowerCase(),
+          createdAt: new Date()
         }
-      }
+      },
+      { upsert: true }
     );
 
     console.log(`Saved ${allPositions.length} positions for wallet:`, walletAddress);
-    console.log(`  ├─ LP positions: ${lpPositions.length}`);
-    console.log(`  ├─ Avantis positions: ${avantisPositions.length}`);
-    console.log(`  └─ Hyperliquid positions: ${(hyperliquidPositions || []).length}`);
+    console.log(`  ├─ LP positions: ${(lpPositions || []).length}`);
+    console.log(`  ├─ Avantis positions: ${(avantisPositions || []).length}`);
+    console.log(`  ├─ Hyperliquid positions: ${(hyperliquidPositions || []).length}`);
+    console.log(`  └─ Polymarket positions: ${(polymarketPositions || []).length}`);
 
     return NextResponse.json({
       success: true,
