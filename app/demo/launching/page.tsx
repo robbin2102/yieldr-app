@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useAccount } from 'wagmi';
 import { useRouter } from 'next/navigation';
 
@@ -9,367 +9,379 @@ interface LogStep {
   text: string;
   detail?: string;
   status: 'pending' | 'loading' | 'success';
-}
-
-interface PositionData {
-  avantis: number;
-  hyperliquid: number;
-  polymarket: number;
-  totalValue: number;
-}
-
-interface TraderData {
-  wallets: string[];
-  count: number;
+  highlight?: boolean;
+  visible: boolean;
 }
 
 export default function LaunchingPage() {
   const [mounted, setMounted] = useState(false);
   const router = useRouter();
   const { address, isConnected } = useAccount();
-  const [agentName, setAgentName] = useState('AlphaHunter');
+  const sequenceStarted = useRef(false);
 
-  useEffect(() => { setMounted(true); }, []);
+  const [agentName, setAgentName] = useState('AlphaHunter');
   const [progress, setProgress] = useState(0);
   const [isReady, setIsReady] = useState(false);
-  const [showDiscovery, setShowDiscovery] = useState(false);
-  const [showCTA, setShowCTA] = useState(false);
+  const [discoveryVisible, setDiscoveryVisible] = useState(false);
+  const [ctaVisible, setCtaVisible] = useState(false);
 
   const [logs, setLogs] = useState<LogStep[]>([
-    { id: 1, text: 'Initializing agent', status: 'pending' },
-    { id: 2, text: 'Connecting wallet', status: 'pending' },
-    { id: 3, text: 'Loading market context', status: 'pending' },
-    { id: 4, text: 'Scanning positions', status: 'pending' },
-    { id: 5, text: 'Following top traders', status: 'pending' },
+    { id: 1, text: 'Initializing agent', status: 'pending', visible: false },
+    { id: 2, text: 'Connecting wallet', status: 'pending', visible: false },
+    { id: 3, text: 'Loading market context', status: 'pending', visible: false },
+    { id: 4, text: 'Scanning positions', status: 'pending', visible: false },
+    { id: 5, text: 'Following top traders', status: 'pending', visible: false },
   ]);
 
-  const [positionData, setPositionData] = useState<PositionData>({
-    avantis: 0,
-    hyperliquid: 0,
-    polymarket: 0,
-    totalValue: 0,
-  });
+  const [portfolioValue, setPortfolioValue] = useState(0);
+  const [portfolioDetail, setPortfolioDetail] = useState('');
 
-  const [traderData, setTraderData] = useState<TraderData>({
-    wallets: [],
-    count: 0,
-  });
+  useEffect(() => { setMounted(true); }, []);
 
   // Load setup data
   useEffect(() => {
+    if (!mounted) return;
     const setup = localStorage.getItem('agentSetup');
     if (setup) {
-      const data = JSON.parse(setup);
-      if (data.name) setAgentName(data.name);
+      try {
+        const data = JSON.parse(setup);
+        if (data.name) setAgentName(data.name);
+      } catch {}
     }
-
-    // Redirect if no wallet connected
-    if (!isConnected) {
-      router.push('/demo');
-    }
-  }, [isConnected, router]);
-
-  const shortWallet = address
-    ? `${address.slice(0, 6)}...${address.slice(-4)}`
-    : '';
+  }, [mounted]);
 
   const updateLog = useCallback((id: number, updates: Partial<LogStep>) => {
-    setLogs(prev =>
-      prev.map(log => (log.id === id ? { ...log, ...updates } : log))
-    );
+    setLogs(prev => prev.map(log => (log.id === id ? { ...log, ...updates } : log)));
   }, []);
 
-  // Scan positions from MCP server
-  const scanPositions = useCallback(async () => {
-    if (!address) return { avantis: 0, hyperliquid: 0, polymarket: 0, totalValue: 0 };
+  const startStep = useCallback((id: number) => {
+    updateLog(id, { status: 'loading', visible: true });
+  }, [updateLog]);
 
+  const completeStep = useCallback((id: number, detail?: string, highlight?: boolean) => {
+    updateLog(id, { status: 'success', detail, highlight });
+  }, [updateLog]);
+
+  // Scan positions using existing production APIs + MCP for Polymarket
+  const scanPositions = useCallback(async (walletAddress: string) => {
     const mcpUrl = process.env.NEXT_PUBLIC_MCP_SERVER_URL || 'https://mcp-demo-production-59da.up.railway.app';
 
-    try {
-      // Fetch positions in parallel
-      const [avantisRes, hlRes, pmRes] = await Promise.allSettled([
-        fetch(`${mcpUrl}/tools/get_avantis_live_positions`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ walletAddress: address }),
-        }),
-        fetch(`${mcpUrl}/tools/get_hl_live_positions`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ walletAddress: address }),
-        }),
-        fetch(`${mcpUrl}/tools/get_pm_live_positions`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ walletAddress: address }),
-        }),
-      ]);
-
-      let avantisCount = 0, hlCount = 0, pmCount = 0, totalValue = 0;
-
-      if (avantisRes.status === 'fulfilled' && avantisRes.value.ok) {
-        const data = await avantisRes.value.json();
-        avantisCount = data.totalPositions || 0;
-        totalValue += data.summary?.totalMargin || 0;
-      }
-
-      if (hlRes.status === 'fulfilled' && hlRes.value.ok) {
-        const data = await hlRes.value.json();
-        hlCount = data.totalPositions || 0;
-        totalValue += data.summary?.accountValue || 0;
-      }
-
-      if (pmRes.status === 'fulfilled' && pmRes.value.ok) {
-        const data = await pmRes.value.json();
-        pmCount = data.totalPositions || 0;
-        totalValue += data.summary?.totalValue || 0;
-      }
-
-      return { avantis: avantisCount, hyperliquid: hlCount, polymarket: pmCount, totalValue };
-    } catch (error) {
-      console.error('Error scanning positions:', error);
-      return { avantis: 0, hyperliquid: 0, polymarket: 0, totalValue: 0 };
-    }
-  }, [address]);
-
-  // Fetch top traders to follow
-  const fetchTopTraders = useCallback(async () => {
-    const mcpUrl = process.env.NEXT_PUBLIC_MCP_SERVER_URL || 'https://mcp-demo-production-59da.up.railway.app';
-
-    try {
-      const [perpRes, pmRes] = await Promise.allSettled([
-        fetch(`${mcpUrl}/tools/get_top_perp_traders`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ sortBy: 'totalPnl', limit: 3 }),
-        }),
-        fetch(`${mcpUrl}/tools/get_top_pm_traders`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ sortBy: 'netPnl', limit: 3 }),
-        }),
-      ]);
-
-      const wallets: string[] = [];
-
-      if (perpRes.status === 'fulfilled' && perpRes.value.ok) {
-        const data = await perpRes.value.json();
-        (data.traders || []).forEach((t: any) => {
-          if (t.wallet && !wallets.includes(t.wallet)) {
-            wallets.push(t.wallet);
-          }
-        });
-      }
-
-      if (pmRes.status === 'fulfilled' && pmRes.value.ok) {
-        const data = await pmRes.value.json();
-        (data.traders || []).forEach((t: any) => {
-          if (t.wallet && !wallets.includes(t.wallet)) {
-            wallets.push(t.wallet);
-          }
-        });
-      }
-
-      return { wallets, count: wallets.length };
-    } catch (error) {
-      console.error('Error fetching traders:', error);
-      return { wallets: [], count: 0 };
-    }
-  }, []);
-
-  // Save agent to database
-  const saveAgent = useCallback(async (positions: PositionData, traders: TraderData) => {
-    if (!address) return;
-
-    try {
-      const setup = JSON.parse(localStorage.getItem('agentSetup') || '{}');
-
-      await fetch('/api/demo/agents', {
+    const [avantisRes, hlRes, lpRes, pmRes] = await Promise.allSettled([
+      fetch(`/api/avantis-positions?address=${walletAddress}`),
+      fetch(`/api/hyperliquid-positions?address=${walletAddress}`),
+      fetch(`/api/lp-positions?address=${walletAddress}`),
+      fetch(`${mcpUrl}/tools/get_pm_live_positions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: agentName,
-          ownerWallet: address,
-          goals: setup.goals || ['invest'],
-          positions,
-          followedTraders: traders.wallets,
-        }),
+        body: JSON.stringify({ walletAddress }),
+      }),
+    ]);
+
+    let avantisPositions: any[] = [];
+    let hlPositions: any[] = [];
+    let lpPositions: any[] = [];
+    let pmPositions: any[] = [];
+    let totalValue = 0;
+
+    if (avantisRes.status === 'fulfilled' && avantisRes.value.ok) {
+      const data = await avantisRes.value.json();
+      avantisPositions = data.positions || [];
+      totalValue += data.summary?.totalMargin || 0;
+    }
+
+    if (hlRes.status === 'fulfilled' && hlRes.value.ok) {
+      const data = await hlRes.value.json();
+      hlPositions = data.positions || [];
+      totalValue += data.summary?.accountValue || data.summary?.totalMargin || 0;
+    }
+
+    if (lpRes.status === 'fulfilled' && lpRes.value.ok) {
+      const data = await lpRes.value.json();
+      lpPositions = data.positions || [];
+      totalValue += data.summary?.totalLiquidity || 0;
+    }
+
+    if (pmRes.status === 'fulfilled' && pmRes.value.ok) {
+      const data = await pmRes.value.json();
+      pmPositions = data.positions || [];
+      totalValue += data.summary?.totalValue || 0;
+    }
+
+    return {
+      avantisPositions,
+      hlPositions,
+      lpPositions,
+      pmPositions,
+      counts: {
+        avantis: avantisPositions.length,
+        hyperliquid: hlPositions.length,
+        lp: lpPositions.length,
+        polymarket: pmPositions.length,
+      },
+      totalValue,
+    };
+  }, []);
+
+  // Save positions to MongoDB using existing production API
+  const savePositions = useCallback(async (walletAddress: string, data: any) => {
+    try {
+      // Add polymarket positions to the existing save format
+      const allPositions = {
+        walletAddress,
+        lpPositions: data.lpPositions,
+        avantisPositions: data.avantisPositions,
+        hyperliquidPositions: data.hlPositions,
+        polymarketPositions: data.pmPositions,
+        metrics: {
+          totalPnL: 0,
+          totalAUM: data.totalValue,
+          totalROI: 0,
+        },
+      };
+
+      await fetch('/api/positions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(allPositions),
       });
     } catch (error) {
-      console.error('Error saving agent:', error);
+      console.error('Error saving positions:', error);
     }
-  }, [address, agentName]);
+  }, []);
 
-  // Run the animation sequence
+  // Run animation sequence
   useEffect(() => {
-    if (!address) return;
+    if (!mounted || !address || sequenceStarted.current) return;
+    sequenceStarted.current = true;
 
-    const runSequence = async () => {
+    const shortWallet = `${address.slice(0, 6)}...${address.slice(-4)}`;
+    const setup = JSON.parse(localStorage.getItem('agentSetup') || '{}');
+    const markets: string[] = setup.markets || ['perps'];
+
+    const run = async () => {
       // Step 1: Initialize
-      updateLog(1, { status: 'loading' });
-      await new Promise(r => setTimeout(r, 1000));
-      updateLog(1, { status: 'success' });
+      startStep(1);
+      await new Promise(r => setTimeout(r, 1500));
+      completeStep(1);
       setProgress(20);
 
       // Step 2: Connect wallet
-      updateLog(2, { status: 'loading' });
-      await new Promise(r => setTimeout(r, 800));
-      updateLog(2, { status: 'success', detail: shortWallet });
+      await new Promise(r => setTimeout(r, 200));
+      startStep(2);
+      await new Promise(r => setTimeout(r, 1500));
+      completeStep(2, shortWallet);
       setProgress(40);
 
-      // Step 3: Load market context
-      updateLog(3, { status: 'loading' });
-      await new Promise(r => setTimeout(r, 1200));
-      updateLog(3, { status: 'success', detail: 'BTC, ETH, SOL trends loaded' });
+      // Step 3: Market context
+      await new Promise(r => setTimeout(r, 200));
+      startStep(3);
+      await new Promise(r => setTimeout(r, 1500));
+      const marketNames = markets.map((m: string) => {
+        if (m === 'perps') return 'Perpetuals';
+        if (m === 'predictions') return 'Prediction Markets';
+        if (m === 'liquidity') return 'Liquidity';
+        return m;
+      });
+      completeStep(3, marketNames.length === 3 ? 'All markets' : marketNames.join(' + '));
       setProgress(60);
 
-      // Step 4: Scan positions
-      updateLog(4, { status: 'loading' });
-      const positions = await scanPositions();
-      setPositionData(positions);
-
-      const perpCount = positions.avantis + positions.hyperliquid;
-      let posDetail = '';
-      if (perpCount > 0 && positions.polymarket > 0) {
-        posDetail = `Found ${perpCount} positions on Avantis + Hyperliquid\nFound ${positions.polymarket} positions on Polymarket`;
-      } else if (perpCount > 0) {
-        posDetail = `Found ${perpCount} positions on Avantis + Hyperliquid`;
-      } else if (positions.polymarket > 0) {
-        posDetail = `Found ${positions.polymarket} positions on Polymarket`;
-      } else {
-        posDetail = 'No positions found';
-      }
-
-      updateLog(4, { status: 'success', detail: posDetail });
+      // Step 4: Scan positions (real API calls)
+      await new Promise(r => setTimeout(r, 200));
+      startStep(4);
+      const posData = await scanPositions(address);
+      const parts: string[] = [];
+      const perpCount = posData.counts.avantis + posData.counts.hyperliquid;
+      if (perpCount > 0) parts.push(`${perpCount} perp positions`);
+      if (posData.counts.lp > 0) parts.push(`${posData.counts.lp} LP positions`);
+      if (posData.counts.polymarket > 0) parts.push(`${posData.counts.polymarket} prediction positions`);
+      const posDetail = parts.length > 0 ? `Found ${parts.join(' + ')}` : 'No positions found';
+      completeStep(4, posDetail, true);
       setProgress(80);
 
-      // Step 5: Follow traders
-      updateLog(5, { status: 'loading' });
-      const traders = await fetchTopTraders();
-      setTraderData(traders);
-
-      let traderDetail = '';
-      if (traders.wallets.length > 3) {
-        const shortWallets = traders.wallets.slice(0, 3).map(w => `${w.slice(0, 6)}...${w.slice(-2)}`);
-        traderDetail = `${shortWallets.join(', ')} +${traders.wallets.length - 3} more`;
-      } else if (traders.wallets.length > 0) {
-        traderDetail = traders.wallets.map(w => `${w.slice(0, 6)}...${w.slice(-2)}`).join(', ');
-      } else {
-        traderDetail = 'Following default traders';
-      }
-
-      updateLog(5, { status: 'success', detail: traderDetail });
+      // Step 5: Follow top traders (placeholder)
+      await new Promise(r => setTimeout(r, 200));
+      startStep(5);
+      await new Promise(r => setTimeout(r, 2000));
+      completeStep(5, 'Coming soon');
       setProgress(100);
 
-      // Save agent
-      await saveAgent(positions, traders);
+      // Save positions to MongoDB
+      await savePositions(address, posData);
 
-      // Show completion
+      // Show discovery
+      const totalPositions = perpCount + posData.counts.lp + posData.counts.polymarket;
+      setPortfolioValue(posData.totalValue);
+      if (totalPositions > 0) {
+        setPortfolioDetail(`${totalPositions} positions across ${[
+          posData.counts.avantis > 0 || posData.counts.hyperliquid > 0 ? 'Perps' : '',
+          posData.counts.lp > 0 ? 'LP' : '',
+          posData.counts.polymarket > 0 ? 'Polymarket' : '',
+        ].filter(Boolean).join(' + ')}`);
+      } else {
+        setPortfolioDetail('Ready to start trading');
+      }
+
       await new Promise(r => setTimeout(r, 500));
       setIsReady(true);
-      setShowDiscovery(true);
+      setDiscoveryVisible(true);
 
       await new Promise(r => setTimeout(r, 500));
-      setShowCTA(true);
+      setCtaVisible(true);
     };
 
-    runSequence();
-  }, [address, shortWallet, scanPositions, fetchTopTraders, saveAgent, updateLog]);
+    run();
+  }, [mounted, address, startStep, completeStep, scanPositions, savePositions]);
 
   const handleLetsGo = () => {
-    // Save completion state
     localStorage.setItem('agentCreated', JSON.stringify({
       name: agentName,
       wallet: address,
-      traders: traderData.wallets,
-      positions: positionData,
       createdAt: Date.now(),
     }));
-
     router.push('/demo/chat');
   };
 
-  const totalPositions = positionData.avantis + positionData.hyperliquid + positionData.polymarket;
-
   if (!mounted) return null;
 
+  // Redirect if no wallet
+  if (!isConnected && mounted) {
+    router.push('/demo');
+    return null;
+  }
+
   return (
-    <div className="min-h-screen flex items-center justify-center p-4 md:p-8">
-      <div className="max-w-[480px] w-full bg-[#0A0A0A] border border-[#1E1E1E] rounded-2xl p-8 shadow-2xl">
+    <div style={{
+      minHeight: '100vh',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      padding: '2rem',
+      fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, sans-serif",
+    }}>
+      <div style={{
+        maxWidth: 480,
+        width: '100%',
+        background: '#0A0A0A',
+        border: '1px solid #1E1E1E',
+        borderRadius: 16,
+        padding: '2.5rem 2rem',
+        boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.8)',
+      }}>
         {/* Agent Avatar */}
-        <div className="flex justify-center mb-6">
-          <div
-            className={`w-20 h-20 rounded-[20px] flex items-center justify-center text-4xl relative ${
-              isReady
-                ? 'bg-gradient-to-br from-[#00C805] to-[#0088FF] shadow-[0_0_30px_rgba(0,200,5,0.3)]'
-                : 'bg-gradient-to-br from-[#00C805] to-[#0088FF] animate-pulse'
-            }`}
+        <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '1.5rem' }}>
+          <div style={{
+            width: 80,
+            height: 80,
+            background: 'linear-gradient(135deg, #00C805 0%, #0088FF 100%)',
+            borderRadius: 20,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontSize: '2.5rem',
+            position: 'relative',
+            boxShadow: isReady ? '0 0 30px rgba(0, 200, 5, 0.3)' : undefined,
+            animation: isReady ? 'none' : undefined,
+          }}
+          className={isReady ? '' : 'avatar-pulse'}
           >
-            🤖
+            {'\uD83E\uDD16'}
             {isReady && (
               <>
-                <span className="absolute -top-2 -right-2 text-base animate-bounce">✨</span>
-                <span className="absolute -bottom-2 -left-2 text-base animate-bounce delay-150">✨</span>
+                <span className="sparkle sparkle-1">{'\u2728'}</span>
+                <span className="sparkle sparkle-2">{'\u2728'}</span>
+                <span className="sparkle sparkle-3">{'\u2728'}</span>
               </>
             )}
           </div>
         </div>
 
         {/* Title */}
-        <h1 className="text-center text-2xl font-bold mb-2">
-          {isReady ? (
-            <>{agentName} is Ready!</>
-          ) : (
-            <>Creating {agentName}</>
-          )}
+        <h1 style={{ textAlign: 'center', fontSize: '1.5rem', fontWeight: 700, marginBottom: '0.5rem', letterSpacing: '-0.02em' }}>
+          {isReady ? `${agentName} is Ready!` : `Creating ${agentName}`}
         </h1>
-        <p className="text-center text-sm text-[#9E9E9E] mb-8">
-          {isReady
-            ? 'Your agent is ready to monitor and learn.'
-            : 'Setting up your trading agent...'}
+        <p style={{ textAlign: 'center', fontSize: '0.85rem', color: '#9E9E9E', marginBottom: '2rem' }}>
+          {isReady ? 'Your agent is ready to monitor and learn.' : 'Setting up your trading agent...'}
         </p>
 
         {/* Progress Bar */}
-        <div className="mb-8">
-          <div className="h-1 bg-[#1E1E1E] rounded-full overflow-hidden">
-            <div
-              className="h-full bg-gradient-to-r from-[#00C805] to-[#0088FF] transition-all duration-500 ease-out"
-              style={{ width: `${progress}%` }}
-            />
+        <div style={{ marginBottom: '2rem' }}>
+          <div style={{ height: 4, background: '#1E1E1E', borderRadius: 2, overflow: 'hidden' }}>
+            <div style={{
+              height: '100%',
+              background: 'linear-gradient(90deg, #00C805 0%, #0088FF 100%)',
+              width: `${progress}%`,
+              transition: 'width 0.5s ease',
+              borderRadius: 2,
+            }} />
           </div>
         </div>
 
         {/* Log Container */}
-        <div className="bg-[#111111] border border-[#1E1E1E] rounded-xl p-4 mb-6 min-h-[180px]">
+        <div style={{
+          background: '#111111',
+          border: '1px solid #1E1E1E',
+          borderRadius: 10,
+          padding: '1rem',
+          marginBottom: '1.5rem',
+          minHeight: 200,
+        }}>
           {logs.map((log) => (
             <div
               key={log.id}
-              className={`flex items-start gap-3 py-2 transition-all duration-300 ${
-                log.status === 'pending' ? 'opacity-40' : 'opacity-100'
-              }`}
+              style={{
+                display: 'flex',
+                alignItems: 'flex-start',
+                gap: '0.75rem',
+                padding: '0.5rem 0',
+                opacity: log.visible ? (log.status === 'pending' ? 0.5 : 1) : 0,
+                transform: log.visible ? 'translateY(0)' : 'translateY(10px)',
+                transition: 'all 0.3s ease',
+              }}
             >
               {/* Icon */}
               <div
-                className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] flex-shrink-0 mt-0.5 ${
-                  log.status === 'pending'
-                    ? 'bg-[#1A1A1A] border-2 border-[#2A2A2A] text-[#6E6E6E]'
-                    : log.status === 'loading'
-                    ? 'bg-[#1A1A1A] border-2 border-[#FFD000] text-[#FFD000] animate-spin'
-                    : 'bg-[#00C805] border-2 border-[#00C805] text-black font-bold'
-                }`}
+                className={log.status === 'loading' ? 'spin-icon' : ''}
+                style={{
+                  width: 20,
+                  height: 20,
+                  borderRadius: '50%',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: '0.65rem',
+                  flexShrink: 0,
+                  marginTop: 2,
+                  ...(log.status === 'pending' ? {
+                    background: '#1A1A1A',
+                    border: '2px solid #2A2A2A',
+                    color: '#6E6E6E',
+                  } : log.status === 'loading' ? {
+                    background: '#1A1A1A',
+                    border: '2px solid #FFD000',
+                    color: '#FFD000',
+                  } : {
+                    background: '#00C805',
+                    border: '2px solid #00C805',
+                    color: '#000',
+                    fontWeight: 700,
+                  }),
+                }}
               >
-                {log.status === 'success' ? '✓' : '○'}
+                {log.status === 'success' ? '\u2713' : '\u25CB'}
               </div>
 
               {/* Content */}
-              <div className="flex-1">
-                <div className="text-sm text-white">{log.text}</div>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: '0.85rem', color: '#FFFFFF', marginBottom: '0.15rem' }}>
+                  {log.text}
+                </div>
                 {log.detail && (
-                  <div
-                    className={`text-[11px] font-mono mt-1 whitespace-pre-line ${
-                      log.id === 3 ? 'text-[#00C805] font-semibold' : 'text-[#6E6E6E]'
-                    }`}
-                  >
+                  <div style={{
+                    fontFamily: "'JetBrains Mono', monospace",
+                    fontSize: '0.7rem',
+                    color: log.highlight ? '#00C805' : '#6E6E6E',
+                    fontWeight: log.highlight ? 600 : 400,
+                  }}>
                     {log.detail}
                   </div>
                 )}
@@ -379,50 +391,90 @@ export default function LaunchingPage() {
         </div>
 
         {/* Discovery Box */}
-        {showDiscovery && (
-          <div className="bg-[#00C805]/10 border border-[#00C805]/20 rounded-xl p-4 mb-6 animate-fade-in">
-            <div className="text-2xl mb-2">🎉</div>
-            <div className="text-sm font-semibold text-[#00C805] mb-1">
-              Portfolio Discovered!
-            </div>
-            <div className="text-2xl font-bold font-mono mb-1">
-              ${positionData.totalValue.toLocaleString(undefined, { maximumFractionDigits: 0 })}
-            </div>
-            <div className="text-xs text-[#9E9E9E]">
-              {totalPositions} positions across {[
-                positionData.avantis > 0 && 'Avantis',
-                positionData.hyperliquid > 0 && 'Hyperliquid',
-                positionData.polymarket > 0 && 'Polymarket',
-              ].filter(Boolean).join(' + ') || 'all protocols'}
-            </div>
+        <div style={{
+          background: 'rgba(0, 200, 5, 0.08)',
+          border: '1px solid rgba(0, 200, 5, 0.2)',
+          borderRadius: 8,
+          padding: '1rem',
+          marginBottom: '1.5rem',
+          opacity: discoveryVisible ? 1 : 0,
+          transform: discoveryVisible ? 'translateY(0)' : 'translateY(10px)',
+          transition: 'all 0.4s ease',
+          display: discoveryVisible ? 'block' : 'none',
+        }}>
+          <div style={{ fontSize: '1.25rem', marginBottom: '0.5rem' }}>{'\uD83C\uDF89'}</div>
+          <div style={{ fontSize: '0.9rem', fontWeight: 600, color: '#00C805', marginBottom: '0.25rem' }}>
+            Portfolio Discovered!
           </div>
-        )}
+          <div style={{
+            fontFamily: "'JetBrains Mono', monospace",
+            fontSize: '1.5rem',
+            fontWeight: 700,
+            color: '#FFFFFF',
+            marginBottom: '0.25rem',
+          }}>
+            ${portfolioValue.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+          </div>
+          <div style={{ fontSize: '0.75rem', color: '#9E9E9E' }}>
+            {portfolioDetail}
+          </div>
+        </div>
 
         {/* CTA Button */}
-        {showCTA && (
+        <div style={{
+          opacity: ctaVisible ? 1 : 0,
+          transform: ctaVisible ? 'translateY(0)' : 'translateY(10px)',
+          transition: 'all 0.4s ease',
+          display: ctaVisible ? 'block' : 'none',
+        }}>
           <button
             onClick={handleLetsGo}
-            className="w-full py-4 rounded-lg bg-[#00C805] text-black text-base font-bold hover:bg-[#00E006] hover:-translate-y-0.5 hover:shadow-[0_4px_20px_rgba(0,200,5,0.4)] transition-all animate-fade-in"
+            style={{
+              width: '100%',
+              padding: '1rem 1.5rem',
+              background: '#00C805',
+              border: 'none',
+              borderRadius: 8,
+              color: '#000',
+              fontSize: '1rem',
+              fontWeight: 700,
+              cursor: 'pointer',
+              fontFamily: "'Inter', sans-serif",
+              transition: 'all 0.2s ease',
+            }}
           >
-            Let&apos;s Go →
+            {"Let's Go \u2192"}
           </button>
-        )}
+        </div>
       </div>
 
       <style jsx>{`
-        @keyframes fade-in {
-          from {
-            opacity: 0;
-            transform: translateY(10px);
-          }
-          to {
-            opacity: 1;
-            transform: translateY(0);
-          }
+        @keyframes pulse {
+          0%, 100% { box-shadow: 0 0 0 0 rgba(0, 200, 5, 0.4); }
+          50% { box-shadow: 0 0 20px 10px rgba(0, 200, 5, 0.1); }
         }
-        .animate-fade-in {
-          animation: fade-in 0.4s ease-out forwards;
+        .avatar-pulse {
+          animation: pulse 2s ease-in-out infinite;
         }
+        @keyframes spin {
+          from { transform: rotate(0deg); }
+          to { transform: rotate(360deg); }
+        }
+        .spin-icon {
+          animation: spin 1s linear infinite;
+        }
+        @keyframes sparkleAnim {
+          0%, 100% { opacity: 0; transform: scale(0.5); }
+          50% { opacity: 1; transform: scale(1); }
+        }
+        .sparkle {
+          position: absolute;
+          font-size: 1rem;
+          animation: sparkleAnim 1s ease-in-out infinite;
+        }
+        .sparkle-1 { top: -8px; right: -8px; animation-delay: 0s; }
+        .sparkle-2 { bottom: -8px; left: -8px; animation-delay: 0.3s; }
+        .sparkle-3 { top: -8px; left: -8px; animation-delay: 0.6s; }
       `}</style>
     </div>
   );

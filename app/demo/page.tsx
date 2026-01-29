@@ -5,204 +5,364 @@ import { useAccount } from 'wagmi';
 import { ConnectButton } from '@rainbow-me/rainbowkit';
 import { useRouter } from 'next/navigation';
 
-type Goal = 'invest' | 'improve' | 'fund';
+type Market = 'perps' | 'predictions' | 'liquidity';
+
+const marketConfig: Array<{
+  id: Market;
+  icon: string;
+  name: string;
+  desc: string;
+  platforms: string[];
+}> = [
+  {
+    id: 'perps',
+    icon: '\u26A1',
+    name: 'Perpetuals',
+    desc: 'Leveraged trading on perp DEXs',
+    platforms: ['Avantis', 'Hyperliquid'],
+  },
+  {
+    id: 'predictions',
+    icon: '\uD83C\uDFB2',
+    name: 'Prediction Markets',
+    desc: 'Event-driven trading and forecasting',
+    platforms: ['Polymarket', 'Limitless'],
+  },
+  {
+    id: 'liquidity',
+    icon: '\uD83D\uDCA7',
+    name: 'Liquidity',
+    desc: 'LP positions and yield farming',
+    platforms: ['Uniswap', 'Aerodrome'],
+  },
+];
+
+const marketNames: Record<Market, string> = {
+  perps: 'Perpetuals',
+  predictions: 'Prediction Markets',
+  liquidity: 'Liquidity',
+};
 
 export default function CreateAgentPage() {
   const [mounted, setMounted] = useState(false);
   const router = useRouter();
   const { address, isConnected } = useAccount();
   const [agentName, setAgentName] = useState('');
-  const [selectedGoals, setSelectedGoals] = useState<Goal[]>([]);
-  const [isCreating, setIsCreating] = useState(false);
+  const [selectedMarkets, setSelectedMarkets] = useState<Market[]>([]);
+  const [pendingConnect, setPendingConnect] = useState(false);
 
   useEffect(() => { setMounted(true); }, []);
 
-  const goals: Array<{
-    id: Goal;
-    icon: string;
-    title: string;
-    description: string;
-    tag: string;
-    disabled: boolean;
-  }> = [
-    {
-      id: 'invest',
-      icon: '💰',
-      title: 'Invest with Top Traders',
-      description: 'Your agent learns & executes trades following top traders',
-      tag: '→ Best for passive investors',
-      disabled: false,
-    },
-    {
-      id: 'improve',
-      icon: '📈',
-      title: 'Improve My Trading',
-      description: 'Get AI insights on your own trades',
-      tag: '→ Best for active traders',
-      disabled: true,
-    },
-    {
-      id: 'fund',
-      icon: '🏦',
-      title: 'Launch a Fund',
-      description: 'Launch & manage investor capital with your agent',
-      tag: '→ Best for professional traders',
-      disabled: true,
-    },
-  ];
-
-  const toggleGoal = (goalId: Goal) => {
-    if (goals.find(g => g.id === goalId)?.disabled) return;
-
-    setSelectedGoals(prev => {
-      if (prev.includes(goalId)) {
-        return prev.filter(g => g !== goalId);
-      }
-      // Allow max 2 selections
-      if (prev.length >= 2) {
-        return [...prev.slice(1), goalId];
-      }
-      return [...prev, goalId];
-    });
-  };
-
-  const canContinue = agentName.trim().length > 0 && selectedGoals.length > 0;
-
-  // Handle wallet connection
+  // Load saved data
   useEffect(() => {
-    if (isConnected && address && isCreating) {
-      // Store agent setup data
+    if (!mounted) return;
+    const saved = localStorage.getItem('agentSetup');
+    if (saved) {
+      try {
+        const data = JSON.parse(saved);
+        if (data.name) setAgentName(data.name);
+        if (data.markets && Array.isArray(data.markets)) setSelectedMarkets(data.markets);
+      } catch {}
+    }
+  }, [mounted]);
+
+  // After wallet connects, save and navigate
+  useEffect(() => {
+    if (isConnected && address && pendingConnect) {
       localStorage.setItem('agentSetup', JSON.stringify({
         name: agentName,
-        goals: selectedGoals,
+        markets: selectedMarkets,
         wallet: address,
-        step: 1,
+        createdAt: Date.now(),
       }));
-
-      // Navigate to launching page
       router.push('/demo/launching');
     }
-  }, [isConnected, address, isCreating, agentName, selectedGoals, router]);
+  }, [isConnected, address, pendingConnect, agentName, selectedMarkets, router]);
 
-  const handleContinue = () => {
-    setIsCreating(true);
+  const toggleMarket = (marketId: Market) => {
+    setSelectedMarkets(prev =>
+      prev.includes(marketId)
+        ? prev.filter(m => m !== marketId)
+        : [...prev, marketId]
+    );
   };
+
+  const canContinue = agentName.trim().length > 0 && selectedMarkets.length > 0;
+
+  const selectionText = (() => {
+    if (selectedMarkets.length === 0) return '';
+    if (selectedMarkets.length === 3) return '\u2713 All markets selected';
+    return `\u2713 ${selectedMarkets.map(m => marketNames[m]).join(' + ')}`;
+  })();
 
   if (!mounted) return null;
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-4 md:p-8">
-      <div className="max-w-[500px] w-full">
-        {/* Header */}
-        <div className="mb-8">
-          <div className="flex items-center gap-2 mb-4">
-            <span className="text-xs font-medium text-[#6E6E6E]">Step 1 of 2</span>
-            <div className="flex-1 h-[3px] bg-[#1E1E1E] rounded-full overflow-hidden">
-              <div className="h-full bg-[#00C805] w-1/2 transition-all duration-300" />
-            </div>
-          </div>
-          <h1 className="text-2xl font-bold">Create Your AI Agent</h1>
+    <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '2rem' }}>
+      <div style={{ maxWidth: 520, width: '100%' }}>
+        {/* Logo */}
+        <div style={{ textAlign: 'center', marginBottom: '2.5rem' }}>
+          <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: '1.5rem', fontWeight: 700, color: '#00C805', letterSpacing: '-0.02em' }}>
+            YIELDR
+          </span>
         </div>
 
-        {/* Form */}
-        <div className="space-y-8">
-          {/* Agent Name */}
-          <div>
-            <label className="block text-sm font-semibold mb-3">
-              Name your agent
-            </label>
-            <input
-              type="text"
-              value={agentName}
-              onChange={(e) => setAgentName(e.target.value)}
-              placeholder="e.g. AlphaHunter, YieldBot, TrendSeeker"
-              maxLength={30}
-              className="w-full px-4 py-3.5 bg-[#0B0B0B] border border-[#1E1E1E] rounded-lg text-white placeholder-[#6E6E6E] focus:outline-none focus:border-[#00C805] transition-colors"
-            />
-          </div>
+        {/* Header */}
+        <div style={{ marginBottom: '2rem' }}>
+          <h1 style={{ fontSize: '1.75rem', fontWeight: 700, marginBottom: '0.5rem', letterSpacing: '-0.02em' }}>
+            Create Your AI Agent
+          </h1>
+          <p style={{ fontSize: '0.9rem', color: '#9E9E9E', lineHeight: 1.5 }}>
+            Your agent learns from top traders and helps you understand market moves.
+          </p>
+        </div>
 
-          {/* Goals */}
-          <div>
-            <label className="block text-sm font-semibold mb-3">
-              What&apos;s your goal?
-            </label>
-            <div className="space-y-3">
-              {goals.map((goal) => (
+        {/* Agent Name */}
+        <div style={{ marginBottom: '2rem' }}>
+          <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, marginBottom: '0.75rem', color: '#FFFFFF' }}>
+            Name your agent
+          </label>
+          <input
+            type="text"
+            value={agentName}
+            onChange={(e) => setAgentName(e.target.value)}
+            placeholder="e.g. AlphaHunter, YieldBot, TrendSeeker"
+            maxLength={20}
+            autoComplete="off"
+            style={{
+              width: '100%',
+              padding: '1rem 1.25rem',
+              background: '#0A0A0A',
+              border: '2px solid #1E1E1E',
+              borderRadius: 8,
+              color: '#FFFFFF',
+              fontSize: '1rem',
+              fontFamily: "'Inter', sans-serif",
+              outline: 'none',
+              transition: 'all 0.2s ease',
+            }}
+            onFocus={(e) => { e.target.style.borderColor = '#00C805'; e.target.style.background = '#111111'; }}
+            onBlur={(e) => { e.target.style.borderColor = '#1E1E1E'; e.target.style.background = '#0A0A0A'; }}
+          />
+        </div>
+
+        {/* Market Selection */}
+        <div style={{ marginBottom: '2rem' }}>
+          <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, marginBottom: '0.75rem', color: '#FFFFFF' }}>
+            Which markets will your agent focus on?
+            <span style={{ fontWeight: 400, color: '#6E6E6E', marginLeft: '0.25rem' }}>(select one or more)</span>
+          </label>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+            {marketConfig.map((market) => {
+              const selected = selectedMarkets.includes(market.id);
+              return (
                 <button
-                  key={goal.id}
-                  onClick={() => toggleGoal(goal.id)}
-                  disabled={goal.disabled}
-                  className={`w-full text-left p-5 rounded-lg border-2 transition-all ${
-                    goal.disabled
-                      ? 'opacity-50 cursor-not-allowed bg-[#0B0B0B] border-[#1E1E1E]'
-                      : selectedGoals.includes(goal.id)
-                      ? 'bg-[#00C805]/5 border-[#00C805]'
-                      : 'bg-[#0B0B0B] border-[#1E1E1E] hover:border-[#2A2A2A] hover:bg-[#161616]'
-                  }`}
+                  key={market.id}
+                  type="button"
+                  onClick={() => toggleMarket(market.id)}
+                  style={{
+                    background: selected ? 'rgba(0, 200, 5, 0.05)' : '#0A0A0A',
+                    border: `2px solid ${selected ? '#00C805' : '#1E1E1E'}`,
+                    borderRadius: 10,
+                    padding: '1.25rem',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '1rem',
+                    transition: 'all 0.2s ease',
+                    textAlign: 'left',
+                    width: '100%',
+                    color: '#FFFFFF',
+                  }}
                 >
-                  <div className="flex items-center gap-3 mb-2">
-                    <span className="text-2xl">{goal.icon}</span>
-                    <span className="font-semibold">{goal.title}</span>
-                    {goal.disabled && (
-                      <span className="ml-auto px-2 py-1 bg-[#0088FF] text-black text-[10px] font-bold rounded uppercase tracking-wide">
-                        Coming Soon
-                      </span>
+                  {/* Icon */}
+                  <div style={{
+                    fontSize: '1.75rem',
+                    width: 48,
+                    height: 48,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    background: selected ? 'rgba(0, 200, 5, 0.15)' : '#111111',
+                    borderRadius: 10,
+                    flexShrink: 0,
+                  }}>
+                    {market.icon}
+                  </div>
+
+                  {/* Info */}
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: '1rem', fontWeight: 600, marginBottom: '0.25rem' }}>
+                      {market.name}
+                    </div>
+                    <div style={{ fontSize: '0.75rem', color: '#9E9E9E', marginBottom: '0.5rem', lineHeight: 1.4 }}>
+                      {market.desc}
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+                      {market.platforms.map((p) => (
+                        <span key={p} style={{
+                          fontFamily: "'JetBrains Mono', monospace",
+                          fontSize: '0.6rem',
+                          fontWeight: 600,
+                          padding: '0.25rem 0.5rem',
+                          background: selected ? 'rgba(0, 200, 5, 0.1)' : '#1A1A1A',
+                          border: `1px solid ${selected ? 'rgba(0, 200, 5, 0.2)' : '#1E1E1E'}`,
+                          borderRadius: 4,
+                          color: selected ? '#00C805' : '#6E6E6E',
+                          textTransform: 'uppercase' as const,
+                          letterSpacing: '0.03em',
+                        }}>
+                          {p}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Checkbox */}
+                  <div style={{
+                    width: 22,
+                    height: 22,
+                    border: `2px solid ${selected ? '#00C805' : '#2A2A2A'}`,
+                    borderRadius: 4,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    flexShrink: 0,
+                    background: selected ? '#00C805' : 'transparent',
+                    transition: 'all 0.2s ease',
+                  }}>
+                    {selected && (
+                      <span style={{ color: '#000', fontSize: '0.75rem', fontWeight: 700 }}>{'\u2713'}</span>
                     )}
                   </div>
-                  <p className="text-sm text-[#9E9E9E] mb-2">{goal.description}</p>
-                  <p className="text-xs text-[#6E6E6E] font-medium">{goal.tag}</p>
                 </button>
-              ))}
+              );
+            })}
+          </div>
+
+          {/* Selection Summary */}
+          <div style={{
+            marginTop: '0.75rem',
+            fontSize: '0.75rem',
+            color: selectedMarkets.length > 0 ? '#00C805' : '#6E6E6E',
+            minHeight: '1.2em',
+          }}>
+            {selectionText}
+          </div>
+        </div>
+
+        {/* Actions */}
+        <div style={{ display: 'flex', gap: '0.75rem', marginTop: '2.5rem' }}>
+          <button
+            type="button"
+            onClick={() => router.push('/')}
+            style={{
+              flex: '0 0 auto',
+              width: '30%',
+              padding: '1rem 1.5rem',
+              borderRadius: 8,
+              fontSize: '0.95rem',
+              fontWeight: 600,
+              cursor: 'pointer',
+              background: 'transparent',
+              border: '2px solid #1E1E1E',
+              color: '#FFFFFF',
+              fontFamily: "'Inter', sans-serif",
+              transition: 'all 0.2s ease',
+            }}
+          >
+            Back
+          </button>
+
+          {!isConnected ? (
+            <div style={{ flex: 1 }}>
+              {canContinue ? (
+                <ConnectButton.Custom>
+                  {({ openConnectModal }) => (
+                    <button
+                      onClick={() => {
+                        setPendingConnect(true);
+                        localStorage.setItem('agentSetup', JSON.stringify({
+                          name: agentName,
+                          markets: selectedMarkets,
+                          createdAt: Date.now(),
+                        }));
+                        openConnectModal();
+                      }}
+                      style={{
+                        width: '100%',
+                        padding: '1rem 1.5rem',
+                        borderRadius: 8,
+                        fontSize: '0.95rem',
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                        background: '#00C805',
+                        border: 'none',
+                        color: '#000000',
+                        fontFamily: "'Inter', sans-serif",
+                        transition: 'all 0.2s ease',
+                      }}
+                    >
+                      Connect Wallet
+                    </button>
+                  )}
+                </ConnectButton.Custom>
+              ) : (
+                <button
+                  disabled
+                  style={{
+                    width: '100%',
+                    padding: '1rem 1.5rem',
+                    borderRadius: 8,
+                    fontSize: '0.95rem',
+                    fontWeight: 600,
+                    background: '#00C805',
+                    border: 'none',
+                    color: '#000000',
+                    fontFamily: "'Inter', sans-serif",
+                    opacity: 0.4,
+                    cursor: 'not-allowed',
+                  }}
+                >
+                  Connect Wallet
+                </button>
+              )}
             </div>
-          </div>
-
-          {/* Actions */}
-          <div className="flex gap-3 pt-4">
+          ) : (
             <button
-              onClick={() => router.push('/')}
-              className="flex-1 py-3.5 px-6 rounded-lg border border-[#1E1E1E] text-white font-semibold hover:bg-[#161616] hover:border-[#2A2A2A] transition-all"
+              onClick={() => {
+                localStorage.setItem('agentSetup', JSON.stringify({
+                  name: agentName,
+                  markets: selectedMarkets,
+                  wallet: address,
+                  createdAt: Date.now(),
+                }));
+                router.push('/demo/launching');
+              }}
+              disabled={!canContinue}
+              style={{
+                flex: 1,
+                padding: '1rem 1.5rem',
+                borderRadius: 8,
+                fontSize: '0.95rem',
+                fontWeight: 600,
+                cursor: canContinue ? 'pointer' : 'not-allowed',
+                background: '#00C805',
+                border: 'none',
+                color: '#000000',
+                fontFamily: "'Inter', sans-serif",
+                opacity: canContinue ? 1 : 0.4,
+                transition: 'all 0.2s ease',
+              }}
             >
-              Back
+              Continue &rarr;
             </button>
+          )}
+        </div>
 
-            {!isConnected ? (
-              <div className="flex-1">
-                {canContinue ? (
-                  <div onClick={handleContinue}>
-                    <ConnectButton.Custom>
-                      {({ openConnectModal }) => (
-                        <button
-                          onClick={openConnectModal}
-                          className="w-full py-3.5 px-6 rounded-lg bg-[#00C805] text-black font-semibold hover:bg-[#00E006] hover:-translate-y-0.5 hover:shadow-[0_4px_20px_rgba(0,200,5,0.4)] transition-all"
-                        >
-                          Connect Wallet →
-                        </button>
-                      )}
-                    </ConnectButton.Custom>
-                  </div>
-                ) : (
-                  <button
-                    disabled
-                    className="w-full py-3.5 px-6 rounded-lg bg-[#00C805] text-black font-semibold opacity-50 cursor-not-allowed"
-                  >
-                    Connect Wallet →
-                  </button>
-                )}
-              </div>
-            ) : (
-              <button
-                onClick={() => router.push('/demo/launching')}
-                disabled={!canContinue}
-                className={`flex-1 py-3.5 px-6 rounded-lg bg-[#00C805] text-black font-semibold transition-all ${
-                  canContinue
-                    ? 'hover:bg-[#00E006] hover:-translate-y-0.5 hover:shadow-[0_4px_20px_rgba(0,200,5,0.4)]'
-                    : 'opacity-50 cursor-not-allowed'
-                }`}
-              >
-                Continue →
-              </button>
-            )}
-          </div>
+        {/* Footer */}
+        <div style={{ textAlign: 'center', marginTop: '2rem', fontSize: '0.7rem', color: '#6E6E6E' }}>
+          By connecting, you agree to our <a href="#" style={{ color: '#00C805', textDecoration: 'none' }}>Terms</a> and <a href="#" style={{ color: '#00C805', textDecoration: 'none' }}>Privacy Policy</a>
         </div>
       </div>
     </div>
