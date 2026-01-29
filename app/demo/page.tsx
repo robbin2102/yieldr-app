@@ -8,11 +8,14 @@ import { useRouter } from 'next/navigation';
 type Goal = 'invest' | 'improve' | 'fund';
 
 export default function CreateAgentPage() {
+  const [mounted, setMounted] = useState(false);
   const router = useRouter();
   const { address, isConnected } = useAccount();
   const [agentName, setAgentName] = useState('');
   const [selectedGoals, setSelectedGoals] = useState<Goal[]>([]);
   const [isCreating, setIsCreating] = useState(false);
+
+  useEffect(() => { setMounted(true); }, []);
 
   const goals: Array<{
     id: Goal;
@@ -84,6 +87,8 @@ export default function CreateAgentPage() {
   const handleContinue = () => {
     setIsCreating(true);
   };
+
+  if (!mounted) return null;
 
   return (
     <div className="min-h-screen flex items-center justify-center p-4 md:p-8">

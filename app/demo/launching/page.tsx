@@ -24,9 +24,12 @@ interface TraderData {
 }
 
 export default function LaunchingPage() {
+  const [mounted, setMounted] = useState(false);
   const router = useRouter();
   const { address, isConnected } = useAccount();
   const [agentName, setAgentName] = useState('AlphaHunter');
+
+  useEffect(() => { setMounted(true); }, []);
   const [progress, setProgress] = useState(0);
   const [isReady, setIsReady] = useState(false);
   const [showDiscovery, setShowDiscovery] = useState(false);
@@ -287,6 +290,8 @@ export default function LaunchingPage() {
   };
 
   const totalPositions = positionData.avantis + positionData.hyperliquid + positionData.polymarket;
+
+  if (!mounted) return null;
 
   return (
     <div className="min-h-screen flex items-center justify-center p-4 md:p-8">
