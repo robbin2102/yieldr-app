@@ -19,6 +19,12 @@ const nextConfig = {
         net: false,
         tls: false,
       };
+
+      // MetaMask SDK tries to import this React Native module - mock it for browser
+      config.resolve.alias = {
+        ...config.resolve.alias,
+        '@react-native-async-storage/async-storage': false,
+      };
     }
 
     // Only externalize idb-related packages on the server
