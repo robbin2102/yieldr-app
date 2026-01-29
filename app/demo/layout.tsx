@@ -1,6 +1,11 @@
 'use client';
 
-import { Providers } from '@/components/RainbowKitProvider';
+import dynamic from 'next/dynamic';
+
+const Providers = dynamic(
+  () => import('@/components/RainbowKitProvider').then(mod => mod.Providers),
+  { ssr: false }
+);
 
 export default function DemoLayout({
   children,
