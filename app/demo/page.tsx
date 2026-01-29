@@ -155,17 +155,18 @@ export default function CreateAgentPage() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
             {marketConfig.map((market) => {
               const selected = selectedMarkets.includes(market.id);
+              const comingSoon = market.id === 'liquidity';
               return (
                 <button
                   key={market.id}
                   type="button"
-                  onClick={() => toggleMarket(market.id)}
+                  onClick={() => !comingSoon && toggleMarket(market.id)}
                   style={{
                     background: selected ? 'rgba(0, 200, 5, 0.05)' : '#0A0A0A',
                     border: `2px solid ${selected ? '#00C805' : '#1E1E1E'}`,
                     borderRadius: 10,
                     padding: '0.875rem 1rem',
-                    cursor: 'pointer',
+                    cursor: comingSoon ? 'default' : 'pointer',
                     display: 'flex',
                     alignItems: 'center',
                     gap: '1rem',
@@ -173,6 +174,7 @@ export default function CreateAgentPage() {
                     textAlign: 'left',
                     width: '100%',
                     color: '#FFFFFF',
+                    opacity: comingSoon ? 0.5 : 1,
                   }}
                 >
                   {/* Icon */}
@@ -192,8 +194,21 @@ export default function CreateAgentPage() {
 
                   {/* Info */}
                   <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: '1rem', fontWeight: 600, marginBottom: '0.25rem' }}>
+                    <div style={{ fontSize: '1rem', fontWeight: 600, marginBottom: '0.25rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                       {market.name}
+                      {comingSoon && (
+                        <span style={{
+                          fontSize: '0.55rem',
+                          fontWeight: 700,
+                          padding: '0.15rem 0.4rem',
+                          background: '#1A1A1A',
+                          border: '1px solid #2A2A2A',
+                          borderRadius: 4,
+                          color: '#6E6E6E',
+                          textTransform: 'uppercase' as const,
+                          letterSpacing: '0.05em',
+                        }}>Coming Soon</span>
+                      )}
                     </div>
                     <div style={{ fontSize: '0.75rem', color: '#9E9E9E', marginBottom: '0.5rem', lineHeight: 1.4 }}>
                       {market.desc}

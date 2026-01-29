@@ -28,9 +28,8 @@ export default function LaunchingPage() {
   const [logs, setLogs] = useState<LogStep[]>([
     { id: 1, text: 'Initializing agent', status: 'pending', visible: false },
     { id: 2, text: 'Connecting wallet', status: 'pending', visible: false },
-    { id: 3, text: 'Loading market context', status: 'pending', visible: false },
-    { id: 4, text: 'Scanning positions', status: 'pending', visible: false },
-    { id: 5, text: 'Following top traders', status: 'pending', visible: false },
+    { id: 3, text: 'Scanning positions', status: 'pending', visible: false },
+    { id: 4, text: 'Following top traders', status: 'pending', visible: false },
   ]);
 
   const [portfolioValue, setPortfolioValue] = useState(0);
@@ -84,27 +83,43 @@ export default function LaunchingPage() {
     let totalValue = 0;
 
     if (avantisRes.status === 'fulfilled' && avantisRes.value.ok) {
-      const data = await avantisRes.value.json();
-      avantisPositions = data.positions || [];
-      totalValue += data.summary?.totalMargin || 0;
+      const json = await avantisRes.value.json();
+      const d = json.data || json;
+      avantisPositions = d.positions || [];
+      totalValue += d.summary?.totalMargin || 0;
+      console.log('[scan] Avantis:', avantisPositions.length, 'positions');
+    } else {
+      console.log('[scan] Avantis failed:', avantisRes.status === 'fulfilled' ? avantisRes.value.status : 'rejected');
     }
 
     if (hlRes.status === 'fulfilled' && hlRes.value.ok) {
-      const data = await hlRes.value.json();
-      hlPositions = data.positions || [];
-      totalValue += data.summary?.accountValue || data.summary?.totalMargin || 0;
+      const json = await hlRes.value.json();
+      const d = json.data || json;
+      hlPositions = d.positions || [];
+      totalValue += d.summary?.accountValue || d.summary?.totalMargin || 0;
+      console.log('[scan] HL:', hlPositions.length, 'positions');
+    } else {
+      console.log('[scan] HL failed:', hlRes.status === 'fulfilled' ? hlRes.value.status : 'rejected');
     }
 
     if (lpRes.status === 'fulfilled' && lpRes.value.ok) {
-      const data = await lpRes.value.json();
-      lpPositions = data.positions || [];
-      totalValue += data.summary?.totalLiquidity || 0;
+      const json = await lpRes.value.json();
+      const d = json.data || json;
+      lpPositions = d.positions || [];
+      totalValue += d.summary?.totalLiquidity || 0;
+      console.log('[scan] LP:', lpPositions.length, 'positions');
+    } else {
+      console.log('[scan] LP failed:', lpRes.status === 'fulfilled' ? lpRes.value.status : 'rejected');
     }
 
     if (pmRes.status === 'fulfilled' && pmRes.value.ok) {
-      const data = await pmRes.value.json();
-      pmPositions = data.positions || [];
-      totalValue += data.summary?.totalValue || 0;
+      const json = await pmRes.value.json();
+      const d = json.data || json;
+      pmPositions = d.positions || [];
+      totalValue += d.summary?.totalValue || 0;
+      console.log('[scan] PM:', pmPositions.length, 'positions');
+    } else {
+      console.log('[scan] PM failed:', pmRes.status === 'fulfilled' ? pmRes.value.status : 'rejected');
     }
 
     return {
@@ -175,31 +190,18 @@ export default function LaunchingPage() {
       startStep(1);
       await new Promise(r => setTimeout(r, 1500));
       completeStep(1);
-      setProgress(20);
+      setProgress(25);
 
       // Step 2: Connect wallet
       await new Promise(r => setTimeout(r, 200));
       startStep(2);
       await new Promise(r => setTimeout(r, 1500));
       completeStep(2, shortWallet);
-      setProgress(40);
+      setProgress(50);
 
-      // Step 3: Market context
+      // Step 3: Scan positions (real API calls)
       await new Promise(r => setTimeout(r, 200));
       startStep(3);
-      await new Promise(r => setTimeout(r, 1500));
-      const marketNames = markets.map((m: string) => {
-        if (m === 'perps') return 'Perpetuals';
-        if (m === 'predictions') return 'Prediction Markets';
-        if (m === 'liquidity') return 'Liquidity';
-        return m;
-      });
-      completeStep(3, marketNames.length === 3 ? 'All markets' : marketNames.join(' + '));
-      setProgress(60);
-
-      // Step 4: Scan positions (real API calls)
-      await new Promise(r => setTimeout(r, 200));
-      startStep(4);
       const posData = await scanPositions(address);
       const parts: string[] = [];
       const perpCount = posData.counts.avantis + posData.counts.hyperliquid;
@@ -207,15 +209,15 @@ export default function LaunchingPage() {
       if (posData.counts.lp > 0) parts.push(`${posData.counts.lp} LP positions`);
       if (posData.counts.polymarket > 0) parts.push(`${posData.counts.polymarket} prediction positions`);
       const posDetail = parts.length > 0 ? `Found ${parts.join(' + ')}` : 'No positions found';
-      completeStep(4, posDetail, true);
-      setProgress(80);
+      completeStep(3, posDetail, true);
+      setProgress(75);
 
-      // Save positions to MongoDB (before step 5 so agent exists)
+      // Save positions to MongoDB (before step 4 so agent exists)
       await saveData(address, posData);
 
-      // Step 5: Follow top traders (real API call)
+      // Step 4: Follow top traders (real API call)
       await new Promise(r => setTimeout(r, 200));
-      startStep(5);
+      startStep(4);
       let followDetail = 'No traders found';
       try {
         const followRes = await fetch('/api/demo/agents/follow-traders', {
@@ -233,7 +235,7 @@ export default function LaunchingPage() {
       } catch (e) {
         console.error('Follow traders failed:', e);
       }
-      completeStep(5, followDetail, true);
+      completeStep(4, followDetail, true);
       setProgress(100);
 
       // Show discovery
