@@ -83,6 +83,7 @@ export default function ChatPage() {
   const [pmPositions, setPmPositions] = useState<PMPosition[]>([]);
   const [followedTraders, setFollowedTraders] = useState<FollowedTrader[]>([]);
   const [hoveredTrader, setHoveredTrader] = useState<string | null>(null);
+  const [tooltipPos, setTooltipPos] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
 
   // Chat
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -189,26 +190,87 @@ export default function ChatPage() {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  const handleSend = useCallback(() => {
+  const [isStreaming, setIsStreaming] = useState(false);
+
+  const handleSend = useCallback(async () => {
     const text = inputValue.trim();
-    if (!text) return;
+    if (!text || isStreaming) return;
     setInputValue('');
+
+    const now = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
     const userMsg: ChatMessage = {
       id: Date.now().toString(),
       role: 'user',
       content: text,
-      time: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false }),
+      time: now,
     };
-    setMessages(prev => [...prev, userMsg]);
-    setTimeout(() => {
-      setMessages(prev => [...prev, {
-        id: (Date.now() + 1).toString(),
-        role: 'agent',
-        content: "I'm processing your request. Full AI chat integration is coming soon — I'll be able to analyze your positions, fetch market data, and provide trading insights using real-time data.",
-        time: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false }),
-      }]);
-    }, 1000);
-  }, [inputValue]);
+    const agentMsgId = (Date.now() + 1).toString();
+
+    setMessages(prev => [...prev, userMsg, {
+      id: agentMsgId,
+      role: 'agent',
+      content: '',
+      time: now,
+    }]);
+    setIsStreaming(true);
+
+    // Build conversation history for API (exclude the empty agent msg)
+    const apiMessages = [...messages, userMsg]
+      .filter(m => m.content.trim())
+      .map(m => ({ role: m.role, content: m.content }));
+
+    try {
+      const res = await fetch('/api/demo/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages: apiMessages, wallet: address }),
+      });
+
+      if (!res.ok || !res.body) {
+        const errData = await res.json().catch(() => ({ error: 'Unknown error' }));
+        setMessages(prev => prev.map(m =>
+          m.id === agentMsgId ? { ...m, content: `Error: ${errData.error || 'Failed to get response'}` } : m
+        ));
+        setIsStreaming(false);
+        return;
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            const parsed = JSON.parse(line);
+            if (parsed.type === 'text') {
+              setMessages(prev => prev.map(m =>
+                m.id === agentMsgId ? { ...m, content: m.content + parsed.text } : m
+              ));
+            } else if (parsed.type === 'error') {
+              setMessages(prev => prev.map(m =>
+                m.id === agentMsgId ? { ...m, content: m.content || `Error: ${parsed.error}` } : m
+              ));
+            }
+          } catch {}
+        }
+      }
+    } catch (err: any) {
+      setMessages(prev => prev.map(m =>
+        m.id === agentMsgId ? { ...m, content: `Connection error: ${err.message}` } : m
+      ));
+    }
+
+    setIsStreaming(false);
+  }, [inputValue, isStreaming, messages, address]);
 
   const handlePromptClick = (prompt: string) => {
     setInputValue(prompt);
@@ -613,7 +675,11 @@ export default function ChatPage() {
                           cursor: 'pointer',
                           position: 'relative',
                         }}
-                        onMouseEnter={() => setHoveredTrader(trader.wallet)}
+                        onMouseEnter={(e) => {
+                          const rect = e.currentTarget.getBoundingClientRect();
+                          setTooltipPos({ top: rect.top, left: rect.right + 8 });
+                          setHoveredTrader(trader.wallet);
+                        }}
                         onMouseLeave={() => setHoveredTrader(null)}
                       >
                         <img
@@ -647,8 +713,8 @@ export default function ChatPage() {
                         {hoveredTrader === trader.wallet && (
                           <div style={{
                             position: 'fixed',
-                            left: 308,
-                            top: 'auto',
+                            left: tooltipPos.left,
+                            top: tooltipPos.top,
                             width: 200,
                             background: '#111111',
                             border: '1px solid #00C805',
@@ -656,7 +722,6 @@ export default function ChatPage() {
                             padding: '0.6rem',
                             zIndex: 1000,
                             boxShadow: '0 8px 24px rgba(0,0,0,0.6)',
-                            marginTop: -30,
                           }}>
                             <div style={{ fontSize: '0.8rem', fontWeight: 700, marginBottom: '0.4rem' }}>
                               {trader.username || `${trader.wallet.slice(0, 10)}...`}
@@ -1056,16 +1121,16 @@ export default function ChatPage() {
                   outline: 'none',
                 }}
               />
-              <button onClick={handleSend} style={{
+              <button onClick={handleSend} disabled={isStreaming} style={{
                 width: 40, height: 40,
-                background: '#111111',
+                background: isStreaming ? '#0A0A0A' : '#111111',
                 border: '1px solid #1E1E1E',
                 borderRadius: 6,
-                color: '#9E9E9E',
-                cursor: 'pointer',
+                color: isStreaming ? '#333' : '#9E9E9E',
+                cursor: isStreaming ? 'not-allowed' : 'pointer',
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
                 fontSize: '1rem',
-              }}>{'➤'}</button>
+              }}>{isStreaming ? '...' : '➤'}</button>
             </div>
           </div>
         </div>

@@ -61,6 +61,7 @@ export async function POST(request: NextRequest) {
       followedTraders.push({
         wallet: t.walletAddress || t.wallet || 'unknown',
         platform: 'hyperliquid',
+        username: t.username || t.name || undefined,
         pnl30d: t.pnl_30d || 0,
         winRate: t.positionWinRate || 0,
         totalPositions: t.totalPositions || 0,
