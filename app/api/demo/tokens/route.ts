@@ -1,29 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server';
-import Moralis from 'moralis';
 
-let moralisInitialized = false;
-
-async function initMoralis() {
-  if (!moralisInitialized) {
-    await Moralis.start({
-      apiKey: process.env.MORALIS_API_KEY || '',
-    });
-    moralisInitialized = true;
-  }
-}
+const MORALIS_BASE = 'https://deep-index.moralis.io/api/v2.2';
 
 // Wrapped native token addresses for price lookup per chain
 const CHAINS = [
   { hex: '0x1', name: 'Ethereum', nativeSymbol: 'ETH', nativeName: 'Ethereum',
-    wrappedNative: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2' }, // WETH on Ethereum
+    wrappedNative: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2' },
   { hex: '0x2105', name: 'Base', nativeSymbol: 'ETH', nativeName: 'Ethereum',
-    wrappedNative: '0x4200000000000000000000000000000000000006' }, // WETH on Base
+    wrappedNative: '0x4200000000000000000000000000000000000006' },
   { hex: '0xa4b1', name: 'Arbitrum', nativeSymbol: 'ETH', nativeName: 'Ethereum',
-    wrappedNative: '0x82aF49447D8a07e3bd95BD0d56f35241523fBab1' }, // WETH on Arbitrum
+    wrappedNative: '0x82aF49447D8a07e3bd95BD0d56f35241523fBab1' },
   { hex: '0xa', name: 'Optimism', nativeSymbol: 'ETH', nativeName: 'Ethereum',
-    wrappedNative: '0x4200000000000000000000000000000000000006' }, // WETH on Optimism
+    wrappedNative: '0x4200000000000000000000000000000000000006' },
   { hex: '0x89', name: 'Polygon', nativeSymbol: 'POL', nativeName: 'Polygon',
-    wrappedNative: '0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270' }, // WPOL/WMATIC on Polygon
+    wrappedNative: '0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270' },
 ];
 
 interface TokenBalance {
@@ -41,9 +31,33 @@ interface TokenBalance {
   isNative: boolean;
 }
 
+async function moralisGet(path: string, apiKey: string): Promise<any> {
+  const res = await fetch(`${MORALIS_BASE}${path}`, {
+    headers: { 'X-API-Key': apiKey, 'Accept': 'application/json' },
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Moralis ${res.status}: ${text}`);
+  }
+  return res.json();
+}
+
+function parseBalance(rawBalance: string, decimals: number): number {
+  if (!rawBalance || rawBalance === '0') return 0;
+  // Handle large numbers by splitting at decimal point position
+  const len = rawBalance.length;
+  if (len <= decimals) {
+    const padded = rawBalance.padStart(decimals + 1, '0');
+    return parseFloat(padded.slice(0, padded.length - decimals) + '.' + padded.slice(padded.length - decimals));
+  }
+  const intPart = rawBalance.slice(0, len - decimals);
+  const decPart = rawBalance.slice(len - decimals);
+  return parseFloat(intPart + '.' + decPart);
+}
+
 /**
  * GET /api/demo/tokens?address=0x...
- * Fetches token balances across multiple chains using Moralis
+ * Fetches token balances across multiple chains using Moralis REST API
  */
 export async function GET(request: NextRequest) {
   try {
@@ -52,49 +66,47 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Address required' }, { status: 400 });
     }
 
-    if (!process.env.MORALIS_API_KEY) {
+    const apiKey = process.env.MORALIS_API_KEY;
+    if (!apiKey) {
       return NextResponse.json({ error: 'MORALIS_API_KEY not configured' }, { status: 500 });
     }
 
-    await initMoralis();
-
     const allTokens: TokenBalance[] = [];
 
-    // Fetch native + ERC20 balances across all chains in parallel
     const results = await Promise.allSettled(
       CHAINS.map(async (chain) => {
         const tokens: TokenBalance[] = [];
 
-        // Fetch native balance
+        // 1. Fetch native balance
         try {
-          const nativeRes = await Moralis.EvmApi.balance.getNativeBalance({
-            address,
-            chain: chain.hex,
-          });
-          const nativeRaw = nativeRes.result.balance.value.toString();
-          const nativeBalance = parseFloat(nativeRes.result.balance.ether);
+          const nativeData = await moralisGet(
+            `/${address}/balance?chain=${chain.hex}`,
+            apiKey
+          );
+          const rawBalance = nativeData.balance || '0';
+          const balance = parseBalance(rawBalance, 18);
 
-          if (nativeBalance > 0.00001) {
-            // Get native price using the wrapped native token on the SAME chain
+          if (balance > 0.00001) {
+            // Get native price via wrapped token
             let nativePrice: number | null = null;
             try {
-              const priceRes = await Moralis.EvmApi.token.getTokenPrice({
-                address: chain.wrappedNative,
-                chain: chain.hex,
-              });
-              nativePrice = priceRes.result.usdPrice;
+              const priceData = await moralisGet(
+                `/erc20/${chain.wrappedNative}/price?chain=${chain.hex}`,
+                apiKey
+              );
+              nativePrice = priceData.usdPrice || null;
             } catch (e) {
-              console.log(`[tokens] Native price fetch failed for ${chain.nativeSymbol} on ${chain.name}:`, (e as Error).message);
+              console.log(`[tokens] Native price failed ${chain.name}:`, (e as Error).message?.slice(0, 80));
             }
 
             tokens.push({
               symbol: chain.nativeSymbol,
               name: chain.nativeName,
-              balance: nativeBalance,
-              balanceRaw: nativeRaw,
+              balance,
+              balanceRaw: rawBalance,
               decimals: 18,
               usdPrice: nativePrice,
-              usdValue: nativePrice ? nativeBalance * nativePrice : null,
+              usdValue: nativePrice ? balance * nativePrice : null,
               chain: chain.name,
               chainHex: chain.hex,
               contractAddress: null,
@@ -103,83 +115,56 @@ export async function GET(request: NextRequest) {
             });
           }
         } catch (e) {
-          console.log(`[tokens] Native balance failed for ${chain.name}:`, (e as Error).message);
+          console.log(`[tokens] Native balance failed ${chain.name}:`, (e as Error).message?.slice(0, 80));
         }
 
-        // Fetch ERC20 balances with prices
+        // 2. Fetch ERC20 balances using REST API directly
         try {
-          const erc20Res = await Moralis.EvmApi.token.getWalletTokenBalancesPrice({
-            address,
-            chain: chain.hex,
-          });
+          const erc20Data = await moralisGet(
+            `/${address}/erc20?chain=${chain.hex}`,
+            apiKey
+          );
 
-          for (const token of erc20Res.result) {
-            const decimals = token.decimals || 18;
-            const rawBalance = token.balanceFormatted;
-            const balance = parseFloat(rawBalance);
+          console.log(`[tokens] ${chain.name} ERC20: ${Array.isArray(erc20Data) ? erc20Data.length : 0} tokens found`);
 
-            if (balance > 0 && !token.nativeToken) {
-              tokens.push({
-                symbol: token.symbol || 'UNKNOWN',
-                name: token.name || token.symbol || 'Unknown Token',
-                balance,
-                balanceRaw: token.balance.toString(),
-                decimals,
-                usdPrice: token.usdPrice ?? null,
-                usdValue: token.usdValue ?? null,
-                chain: chain.name,
-                chainHex: chain.hex,
-                contractAddress: token.tokenAddress?.lowercase || null,
-                logo: token.logo || token.thumbnail || null,
-                isNative: false,
-              });
-            }
-          }
-        } catch (e) {
-          console.log(`[tokens] ERC20 fetch failed for ${chain.name}:`, (e as Error).message);
-          // Fallback: try the basic endpoint without prices
-          try {
-            const erc20Res = await Moralis.EvmApi.token.getWalletTokenBalances({
-              address,
-              chain: chain.hex,
-            });
-
-            for (const token of erc20Res.result) {
-              const decimals = token.decimals || 18;
-              // Manual decimal conversion for proper balance
-              const rawBigInt = BigInt(token.balance.value.toString());
-              const balance = Number(rawBigInt) / Math.pow(10, decimals);
+          if (Array.isArray(erc20Data)) {
+            for (const token of erc20Data) {
+              const decimals = token.decimals ?? 18;
+              const rawBal = token.balance || '0';
+              const balance = parseBalance(rawBal, decimals);
 
               if (balance > 0) {
-                // Try to get price individually
+                // Get token price
                 let usdPrice: number | null = null;
                 try {
-                  const priceRes = await Moralis.EvmApi.token.getTokenPrice({
-                    address: token.contractAddress.lowercase,
-                    chain: chain.hex,
-                  });
-                  usdPrice = priceRes.result.usdPrice;
-                } catch {}
+                  const priceData = await moralisGet(
+                    `/erc20/${token.token_address}/price?chain=${chain.hex}`,
+                    apiKey
+                  );
+                  usdPrice = priceData.usdPrice || null;
+                } catch {
+                  // Price not available for this token - that's ok
+                }
 
                 tokens.push({
                   symbol: token.symbol || 'UNKNOWN',
                   name: token.name || token.symbol || 'Unknown Token',
                   balance,
-                  balanceRaw: token.balance.value.toString(),
+                  balanceRaw: rawBal,
                   decimals,
                   usdPrice,
                   usdValue: usdPrice ? balance * usdPrice : null,
                   chain: chain.name,
                   chainHex: chain.hex,
-                  contractAddress: token.contractAddress.lowercase,
-                  logo: token.logo || null,
+                  contractAddress: token.token_address || null,
+                  logo: token.logo || token.thumbnail || null,
                   isNative: false,
                 });
               }
             }
-          } catch (e2) {
-            console.log(`[tokens] ERC20 fallback also failed for ${chain.name}:`, (e2 as Error).message);
           }
+        } catch (e) {
+          console.log(`[tokens] ERC20 fetch failed ${chain.name}:`, (e as Error).message?.slice(0, 120));
         }
 
         return tokens;
