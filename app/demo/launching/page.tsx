@@ -29,7 +29,8 @@ export default function LaunchingPage() {
     { id: 1, text: 'Initializing agent', status: 'pending', visible: false },
     { id: 2, text: 'Connecting wallet', status: 'pending', visible: false },
     { id: 3, text: 'Scanning positions', status: 'pending', visible: false },
-    { id: 4, text: 'Following top traders', status: 'pending', visible: false },
+    { id: 4, text: 'Detecting tokens', status: 'pending', visible: false },
+    { id: 5, text: 'Following top traders', status: 'pending', visible: false },
   ]);
 
   const [portfolioValue, setPortfolioValue] = useState(0);
@@ -204,14 +205,37 @@ export default function LaunchingPage() {
       if (posData.counts.polymarket > 0) parts.push(`${posData.counts.polymarket} prediction positions`);
       const posDetail = parts.length > 0 ? `Found ${parts.join(' + ')}` : 'No positions found';
       completeStep(3, posDetail, true);
-      setProgress(75);
+      setProgress(60);
 
-      // Save positions to MongoDB (before step 4 so agent exists)
+      // Save positions to MongoDB (before step 5 so agent exists)
       await saveData(address, posData);
 
-      // Step 4: Follow top traders (real API call)
+      // Step 4: Detect tokens across chains
       await new Promise(r => setTimeout(r, 200));
       startStep(4);
+      let tokenDetail = 'No tokens found';
+      try {
+        const tokenRes = await fetch(`/api/demo/tokens?address=${address}`);
+        if (tokenRes.ok) {
+          const tokenData = await tokenRes.json();
+          if (tokenData.success && tokenData.data) {
+            const count = tokenData.data.tokenCount || 0;
+            const totalUsd = tokenData.data.totalUsdValue || 0;
+            const chains = (tokenData.data.tokens || []).reduce((acc: Set<string>, t: any) => { acc.add(t.chain); return acc; }, new Set<string>());
+            if (count > 0) {
+              tokenDetail = `${count} tokens ($${totalUsd.toLocaleString(undefined, { maximumFractionDigits: 0 })}) on ${chains.size} chain${chains.size > 1 ? 's' : ''}`;
+            }
+          }
+        }
+      } catch (e) {
+        console.error('Token scan failed:', e);
+      }
+      completeStep(4, tokenDetail, true);
+      setProgress(80);
+
+      // Step 5: Follow top traders (real API call)
+      await new Promise(r => setTimeout(r, 200));
+      startStep(5);
       let followDetail = 'No traders found';
       try {
         const followRes = await fetch('/api/demo/agents/follow-traders', {
@@ -229,7 +253,7 @@ export default function LaunchingPage() {
       } catch (e) {
         console.error('Follow traders failed:', e);
       }
-      completeStep(4, followDetail, true);
+      completeStep(5, followDetail, true);
       setProgress(100);
 
       // Show discovery

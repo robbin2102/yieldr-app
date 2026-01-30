@@ -47,6 +47,17 @@ interface ChatMessage {
   time: string;
 }
 
+interface TokenBalance {
+  symbol: string;
+  name: string;
+  balance: number;
+  usdPrice: number | null;
+  usdValue: number | null;
+  chain: string;
+  logo: string | null;
+  isNative: boolean;
+}
+
 const AVATAR_IMGS = [1, 11, 12, 14, 15];
 
 // Filter traders: pick best per platform with realistic win rates (70-95%)
@@ -84,6 +95,9 @@ export default function ChatPage() {
   const [followedTraders, setFollowedTraders] = useState<FollowedTrader[]>([]);
   const [hoveredTrader, setHoveredTrader] = useState<string | null>(null);
   const [tooltipPos, setTooltipPos] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
+  const [tokens, setTokens] = useState<TokenBalance[]>([]);
+  const [tokensLoading, setTokensLoading] = useState(false);
+  const [tokensTotalUsd, setTokensTotalUsd] = useState(0);
 
   // Chat
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -147,6 +161,19 @@ export default function ChatPage() {
         }
       })
       .catch(() => {});
+
+    // Fetch token balances
+    setTokensLoading(true);
+    fetch(`/api/demo/tokens?address=${address}`)
+      .then(r => r.json())
+      .then(data => {
+        if (data.success && data.data) {
+          setTokens(data.data.tokens || []);
+          setTokensTotalUsd(data.data.totalUsdValue || 0);
+        }
+      })
+      .catch(() => {})
+      .finally(() => setTokensLoading(false));
 
     // Fetch agent (for followed traders)
     fetch(`/api/demo/agents?wallet=${address}`)
@@ -962,12 +989,13 @@ export default function ChatPage() {
 
             {/* TOKENS TAB */}
             {activeTab === 'tokens' && (
-              <div style={{ borderBottom: '1px solid #1E1E1E' }}>
+              <div>
+                {/* Header */}
                 <div style={{
                   fontSize: '0.6rem', textTransform: 'uppercase', letterSpacing: '0.05em',
                   color: '#6E6E6E', padding: '0.5rem',
                   display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                  background: '#111111',
+                  background: '#111111', borderBottom: '1px solid #1E1E1E',
                 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
                     <span>Tokens</span>
@@ -977,15 +1005,114 @@ export default function ChatPage() {
                       background: '#1A1A1A', padding: '0.1rem 0.25rem', borderRadius: 2,
                     }}>{shortWallet}</span>
                   </div>
-                  <span style={{ fontFamily: "'JetBrains Mono', monospace", color: '#9E9E9E' }}>--</span>
+                  <span style={{ fontFamily: "'JetBrains Mono', monospace", color: '#9E9E9E' }}>
+                    {tokensTotalUsd > 0 ? `$${tokensTotalUsd.toLocaleString(undefined, { maximumFractionDigits: 2 })}` : '--'}
+                  </span>
                 </div>
-                <div style={{ padding: '1.5rem 0.5rem', textAlign: 'center' }}>
-                  <div style={{ fontSize: '0.75rem', color: '#6E6E6E', marginBottom: '0.5rem' }}>
-                    Multi-chain token detection coming soon
-                  </div>
-                  <div style={{ fontSize: '0.65rem', color: '#6E6E6E' }}>
-                    Will detect tokens across Base, Ethereum, Arbitrum, and more
-                  </div>
+
+                {/* Chain badges */}
+                <div style={{
+                  padding: '0.4rem 0.5rem',
+                  display: 'flex', flexWrap: 'wrap', gap: '0.25rem',
+                  borderBottom: '1px solid #1E1E1E',
+                }}>
+                  {['Ethereum', 'Base', 'Arbitrum', 'Optimism', 'Polygon'].map(chain => {
+                    const hasTokens = tokens.some(t => t.chain === chain);
+                    return (
+                      <span key={chain} style={{
+                        fontSize: '0.5rem', padding: '0.15rem 0.3rem',
+                        background: hasTokens ? 'rgba(0, 200, 5, 0.1)' : '#1A1A1A',
+                        border: `1px solid ${hasTokens ? 'rgba(0, 200, 5, 0.3)' : '#1E1E1E'}`,
+                        borderRadius: 3,
+                        color: hasTokens ? '#00C805' : '#6E6E6E',
+                        fontWeight: 500,
+                      }}>{chain}</span>
+                    );
+                  })}
+                </div>
+
+                {/* Token list */}
+                <div style={{ padding: '0.5rem' }}>
+                  {tokensLoading ? (
+                    <div style={{ fontSize: '0.75rem', color: '#6E6E6E', textAlign: 'center', padding: '1.5rem 0' }}>
+                      Scanning chains...
+                    </div>
+                  ) : tokens.length === 0 ? (
+                    <div style={{ fontSize: '0.75rem', color: '#6E6E6E', textAlign: 'center', padding: '1.5rem 0' }}>
+                      No tokens found across chains
+                    </div>
+                  ) : tokens.map((token, i) => (
+                    <div key={i} style={{
+                      background: '#111111',
+                      border: '1px solid #1E1E1E',
+                      borderRadius: 5,
+                      padding: '0.45rem 0.5rem',
+                      marginBottom: '0.3rem',
+                      display: 'flex', alignItems: 'center', gap: '0.4rem',
+                    }}>
+                      {/* Token icon */}
+                      <div style={{
+                        width: 24, height: 24, borderRadius: '50%',
+                        background: token.isNative ? 'linear-gradient(135deg, #627EEA 0%, #3B5998 100%)' : '#1A1A1A',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        fontSize: '0.6rem', fontWeight: 700, color: '#9E9E9E',
+                        overflow: 'hidden', flexShrink: 0,
+                      }}>
+                        {token.logo ? (
+                          <img src={token.logo} alt="" style={{ width: '100%', height: '100%' }} />
+                        ) : (
+                          token.symbol.slice(0, 2)
+                        )}
+                      </div>
+
+                      {/* Token info */}
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                          <span style={{ fontWeight: 600, fontSize: '0.75rem' }}>{token.symbol}</span>
+                          <span style={{
+                            fontSize: '0.45rem', color: '#6E6E6E',
+                            background: '#1A1A1A', padding: '0.1rem 0.2rem', borderRadius: 2,
+                          }}>{token.chain}</span>
+                          {token.isNative && (
+                            <span style={{
+                              fontSize: '0.4rem', color: '#0088FF',
+                              background: 'rgba(0, 136, 255, 0.1)', padding: '0.1rem 0.2rem', borderRadius: 2,
+                            }}>NATIVE</span>
+                          )}
+                        </div>
+                        <div style={{
+                          fontSize: '0.55rem', color: '#6E6E6E',
+                          fontFamily: "'JetBrains Mono', monospace",
+                        }}>
+                          {token.balance < 0.001
+                            ? token.balance.toExponential(2)
+                            : token.balance < 1
+                            ? token.balance.toFixed(4)
+                            : token.balance.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                        </div>
+                      </div>
+
+                      {/* USD value */}
+                      <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                        <div style={{
+                          fontFamily: "'JetBrains Mono', monospace",
+                          fontSize: '0.75rem', fontWeight: 600,
+                        }}>
+                          {token.usdValue !== null
+                            ? `$${token.usdValue < 0.01 ? token.usdValue.toFixed(4) : token.usdValue.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
+                            : '--'}
+                        </div>
+                        {token.usdPrice !== null && (
+                          <div style={{
+                            fontSize: '0.5rem', color: '#6E6E6E',
+                            fontFamily: "'JetBrains Mono', monospace",
+                          }}>
+                            @${token.usdPrice < 0.01 ? token.usdPrice.toFixed(6) : token.usdPrice.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
                 </div>
               </div>
             )}
