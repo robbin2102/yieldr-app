@@ -1,6 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 import clientPromise from '@/lib/mongodb';
 
+// Derive trading platform from metrics position counts
+function deriveTradingPlatform(metrics: any): string {
+  const avantis = metrics?.avantisPositions || 0;
+  const hl = metrics?.hyperliquidPositions || 0;
+  if (avantis === 0 && hl === 0) return 'unknown';
+  if (avantis >= hl) return 'avantis';
+  return 'hyperliquid';
+}
+
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
@@ -80,6 +89,7 @@ export async function POST(request: NextRequest) {
       totalEarnings: 0,
       coInvestorsCount: 0,
       metrics: data.metrics || {},
+      tradingPlatform: deriveTradingPlatform(data.metrics),
       marketOutlook: data.marketOutlook || '',
       investmentThesis: data.investmentThesis || '',
       positionStrategy: data.positionStrategy || '',
@@ -153,7 +163,10 @@ export async function PATCH(request: NextRequest) {
     if (data.marketOutlook !== undefined) updates.marketOutlook = data.marketOutlook;
     if (data.investmentThesis !== undefined) updates.investmentThesis = data.investmentThesis;
     if (data.positionStrategy !== undefined) updates.positionStrategy = data.positionStrategy;
-    if (data.metrics !== undefined) updates.metrics = data.metrics;
+    if (data.metrics !== undefined) {
+      updates.metrics = data.metrics;
+      updates.tradingPlatform = deriveTradingPlatform(data.metrics);
+    }
     if (data.totalEarnings !== undefined) updates.totalEarnings = data.totalEarnings;
     if (data.coInvestorsCount !== undefined) updates.coInvestorsCount = data.coInvestorsCount;
     if (data.lastFeeUpdate !== undefined) updates.lastFeeUpdate = new Date(data.lastFeeUpdate);
