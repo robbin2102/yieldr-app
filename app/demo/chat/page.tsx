@@ -193,11 +193,14 @@ export default function ChatPage() {
     const timer = setTimeout(() => {
       const perpCount = perpPositions.length;
       const pmCount = pmPositions.length;
+      const tokenCount = tokens.length;
+      const hasAnything = perpCount > 0 || pmCount > 0 || tokenCount > 0;
       let content = '';
-      if (perpCount > 0 || pmCount > 0) {
+      if (hasAnything) {
         const parts: string[] = [];
         if (perpCount > 0) parts.push(`${perpCount} perp positions`);
         if (pmCount > 0) parts.push(`${pmCount} prediction market positions`);
+        if (tokenCount > 0) parts.push(`${tokenCount} tokens ($${tokensTotalUsd.toFixed(2)})`);
         content = `I've scanned your wallet and found ${parts.join(' + ')}. I'm monitoring your portfolio and tracking the top traders you follow.\n\nAsk me anything about your positions, market conditions, or trading strategies.`;
       } else {
         content = `Welcome! I'm ${agentName}, your AI trading agent. I'm ready to help you analyze markets, track positions, and learn from top traders.\n\nConnect your positions or ask me about any market!`;
@@ -210,7 +213,7 @@ export default function ChatPage() {
       }]);
     }, 800);
     return () => clearTimeout(timer);
-  }, [mounted, perpPositions, pmPositions, agentName, messages.length]);
+  }, [mounted, perpPositions, pmPositions, tokens, tokensTotalUsd, agentName, messages.length]);
 
   // Auto-scroll chat
   useEffect(() => {

@@ -13,8 +13,10 @@ function buildSystemPrompt(context: {
   positions: any[];
   followedTraders: any[];
   portfolioSummary: any;
+  tokens: any[];
+  tokensTotalUsd: number;
 }) {
-  const { agentName, positions, followedTraders, portfolioSummary } = context;
+  const { agentName, positions, followedTraders, portfolioSummary, tokens, tokensTotalUsd } = context;
 
   const positionSummary = positions.length > 0
     ? positions.map(p => {
@@ -35,6 +37,12 @@ function buildSystemPrompt(context: {
       }).join('\n')
     : 'No traders followed yet.';
 
+  const tokenSummary = tokens.length > 0
+    ? tokens.map(t => `- ${t.symbol} on ${t.chain}: ${t.balance} ($${t.usdValue?.toFixed(2) || '?'})`).join('\n')
+    : 'No tokens detected.';
+
+  const totalPortfolioValue = (portfolioSummary?.totalValue || 0) + tokensTotalUsd;
+
   return `You are ${agentName}, an AI trading agent on the Yieldr platform. You help users analyze their positions, track top traders, and understand market conditions.
 
 ## Your Capabilities
@@ -43,13 +51,18 @@ function buildSystemPrompt(context: {
 - Discuss market conditions, trading strategies, and risk management
 - Provide educational content about DeFi, perpetuals, and prediction markets
 - Alert about position risks (high leverage, concentrated positions, etc.)
+- Analyze token holdings across multiple chains
 
 ## User's Portfolio
-Total Value: $${portfolioSummary?.totalValue || 0}
+Total Value: $${totalPortfolioValue.toFixed(2)}
 Position Count: ${portfolioSummary?.positionCount || 0}
+Token Holdings: $${tokensTotalUsd.toFixed(2)} across ${tokens.length} tokens
 
 ### Open Positions
 ${positionSummary}
+
+### Token Holdings
+${tokenSummary}
 
 ### Followed Traders
 ${traderSummary}
@@ -90,6 +103,8 @@ export async function POST(request: NextRequest) {
     let followedTraders: any[] = [];
     let portfolioSummary: any = {};
     let agentName = 'YieldrAgent';
+    let tokens: any[] = [];
+    let tokensTotalUsd = 0;
 
     if (db && wallet) {
       const [agent, positionDocs] = await Promise.all([
@@ -102,6 +117,21 @@ export async function POST(request: NextRequest) {
         followedTraders = agent.followedTraders || [];
         portfolioSummary = agent.portfolioSummary || {};
       }
+
+      // Fetch token balances
+      try {
+        const tokenApiUrl = `${process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'}/api/demo/tokens?address=${wallet}`;
+        const tokenRes = await fetch(tokenApiUrl);
+        if (tokenRes.ok) {
+          const tokenData = await tokenRes.json();
+          if (tokenData.success && tokenData.data) {
+            tokens = tokenData.data.tokens || [];
+            tokensTotalUsd = tokenData.data.totalUsdValue || 0;
+          }
+        }
+      } catch (e) {
+        console.log('[chat] Token fetch for context failed:', (e as Error).message);
+      }
       positions = positionDocs || [];
     }
 
@@ -110,6 +140,8 @@ export async function POST(request: NextRequest) {
       positions,
       followedTraders,
       portfolioSummary,
+      tokens,
+      tokensTotalUsd,
     });
 
     // Convert messages to Anthropic format

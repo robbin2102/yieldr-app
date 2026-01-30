@@ -214,16 +214,17 @@ export default function LaunchingPage() {
       await new Promise(r => setTimeout(r, 200));
       startStep(4);
       let tokenDetail = 'No tokens found';
+      let tokenTotalUsd = 0;
       try {
         const tokenRes = await fetch(`/api/demo/tokens?address=${address}`);
         if (tokenRes.ok) {
           const tokenData = await tokenRes.json();
           if (tokenData.success && tokenData.data) {
             const count = tokenData.data.tokenCount || 0;
-            const totalUsd = tokenData.data.totalUsdValue || 0;
+            tokenTotalUsd = tokenData.data.totalUsdValue || 0;
             const chains = (tokenData.data.tokens || []).reduce((acc: Set<string>, t: any) => { acc.add(t.chain); return acc; }, new Set<string>());
             if (count > 0) {
-              tokenDetail = `${count} tokens ($${totalUsd.toLocaleString(undefined, { maximumFractionDigits: 0 })}) on ${chains.size} chain${chains.size > 1 ? 's' : ''}`;
+              tokenDetail = `${count} tokens ($${tokenTotalUsd.toLocaleString(undefined, { maximumFractionDigits: 0 })}) on ${chains.size} chain${chains.size > 1 ? 's' : ''}`;
             }
           }
         }
@@ -258,7 +259,7 @@ export default function LaunchingPage() {
 
       // Show discovery
       const totalPositions = perpCount + posData.counts.lp + posData.counts.polymarket;
-      setPortfolioValue(posData.totalValue);
+      setPortfolioValue(posData.totalValue + tokenTotalUsd);
       if (totalPositions > 0) {
         setPortfolioDetail(`${totalPositions} positions across ${[
           posData.counts.avantis > 0 || posData.counts.hyperliquid > 0 ? 'Perps' : '',

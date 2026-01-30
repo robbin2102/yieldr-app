@@ -177,20 +177,18 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // Sort by USD value (highest first), tokens without price last
-    allTokens.sort((a, b) => {
-      if (a.usdValue !== null && b.usdValue !== null) return b.usdValue - a.usdValue;
-      if (a.usdValue !== null) return -1;
-      if (b.usdValue !== null) return 1;
-      return b.balance - a.balance;
-    });
+    // Filter out tokens with no USD value (spam, worthless, or unpriced)
+    const validTokens = allTokens.filter(t => t.usdValue !== null && t.usdValue > 0.01);
 
-    const totalUsdValue = allTokens.reduce((sum, t) => sum + (t.usdValue || 0), 0);
+    // Sort by USD value (highest first)
+    validTokens.sort((a, b) => (b.usdValue || 0) - (a.usdValue || 0));
+
+    const totalUsdValue = validTokens.reduce((sum, t) => sum + (t.usdValue || 0), 0);
 
     return NextResponse.json({
       success: true,
       data: {
-        tokens: allTokens,
+        tokens: validTokens,
         totalUsdValue,
         chainsScanned: CHAINS.map(c => c.name),
         tokenCount: allTokens.length,
