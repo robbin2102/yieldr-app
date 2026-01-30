@@ -49,6 +49,26 @@ interface ChatMessage {
 
 const AVATAR_IMGS = [1, 11, 12, 14, 15];
 
+// Filter traders: pick best per platform with realistic win rates (70-95%)
+function pickDisplayTraders(traders: FollowedTrader[]): FollowedTrader[] {
+  const validWinRate = (t: FollowedTrader) => {
+    const wr = t.winRate <= 1 ? t.winRate * 100 : t.winRate;
+    return wr >= 70 && wr <= 95;
+  };
+  const byPnl = (a: FollowedTrader, b: FollowedTrader) => b.pnl30d - a.pnl30d;
+
+  const hl = traders.filter(t => t.platform === 'hyperliquid' && validWinRate(t)).sort(byPnl);
+  const av = traders.filter(t => t.platform === 'avantis' && validWinRate(t)).sort(byPnl);
+  const pm = traders.filter(t => t.platform === 'polymarket' && validWinRate(t)).sort(byPnl);
+
+  // Fallback: if no valid win rate traders, just pick highest pnl per platform
+  const hlPick = hl[0] || traders.filter(t => t.platform === 'hyperliquid').sort(byPnl)[0];
+  const avPick = av[0] || traders.filter(t => t.platform === 'avantis').sort(byPnl)[0];
+  const pmPick = pm[0] || traders.filter(t => t.platform === 'polymarket').sort(byPnl)[0];
+
+  return [hlPick, avPick, pmPick].filter(Boolean);
+}
+
 export default function ChatPage() {
   const [mounted, setMounted] = useState(false);
   const router = useRouter();
@@ -56,7 +76,7 @@ export default function ChatPage() {
 
   const [agentName, setAgentName] = useState('AlphaHunter');
   const [panelCollapsed, setPanelCollapsed] = useState(false);
-  const [activeTab, setActiveTab] = useState<'positions' | 'trades' | 'markets'>('positions');
+  const [activeTab, setActiveTab] = useState<'positions' | 'tokens' | 'trades' | 'markets'>('positions');
 
   // Data
   const [perpPositions, setPerpPositions] = useState<PerpPosition[]>([]);
@@ -69,8 +89,9 @@ export default function ChatPage() {
   const [inputValue, setInputValue] = useState('');
   const chatEndRef = useRef<HTMLDivElement>(null);
 
-  // Countdown
-  const [countdown, setCountdown] = useState(163);
+  // Modal
+  const [showModal, setShowModal] = useState(false);
+  const [yldrInput, setYldrInput] = useState(100);
 
   useEffect(() => { setMounted(true); }, []);
 
@@ -163,14 +184,6 @@ export default function ChatPage() {
     return () => clearTimeout(timer);
   }, [mounted, perpPositions, pmPositions, agentName, messages.length]);
 
-  // Countdown timer
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setCountdown(prev => prev <= 0 ? 180 : prev - 1);
-    }, 1000);
-    return () => clearInterval(interval);
-  }, []);
-
   // Auto-scroll chat
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -187,7 +200,6 @@ export default function ChatPage() {
       time: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false }),
     };
     setMessages(prev => [...prev, userMsg]);
-    // Placeholder agent response (Claude API integration in Part 5)
     setTimeout(() => {
       setMessages(prev => [...prev, {
         id: (Date.now() + 1).toString(),
@@ -204,14 +216,16 @@ export default function ChatPage() {
 
   const shortWallet = address ? `${address.slice(0, 6)}...${address.slice(-4)}` : '';
   const agentInitials = agentName.slice(0, 2).toUpperCase();
-  const countdownMin = Math.floor(countdown / 60);
-  const countdownSec = countdown % 60;
 
   const perpTotal = perpPositions.reduce((s, p) => s + (p.margin || p.positionSize || 0), 0);
   const pmTotal = pmPositions.reduce((s, p) => s + (p.currentValue || 0), 0);
 
-  const perpTraders = followedTraders.filter(t => t.platform === 'hyperliquid' || t.platform === 'avantis');
-  const pmTraders = followedTraders.filter(t => t.platform === 'polymarket');
+  const displayTraders = pickDisplayTraders(followedTraders);
+
+  // YLDR tokenomics: $9M FDV, 210M supply => price = 9000000/210000000 = ~$0.04286 per YLDR
+  const yldrPrice = 9000000 / 210000000;
+  const yldrTokens = Math.floor(yldrInput / yldrPrice);
+  const tradeCapacity = Math.floor(yldrTokens / 1000);
 
   const suggestedPrompts = [
     'Analyze my losing positions',
@@ -292,25 +306,29 @@ export default function ChatPage() {
           <span style={{ fontWeight: 600, fontSize: '0.95rem' }}>{agentName}</span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginLeft: 'auto' }}>
-          <div style={{
-            display: 'flex', alignItems: 'center', gap: '0.3rem',
-            fontFamily: "'JetBrains Mono', monospace",
-            fontSize: '0.75rem',
-            padding: '0.35rem 0.6rem',
-            background: '#0A0A0A',
-            border: '1px solid #1E1E1E',
-            borderRadius: 4,
-            cursor: 'pointer',
-          }}>
+          <div
+            onClick={() => setShowModal(true)}
+            style={{
+              display: 'flex', alignItems: 'center', gap: '0.3rem',
+              fontFamily: "'JetBrains Mono', monospace",
+              fontSize: '0.75rem',
+              padding: '0.35rem 0.6rem',
+              background: '#0A0A0A',
+              border: '1px solid #1E1E1E',
+              borderRadius: 4,
+              cursor: 'pointer',
+            }}>
             <span style={{ color: '#00C805' }}>{'⚡'}</span>
-            <span style={{ fontWeight: 600 }}>63,250</span>
+            <span style={{ fontWeight: 600 }}>100,000</span>
           </div>
-          <button style={{
-            fontSize: '0.65rem', fontWeight: 600,
-            padding: '0.35rem 0.5rem',
-            background: '#00C805', border: 'none', borderRadius: 4,
-            color: '#000', cursor: 'pointer',
-          }}>+ Get YLDR</button>
+          <button
+            onClick={() => setShowModal(true)}
+            style={{
+              fontSize: '0.65rem', fontWeight: 600,
+              padding: '0.35rem 0.5rem',
+              background: '#00C805', border: 'none', borderRadius: 4,
+              color: '#000', cursor: 'pointer',
+            }}>+ Get YLDR</button>
         </div>
       </div>
 
@@ -359,7 +377,7 @@ export default function ChatPage() {
             >{'◀'}</button>
           </div>
 
-          {/* Tabs */}
+          {/* Tabs: Positions | Tokens | Trades | Markets */}
           <div style={{
             display: 'flex', alignItems: 'center',
             borderBottom: '1px solid #1E1E1E',
@@ -368,7 +386,7 @@ export default function ChatPage() {
             padding: '0 0.5rem',
           }}>
             <div style={{ display: 'flex', flex: 1 }}>
-              {(['positions', 'trades', 'markets'] as const).map(tab => (
+              {(['positions', 'tokens', 'trades', 'markets'] as const).map(tab => (
                 <button key={tab} onClick={() => setActiveTab(tab)} style={{
                   padding: '0.5rem',
                   fontSize: '0.7rem',
@@ -382,22 +400,10 @@ export default function ChatPage() {
                 }}>{tab}</button>
               ))}
             </div>
-            <div style={{
-              display: 'flex', alignItems: 'center', gap: '0.25rem',
-              fontFamily: "'JetBrains Mono', monospace",
-              fontSize: '0.55rem',
-              color: '#6E6E6E',
-              padding: '0.25rem 0.4rem',
-              background: '#111111',
-              borderRadius: 3,
-            }}>
-              <span style={{ fontSize: '0.6rem' }}>{'↻'}</span>
-              <span>{countdownMin}:{String(countdownSec).padStart(2, '0')}</span>
-            </div>
           </div>
 
-          {/* Filter bar (positions/trades tabs only) */}
-          {activeTab !== 'markets' && (
+          {/* Filter bar (positions tab only) */}
+          {activeTab === 'positions' && (
             <div style={{
               padding: '0.5rem',
               borderBottom: '1px solid #1E1E1E',
@@ -416,7 +422,7 @@ export default function ChatPage() {
                 cursor: 'pointer',
               }}>
                 <option>Your Positions</option>
-                {followedTraders.map((t, i) => (
+                {displayTraders.map((t, i) => (
                   <option key={i}>{t.username || t.wallet.slice(0, 10)}</option>
                 ))}
               </select>
@@ -571,31 +577,6 @@ export default function ChatPage() {
                   </div>
                 </div>
 
-                {/* Tokens Section (placeholder) */}
-                <div style={{ borderBottom: '1px solid #1E1E1E' }}>
-                  <div style={{
-                    fontSize: '0.6rem', textTransform: 'uppercase', letterSpacing: '0.05em',
-                    color: '#6E6E6E', padding: '0.5rem',
-                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                    background: '#111111',
-                  }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                      <span>Tokens</span>
-                      <span style={{
-                        fontFamily: "'JetBrains Mono', monospace",
-                        fontSize: '0.55rem', color: '#6E6E6E',
-                        background: '#1A1A1A', padding: '0.1rem 0.25rem', borderRadius: 2,
-                      }}>{shortWallet}</span>
-                    </div>
-                    <span style={{ fontFamily: "'JetBrains Mono', monospace", color: '#9E9E9E' }}>--</span>
-                  </div>
-                  <div style={{ padding: '0.75rem 0.5rem', textAlign: 'center' }}>
-                    <div style={{ fontSize: '0.7rem', color: '#6E6E6E' }}>
-                      Token detection coming soon
-                    </div>
-                  </div>
-                </div>
-
                 {/* Agent Following Section */}
                 <div style={{
                   padding: '0.4rem 0.75rem',
@@ -609,118 +590,351 @@ export default function ChatPage() {
                     textTransform: 'uppercase', letterSpacing: '0.05em',
                   }}>Agent Following</span>
                   <span style={{ fontSize: '0.6rem', color: '#6E6E6E' }}>
-                    {followedTraders.length}
+                    {displayTraders.length}
                   </span>
                 </div>
                 <div style={{ padding: '0.5rem' }}>
-                  {followedTraders.length === 0 ? (
+                  {displayTraders.length === 0 ? (
                     <div style={{ fontSize: '0.7rem', color: '#6E6E6E', textAlign: 'center', padding: '0.5rem 0' }}>
                       No traders followed yet
                     </div>
-                  ) : followedTraders.map((trader, i) => (
-                    <div
-                      key={i}
-                      style={{
-                        background: '#111111',
-                        border: `1px solid ${hoveredTrader === trader.wallet ? '#00C805' : '#1E1E1E'}`,
-                        borderRadius: 4,
-                        padding: '0.4rem 0.5rem',
-                        marginBottom: '0.3rem',
-                        display: 'flex', alignItems: 'center', gap: '0.4rem',
-                        cursor: 'pointer',
-                        position: 'relative',
-                      }}
-                      onMouseEnter={() => setHoveredTrader(trader.wallet)}
-                      onMouseLeave={() => setHoveredTrader(null)}
-                    >
-                      <img
-                        src={`https://i.pravatar.cc/150?img=${AVATAR_IMGS[i % AVATAR_IMGS.length]}`}
-                        alt=""
+                  ) : displayTraders.map((trader, i) => {
+                    const wrDisplay = trader.winRate <= 1 ? (trader.winRate * 100).toFixed(0) : trader.winRate.toFixed(0);
+                    return (
+                      <div
+                        key={i}
                         style={{
-                          width: 24, height: 24, borderRadius: '50%',
-                          border: '2px solid #00C805',
+                          background: '#111111',
+                          border: `1px solid ${hoveredTrader === trader.wallet ? '#00C805' : '#1E1E1E'}`,
+                          borderRadius: 4,
+                          padding: '0.4rem 0.5rem',
+                          marginBottom: '0.3rem',
+                          display: 'flex', alignItems: 'center', gap: '0.4rem',
+                          cursor: 'pointer',
+                          position: 'relative',
                         }}
-                      />
-                      <div style={{ flex: 1 }}>
-                        <div style={{ fontWeight: 600, fontSize: '0.75rem' }}>
-                          {trader.username || `${trader.wallet.slice(0, 8)}...`}
+                        onMouseEnter={() => setHoveredTrader(trader.wallet)}
+                        onMouseLeave={() => setHoveredTrader(null)}
+                      >
+                        <img
+                          src={`https://i.pravatar.cc/150?img=${AVATAR_IMGS[i % AVATAR_IMGS.length]}`}
+                          alt=""
+                          style={{
+                            width: 24, height: 24, borderRadius: '50%',
+                            border: '2px solid #00C805',
+                          }}
+                        />
+                        <div style={{ flex: 1 }}>
+                          <div style={{ fontWeight: 600, fontSize: '0.75rem' }}>
+                            {trader.username || `${trader.wallet.slice(0, 8)}...`}
+                          </div>
+                          <div style={{ fontSize: '0.55rem', color: '#6E6E6E' }}>
+                            {trader.platform.charAt(0).toUpperCase() + trader.platform.slice(1)} · {wrDisplay}% win
+                          </div>
+                        </div>
+                        <span style={{
+                          fontFamily: "'JetBrains Mono', monospace",
+                          fontSize: '0.7rem', color: '#00C805', fontWeight: 600,
+                        }}>
+                          +${trader.pnl30d >= 1000
+                            ? `${(trader.pnl30d / 1000).toFixed(1)}K`
+                            : trader.pnl30d.toFixed(0)}
+                        </span>
+
+                        {/* Hover tooltip */}
+                        {hoveredTrader === trader.wallet && (
+                          <div style={{
+                            position: 'absolute',
+                            left: '100%',
+                            top: 0,
+                            marginLeft: 8,
+                            width: 200,
+                            background: '#111111',
+                            border: '1px solid #00C805',
+                            borderRadius: 6,
+                            padding: '0.6rem',
+                            zIndex: 100,
+                            boxShadow: '0 8px 24px rgba(0,0,0,0.6)',
+                          }}>
+                            <div style={{ fontSize: '0.8rem', fontWeight: 700, marginBottom: '0.4rem' }}>
+                              {trader.username || `${trader.wallet.slice(0, 10)}...`}
+                            </div>
+                            <div style={{ fontSize: '0.6rem', color: '#6E6E6E', marginBottom: '0.5rem', textTransform: 'capitalize' }}>
+                              {trader.platform}
+                            </div>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.65rem' }}>
+                                <span style={{ color: '#6E6E6E' }}>30d PnL</span>
+                                <span style={{ fontFamily: "'JetBrains Mono', monospace", color: '#00C805', fontWeight: 600 }}>
+                                  +${trader.pnl30d.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                                </span>
+                              </div>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.65rem' }}>
+                                <span style={{ color: '#6E6E6E' }}>Win Rate</span>
+                                <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 600 }}>
+                                  {wrDisplay}%
+                                </span>
+                              </div>
+                              {trader.roi30d !== undefined && (
+                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.65rem' }}>
+                                  <span style={{ color: '#6E6E6E' }}>30d ROI</span>
+                                  <span style={{ fontFamily: "'JetBrains Mono', monospace", color: '#00C805', fontWeight: 600 }}>
+                                    {trader.roi30d.toFixed(1)}%
+                                  </span>
+                                </div>
+                              )}
+                              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.65rem' }}>
+                                <span style={{ color: '#6E6E6E' }}>Positions</span>
+                                <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 600 }}>
+                                  {trader.totalPositions}
+                                </span>
+                              </div>
+                              {trader.totalAUM !== undefined && trader.totalAUM > 0 && (
+                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.65rem' }}>
+                                  <span style={{ color: '#6E6E6E' }}>AUM</span>
+                                  <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 600 }}>
+                                    ${trader.totalAUM.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                                  </span>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* AGENT TRAINING SECTION */}
+                <div style={{
+                  padding: '0.4rem 0.75rem',
+                  background: '#111111',
+                  borderTop: '1px solid #1E1E1E',
+                  borderBottom: '1px solid #1E1E1E',
+                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                }}>
+                  <span style={{
+                    fontSize: '0.6rem', fontWeight: 600, color: '#6E6E6E',
+                    textTransform: 'uppercase', letterSpacing: '0.05em',
+                  }}>Agent Training</span>
+                </div>
+                <div style={{ padding: '0.5rem' }}>
+                  <div style={{
+                    background: '#111111',
+                    border: '1px solid #1E1E1E',
+                    borderRadius: 6,
+                    padding: '0.6rem',
+                  }}>
+                    {/* Training Fuel */}
+                    <div style={{
+                      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                      marginBottom: '0.6rem', paddingBottom: '0.6rem',
+                      borderBottom: '1px solid #1E1E1E',
+                    }}>
+                      <div style={{
+                        display: 'flex', alignItems: 'center', gap: '0.35rem',
+                        fontFamily: "'JetBrains Mono', monospace", fontSize: '0.75rem',
+                      }}>
+                        <span style={{ color: '#00C805' }}>{'⚡'}</span>
+                        <span style={{ color: '#9E9E9E', fontSize: '0.65rem' }}>Training Fuel:</span>
+                        <span style={{ fontWeight: 700 }}>100,000 YLDR</span>
+                      </div>
+                      <button
+                        onClick={() => setShowModal(true)}
+                        style={{
+                          fontSize: '0.6rem', fontWeight: 600,
+                          padding: '0.3rem 0.5rem',
+                          background: 'rgba(0, 200, 5, 0.15)',
+                          border: '1px solid rgba(0, 200, 5, 0.3)',
+                          borderRadius: 4,
+                          color: '#00C805',
+                          cursor: 'pointer',
+                        }}
+                      >Train Agent</button>
+                    </div>
+
+                    {/* Current Phase */}
+                    <div style={{ marginBottom: '0.6rem' }}>
+                      <div style={{
+                        fontSize: '0.55rem', textTransform: 'uppercase', letterSpacing: '0.05em',
+                        color: '#6E6E6E', marginBottom: '0.2rem',
+                      }}>Current Phase</div>
+                      <div style={{ fontSize: '0.8rem', fontWeight: 700, color: '#FFD000', marginBottom: '0.15rem' }}>
+                        DATA MONITORING
+                      </div>
+                      <div style={{ fontSize: '0.65rem', color: '#9E9E9E' }}>
+                        Monitoring traders and collecting trade data
+                      </div>
+                    </div>
+
+                    {/* Agent Activity - all 0 except YLDR */}
+                    <div style={{
+                      background: '#0A0A0A', borderRadius: 4, padding: '0.5rem',
+                      marginBottom: '0.6rem',
+                    }}>
+                      {[
+                        ['Trades analyzed', '0'],
+                        ['Insights generated', '0'],
+                        ['Trader alignments', '0'],
+                        ['YLDR consumed', '0'],
+                      ].map(([label, value]) => (
+                        <div key={label} style={{
+                          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                          fontSize: '0.65rem', padding: '0.2rem 0',
+                        }}>
+                          <span style={{ color: '#6E6E6E' }}>{label}</span>
+                          <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 600 }}>{value}</span>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* What Agent Does Now - V1 label */}
+                    <div style={{ marginBottom: '0.6rem' }}>
+                      <div style={{ fontSize: '0.6rem', fontWeight: 600, color: '#9E9E9E', marginBottom: '0.35rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                        What Your Agent Does Now
+                        <span style={{
+                          fontSize: '0.5rem', fontWeight: 700, padding: '0.1rem 0.3rem',
+                          background: 'rgba(0, 136, 255, 0.15)', color: '#0088FF', borderRadius: 3,
+                        }}>COMING IN V1</span>
+                      </div>
+                      {[
+                        'Explains WHY trades happen with market context',
+                        'Spots when followed traders align on same position',
+                        'Sends alerts to Telegram (ask in chat)',
+                      ].map((text, i) => (
+                        <div key={i} style={{
+                          display: 'flex', alignItems: 'flex-start', gap: '0.35rem',
+                          fontSize: '0.65rem', color: '#9E9E9E', padding: '0.15rem 0',
+                        }}>
+                          <span style={{ color: '#00C805', flexShrink: 0 }}>{'✓'}</span>
+                          <span>{text}</span>
+                        </div>
+                      ))}
+                      <a
+                        href="https://yieldr.org/docs"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{
+                          display: 'inline-block', marginTop: '0.35rem',
+                          fontSize: '0.6rem', color: '#00C805', textDecoration: 'none',
+                        }}
+                      >Read more in docs &rarr;</a>
+                    </div>
+
+                    {/* Training Threshold */}
+                    <div style={{
+                      background: '#0A0A0A', borderRadius: 4, padding: '0.5rem',
+                      marginBottom: '0.6rem',
+                    }}>
+                      <div style={{
+                        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                        fontSize: '0.6rem', marginBottom: '0.35rem',
+                      }}>
+                        <span style={{ color: '#6E6E6E' }}>Training Starts At</span>
+                        <span style={{ fontFamily: "'JetBrains Mono', monospace", color: '#FFD000', fontWeight: 600 }}>1,000 trades</span>
+                      </div>
+                      <div style={{
+                        height: 6, background: '#000', borderRadius: 3, overflow: 'hidden',
+                        marginBottom: '0.25rem',
+                      }}>
+                        <div style={{
+                          height: '100%', width: '0%',
+                          background: 'linear-gradient(90deg, #FFD000 0%, #00C805 100%)',
+                          borderRadius: 3,
+                        }} />
+                      </div>
+                      <div style={{ fontSize: '0.55rem', color: '#6E6E6E', textAlign: 'right' }}>
+                        1,000 more trades needed
+                      </div>
+                    </div>
+
+                    {/* What Training Unlocks */}
+                    <div style={{ marginBottom: '0.6rem' }}>
+                      <div style={{ fontSize: '0.6rem', fontWeight: 600, color: '#9E9E9E', marginBottom: '0.35rem' }}>
+                        What Training Unlocks
+                      </div>
+                      {[
+                        'Personalized entry/exit signals',
+                        'Pattern recognition from your traders',
+                        'Position sizing & risk management advice',
+                        'Auto-execution (coming soon)',
+                      ].map((text, i) => (
+                        <div key={i} style={{
+                          display: 'flex', alignItems: 'flex-start', gap: '0.35rem',
+                          fontSize: '0.65rem', color: '#6E6E6E', padding: '0.15rem 0',
+                        }}>
+                          <span style={{ color: '#6E6E6E', flexShrink: 0 }}>{'○'}</span>
+                          <span>{text}</span>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Expected ROI */}
+                    <div style={{
+                      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                      padding: '0.5rem',
+                      background: 'rgba(0, 200, 5, 0.08)',
+                      border: '1px solid rgba(0, 200, 5, 0.15)',
+                      borderRadius: 4,
+                      marginBottom: '0.6rem',
+                    }}>
+                      <div>
+                        <div style={{ fontSize: '0.65rem', color: '#9E9E9E', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                          {'📈'} Expected Agent ROI
                         </div>
                         <div style={{ fontSize: '0.55rem', color: '#6E6E6E' }}>
-                          {trader.platform.charAt(0).toUpperCase() + trader.platform.slice(1)} · {(trader.winRate * 100).toFixed(0)}% win
+                          Based on avg of {displayTraders.length} followed traders
                         </div>
                       </div>
-                      <span style={{
+                      <div style={{
                         fontFamily: "'JetBrains Mono', monospace",
-                        fontSize: '0.7rem', color: '#00C805', fontWeight: 600,
-                      }}>
-                        +${trader.pnl30d >= 1000
-                          ? `${(trader.pnl30d / 1000).toFixed(1)}K`
-                          : trader.pnl30d.toFixed(0)}
-                      </span>
-
-                      {/* Hover tooltip */}
-                      {hoveredTrader === trader.wallet && (
-                        <div style={{
-                          position: 'absolute',
-                          left: '100%',
-                          top: 0,
-                          marginLeft: 8,
-                          width: 200,
-                          background: '#111111',
-                          border: '1px solid #00C805',
-                          borderRadius: 6,
-                          padding: '0.6rem',
-                          zIndex: 100,
-                          boxShadow: '0 8px 24px rgba(0,0,0,0.6)',
-                        }}>
-                          <div style={{ fontSize: '0.8rem', fontWeight: 700, marginBottom: '0.4rem' }}>
-                            {trader.username || `${trader.wallet.slice(0, 10)}...`}
-                          </div>
-                          <div style={{ fontSize: '0.6rem', color: '#6E6E6E', marginBottom: '0.5rem', textTransform: 'capitalize' }}>
-                            {trader.platform}
-                          </div>
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.65rem' }}>
-                              <span style={{ color: '#6E6E6E' }}>30d PnL</span>
-                              <span style={{ fontFamily: "'JetBrains Mono', monospace", color: '#00C805', fontWeight: 600 }}>
-                                +${trader.pnl30d.toLocaleString(undefined, { maximumFractionDigits: 0 })}
-                              </span>
-                            </div>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.65rem' }}>
-                              <span style={{ color: '#6E6E6E' }}>Win Rate</span>
-                              <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 600 }}>
-                                {(trader.winRate * 100).toFixed(0)}%
-                              </span>
-                            </div>
-                            {trader.roi30d !== undefined && (
-                              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.65rem' }}>
-                                <span style={{ color: '#6E6E6E' }}>30d ROI</span>
-                                <span style={{ fontFamily: "'JetBrains Mono', monospace", color: '#00C805', fontWeight: 600 }}>
-                                  {trader.roi30d.toFixed(1)}%
-                                </span>
-                              </div>
-                            )}
-                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.65rem' }}>
-                              <span style={{ color: '#6E6E6E' }}>Positions</span>
-                              <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 600 }}>
-                                {trader.totalPositions}
-                              </span>
-                            </div>
-                            {trader.totalAUM !== undefined && trader.totalAUM > 0 && (
-                              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.65rem' }}>
-                                <span style={{ color: '#6E6E6E' }}>AUM</span>
-                                <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 600 }}>
-                                  ${trader.totalAUM.toLocaleString(undefined, { maximumFractionDigits: 0 })}
-                                </span>
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      )}
+                        fontSize: '0.85rem', fontWeight: 700, color: '#00C805',
+                      }}>+0%</div>
                     </div>
-                  ))}
+
+                    {/* Train Agent CTA */}
+                    <button
+                      onClick={() => setShowModal(true)}
+                      style={{
+                        width: '100%', padding: '0.6rem',
+                        background: '#00C805', border: 'none', borderRadius: 4,
+                        color: '#000', fontSize: '0.75rem', fontWeight: 700,
+                        cursor: 'pointer',
+                      }}
+                    >Train Agent</button>
+                  </div>
                 </div>
               </>
+            )}
+
+            {/* TOKENS TAB */}
+            {activeTab === 'tokens' && (
+              <div style={{ borderBottom: '1px solid #1E1E1E' }}>
+                <div style={{
+                  fontSize: '0.6rem', textTransform: 'uppercase', letterSpacing: '0.05em',
+                  color: '#6E6E6E', padding: '0.5rem',
+                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                  background: '#111111',
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                    <span>Tokens</span>
+                    <span style={{
+                      fontFamily: "'JetBrains Mono', monospace",
+                      fontSize: '0.55rem', color: '#6E6E6E',
+                      background: '#1A1A1A', padding: '0.1rem 0.25rem', borderRadius: 2,
+                    }}>{shortWallet}</span>
+                  </div>
+                  <span style={{ fontFamily: "'JetBrains Mono', monospace", color: '#9E9E9E' }}>--</span>
+                </div>
+                <div style={{ padding: '1.5rem 0.5rem', textAlign: 'center' }}>
+                  <div style={{ fontSize: '0.75rem', color: '#6E6E6E', marginBottom: '0.5rem' }}>
+                    Multi-chain token detection coming soon
+                  </div>
+                  <div style={{ fontSize: '0.65rem', color: '#6E6E6E' }}>
+                    Will detect tokens across Base, Ethereum, Arbitrum, and more
+                  </div>
+                </div>
+              </div>
             )}
 
             {/* TRADES TAB (placeholder) */}
@@ -868,6 +1082,209 @@ export default function ChatPage() {
           </div>
         </div>
       </div>
+
+      {/* YLDR MODAL */}
+      {showModal && (
+        <div
+          onClick={() => setShowModal(false)}
+          style={{
+            position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+            background: 'rgba(0, 0, 0, 0.9)',
+            backdropFilter: 'blur(8px)',
+            zIndex: 1000,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            padding: '1.5rem',
+          }}
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{
+              background: '#0A0A0A',
+              border: '1px solid #00C805',
+              borderRadius: 8,
+              maxWidth: 440,
+              width: '100%',
+              maxHeight: '90vh',
+              overflowY: 'auto',
+            }}
+          >
+            {/* Modal Header */}
+            <div style={{
+              padding: '1rem',
+              borderBottom: '1px solid #1E1E1E',
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            }}>
+              <h2 style={{ fontSize: '1rem', fontWeight: 700, margin: 0 }}>Get YLDR Tokens</h2>
+              <button
+                onClick={() => setShowModal(false)}
+                style={{
+                  width: 28, height: 28,
+                  background: '#111111',
+                  border: '1px solid #1E1E1E',
+                  borderRadius: 4,
+                  color: '#9E9E9E',
+                  cursor: 'pointer',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  fontSize: '1rem',
+                }}
+              >{'×'}</button>
+            </div>
+
+            {/* Modal Body */}
+            <div style={{ padding: '1rem' }}>
+              <p style={{ fontSize: '0.85rem', color: '#9E9E9E', lineHeight: 1.5, marginBottom: '1rem' }}>
+                YLDR powers your agent's training. Early buyers get the best price — it increases at each tier.
+              </p>
+
+              {/* Tier Card */}
+              <div style={{
+                background: '#111111',
+                border: '1px solid #1E1E1E',
+                borderRadius: 6,
+                padding: '0.75rem',
+                marginBottom: '1rem',
+              }}>
+                <div style={{
+                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                  marginBottom: '0.5rem',
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                    <span style={{
+                      fontFamily: "'JetBrains Mono', monospace",
+                      fontSize: '0.6rem', fontWeight: 700,
+                      padding: '0.2rem 0.4rem',
+                      background: '#00C805', color: '#000', borderRadius: 3,
+                    }}>TIER 1</span>
+                    <span style={{ fontSize: '0.8rem', fontWeight: 600 }}>Early Access</span>
+                  </div>
+                  <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: '0.75rem', color: '#9E9E9E' }}>$9M FDV</span>
+                </div>
+                <div style={{ marginBottom: '0.5rem' }}>
+                  <div style={{ height: 4, background: '#000', borderRadius: 2, overflow: 'hidden', marginBottom: '0.25rem' }}>
+                    <div style={{ height: '100%', width: '35%', background: '#00C805' }} />
+                  </div>
+                  <div style={{ fontSize: '0.65rem', color: '#6E6E6E' }}>35% filled — 650K YLDR left at this price</div>
+                </div>
+                <div style={{
+                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                  paddingTop: '0.5rem', borderTop: '1px solid #1E1E1E', fontSize: '0.7rem',
+                }}>
+                  <span style={{ color: '#9E9E9E' }}>Next tier</span>
+                  <span style={{ fontFamily: "'JetBrains Mono', monospace", color: '#FFD000', fontWeight: 600 }}>$14M FDV (+56%)</span>
+                </div>
+              </div>
+
+              {/* Amount Input */}
+              <div style={{ marginBottom: '1rem' }}>
+                <label style={{ fontSize: '0.75rem', fontWeight: 600, marginBottom: '0.35rem', display: 'block' }}>Amount</label>
+                <div style={{ position: 'relative' }}>
+                  <input
+                    type="number"
+                    value={yldrInput}
+                    onChange={e => setYldrInput(Math.max(0, parseFloat(e.target.value) || 0))}
+                    min={0}
+                    style={{
+                      width: '100%',
+                      background: '#111111',
+                      border: '1px solid #1E1E1E',
+                      borderRadius: 6,
+                      padding: '0.75rem 3.5rem 0.75rem 0.75rem',
+                      fontFamily: "'JetBrains Mono', monospace",
+                      fontSize: '1.25rem', fontWeight: 600,
+                      color: '#FFFFFF',
+                      outline: 'none',
+                    }}
+                  />
+                  <span style={{
+                    position: 'absolute', right: '0.75rem', top: '50%', transform: 'translateY(-50%)',
+                    fontFamily: "'JetBrains Mono', monospace", fontSize: '0.85rem', color: '#6E6E6E',
+                  }}>USDC</span>
+                </div>
+              </div>
+
+              {/* Conversion Display */}
+              <div style={{
+                background: '#111111',
+                border: '1px solid #1E1E1E',
+                borderRadius: 6,
+                padding: '0.75rem',
+                marginBottom: '1rem',
+              }}>
+                {[
+                  ['You Receive', `${yldrTokens.toLocaleString()} YLDR`],
+                  ['Agent Training', `~${tradeCapacity.toLocaleString()} trades`],
+                  ['Max Supply', '210,000,000 YLDR'],
+                ].map(([label, value]) => (
+                  <div key={label} style={{
+                    display: 'flex', justifyContent: 'space-between',
+                    fontSize: '0.8rem', marginBottom: '0.35rem',
+                  }}>
+                    <span style={{ color: '#9E9E9E' }}>{label}</span>
+                    <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 600, color: '#00C805' }}>{value}</span>
+                  </div>
+                ))}
+              </div>
+
+              {/* Why Buy Now */}
+              <div style={{
+                background: 'rgba(0, 200, 5, 0.08)',
+                border: '1px solid rgba(0, 200, 5, 0.2)',
+                borderRadius: 6,
+                padding: '0.75rem',
+                marginBottom: '1rem',
+              }}>
+                <div style={{ fontSize: '0.7rem', fontWeight: 600, color: '#00C805', marginBottom: '0.5rem' }}>
+                  Why Buy Now
+                </div>
+                {[
+                  'AI chat credits for trading insights',
+                  'Train agent to unlock personalized signals',
+                  'Early access to Execute (auto-trading)',
+                  'Potential 10-100x if listed on major exchange',
+                ].map((text, i) => (
+                  <div key={i} style={{
+                    display: 'flex', alignItems: 'flex-start', gap: '0.4rem',
+                    fontSize: '0.75rem', marginBottom: '0.35rem', lineHeight: 1.4,
+                  }}>
+                    <span style={{ color: '#00C805', flexShrink: 0 }}>{'✓'}</span>
+                    <span>{text}</span>
+                  </div>
+                ))}
+              </div>
+
+              {/* Buy Button - Deactivated */}
+              <button
+                disabled
+                style={{
+                  width: '100%',
+                  background: '#333',
+                  color: '#666',
+                  border: 'none',
+                  padding: '0.75rem',
+                  borderRadius: 6,
+                  fontWeight: 700,
+                  fontSize: '0.9rem',
+                  cursor: 'not-allowed',
+                  opacity: 0.6,
+                }}
+              >Buy YLDR (Coming Soon)</button>
+
+              <p style={{
+                fontSize: '0.7rem', color: '#6E6E6E',
+                textAlign: 'center', marginTop: '0.75rem', lineHeight: 1.5,
+              }}>
+                Only users can mint. No team/VC allocation until listing.<br />
+                <a
+                  href="https://yieldr.org/docs"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{ color: '#00C805', textDecoration: 'none' }}
+                >Learn about tokenomics &rarr;</a>
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
