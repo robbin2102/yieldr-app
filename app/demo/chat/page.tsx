@@ -319,7 +319,7 @@ export default function ChatPage() {
               cursor: 'pointer',
             }}>
             <span style={{ color: '#00C805' }}>{'⚡'}</span>
-            <span style={{ fontWeight: 600 }}>100,000</span>
+            <span style={{ fontWeight: 600 }}>100K</span>
           </div>
           <button
             onClick={() => setShowModal(true)}
@@ -636,7 +636,9 @@ export default function ChatPage() {
                           fontFamily: "'JetBrains Mono', monospace",
                           fontSize: '0.7rem', color: '#00C805', fontWeight: 600,
                         }}>
-                          +${trader.pnl30d >= 1000
+                          +${trader.pnl30d >= 1000000
+                            ? `${(trader.pnl30d / 1000000).toFixed(1)}M`
+                            : trader.pnl30d >= 1000
                             ? `${(trader.pnl30d / 1000).toFixed(1)}K`
                             : trader.pnl30d.toFixed(0)}
                         </span>
@@ -644,17 +646,17 @@ export default function ChatPage() {
                         {/* Hover tooltip */}
                         {hoveredTrader === trader.wallet && (
                           <div style={{
-                            position: 'absolute',
-                            left: '100%',
-                            top: 0,
-                            marginLeft: 8,
+                            position: 'fixed',
+                            left: 308,
+                            top: 'auto',
                             width: 200,
                             background: '#111111',
                             border: '1px solid #00C805',
                             borderRadius: 6,
                             padding: '0.6rem',
-                            zIndex: 100,
+                            zIndex: 1000,
                             boxShadow: '0 8px 24px rgba(0,0,0,0.6)',
+                            marginTop: -30,
                           }}>
                             <div style={{ fontSize: '0.8rem', fontWeight: 700, marginBottom: '0.4rem' }}>
                               {trader.username || `${trader.wallet.slice(0, 10)}...`}
@@ -737,7 +739,7 @@ export default function ChatPage() {
                       }}>
                         <span style={{ color: '#00C805' }}>{'⚡'}</span>
                         <span style={{ color: '#9E9E9E', fontSize: '0.65rem' }}>Training Fuel:</span>
-                        <span style={{ fontWeight: 700 }}>100,000 YLDR</span>
+                        <span style={{ fontWeight: 700 }}>100K YLDR</span>
                       </div>
                       <button
                         onClick={() => setShowModal(true)}
@@ -759,7 +761,7 @@ export default function ChatPage() {
                         fontSize: '0.55rem', textTransform: 'uppercase', letterSpacing: '0.05em',
                         color: '#6E6E6E', marginBottom: '0.2rem',
                       }}>Current Phase</div>
-                      <div style={{ fontSize: '0.8rem', fontWeight: 700, color: '#FFD000', marginBottom: '0.15rem' }}>
+                      <div style={{ fontSize: '0.65rem', fontWeight: 700, color: '#FFD000', marginBottom: '0.15rem', letterSpacing: '0.05em' }}>
                         DATA MONITORING
                       </div>
                       <div style={{ fontSize: '0.65rem', color: '#9E9E9E' }}>
@@ -786,39 +788,6 @@ export default function ChatPage() {
                           <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 600 }}>{value}</span>
                         </div>
                       ))}
-                    </div>
-
-                    {/* What Agent Does Now - V1 label */}
-                    <div style={{ marginBottom: '0.6rem' }}>
-                      <div style={{ fontSize: '0.6rem', fontWeight: 600, color: '#9E9E9E', marginBottom: '0.35rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                        What Your Agent Does Now
-                        <span style={{
-                          fontSize: '0.5rem', fontWeight: 700, padding: '0.1rem 0.3rem',
-                          background: 'rgba(0, 136, 255, 0.15)', color: '#0088FF', borderRadius: 3,
-                        }}>COMING IN V1</span>
-                      </div>
-                      {[
-                        'Explains WHY trades happen with market context',
-                        'Spots when followed traders align on same position',
-                        'Sends alerts to Telegram (ask in chat)',
-                      ].map((text, i) => (
-                        <div key={i} style={{
-                          display: 'flex', alignItems: 'flex-start', gap: '0.35rem',
-                          fontSize: '0.65rem', color: '#9E9E9E', padding: '0.15rem 0',
-                        }}>
-                          <span style={{ color: '#00C805', flexShrink: 0 }}>{'✓'}</span>
-                          <span>{text}</span>
-                        </div>
-                      ))}
-                      <a
-                        href="https://yieldr.org/docs"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        style={{
-                          display: 'inline-block', marginTop: '0.35rem',
-                          fontSize: '0.6rem', color: '#00C805', textDecoration: 'none',
-                        }}
-                      >Read more in docs &rarr;</a>
                     </div>
 
                     {/* Training Threshold */}
@@ -902,6 +871,25 @@ export default function ChatPage() {
                         cursor: 'pointer',
                       }}
                     >Train Agent</button>
+
+                    {/* V1 label + docs */}
+                    <div style={{
+                      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                      marginTop: '0.5rem', paddingTop: '0.5rem',
+                      borderTop: '1px solid #1E1E1E',
+                    }}>
+                      <span style={{
+                        fontSize: '0.5rem', fontWeight: 700, padding: '0.15rem 0.35rem',
+                        background: 'rgba(0, 136, 255, 0.15)', color: '#0088FF', borderRadius: 3,
+                        letterSpacing: '0.03em',
+                      }}>COMING IN V1</span>
+                      <a
+                        href="https://yieldr.org/docs"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{ fontSize: '0.55rem', color: '#00C805', textDecoration: 'none' }}
+                      >Read docs &rarr;</a>
+                    </div>
                   </div>
                 </div>
               </>
