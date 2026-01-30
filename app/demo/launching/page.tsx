@@ -286,6 +286,7 @@ export default function LaunchingPage() {
       name: agentName,
       wallet: address,
       createdAt: Date.now(),
+      portfolioValue,
     }));
     router.push('/demo/chat');
   };

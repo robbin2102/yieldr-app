@@ -454,6 +454,12 @@ export default function ChatPage() {
             }}>
               <span style={{ color: '#00C805' }}>{'📊'}</span> Agent Monitoring
             </span>
+            <span style={{
+              fontFamily: "'JetBrains Mono', monospace",
+              fontSize: '0.7rem', fontWeight: 700, color: '#FFFFFF',
+            }}>
+              ${(perpTotal + pmTotal + tokensTotalUsd).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+            </span>
             <button
               onClick={() => setPanelCollapsed(true)}
               style={{
