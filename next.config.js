@@ -36,6 +36,12 @@ const nextConfig = {
       });
     }
 
+    // Suppress MetaMask SDK async-storage warning
+    config.ignoreWarnings = [
+      ...(config.ignoreWarnings || []),
+      { module: /@metamask\/sdk/ },
+    ];
+
     return config;
   },
 };

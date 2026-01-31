@@ -102,8 +102,11 @@ export async function POST(request: NextRequest) {
         type: 'PERP',
         status: 'active',
       }).toArray(),
-      db.collection('polymarket-openPositions').find({
+      // User's PM positions are stored in 'positions' collection with type PREDICTION
+      // (polymarket-openPositions is for tracked traders, not the user)
+      db.collection('positions').find({
         walletAddress: walletLower,
+        type: 'PREDICTION',
       }).toArray(),
     ]);
 
@@ -117,7 +120,7 @@ export async function POST(request: NextRequest) {
     // Extract user's PM categories from market titles
     const userPmCategories = [...new Set(
       userPmPositions
-        .map(p => categorizeMarket(p.title || ''))
+        .map(p => categorizeMarket(p.market || p.title || ''))
         .filter(cat => cat !== 'Other')
     )];
 
@@ -262,9 +265,11 @@ export async function POST(request: NextRequest) {
       console.log(`[follow-traders] PM traders matched: ${pmTraders.length} (categories: [${userPmCategories.join(', ')}])`);
     }
 
-    // Update agent
-    agent.followedTraders = followedTraders;
-    await agent.save();
+    // Update agent atomically to avoid VersionError from concurrent calls
+    await Agent.findOneAndUpdate(
+      { ownerWallet: walletLower },
+      { $set: { followedTraders } },
+    );
 
     return NextResponse.json({
       success: true,
