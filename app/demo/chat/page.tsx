@@ -104,6 +104,11 @@ export default function ChatPage() {
   const [inputValue, setInputValue] = useState('');
   const chatEndRef = useRef<HTMLDivElement>(null);
 
+  // Chat sessions
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [chatSessions, setChatSessions] = useState<{ id: string; title: string; updatedAt: string }[]>([]);
+  const [showHistory, setShowHistory] = useState(false);
+
   // Modal
   const [showModal, setShowModal] = useState(false);
   const [yldrInput, setYldrInput] = useState(100);
@@ -187,6 +192,51 @@ export default function ChatPage() {
       .catch(() => {});
   }, [mounted, address]);
 
+  // Load chat sessions list
+  const loadChatSessions = useCallback(async () => {
+    if (!address) return;
+    try {
+      const res = await fetch(`/api/demo/chat-sessions?wallet=${address}`);
+      const data = await res.json();
+      if (data.success) {
+        setChatSessions(data.sessions.map((s: any) => ({
+          id: s.id,
+          title: s.title,
+          updatedAt: s.updatedAt,
+        })));
+      }
+    } catch {}
+  }, [address]);
+
+  useEffect(() => {
+    if (mounted && address) loadChatSessions();
+  }, [mounted, address, loadChatSessions]);
+
+  // Load a specific chat session
+  const loadSession = useCallback(async (id: string) => {
+    try {
+      const res = await fetch(`/api/demo/chat-sessions/${id}`);
+      const data = await res.json();
+      if (data.success && data.session) {
+        setSessionId(id);
+        setMessages(data.session.messages.map((m: any, i: number) => ({
+          id: `${id}-${i}`,
+          role: m.role,
+          content: m.content,
+          time: new Date(m.timestamp).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false }),
+        })));
+        setShowHistory(false);
+      }
+    } catch {}
+  }, []);
+
+  // Start a new chat
+  const startNewChat = useCallback(() => {
+    setSessionId(null);
+    setMessages([]);
+    setShowHistory(false);
+  }, []);
+
   // Initial agent message
   useEffect(() => {
     if (!mounted || messages.length > 0) return;
@@ -253,7 +303,7 @@ export default function ChatPage() {
       const res = await fetch('/api/demo/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: apiMessages, wallet: address }),
+        body: JSON.stringify({ messages: apiMessages, wallet: address, sessionId }),
       });
 
       if (!res.ok || !res.body) {
@@ -285,6 +335,9 @@ export default function ChatPage() {
               setMessages(prev => prev.map(m =>
                 m.id === agentMsgId ? { ...m, content: m.content + parsed.text } : m
               ));
+            } else if (parsed.type === 'session') {
+              setSessionId(parsed.sessionId);
+              loadChatSessions();
             } else if (parsed.type === 'error') {
               setMessages(prev => prev.map(m =>
                 m.id === agentMsgId ? { ...m, content: m.content || `Error: ${parsed.error}` } : m
@@ -300,7 +353,7 @@ export default function ChatPage() {
     }
 
     setIsStreaming(false);
-  }, [inputValue, isStreaming, messages, address]);
+  }, [inputValue, isStreaming, messages, address, sessionId, loadChatSessions]);
 
   const handlePromptClick = (prompt: string) => {
     setInputValue(prompt);
@@ -1155,6 +1208,69 @@ export default function ChatPage() {
           position: 'relative',
           overflow: 'hidden',
         }}>
+          {/* Chat History Dropdown */}
+          {showHistory && (
+            <div style={{
+              position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
+              background: 'rgba(0,0,0,0.7)', zIndex: 20,
+            }} onClick={() => setShowHistory(false)}>
+              <div
+                onClick={e => e.stopPropagation()}
+                style={{
+                  position: 'absolute', top: '0.5rem', right: '0.5rem',
+                  width: 300, maxHeight: '70vh',
+                  background: '#111111', border: '1px solid #1E1E1E',
+                  borderRadius: 8, overflow: 'hidden',
+                  display: 'flex', flexDirection: 'column',
+                }}
+              >
+                <div style={{
+                  padding: '0.6rem 0.75rem',
+                  borderBottom: '1px solid #1E1E1E',
+                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                }}>
+                  <span style={{ fontSize: '0.8rem', fontWeight: 600 }}>Chat History</span>
+                  <button onClick={startNewChat} style={{
+                    fontSize: '0.65rem', fontWeight: 600,
+                    padding: '0.25rem 0.5rem',
+                    background: '#00C805', border: 'none', borderRadius: 4,
+                    color: '#000', cursor: 'pointer',
+                  }}>+ New Chat</button>
+                </div>
+                <div style={{ flex: 1, overflowY: 'auto' }}>
+                  {chatSessions.length === 0 ? (
+                    <div style={{ padding: '1.5rem', textAlign: 'center', fontSize: '0.75rem', color: '#6E6E6E' }}>
+                      No previous chats
+                    </div>
+                  ) : chatSessions.map(s => (
+                    <div
+                      key={s.id}
+                      onClick={() => loadSession(s.id)}
+                      style={{
+                        padding: '0.6rem 0.75rem',
+                        borderBottom: '1px solid #1E1E1E',
+                        cursor: 'pointer',
+                        background: s.id === sessionId ? 'rgba(0, 200, 5, 0.08)' : 'transparent',
+                      }}
+                    >
+                      <div style={{
+                        fontSize: '0.75rem', fontWeight: 500,
+                        whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                      }}>{s.title}</div>
+                      <div style={{
+                        fontSize: '0.6rem', color: '#6E6E6E',
+                        fontFamily: "'JetBrains Mono', monospace",
+                        marginTop: '0.15rem',
+                      }}>
+                        {new Date(s.updatedAt).toLocaleDateString()}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Expand button (when panel collapsed) */}
           {panelCollapsed && (
             <button
@@ -1238,6 +1354,20 @@ export default function ChatPage() {
               ))}
             </div>
             <div style={{ display: 'flex', gap: '0.5rem' }}>
+              <button
+                onClick={() => { setShowHistory(!showHistory); loadChatSessions(); }}
+                title="Chat History"
+                style={{
+                  width: 40, height: 40,
+                  background: '#111111',
+                  border: '1px solid #1E1E1E',
+                  borderRadius: 6,
+                  color: '#9E9E9E',
+                  cursor: 'pointer',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  fontSize: '1rem', flexShrink: 0,
+                }}
+              >{'☰'}</button>
               <textarea
                 value={inputValue}
                 onChange={e => setInputValue(e.target.value)}

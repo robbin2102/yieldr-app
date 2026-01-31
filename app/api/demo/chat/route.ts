@@ -3,6 +3,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import connectDB from '@/lib/mongoose';
 import mongoose from 'mongoose';
 import Agent from '@/models/Agent';
+import ChatSession from '@/models/ChatSession';
 
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY || '',
@@ -87,7 +88,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const { messages, wallet } = await request.json();
+    const { messages, wallet, sessionId } = await request.json();
 
     if (!messages || !Array.isArray(messages) || messages.length === 0) {
       return new Response(
@@ -150,10 +151,14 @@ export async function POST(request: NextRequest) {
       content: m.content,
     }));
 
+    // Get the last user message for saving
+    const lastUserMessage = messages[messages.length - 1];
+
     // Stream response
     const encoder = new TextEncoder();
     const stream = new ReadableStream({
       async start(controller) {
+        let fullResponse = '';
         try {
           const response = await anthropic.messages.create({
             model: 'claude-sonnet-4-20250514',
@@ -165,8 +170,42 @@ export async function POST(request: NextRequest) {
 
           for await (const event of response) {
             if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
+              fullResponse += event.delta.text;
               const chunk = JSON.stringify({ type: 'text', text: event.delta.text }) + '\n';
               controller.enqueue(encoder.encode(chunk));
+            }
+          }
+
+          // Save messages to chat session
+          if (wallet && fullResponse) {
+            try {
+              await connectDB();
+              const newMessages = [
+                { role: 'user' as const, content: lastUserMessage.content, timestamp: new Date() },
+                { role: 'agent' as const, content: fullResponse, timestamp: new Date() },
+              ];
+
+              if (sessionId) {
+                // Append to existing session
+                await ChatSession.findByIdAndUpdate(sessionId, {
+                  $push: { messages: { $each: newMessages } },
+                  $set: { updatedAt: new Date() },
+                });
+              } else {
+                // Create new session with title from first user message
+                const title = lastUserMessage.content.slice(0, 100);
+                const session = await ChatSession.create({
+                  walletAddress: wallet.toLowerCase(),
+                  title,
+                  messages: newMessages,
+                });
+                // Send session ID back to client
+                controller.enqueue(encoder.encode(
+                  JSON.stringify({ type: 'session', sessionId: session._id.toString() }) + '\n'
+                ));
+              }
+            } catch (saveErr) {
+              console.error('[chat] Failed to save chat session:', saveErr);
             }
           }
 
