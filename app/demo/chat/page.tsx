@@ -238,33 +238,116 @@ export default function ChatPage() {
     setShowHistory(false);
   }, []);
 
-  // Initial agent message
+  // Track whether initial analysis has been triggered
+  const initialAnalysisTriggered = useRef(false);
+
+  // Initial agent message - calls the LLM to generate portfolio analysis
   useEffect(() => {
-    if (!mounted || messages.length > 0) return;
-    const timer = setTimeout(() => {
-      const perpCount = perpPositions.length;
-      const pmCount = pmPositions.length;
-      const tokenCount = tokens.length;
-      const hasAnything = perpCount > 0 || pmCount > 0 || tokenCount > 0;
-      let content = '';
-      if (hasAnything) {
-        const parts: string[] = [];
-        if (perpCount > 0) parts.push(`${perpCount} perp positions`);
-        if (pmCount > 0) parts.push(`${pmCount} prediction market positions`);
-        if (tokenCount > 0) parts.push(`${tokenCount} tokens ($${tokensTotalUsd.toFixed(2)})`);
-        content = `I've scanned your wallet and found ${parts.join(' + ')}. I'm monitoring your portfolio and tracking the top traders you follow.\n\nAsk me anything about your positions, market conditions, or trading strategies.`;
-      } else {
-        content = `Welcome! I'm ${agentName}, your AI trading agent. I'm ready to help you analyze markets, track positions, and learn from top traders.\n\nConnect your positions or ask me about any market!`;
+    if (!mounted || messages.length > 0 || !address || initialAnalysisTriggered.current) return;
+    initialAnalysisTriggered.current = true;
+
+    const now = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+    const agentMsgId = 'initial-analysis';
+
+    // Show an empty agent message that will be filled by streaming
+    setMessages([{
+      id: agentMsgId,
+      role: 'agent',
+      content: '',
+      time: now,
+    }]);
+    setIsStreaming(true);
+
+    console.log('[chat-page] Triggering initial-analysis...');
+
+    (async () => {
+      try {
+        const res = await fetch('/api/demo/chat/initial-analysis', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ wallet: address }),
+        });
+
+        if (!res.ok) {
+          // If the API fails, try parsing as JSON for a static response
+          const errData = await res.json().catch(() => ({ error: 'Unknown error' }));
+          setMessages([{
+            id: agentMsgId,
+            role: 'agent',
+            content: `Welcome! I'm ${agentName}, your AI trading agent. I'm ready to help you analyze markets, track positions, and learn from top traders.\n\nAsk me anything about your positions or strategies.`,
+            time: now,
+          }]);
+          setIsStreaming(false);
+          console.log('[chat-page] initial-analysis failed:', errData.error);
+          return;
+        }
+
+        const contentType = res.headers.get('content-type') || '';
+
+        // Handle static response (no positions)
+        if (contentType.includes('application/json')) {
+          const data = await res.json();
+          setMessages([{
+            id: agentMsgId,
+            role: 'agent',
+            content: data.content || `Welcome! I'm ${agentName}, your AI trading agent.`,
+            time: now,
+          }]);
+          setIsStreaming(false);
+          console.log('[chat-page] initial-analysis: static response (no positions)');
+          return;
+        }
+
+        // Handle streaming response
+        if (!res.body) {
+          setIsStreaming(false);
+          return;
+        }
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            try {
+              const parsed = JSON.parse(line);
+              if (parsed.type === 'text') {
+                setMessages(prev => prev.map(m =>
+                  m.id === agentMsgId ? { ...m, content: m.content + parsed.text } : m
+                ));
+              } else if (parsed.type === 'session') {
+                setSessionId(parsed.sessionId);
+                loadChatSessions();
+                console.log('[chat-page] initial-analysis session created:', parsed.sessionId);
+              } else if (parsed.type === 'error') {
+                console.error('[chat-page] initial-analysis stream error:', parsed.error);
+              }
+            } catch {}
+          }
+        }
+
+        console.log('[chat-page] initial-analysis streaming complete');
+      } catch (err: any) {
+        console.error('[chat-page] initial-analysis fetch error:', err.message);
+        setMessages([{
+          id: agentMsgId,
+          role: 'agent',
+          content: `Welcome! I'm ${agentName}, your AI trading agent. I encountered an issue loading your analysis, but I'm ready to help.\n\nAsk me anything about your positions or strategies.`,
+          time: now,
+        }]);
       }
-      setMessages([{
-        id: '1',
-        role: 'agent',
-        content,
-        time: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false }),
-      }]);
-    }, 800);
-    return () => clearTimeout(timer);
-  }, [mounted, perpPositions, pmPositions, tokens, tokensTotalUsd, agentName, messages.length]);
+      setIsStreaming(false);
+    })();
+  }, [mounted, address, agentName, messages.length, loadChatSessions]);
 
   // Auto-scroll chat
   useEffect(() => {

@@ -98,6 +98,8 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    console.log(`[chat] Request: ${messages.length} messages, wallet: ${wallet}, session: ${sessionId || 'new'}`);
+
     // Fetch user context from DB
     await connectDB();
     const db = mongoose.connection.db;
@@ -162,7 +164,7 @@ export async function POST(request: NextRequest) {
         let fullResponse = '';
         try {
           const response = await anthropic.messages.create({
-            model: 'claude-sonnet-4-20250514',
+            model: 'claude-sonnet-4-5-20250514',
             max_tokens: 1024,
             system: systemPrompt,
             messages: anthropicMessages,

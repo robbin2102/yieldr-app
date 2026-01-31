@@ -121,7 +121,18 @@ export async function POST(request: NextRequest) {
         .filter(cat => cat !== 'Other')
     )];
 
-    console.log(`[follow-traders] User ${walletLower} coins: [${userPerpCoins.join(', ')}], PM categories: [${userPmCategories.join(', ')}]`);
+    // Extract user's PM market titles for market-level matching
+    const userPmMarketTitles = userPmPositions.map(p => (p.title || '').toLowerCase()).filter(Boolean);
+
+    // Extract key terms from market titles for fuzzy matching (words > 4 chars, excluding common words)
+    const stopWords = new Set(['will', 'what', 'when', 'where', 'which', 'this', 'that', 'than', 'then', 'there', 'their', 'about', 'above', 'after', 'before', 'between', 'under', 'over', 'more', 'most', 'other', 'some', 'such', 'only', 'same', 'just', 'also', 'very', 'with', 'from', 'have', 'been', 'does', 'price', 'market']);
+    const userPmKeyTerms = [...new Set(
+      userPmMarketTitles
+        .flatMap(t => t.split(/\s+/))
+        .filter(w => w.length > 4 && !stopWords.has(w))
+    )];
+
+    console.log(`[follow-traders] User ${walletLower} coins: [${userPerpCoins.join(', ')}], PM categories: [${userPmCategories.join(', ')}], PM markets: ${userPmPositions.length}, key terms: [${userPmKeyTerms.slice(0, 10).join(', ')}]`);
 
     const followedTraders: FollowedTrader[] = [];
 
@@ -221,17 +232,74 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // ── Step 3: Find PM traders strong in user's same categories ──
+    // ── Step 3: Find PM traders strong in user's same categories AND markets ──
     if (hasPredictions) {
       let pmTraders: any[] = [];
+      const pmTraderMatchDetails = new Map<string, { categories: string[]; markets: string[] }>();
 
-      if (userPmCategories.length > 0) {
-        // Find traders whose strengths overlap with user's market categories
-        pmTraders = await db.collection('polymarket-traderProfiles').find({
-          wallet: { $ne: walletLower },
-          'strengths.category': { $in: userPmCategories },
-          netPnl: { $gt: 0 },
-        }).sort({ netPnl: -1 }).limit(3).toArray();
+      if (userPmCategories.length > 0 || userPmKeyTerms.length > 0) {
+        // Strategy A: Match by category strengths
+        if (userPmCategories.length > 0) {
+          const categoryMatched = await db.collection('polymarket-traderProfiles').find({
+            wallet: { $ne: walletLower },
+            'strengths.category': { $in: userPmCategories },
+            netPnl: { $gt: 0 },
+          }).sort({ netPnl: -1 }).limit(5).toArray();
+
+          for (const t of categoryMatched) {
+            const traderCategories = (t.strengths || []).map((s: any) => s.category);
+            const overlap = userPmCategories.filter(c => traderCategories.includes(c));
+            pmTraderMatchDetails.set(t.wallet, { categories: overlap, markets: [] });
+          }
+          pmTraders.push(...categoryMatched);
+        }
+
+        // Strategy B: Match by actual market positions (same markets the user holds)
+        if (userPmKeyTerms.length > 0) {
+          // Find open positions from other traders in similar markets
+          const termRegex = userPmKeyTerms.map(t => new RegExp(t, 'i'));
+          const marketMatchedPositions = await db.collection('polymarket-openPositions').aggregate([
+            { $match: {
+              walletAddress: { $ne: walletLower },
+              $or: termRegex.map(r => ({ title: { $regex: r } })),
+            }},
+            { $group: {
+              _id: '$walletAddress',
+              matchedMarkets: { $addToSet: '$title' },
+              marketCount: { $sum: 1 },
+            }},
+            { $sort: { marketCount: -1 } },
+            { $limit: 10 },
+          ]).toArray();
+
+          if (marketMatchedPositions.length > 0) {
+            const marketWallets = marketMatchedPositions.map(w => w._id);
+            const marketTraderProfiles = await db.collection('polymarket-traderProfiles').find({
+              wallet: { $in: marketWallets },
+              netPnl: { $gt: 0 },
+            }).sort({ netPnl: -1 }).limit(5).toArray();
+
+            const marketMap = new Map(marketMatchedPositions.map(w => [w._id, w.matchedMarkets]));
+            for (const t of marketTraderProfiles) {
+              const existing = pmTraderMatchDetails.get(t.wallet);
+              const matchedMarkets = (marketMap.get(t.wallet) || []).slice(0, 3);
+              if (existing) {
+                existing.markets = matchedMarkets;
+              } else {
+                pmTraderMatchDetails.set(t.wallet, { categories: [], markets: matchedMarkets });
+                pmTraders.push(t);
+              }
+            }
+          }
+        }
+
+        // Deduplicate by wallet and pick top 3
+        const seen = new Set<string>();
+        pmTraders = pmTraders.filter(t => {
+          if (seen.has(t.wallet)) return false;
+          seen.add(t.wallet);
+          return true;
+        }).slice(0, 3);
       }
 
       // Fallback to global top PM traders
@@ -242,9 +310,19 @@ export async function POST(request: NextRequest) {
       }
 
       for (const t of pmTraders) {
-        // Find which of user's categories this trader is strong in
-        const traderCategories = (t.strengths || []).map((s: any) => s.category);
-        const overlap = userPmCategories.filter(c => traderCategories.includes(c));
+        const details = pmTraderMatchDetails.get(t.wallet);
+        const categoryOverlap = details?.categories || [];
+        const marketOverlap = details?.markets || [];
+
+        // Build a descriptive match reason
+        let matchReason = 'Top PnL (global)';
+        if (categoryOverlap.length > 0 && marketOverlap.length > 0) {
+          matchReason = `Strong in ${categoryOverlap.join(', ')} + trades similar markets`;
+        } else if (categoryOverlap.length > 0) {
+          matchReason = `Strong in ${categoryOverlap.join(', ')}`;
+        } else if (marketOverlap.length > 0) {
+          matchReason = `Trades similar markets: ${marketOverlap[0].slice(0, 50)}${marketOverlap.length > 1 ? ` +${marketOverlap.length - 1} more` : ''}`;
+        }
 
         followedTraders.push({
           wallet: t.wallet || 'unknown',
@@ -253,10 +331,11 @@ export async function POST(request: NextRequest) {
           winRate: t.winRate || 0,
           totalPositions: t.totalActivities || 0,
           totalAUM: t.openValue || 0,
-          matchReason: overlap.length > 0 ? `Strong in ${overlap.join(', ')}` : 'Top PnL (global)',
+          matchReason,
           followedAt: new Date(),
         });
       }
+      console.log(`[follow-traders] PM traders matched: ${pmTraders.length} (categories: ${userPmCategories.length}, market terms: ${userPmKeyTerms.length})`);
     }
 
     // Update agent

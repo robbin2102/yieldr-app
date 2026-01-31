@@ -150,11 +150,26 @@ export async function POST(request: NextRequest) {
       { upsert: true }
     );
 
-    console.log(`Saved ${allPositions.length} positions for wallet:`, walletAddress);
-    console.log(`  ├─ LP positions: ${(lpPositions || []).length}`);
-    console.log(`  ├─ Avantis positions: ${(avantisPositions || []).length}`);
-    console.log(`  ├─ Hyperliquid positions: ${(hyperliquidPositions || []).length}`);
-    console.log(`  └─ Polymarket positions: ${(polymarketPositions || []).length}`);
+    console.log(`[positions] Saved ${allPositions.length} positions for wallet: ${walletAddress}`);
+    console.log(`[positions]   ├─ LP: ${(lpPositions || []).length}`);
+    console.log(`[positions]   ├─ Avantis: ${(avantisPositions || []).length}`);
+    console.log(`[positions]   ├─ Hyperliquid: ${(hyperliquidPositions || []).length}`);
+    console.log(`[positions]   └─ Polymarket: ${(polymarketPositions || []).length}`);
+
+    // Auto-trigger trader matching after positions are saved
+    // Fire-and-forget so we don't block the response
+    const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000';
+    console.log(`[positions] Triggering follow-traders for ${walletAddress}...`);
+    fetch(`${baseUrl}/api/demo/agents/follow-traders`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ wallet: walletAddress }),
+    }).then(async (res) => {
+      const data = await res.json();
+      console.log(`[positions] follow-traders result: ${data.success ? `matched ${data.count} traders` : data.error}`);
+    }).catch(err => {
+      console.log(`[positions] follow-traders trigger failed (non-blocking): ${err.message}`);
+    });
 
     return NextResponse.json({
       success: true,
