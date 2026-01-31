@@ -34,7 +34,8 @@ function buildSystemPrompt(context: {
   const traderSummary = followedTraders.length > 0
     ? followedTraders.map(t => {
         const wr = t.winRate <= 1 ? (t.winRate * 100).toFixed(0) : t.winRate.toFixed(0);
-        return `- ${t.username || t.wallet.slice(0, 10)} (${t.platform}) | 30d PnL: $${t.pnl30d.toLocaleString()} | Win Rate: ${wr}%`;
+        const reason = t.matchReason ? ` | Why: ${t.matchReason}` : '';
+        return `- ${t.username || t.wallet.slice(0, 10)} (${t.platform}) | 30d PnL: $${t.pnl30d.toLocaleString()} | Win Rate: ${wr}%${reason}`;
       }).join('\n')
     : 'No traders followed yet.';
 

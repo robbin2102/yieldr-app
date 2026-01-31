@@ -38,6 +38,7 @@ interface FollowedTrader {
   roi30d?: number;
   totalPositions: number;
   totalAUM?: number;
+  matchReason?: string;
 }
 
 interface ChatMessage {
@@ -815,9 +816,14 @@ export default function ChatPage() {
                             <div style={{ fontSize: '0.8rem', fontWeight: 700, marginBottom: '0.4rem' }}>
                               {trader.username || `${trader.wallet.slice(0, 10)}...`}
                             </div>
-                            <div style={{ fontSize: '0.6rem', color: '#6E6E6E', marginBottom: '0.5rem', textTransform: 'capitalize' }}>
+                            <div style={{ fontSize: '0.6rem', color: '#6E6E6E', marginBottom: trader.matchReason ? '0.25rem' : '0.5rem', textTransform: 'capitalize' }}>
                               {trader.platform}
                             </div>
+                            {trader.matchReason && (
+                              <div style={{ fontSize: '0.55rem', color: '#00C805', marginBottom: '0.5rem', fontStyle: 'italic' }}>
+                                {trader.matchReason}
+                              </div>
+                            )}
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
                               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.65rem' }}>
                                 <span style={{ color: '#6E6E6E' }}>30d PnL</span>

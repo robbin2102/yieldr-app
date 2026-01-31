@@ -9,6 +9,7 @@ export interface IFollowedTrader {
   roi30d?: number;
   totalPositions?: number;
   totalAUM?: number;
+  matchReason?: string;
   followedAt: Date;
 }
 
@@ -46,6 +47,7 @@ const FollowedTraderSchema = new Schema({
   roi30d: { type: Number },
   totalPositions: { type: Number },
   totalAUM: { type: Number },
+  matchReason: { type: String },
   followedAt: { type: Date, default: Date.now },
 }, { _id: false });
 
