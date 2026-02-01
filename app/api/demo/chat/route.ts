@@ -509,9 +509,9 @@ Expected Monthly Return: $X,XXX - $X,XXX (X-X%)
 Diversification: [High/Medium/Low] — [explanation]
 
 EXECUTION OPTIONS
-  Yieldr Smart Wallet (recommended) — automated copy trading
-  Manual copy on [Platform]
-  Bridge via Coinbase to Base — for on-chain execution
+  For perps: Execute on Avantis (Base) or Coinbase
+  For prediction markets: Execute on Limitless or Coinbase
+  Note: I have open positions of top traders and can help you start executing in similar markets
 
 ## Style & Formatting
 - Lead with the key insight, then supporting data
