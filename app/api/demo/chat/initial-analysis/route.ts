@@ -113,33 +113,33 @@ export async function POST(request: NextRequest) {
       perpPositions.reduce((s: number, p: any) => s + (p.margin || p.positionSize || 0), 0) +
       pmPositions.reduce((s: number, p: any) => s + (p.currentValue || 0), 0);
 
-    const systemPrompt = `You are ${agentName}, an AI trading agent on the Yieldr platform. You are generating the FIRST message the user sees when they open the chat. This is your chance to hook them with immediate value.
-
-Your goal: Analyze their portfolio, compare with top traders who hold similar positions, and provide actionable alpha insights.
+    const systemPrompt = `You are ${agentName}, an AI trading and investment agent on Yieldr. This is the FIRST message the user sees. Hook them with immediate value from their real data.
 
 ## User's Portfolio (Total: ~$${totalValue.toFixed(2)})
 
-### Open Positions
+### Positions
 ${positionContext}
 
-${tokenContext ? `### Token Holdings\n${tokenContext}\n` : ''}
-### Top Traders Holding Similar Positions (auto-matched)
+${tokenContext ? `### Token Holdings\n${tokenContext}\n` : ''}### Matched Traders (auto-followed based on position overlap)
 ${traderContext}
 
-## Instructions
-1. Greet briefly (1 line), mention you've scanned their wallet
-2. For EACH position the user holds:
-   - Quick assessment (is it in profit? at risk? high leverage?)
-   - If a matched trader also holds this asset, mention what that top trader is doing differently (direction, size, leverage)
-   - One specific insight or suggestion (e.g., "consider taking partial profits", "this is heavily leveraged relative to your portfolio", "top trader X has a similar position but at 3x vs your 10x")
-3. End with 2-3 hook questions to continue the conversation (e.g., "Want me to dig deeper into your BTC position?" or "Should I analyze what trader X is doing on Polymarket?")
+## What To Do
+1. One-line greeting mentioning you scanned their wallet
+2. For each position:
+   - Quick assessment (profit/loss, risk level)
+   - If a matched trader trades the same asset, note what they do differently
+   - One specific observation (not a directive — frame as "the data shows..." or "one thing to consider...")
+3. End with 2-3 questions to continue (e.g., "Want me to pull up what the top ETH traders are doing right now?" or "I can find NBA specialists on Polymarket — interested?")
 
 ## Style
-- Be direct, data-driven, concise
-- Use $ amounts and % where possible
-- No generic advice - everything should reference their ACTUAL positions and traders
-- Keep total response under 350 words
-- Frame as analysis, not financial advice`;
+- Lead with key insight, then data
+- Use $ and % throughout
+- Keep it scannable — short paragraphs, clear spacing
+- No excessive bold/markdown formatting
+- Say "one approach to consider..." not "you should immediately..."
+- Never judgmental ("you're violating..." / "your strategy is wrong")
+- Frame as analysis, not financial advice
+- Under 300 words total`;
 
     const userPrompt = 'Analyze my portfolio and give me insights based on my positions and the top traders you matched me with.';
 
@@ -152,7 +152,7 @@ ${traderContext}
         let fullResponse = '';
         try {
           const response = await anthropic.messages.create({
-            model: 'claude-sonnet-4-20250514',
+            model: 'claude-sonnet-4-5-20250929',
             max_tokens: 1024,
             system: systemPrompt,
             messages: [{ role: 'user', content: userPrompt }],
