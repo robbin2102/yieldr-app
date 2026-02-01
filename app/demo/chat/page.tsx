@@ -355,6 +355,7 @@ export default function ChatPage() {
   }, [messages]);
 
   const [isStreaming, setIsStreaming] = useState(false);
+  const [toolStatus, setToolStatus] = useState<string | null>(null);
 
   const handleSend = useCallback(async () => {
     const text = inputValue.trim();
@@ -416,9 +417,12 @@ export default function ChatPage() {
           try {
             const parsed = JSON.parse(line);
             if (parsed.type === 'text') {
+              setToolStatus(null); // Clear tool status when text starts
               setMessages(prev => prev.map(m =>
                 m.id === agentMsgId ? { ...m, content: m.content + parsed.text } : m
               ));
+            } else if (parsed.type === 'tool_status') {
+              setToolStatus(parsed.status);
             } else if (parsed.type === 'session') {
               setSessionId(parsed.sessionId);
               loadChatSessions();
@@ -437,6 +441,7 @@ export default function ChatPage() {
     }
 
     setIsStreaming(false);
+    setToolStatus(null);
   }, [inputValue, isStreaming, messages, address, sessionId, loadChatSessions]);
 
   const handlePromptClick = (prompt: string) => {
@@ -1419,6 +1424,23 @@ export default function ChatPage() {
                 </div>
               </div>
             ))}
+            {/* Tool status indicator */}
+            {toolStatus && (
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: '0.5rem',
+                padding: '0.5rem 0.75rem', margin: '0.25rem 0',
+                color: '#00C805', fontSize: '0.7rem',
+                fontFamily: 'monospace',
+              }}>
+                <span style={{
+                  display: 'inline-block', width: 8, height: 8,
+                  borderRadius: '50%', background: '#00C805',
+                  animation: 'pulse 1.5s ease-in-out infinite',
+                }} />
+                {toolStatus}
+                <style>{`@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }`}</style>
+              </div>
+            )}
             <div ref={chatEndRef} />
           </div>
 

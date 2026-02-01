@@ -114,7 +114,45 @@ const toolDefinitions: Anthropic.Tool[] = [
       required: ['walletAddress'],
     },
   },
+  {
+    name: 'web_search',
+    description: 'Search the web for real-time market news, macro events, crypto news, sports results, or any current information. Use when the user asks about news, recent events, price catalysts, or when you need current context to advise on positions (e.g., Fed decisions, ETF flows, earnings, game results). Only call when current/real-time information would meaningfully improve your answer.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        query: { type: 'string', description: 'Search query (be specific, e.g., "BTC ETF inflows this week" or "Fed rate decision January 2026")' },
+      },
+      required: ['query'],
+    },
+  },
 ];
+
+// ─── Tool Status Labels ────────────────────────────────────────────────────
+
+function getToolStatusLabel(name: string, input: any): string {
+  switch (name) {
+    case 'get_top_perp_traders':
+      return `Fetching top ${input.asset || ''} traders on ${input.protocol || 'perps'}...`.trim();
+    case 'get_top_pm_traders':
+      return `Searching ${input.category || 'top'} Polymarket traders...`.trim();
+    case 'get_hl_live_positions':
+      return `Checking Hyperliquid positions for ${input.walletAddress?.slice(0, 10)}...`;
+    case 'get_avantis_live_positions':
+      return `Checking Avantis positions for ${input.walletAddress?.slice(0, 10)}...`;
+    case 'get_pm_live_positions':
+      return `Checking Polymarket positions for ${input.walletAddress?.slice(0, 10)}...`;
+    case 'get_hl_trade_history':
+      return `Pulling trade history for ${input.walletAddress?.slice(0, 10)}...`;
+    case 'get_pm_closed_positions':
+      return `Checking resolved positions for ${input.walletAddress?.slice(0, 10)}...`;
+    case 'get_hl_portfolio':
+      return `Loading portfolio for ${input.walletAddress?.slice(0, 10)}...`;
+    case 'web_search':
+      return `Searching: ${input.query?.slice(0, 60)}...`;
+    default:
+      return `Running ${name}...`;
+  }
+}
 
 // ─── Tool Execution ────────────────────────────────────────────────────────
 
@@ -182,7 +220,13 @@ async function executeTool(name: string, input: any): Promise<string> {
         const { category, sortBy = 'netPnl', minTrades = 0, limit = 10 } = input;
         const filter: any = {};
         if (minTrades > 0) filter.closedPositionsCount = { $gte: minTrades };
-        if (category) filter['strengths.category'] = { $regex: category, $options: 'i' };
+        if (category) {
+          // Query both specialty (top-level) and strengths.category (array) fields
+          filter.$or = [
+            { specialty: { $regex: category, $options: 'i' } },
+            { 'strengths.category': { $regex: category, $options: 'i' } },
+          ];
+        }
         const sortFieldMap: Record<string, string> = {
           netPnl: 'netPnl', winRate: 'winRate', profitFactor: 'profitFactor', totalTrades: 'closedPositionsCount',
         };
@@ -194,7 +238,7 @@ async function executeTool(name: string, input: any): Promise<string> {
         return JSON.stringify({
           totalFound: traders.length,
           traders: traders.map(t => ({
-            wallet: t.wallet, label: t.label, specialty: t.strengths?.[0]?.category,
+            wallet: t.wallet, label: t.label, specialty: t.specialty || t.strengths?.[0]?.category,
             strategyLabel: t.strategyLabel, volumeLabel: t.volumeLabel,
             metrics: {
               totalTrades: (t.buyCount || 0) + (t.sellCount || 0), winRate: t.winRate,
@@ -324,6 +368,36 @@ async function executeTool(name: string, input: any): Promise<string> {
           openPositions: (data.assetPositions || []).length,
         });
       }
+      case 'web_search': {
+        const { query } = input;
+        // Try Brave Search API first (needs BRAVE_SEARCH_API_KEY in env)
+        // Falls back to DuckDuckGo instant answers
+        const braveKey = process.env.BRAVE_SEARCH_API_KEY;
+        if (braveKey) {
+          const res = await fetch(`https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=5`, {
+            headers: { 'X-Subscription-Token': braveKey, 'Accept': 'application/json' },
+          });
+          if (res.ok) {
+            const data = await res.json();
+            const results = (data.web?.results || []).slice(0, 5).map((r: any) => ({
+              title: r.title, url: r.url, description: r.description,
+            }));
+            return JSON.stringify({ query, source: 'brave', results });
+          }
+        }
+        // Fallback: DuckDuckGo instant answer API (no key needed)
+        const ddgRes = await fetch(`https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1`);
+        if (ddgRes.ok) {
+          const ddg = await ddgRes.json();
+          const results: any[] = [];
+          if (ddg.Abstract) results.push({ title: ddg.Heading || query, description: ddg.Abstract, url: ddg.AbstractURL });
+          for (const r of (ddg.RelatedTopics || []).slice(0, 5)) {
+            if (r.Text) results.push({ title: r.Text.slice(0, 100), description: r.Text, url: r.FirstURL });
+          }
+          if (results.length > 0) return JSON.stringify({ query, source: 'duckduckgo', results });
+        }
+        return JSON.stringify({ query, source: 'none', results: [], note: 'No search results available. Answer based on your training data.' });
+      }
       default:
         return JSON.stringify({ error: `Unknown tool: ${name}` });
     }
@@ -404,6 +478,7 @@ You have access to powerful data tools. USE THEM proactively:
 - get_hl_trade_history — Get recent trades/fills for a Hyperliquid wallet
 - get_pm_closed_positions — Get resolved Polymarket positions for win/loss history
 - get_hl_portfolio — Get Hyperliquid portfolio overview and account value
+- web_search — Search the web for market news, macro events, crypto updates, sports results
 
 IMPORTANT TOOL USAGE RULES:
 - When the user asks about top traders, best performers, or trader discovery — call get_top_perp_traders or get_top_pm_traders
@@ -411,6 +486,7 @@ IMPORTANT TOOL USAGE RULES:
 - When the user asks about a specific category like NBA, NHL, Soccer, Fed, Crypto — call get_top_pm_traders with that category
 - When the user asks to build a portfolio or allocation — first fetch trader data with tools, then construct the plan
 - When the user asks about a trader's history or track record — call get_hl_trade_history or get_pm_closed_positions
+- When market context would help (news, macro events, price catalysts) — call web_search. Only use when current info adds value, not for every query.
 - NEVER say you can't fetch data or don't have access. You have tools for this. USE THEM.
 - You can call multiple tools in sequence to answer complex questions
 
@@ -570,15 +646,22 @@ export async function POST(request: NextRequest) {
                 }
               } else if (event.type === 'content_block_stop') {
                 if (currentToolName && currentToolUseId) {
+                  const parsedInput = JSON.parse(toolInputJson || '{}');
                   contentBlocks.push({
                     type: 'tool_use',
                     id: currentToolUseId,
                     name: currentToolName,
-                    input: JSON.parse(toolInputJson || '{}'),
+                    input: parsedInput,
                   });
 
+                  // Stream tool status to frontend
+                  const statusLabel = getToolStatusLabel(currentToolName, parsedInput);
+                  controller.enqueue(encoder.encode(
+                    JSON.stringify({ type: 'tool_status', tool: currentToolName, status: statusLabel }) + '\n'
+                  ));
+
                   // Execute the tool
-                  const toolResult = await executeTool(currentToolName, JSON.parse(toolInputJson || '{}'));
+                  const toolResult = await executeTool(currentToolName, parsedInput);
                   toolResults.push({
                     role: 'user',
                     content: [{
