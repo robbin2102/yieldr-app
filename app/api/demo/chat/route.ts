@@ -114,18 +114,16 @@ const toolDefinitions: Anthropic.Tool[] = [
       required: ['walletAddress'],
     },
   },
-  {
-    name: 'web_search',
-    description: 'Search the web for real-time market news, macro events, crypto news, sports results, or any current information. Use when the user asks about news, recent events, price catalysts, or when you need current context to advise on positions (e.g., Fed decisions, ETF flows, earnings, game results). Only call when current/real-time information would meaningfully improve your answer.',
-    input_schema: {
-      type: 'object' as const,
-      properties: {
-        query: { type: 'string', description: 'Search query (be specific, e.g., "BTC ETF inflows this week" or "Fed rate decision January 2026")' },
-      },
-      required: ['query'],
-    },
-  },
 ];
+
+// Claude native web search tool
+const webSearchTool = {
+  type: 'web_search_20250305' as const,
+  name: 'web_search',
+  max_uses: 2,
+};
+
+const allTools = [...toolDefinitions, webSearchTool];
 
 // ─── Tool Status Labels ────────────────────────────────────────────────────
 
@@ -148,7 +146,7 @@ function getToolStatusLabel(name: string, input: any): string {
     case 'get_hl_portfolio':
       return `Loading portfolio for ${input.walletAddress?.slice(0, 10)}...`;
     case 'web_search':
-      return `Searching: ${input.query?.slice(0, 60)}...`;
+      return `Searching the web...`;
     default:
       return `Running ${name}...`;
   }
@@ -368,36 +366,6 @@ async function executeTool(name: string, input: any): Promise<string> {
           openPositions: (data.assetPositions || []).length,
         });
       }
-      case 'web_search': {
-        const { query } = input;
-        // Try Brave Search API first (needs BRAVE_SEARCH_API_KEY in env)
-        // Falls back to DuckDuckGo instant answers
-        const braveKey = process.env.BRAVE_SEARCH_API_KEY;
-        if (braveKey) {
-          const res = await fetch(`https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=5`, {
-            headers: { 'X-Subscription-Token': braveKey, 'Accept': 'application/json' },
-          });
-          if (res.ok) {
-            const data = await res.json();
-            const results = (data.web?.results || []).slice(0, 5).map((r: any) => ({
-              title: r.title, url: r.url, description: r.description,
-            }));
-            return JSON.stringify({ query, source: 'brave', results });
-          }
-        }
-        // Fallback: DuckDuckGo instant answer API (no key needed)
-        const ddgRes = await fetch(`https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1`);
-        if (ddgRes.ok) {
-          const ddg = await ddgRes.json();
-          const results: any[] = [];
-          if (ddg.Abstract) results.push({ title: ddg.Heading || query, description: ddg.Abstract, url: ddg.AbstractURL });
-          for (const r of (ddg.RelatedTopics || []).slice(0, 5)) {
-            if (r.Text) results.push({ title: r.Text.slice(0, 100), description: r.Text, url: r.FirstURL });
-          }
-          if (results.length > 0) return JSON.stringify({ query, source: 'duckduckgo', results });
-        }
-        return JSON.stringify({ query, source: 'none', results: [], note: 'No search results available. Answer based on your training data.' });
-      }
       default:
         return JSON.stringify({ error: `Unknown tool: ${name}` });
     }
@@ -478,7 +446,14 @@ You have access to powerful data tools. USE THEM proactively:
 - get_hl_trade_history — Get recent trades/fills for a Hyperliquid wallet
 - get_pm_closed_positions — Get resolved Polymarket positions for win/loss history
 - get_hl_portfolio — Get Hyperliquid portfolio overview and account value
-- web_search — Search the web for market news, macro events, crypto updates, sports results
+- web_search — Search the web for market news, macro events, crypto updates, sports results (native Claude tool)
+
+## Web Search Cost Optimization
+- Web search is expensive (~$0.03 per call). Use sparingly.
+- Your MongoDB tools (trader data, positions, history) are FREE. Prefer them.
+- Search ONLY for: breaking news, Fed/macro events, injury reports for sports bets
+- Max 2 searches per response unless user explicitly requests research
+- Reuse search results within the same conversation
 
 IMPORTANT TOOL USAGE RULES:
 - When the user asks about top traders, best performers, or trader discovery — call get_top_perp_traders or get_top_pm_traders
@@ -616,7 +591,7 @@ export async function POST(request: NextRequest) {
               max_tokens: 2048,
               system: systemPrompt,
               messages: currentMessages,
-              tools: toolDefinitions,
+              tools: allTools,
               stream: true,
             });
 
@@ -627,14 +602,29 @@ export async function POST(request: NextRequest) {
             const toolResults: Anthropic.MessageParam[] = [];
             const contentBlocks: any[] = [];
 
+            let isServerTool = false;
+
             for await (const event of response) {
               if (event.type === 'content_block_start') {
                 if (event.content_block.type === 'tool_use') {
                   hasToolUse = true;
+                  isServerTool = false;
                   currentToolUseId = event.content_block.id;
                   currentToolName = event.content_block.name;
                   toolInputJson = '';
                   console.log(`[chat] Tool call started: ${currentToolName}`);
+                } else if (event.content_block.type === 'server_tool_use') {
+                  // Native Claude tool (web_search) — handled by Claude, no manual execution needed
+                  isServerTool = true;
+                  currentToolName = event.content_block.name;
+                  console.log(`[chat] Server tool started: ${currentToolName}`);
+                  controller.enqueue(encoder.encode(
+                    JSON.stringify({ type: 'tool_status', tool: currentToolName, status: getToolStatusLabel(currentToolName, {}) }) + '\n'
+                  ));
+                } else if (event.content_block.type === 'web_search_tool_result') {
+                  // Result from native web search — Claude uses this internally
+                  isServerTool = false;
+                  console.log(`[chat] Web search results received`);
                 }
               } else if (event.type === 'content_block_delta') {
                 if (event.delta.type === 'text_delta') {
@@ -645,7 +635,7 @@ export async function POST(request: NextRequest) {
                   toolInputJson += event.delta.partial_json;
                 }
               } else if (event.type === 'content_block_stop') {
-                if (currentToolName && currentToolUseId) {
+                if (currentToolName && currentToolUseId && !isServerTool) {
                   const parsedInput = JSON.parse(toolInputJson || '{}');
                   contentBlocks.push({
                     type: 'tool_use',
@@ -674,6 +664,7 @@ export async function POST(request: NextRequest) {
                   currentToolUseId = '';
                   currentToolName = '';
                   toolInputJson = '';
+                  isServerTool = false;
                 }
               }
             }
