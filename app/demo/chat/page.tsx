@@ -3,6 +3,8 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useAccount } from 'wagmi';
 import { useRouter } from 'next/navigation';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 interface PerpPosition {
   pair?: string;
@@ -1426,9 +1428,67 @@ export default function ChatPage() {
                   fontSize: '0.9rem',
                   lineHeight: 1.6,
                   color: '#9E9E9E',
-                  whiteSpace: 'pre-wrap',
+                  ...(msg.role === 'user' ? { whiteSpace: 'pre-wrap' } : {}),
                 }}>
-                  {msg.content}
+                  {msg.role === 'agent' ? (
+                    <ReactMarkdown
+                      remarkPlugins={[remarkGfm]}
+                      components={{
+                        h2: ({ children }) => (
+                          <h2 style={{ fontSize: '1.1rem', fontWeight: 600, color: '#FFFFFF', margin: '1rem 0 0.5rem' }}>{children}</h2>
+                        ),
+                        h3: ({ children }) => (
+                          <h3 style={{ fontSize: '0.95rem', fontWeight: 600, color: '#E0E0E0', margin: '0.75rem 0 0.35rem' }}>{children}</h3>
+                        ),
+                        p: ({ children }) => (
+                          <p style={{ margin: '0.4rem 0' }}>{children}</p>
+                        ),
+                        strong: ({ children }) => (
+                          <strong style={{ color: '#FFFFFF', fontWeight: 600 }}>{children}</strong>
+                        ),
+                        ul: ({ children }) => (
+                          <ul style={{ margin: '0.3rem 0', paddingLeft: '1.25rem', listStyleType: 'disc' }}>{children}</ul>
+                        ),
+                        ol: ({ children }) => (
+                          <ol style={{ margin: '0.3rem 0', paddingLeft: '1.25rem' }}>{children}</ol>
+                        ),
+                        li: ({ children }) => (
+                          <li style={{ margin: '0.15rem 0' }}>{children}</li>
+                        ),
+                        hr: () => (
+                          <hr style={{ border: 'none', borderTop: '1px solid #2A2A2A', margin: '0.75rem 0' }} />
+                        ),
+                        table: ({ children }) => (
+                          <div style={{ overflowX: 'auto', margin: '0.5rem 0' }}>
+                            <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: '0.8rem' }}>{children}</table>
+                          </div>
+                        ),
+                        th: ({ children }) => (
+                          <th style={{ border: '1px solid #2A2A2A', padding: '0.4rem 0.6rem', background: '#111111', color: '#FFFFFF', fontWeight: 600, textAlign: 'left' }}>{children}</th>
+                        ),
+                        td: ({ children }) => (
+                          <td style={{ border: '1px solid #2A2A2A', padding: '0.4rem 0.6rem' }}>{children}</td>
+                        ),
+                        code: ({ children, className }) => {
+                          const isBlock = className?.includes('language-');
+                          return isBlock ? (
+                            <pre style={{ background: '#111111', border: '1px solid #1E1E1E', borderRadius: 4, padding: '0.6rem', overflowX: 'auto', margin: '0.5rem 0' }}>
+                              <code style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: '0.8rem' }}>{children}</code>
+                            </pre>
+                          ) : (
+                            <code style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: '0.8rem', background: '#1A1A1A', padding: '0.1rem 0.3rem', borderRadius: 3 }}>{children}</code>
+                          );
+                        },
+                        a: ({ href, children }) => (
+                          <a href={href} target="_blank" rel="noopener noreferrer" style={{ color: '#00C805', textDecoration: 'none' }}>{children}</a>
+                        ),
+                      }}
+                    >
+                      {msg.content}
+                    </ReactMarkdown>
+                  ) : (
+                    msg.content
+                  )}
                 </div>
               </div>
             ))}
