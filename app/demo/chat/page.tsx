@@ -349,10 +349,18 @@ export default function ChatPage() {
     })();
   }, [mounted, address, agentName, messages.length, loadChatSessions]);
 
-  // Auto-scroll chat
+  // Auto-scroll chat — scroll on new messages, tool status, and continuously during streaming
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+  }, [messages, toolStatus]);
+
+  useEffect(() => {
+    if (!isStreaming) return;
+    const interval = setInterval(() => {
+      chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }, 300);
+    return () => clearInterval(interval);
+  }, [isStreaming]);
 
   const [isStreaming, setIsStreaming] = useState(false);
   const [toolStatus, setToolStatus] = useState<string | null>(null);
