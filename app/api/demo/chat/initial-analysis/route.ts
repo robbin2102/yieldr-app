@@ -4,6 +4,7 @@ import connectDB from '@/lib/mongoose';
 import mongoose from 'mongoose';
 import Agent from '@/models/Agent';
 import ChatSession from '@/models/ChatSession';
+import { trackUsage, TokenUsageData } from '@/lib/tokenTracking';
 
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY || '',
@@ -169,6 +170,10 @@ ${traderContext}
     const stream = new ReadableStream({
       async start(controller) {
         let fullResponse = '';
+        const startTime = Date.now();
+        let totalInputTokens = 0;
+        let totalOutputTokens = 0;
+        const modelUsed = 'claude-sonnet-4-5-20250929';
         try {
           const response = await anthropic.messages.create({
             model: 'claude-sonnet-4-5-20250929',
@@ -179,7 +184,11 @@ ${traderContext}
           });
 
           for await (const event of response) {
-            if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
+            if (event.type === 'message_start' && (event as any).message?.usage) {
+              totalInputTokens += (event as any).message.usage.input_tokens || 0;
+            } else if (event.type === 'message_delta' && (event as any).usage) {
+              totalOutputTokens += (event as any).usage.output_tokens || 0;
+            } else if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
               fullResponse += event.delta.text;
               const chunk = JSON.stringify({ type: 'text', text: event.delta.text }) + '\n';
               controller.enqueue(encoder.encode(chunk));
@@ -203,6 +212,22 @@ ${traderContext}
                 JSON.stringify({ type: 'session', sessionId: session._id.toString() }) + '\n'
               ));
               console.log(`[initial-analysis] Saved session: ${session._id}`);
+
+              // Track token usage
+              if (totalInputTokens > 0 || totalOutputTokens > 0) {
+                const usageData: TokenUsageData = {
+                  inputTokens: totalInputTokens,
+                  outputTokens: totalOutputTokens,
+                  model: modelUsed,
+                  latencyMs: Date.now() - startTime,
+                };
+                trackUsage({
+                  sessionId: session._id.toString(),
+                  walletAddress: walletLower,
+                  usage: usageData,
+                  endpoint: 'initial-analysis',
+                }).catch(err => console.error('[initial-analysis] Token tracking error:', err));
+              }
             } catch (saveErr) {
               console.error('[initial-analysis] Failed to save session:', saveErr);
             }

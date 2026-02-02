@@ -4,6 +4,7 @@ import connectDB from '@/lib/mongoose';
 import mongoose from 'mongoose';
 import Agent from '@/models/Agent';
 import ChatSession from '@/models/ChatSession';
+import { trackUsage, TokenUsageData } from '@/lib/tokenTracking';
 
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY || '',
@@ -19,7 +20,7 @@ const BASE_RPC_URL = process.env.BASE_RPC_URL || 'https://mainnet.base.org';
 const toolDefinitions: Anthropic.Tool[] = [
   {
     name: 'get_top_perp_traders',
-    description: 'Get top perpetual traders from Hyperliquid or Avantis. Returns traders sorted by PnL, win rate, or volume. Use when the user asks about top traders, best performers, or trader discovery for perps/leverage trading.',
+    description: 'Get top perpetual traders from Hyperliquid or Avantis. For Hyperliquid: queries hyperliquidmetrics collection. For Avantis: queries managers collection filtered to traders with actual Avantis positions (avantisPositions > 0). Returns traders sorted by PnL, win rate, or volume.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -128,7 +129,7 @@ const toolDefinitions: Anthropic.Tool[] = [
 // Claude native web search tool
 const webSearchTool = {
   type: 'web_search_20250305' as const,
-  name: 'web_search',
+  name: 'web_search' as const,
   max_uses: 2,
 };
 
@@ -207,9 +208,14 @@ async function executeTool(name: string, input: any): Promise<string> {
             })),
           });
         } else {
-          // Avantis - query managers collection
-          const filter: any = { 'metrics.totalPnL30d': { $exists: true } };
+          // Avantis - query managers collection (filter by avantisPositions > 0 since collection has mixed HL/Avantis/LP data)
+          const filter: any = {
+            'metrics.totalPnL30d': { $exists: true },
+            'metrics.avantisPositions': { $gt: 0 },
+          };
           if (asset) filter['metrics.tradedAssets'] = { $regex: new RegExp(asset, 'i') };
+          if (minWinRate) filter['metrics.winRate30d'] = { $gte: minWinRate };
+          if (minPnl) filter['metrics.totalPnL30d'] = { $gte: minPnl };
           const traders = await db.collection('managers')
             .find(filter)
             .sort({ 'metrics.totalPnL30d': -1 })
@@ -608,7 +614,56 @@ Never frame as:
 • Never use judgmental language about user's positions
 • Keep responses under 250 words unless detailed analysis requested
 • Frame as analysis, not financial advice
-• When data contradicts user's position, state it neutrally with evidence`;
+• When data contradicts user's position, state it neutrally with evidence
+
+---
+
+## 📏 Response Length Control
+
+• DEFAULT: 150-250 words. Concise, scannable, data-driven.
+• EXTENDED (only when user asks for deep analysis, portfolio construction, or multi-trader comparison): 500-800 words.
+• BRIEF (simple questions, yes/no, quick lookups): 50-100 words.
+• Never pad responses to seem thorough. If the answer is 3 sentences, give 3 sentences.
+
+---
+
+## 🚫 Forbidden Phrases — NEVER USE
+
+These phrases are banned in ALL responses:
+• "Mirror" (as in mirror trades)
+• "Copy" (as in copy trading)
+• "Replicate" (as in replicate positions)
+• "Follow trades" or "follow their trades"
+• "Allocation to [trader name]" — allocate to ASSETS/MARKETS, never to traders
+• "I cannot execute" / "I don't have access" / "I can't trade"
+• "Not financial advice" / "Do your own research" / "DYOR"
+
+If you catch yourself about to use any of these, rephrase immediately.
+
+---
+
+## 📈 ROI Projections — Methodology Required
+
+Every return projection or performance estimate MUST include:
+• Win rate (with sample size)
+• Profit factor
+• Time period analyzed
+• Brief calculation methodology
+
+Example: "Based on 142 trades over 90 days with 67% win rate and 2.3x profit factor, a $10K allocation could target $1,200-$1,800/month."
+
+Never project returns without supporting data. Never extrapolate short timeframes (< 30 days) into annual projections.
+
+---
+
+## 🔄 Tool Failure Handling
+
+If a tool call fails or returns an error:
+1. Retry ONCE silently (do not tell the user about the retry)
+2. If still failing, use whatever context you already have to give a partial answer
+3. Say "I couldn't pull live [X] data right now — here's what I can tell you from [available context]"
+4. Never ask the user to provide data that your tools should fetch
+5. Never show raw error messages to the user`;
 }
 
 // ─── Chat API ──────────────────────────────────────────────────────────────
@@ -688,6 +743,11 @@ export async function POST(request: NextRequest) {
     const stream = new ReadableStream({
       async start(controller) {
         let fullResponse = '';
+        const startTime = Date.now();
+        let totalInputTokens = 0;
+        let totalOutputTokens = 0;
+        const allToolCalls: { name: string }[] = [];
+        const modelUsed = 'claude-sonnet-4-5-20250929';
         try {
           // Agentic loop: keep calling Claude until it stops using tools
           let currentMessages = [...anthropicMessages];
@@ -736,6 +796,15 @@ export async function POST(request: NextRequest) {
                   isServerTool = false;
                   console.log(`[chat] Web search results received`);
                 }
+              } else if (event.type === 'message_delta') {
+                // Capture token usage from the final event
+                if ((event as any).usage) {
+                  totalOutputTokens += (event as any).usage.output_tokens || 0;
+                }
+              } else if (event.type === 'message_start') {
+                if ((event as any).message?.usage) {
+                  totalInputTokens += (event as any).message.usage.input_tokens || 0;
+                }
               } else if (event.type === 'content_block_delta') {
                 if (event.delta.type === 'text_delta') {
                   fullResponse += event.delta.text;
@@ -760,6 +829,8 @@ export async function POST(request: NextRequest) {
                     JSON.stringify({ type: 'tool_status', tool: currentToolName, status: statusLabel }) + '\n'
                   ));
 
+                  // Track tool call
+                  allToolCalls.push({ name: currentToolName });
                   // Execute the tool
                   const toolResult = await executeTool(currentToolName, parsedInput);
                   toolResults.push({
@@ -818,6 +889,23 @@ export async function POST(request: NextRequest) {
             } catch (saveErr) {
               console.error('[chat] Failed to save chat session:', saveErr);
             }
+          }
+
+          // Track token usage
+          if (wallet && (totalInputTokens > 0 || totalOutputTokens > 0)) {
+            const usageData: TokenUsageData = {
+              inputTokens: totalInputTokens,
+              outputTokens: totalOutputTokens,
+              model: modelUsed,
+              toolCalls: allToolCalls,
+              latencyMs: Date.now() - startTime,
+            };
+            trackUsage({
+              sessionId: sessionId || undefined,
+              walletAddress: wallet,
+              usage: usageData,
+              endpoint: 'chat',
+            }).catch(err => console.error('[chat] Token tracking error:', err));
           }
 
           controller.enqueue(encoder.encode(JSON.stringify({ type: 'done' }) + '\n'));
