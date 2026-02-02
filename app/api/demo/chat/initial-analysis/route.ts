@@ -163,6 +163,18 @@ ${traderContext}
 
     const userPrompt = 'Analyze my portfolio and give me insights based on my positions and the top traders you matched me with.';
 
+    // ═══ TOKEN BREAKDOWN LOGGING ═══
+    const estimateTokens = (text: string) => text ? Math.ceil(text.length / 4) : 0;
+    const systemPromptTokens = estimateTokens(systemPrompt);
+    const userPromptTokens = estimateTokens(userPrompt);
+    console.log('\n╔══════════════════════════════════════════════════╗');
+    console.log('║     TOKEN BREAKDOWN — INITIAL ANALYSIS           ║');
+    console.log('╠══════════════════════════════════════════════════╣');
+    console.log(`║ System prompt:      ${String(systemPromptTokens).padStart(6)} tokens (${systemPrompt.length} chars)`);
+    console.log(`║ User prompt:        ${String(userPromptTokens).padStart(6)} tokens (${userPrompt.length} chars)`);
+    console.log(`║ ESTIMATED TOTAL:    ${String(systemPromptTokens + userPromptTokens).padStart(6)} tokens`);
+    console.log('╚══════════════════════════════════════════════════╝\n');
+
     console.log(`[initial-analysis] Calling Claude Sonnet 4.5...`);
 
     // Stream the response
@@ -186,8 +198,10 @@ ${traderContext}
           for await (const event of response) {
             if (event.type === 'message_start' && (event as any).message?.usage) {
               totalInputTokens += (event as any).message.usage.input_tokens || 0;
+              console.log(`[TOKENS][initial] Actual input_tokens: ${totalInputTokens} (estimated was: ${systemPromptTokens + userPromptTokens}, overhead: ${totalInputTokens - systemPromptTokens - userPromptTokens})`);
             } else if (event.type === 'message_delta' && (event as any).usage) {
               totalOutputTokens += (event as any).usage.output_tokens || 0;
+              console.log(`[TOKENS][initial] Actual output_tokens: ${totalOutputTokens}`);
             } else if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
               fullResponse += event.delta.text;
               const chunk = JSON.stringify({ type: 'text', text: event.delta.text }) + '\n';

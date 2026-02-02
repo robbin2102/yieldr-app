@@ -730,6 +730,37 @@ export async function POST(request: NextRequest) {
       agentName, positions, followedTraders, portfolioSummary, tokens, tokensTotalUsd,
     });
 
+    // ═══ TOKEN BREAKDOWN LOGGING ═══
+    const estimateTokens = (text: string) => text ? Math.ceil(text.length / 4) : 0;
+    const systemPromptTokens = estimateTokens(systemPrompt);
+    const toolsJson = JSON.stringify(allTools);
+    const toolsTokens = estimateTokens(toolsJson);
+    console.log('\n╔══════════════════════════════════════════════════╗');
+    console.log('║         TOKEN BREAKDOWN — CHAT REQUEST           ║');
+    console.log('╠══════════════════════════════════════════════════╣');
+    console.log(`║ System prompt:      ${String(systemPromptTokens).padStart(6)} tokens (${systemPrompt.length} chars)`);
+    console.log(`║ Tool definitions:   ${String(toolsTokens).padStart(6)} tokens (${toolsJson.length} chars)`);
+    // Per-tool breakdown
+    (toolDefinitions as any[]).forEach((tool: any, i: number) => {
+      const tj = JSON.stringify(tool);
+      console.log(`║   └ ${tool.name}: ${estimateTokens(tj)} tokens`);
+    });
+    console.log(`║   └ web_search (native): ~50 tokens`);
+    // Message history breakdown
+    const msgBreakdown = messages.map((m: any, i: number) => ({
+      idx: i, role: m.role, tokens: estimateTokens(m.content), chars: m.content?.length || 0,
+    }));
+    const totalMsgTokens = msgBreakdown.reduce((s: number, m: any) => s + m.tokens, 0);
+    console.log(`║ Conversation history: ${String(totalMsgTokens).padStart(5)} tokens (${messages.length} messages)`);
+    msgBreakdown.forEach((m: any) => {
+      console.log(`║   └ msg[${m.idx}] ${m.role}: ${m.tokens} tokens (${m.chars} chars)`);
+    });
+    const estimatedTotal = systemPromptTokens + toolsTokens + totalMsgTokens;
+    console.log('╠══════════════════════════════════════════════════╣');
+    console.log(`║ ESTIMATED TOTAL:    ${String(estimatedTotal).padStart(6)} tokens`);
+    console.log('╚══════════════════════════════════════════════════╝\n');
+    // ═══ END TOKEN BREAKDOWN ═══
+
     // Convert messages to Anthropic format
     const anthropicMessages: Anthropic.MessageParam[] = messages.map((m: { role: string; content: string }) => ({
       role: m.role === 'agent' ? 'assistant' as const : 'user' as const,
@@ -797,13 +828,16 @@ export async function POST(request: NextRequest) {
                   console.log(`[chat] Web search results received`);
                 }
               } else if (event.type === 'message_delta') {
-                // Capture token usage from the final event
                 if ((event as any).usage) {
-                  totalOutputTokens += (event as any).usage.output_tokens || 0;
+                  const iterOutput = (event as any).usage.output_tokens || 0;
+                  totalOutputTokens += iterOutput;
+                  console.log(`[TOKENS] Iteration output_tokens: ${iterOutput} | Running total: in=${totalInputTokens} out=${totalOutputTokens}`);
                 }
               } else if (event.type === 'message_start') {
                 if ((event as any).message?.usage) {
-                  totalInputTokens += (event as any).message.usage.input_tokens || 0;
+                  const iterInput = (event as any).message.usage.input_tokens || 0;
+                  totalInputTokens += iterInput;
+                  console.log(`[TOKENS] Iteration input_tokens: ${iterInput} (cache_creation: ${(event as any).message.usage.cache_creation_input_tokens || 0}, cache_read: ${(event as any).message.usage.cache_read_input_tokens || 0})`);
                 }
               } else if (event.type === 'content_block_delta') {
                 if (event.delta.type === 'text_delta') {
@@ -833,6 +867,7 @@ export async function POST(request: NextRequest) {
                   allToolCalls.push({ name: currentToolName });
                   // Execute the tool
                   const toolResult = await executeTool(currentToolName, parsedInput);
+                  console.log(`[TOKENS] Tool result for "${currentToolName}": ${estimateTokens(toolResult)} est. tokens (${toolResult.length} chars)`);
                   toolResults.push({
                     role: 'user',
                     content: [{
@@ -890,6 +925,20 @@ export async function POST(request: NextRequest) {
               console.error('[chat] Failed to save chat session:', saveErr);
             }
           }
+
+          // ═══ FINAL TOKEN SUMMARY ═══
+          console.log('\n╔══════════════════════════════════════════════════╗');
+          console.log('║         ACTUAL TOKEN USAGE — CHAT RESPONSE       ║');
+          console.log('╠══════════════════════════════════════════════════╣');
+          console.log(`║ Actual input tokens:  ${String(totalInputTokens).padStart(6)}`);
+          console.log(`║ Actual output tokens: ${String(totalOutputTokens).padStart(6)}`);
+          console.log(`║ Estimated input was:  ${String(estimatedTotal).padStart(6)}`);
+          console.log(`║ Difference (actual-est): ${String(totalInputTokens - estimatedTotal).padStart(5)} (Claude overhead + encoding)`);
+          console.log(`║ Tool calls made:      ${String(allToolCalls.length).padStart(6)} (${allToolCalls.map(t => t.name).join(', ') || 'none'})`);
+          console.log(`║ Latency:              ${String(Date.now() - startTime).padStart(6)}ms`);
+          const cost = ((totalInputTokens * 3) / 1_000_000) + ((totalOutputTokens * 15) / 1_000_000);
+          console.log(`║ Est. cost:            $${cost.toFixed(4)}`);
+          console.log('╚══════════════════════════════════════════════════╝\n');
 
           // Track token usage
           if (wallet && (totalInputTokens > 0 || totalOutputTokens > 0)) {
