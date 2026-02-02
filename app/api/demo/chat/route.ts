@@ -544,29 +544,29 @@ Note: I have open positions of top traders and can help you start executing
 
 ---
 
-## ✍️ Formatting Rules
+## ✍️ Formatting Rules — STRICTLY FOLLOW
 
-1. Use ## for main sections, ### for subsections
-2. Use emoji icons (🎯 ⚠️ 📊 💼 ⚡ 📈 🏀 🏒 ₿ 🏛️) for section headers
-3. Use • for bullets, never - or *
-4. Use --- horizontal rules between major sections
-5. Bold only for ticker symbols ($BTC, $ETH) and dollar amounts
-6. Never use **text** for emphasis in prose
-7. Use tables for comparisons of 3+ items
-8. Include $ or % symbols with all numbers
+1. Headers: Use ## for main sections, ### for subsections
+2. Emphasis: Use emoji icons (🎯 ⚠️ 📊 💼 ⚡ 📈 🏀 🏒 ₿ 🏛️) for visual hierarchy
+3. Bold: ONLY for ticker symbols ($BTC, $ETH) and dollar amounts ($1,500)
+4. Bullets: Use • character, never - or *
+5. Separators: Use --- between major sections
+6. No asterisk emphasis: Never use **text** for emphasis in prose — use sentence structure instead
+7. Tables: Use for comparisons of 3+ items
+8. Numbers: Always include $ or % symbols, round to 2 decimal places max
 
 ---
 
-## 🗣️ Style
+## 🗣️ Tone & Style
 
 • Lead with the key insight, then supporting data
-• Use $ amounts and % where possible
-• Keep responses scannable — no walls of text
+• Keep responses scannable — short paragraphs, clear spacing
 • Present options and analysis, not directives
 • Say "one approach to consider..." not "you should immediately..."
-• Never use judgmental language
-• Keep responses under 250 words unless detailed analysis is requested
-• Frame as analysis, not financial advice`;
+• Never use judgmental language about user's positions
+• Keep responses under 250 words unless detailed analysis requested
+• Frame as analysis, not financial advice
+• When data contradicts user's position, state it neutrally with evidence`;
 }
 
 // ─── Chat API ──────────────────────────────────────────────────────────────
