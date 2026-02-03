@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { useAccount } from 'wagmi';
+import { useAccount, useDisconnect } from 'wagmi';
 import { useRouter } from 'next/navigation';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -83,14 +83,27 @@ function pickDisplayTraders(traders: FollowedTrader[]): FollowedTrader[] {
   return [hlPick, avPick, pmPick].filter(Boolean);
 }
 
+// Free credits limit (300k tokens)
+const FREE_CREDITS_LIMIT = 300000;
+
 export default function ChatPage() {
   const [mounted, setMounted] = useState(false);
   const router = useRouter();
-  const { address, isConnected } = useAccount();
+  const { address, isConnected, isReconnecting } = useAccount();
+  const { disconnect } = useDisconnect();
+
+  // Auth state - check localStorage first, then verify with wagmi
+  const [authChecking, setAuthChecking] = useState(true);
+  const [authenticatedWallet, setAuthenticatedWallet] = useState<string | null>(null);
 
   const [agentName, setAgentName] = useState('AlphaHunter');
   const [panelCollapsed, setPanelCollapsed] = useState(false);
   const [activeTab, setActiveTab] = useState<'positions' | 'tokens' | 'trades' | 'markets'>('positions');
+
+  // Credits state
+  const [creditsUsed, setCreditsUsed] = useState(0);
+  const [creditsLoading, setCreditsLoading] = useState(true);
+  const creditsExceeded = creditsUsed >= FREE_CREDITS_LIMIT;
 
   // Data
   const [perpPositions, setPerpPositions] = useState<PerpPosition[]>([]);
@@ -118,6 +131,51 @@ export default function ChatPage() {
 
   useEffect(() => { setMounted(true); }, []);
 
+  // Auth check - use localStorage + wagmi for persistent login
+  useEffect(() => {
+    if (!mounted) return;
+
+    // Check localStorage for previously authenticated wallet
+    const storedWallet = localStorage.getItem('yieldr_auth_wallet');
+    const agentCreated = localStorage.getItem('agentCreated');
+
+    if (storedWallet) {
+      setAuthenticatedWallet(storedWallet.toLowerCase());
+    } else if (agentCreated) {
+      // Fallback: extract wallet from agentCreated data
+      try {
+        const data = JSON.parse(agentCreated);
+        if (data.wallet) {
+          localStorage.setItem('yieldr_auth_wallet', data.wallet.toLowerCase());
+          setAuthenticatedWallet(data.wallet.toLowerCase());
+        }
+      } catch {}
+    }
+
+    // Wait a bit for wagmi to potentially reconnect
+    const timer = setTimeout(() => {
+      setAuthChecking(false);
+    }, 1500);
+
+    return () => clearTimeout(timer);
+  }, [mounted]);
+
+  // Sync wagmi connection with auth state
+  useEffect(() => {
+    if (!mounted || authChecking) return;
+
+    // If wagmi connected, update auth state
+    if (isConnected && address) {
+      localStorage.setItem('yieldr_auth_wallet', address.toLowerCase());
+      setAuthenticatedWallet(address.toLowerCase());
+    }
+
+    // Only redirect if both wagmi and localStorage auth fail
+    if (!isConnected && !isReconnecting && !authenticatedWallet) {
+      router.push('/demo');
+    }
+  }, [mounted, authChecking, isConnected, isReconnecting, address, authenticatedWallet, router]);
+
   // Load agent name
   useEffect(() => {
     if (!mounted) return;
@@ -130,19 +188,48 @@ export default function ChatPage() {
     }
   }, [mounted]);
 
-  // Redirect if no wallet
-  useEffect(() => {
-    if (mounted && !isConnected) {
-      router.push('/demo');
+  // Fetch credits/usage
+  const fetchCredits = useCallback(async (wallet: string) => {
+    try {
+      const res = await fetch(`/api/usage/${wallet}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success && data.data) {
+          const totalTokens = (data.data.lifetime?.totalInputTokens || 0) + (data.data.lifetime?.totalOutputTokens || 0);
+          setCreditsUsed(totalTokens);
+        }
+      }
+    } catch (err) {
+      console.error('[chat] Failed to fetch credits:', err);
+    } finally {
+      setCreditsLoading(false);
     }
-  }, [mounted, isConnected, router]);
+  }, []);
+
+  // Load credits on mount
+  useEffect(() => {
+    const wallet = address || authenticatedWallet;
+    if (mounted && wallet) {
+      fetchCredits(wallet);
+    }
+  }, [mounted, address, authenticatedWallet, fetchCredits]);
+
+  // Handle logout/disconnect
+  const handleLogout = useCallback(() => {
+    localStorage.removeItem('yieldr_auth_wallet');
+    localStorage.removeItem('agentCreated');
+    localStorage.removeItem('agentSetup');
+    disconnect();
+    router.push('/demo');
+  }, [disconnect, router]);
 
   // Fetch data
   useEffect(() => {
-    if (!mounted || !address) return;
+    const wallet = address || authenticatedWallet;
+    if (!mounted || !wallet) return;
 
     // Fetch perp positions from positions API
-    fetch(`/api/positions?address=${address}`)
+    fetch(`/api/positions?address=${wallet}`)
       .then(r => r.json())
       .then(data => {
         if (data.success && data.data) {
@@ -152,7 +239,7 @@ export default function ChatPage() {
       .catch(() => {});
 
     // Fetch PM positions separately
-    fetch(`/api/polymarket-positions?address=${address}`)
+    fetch(`/api/polymarket-positions?address=${wallet}`)
       .then(r => r.json())
       .then(data => {
         if (data.success && data.data) {
@@ -172,7 +259,7 @@ export default function ChatPage() {
 
     // Fetch token balances
     setTokensLoading(true);
-    fetch(`/api/demo/tokens?address=${address}`)
+    fetch(`/api/demo/tokens?address=${wallet}`)
       .then(r => r.json())
       .then(data => {
         if (data.success && data.data) {
@@ -184,7 +271,7 @@ export default function ChatPage() {
       .finally(() => setTokensLoading(false));
 
     // Fetch agent (for followed traders)
-    fetch(`/api/demo/agents?wallet=${address}`)
+    fetch(`/api/demo/agents?wallet=${wallet}`)
       .then(r => r.json())
       .then(data => {
         if (data.success && data.agent) {
@@ -193,13 +280,14 @@ export default function ChatPage() {
         }
       })
       .catch(() => {});
-  }, [mounted, address]);
+  }, [mounted, address, authenticatedWallet]);
 
   // Load chat sessions list
   const loadChatSessions = useCallback(async () => {
-    if (!address) return;
+    const wallet = address || authenticatedWallet;
+    if (!wallet) return;
     try {
-      const res = await fetch(`/api/demo/chat-sessions?wallet=${address}`);
+      const res = await fetch(`/api/demo/chat-sessions?wallet=${wallet}`);
       const data = await res.json();
       if (data.success) {
         setChatSessions(data.sessions.map((s: any) => ({
@@ -209,11 +297,12 @@ export default function ChatPage() {
         })));
       }
     } catch {}
-  }, [address]);
+  }, [address, authenticatedWallet]);
 
   useEffect(() => {
-    if (mounted && address) loadChatSessions();
-  }, [mounted, address, loadChatSessions]);
+    const wallet = address || authenticatedWallet;
+    if (mounted && wallet) loadChatSessions();
+  }, [mounted, address, authenticatedWallet, loadChatSessions]);
 
   // Load a specific chat session
   const loadSession = useCallback(async (id: string) => {
@@ -245,7 +334,8 @@ export default function ChatPage() {
 
   // Initial agent message - calls the LLM to generate portfolio analysis
   useEffect(() => {
-    if (!mounted || messages.length > 0 || !address || initialAnalysisTriggered.current) return;
+    const wallet = address || authenticatedWallet;
+    if (!mounted || messages.length > 0 || !wallet || initialAnalysisTriggered.current) return;
     initialAnalysisTriggered.current = true;
 
     const now = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
@@ -267,7 +357,7 @@ export default function ChatPage() {
         const res = await fetch('/api/demo/chat/initial-analysis', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ wallet: address }),
+          body: JSON.stringify({ wallet }),
         });
 
         if (!res.ok) {
@@ -348,8 +438,10 @@ export default function ChatPage() {
         }]);
       }
       setIsStreaming(false);
+      // Refresh credits after initial analysis
+      if (wallet) fetchCredits(wallet);
     })();
-  }, [mounted, address, agentName, messages.length, loadChatSessions]);
+  }, [mounted, address, authenticatedWallet, agentName, messages.length, loadChatSessions, fetchCredits]);
 
   const [isStreaming, setIsStreaming] = useState(false);
   const [toolStatus, setToolStatus] = useState<string | null>(null);
@@ -369,8 +461,11 @@ export default function ChatPage() {
 
   const handleSend = useCallback(async () => {
     const text = inputValue.trim();
-    if (!text || isStreaming) return;
+    if (!text || isStreaming || creditsExceeded) return;
     setInputValue('');
+
+    const wallet = address || authenticatedWallet;
+    if (!wallet) return;
 
     const now = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
     const userMsg: ChatMessage = {
@@ -398,7 +493,7 @@ export default function ChatPage() {
       const res = await fetch('/api/demo/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: apiMessages, wallet: address, sessionId }),
+        body: JSON.stringify({ messages: apiMessages, wallet, sessionId }),
       });
 
       if (!res.ok || !res.body) {
@@ -452,13 +547,17 @@ export default function ChatPage() {
 
     setIsStreaming(false);
     setToolStatus(null);
-  }, [inputValue, isStreaming, messages, address, sessionId, loadChatSessions]);
+    // Refresh credits after each message
+    if (wallet) fetchCredits(wallet);
+  }, [inputValue, isStreaming, creditsExceeded, messages, address, authenticatedWallet, sessionId, loadChatSessions, fetchCredits]);
 
   const handlePromptClick = (prompt: string) => {
     setInputValue(prompt);
   };
 
-  const shortWallet = address ? `${address.slice(0, 6)}...${address.slice(-4)}` : '';
+  // Use either wagmi address or stored authenticated wallet
+  const effectiveWallet = address || authenticatedWallet;
+  const shortWallet = effectiveWallet ? `${effectiveWallet.slice(0, 6)}...${effectiveWallet.slice(-4)}` : '';
   const agentInitials = agentName.slice(0, 2).toUpperCase();
 
   const perpTotal = perpPositions.reduce((s, p) => s + (p.margin || p.positionSize || 0), 0);
@@ -478,7 +577,42 @@ export default function ChatPage() {
     'Alert me on Telegram',
   ];
 
+  // Format credits display (e.g., 32.1k/300k)
+  const formatCredits = (used: number) => {
+    const usedK = used >= 1000 ? `${(used / 1000).toFixed(1)}k` : used.toString();
+    const limitK = `${FREE_CREDITS_LIMIT / 1000}k`;
+    return `${usedK}/${limitK}`;
+  };
+
+  const creditsPercent = Math.min((creditsUsed / FREE_CREDITS_LIMIT) * 100, 100);
+
   if (!mounted) return null;
+
+  // Show loading state while checking auth
+  if (authChecking || isReconnecting) {
+    return (
+      <div style={{
+        height: '100vh',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        background: '#000',
+        fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, sans-serif",
+      }}>
+        <div style={{ textAlign: 'center' }}>
+          <div style={{
+            width: 48, height: 48, margin: '0 auto 1rem',
+            border: '3px solid #1E1E1E',
+            borderTop: '3px solid #00C805',
+            borderRadius: '50%',
+            animation: 'spin 1s linear infinite',
+          }} />
+          <div style={{ color: '#9E9E9E', fontSize: '0.9rem' }}>Reconnecting wallet...</div>
+          <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', overflow: 'hidden', fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, sans-serif" }}>
@@ -517,16 +651,29 @@ export default function ChatPage() {
             }}>Traders</a>
           </div>
         </div>
-        <button style={{
-          fontFamily: "'JetBrains Mono', monospace",
-          fontSize: '0.75rem',
-          color: '#9E9E9E',
-          background: '#111111',
-          padding: '0.35rem 0.6rem',
-          borderRadius: 4,
-          border: '1px solid #1E1E1E',
-          cursor: 'pointer',
-        }}>{shortWallet}</button>
+        <button
+          onClick={handleLogout}
+          title="Disconnect wallet"
+          style={{
+            fontFamily: "'JetBrains Mono', monospace",
+            fontSize: '0.75rem',
+            color: '#9E9E9E',
+            background: '#111111',
+            padding: '0.35rem 0.6rem',
+            borderRadius: 4,
+            border: '1px solid #1E1E1E',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.4rem',
+          }}>
+          <span>{shortWallet}</span>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+            <polyline points="16 17 21 12 16 7" />
+            <line x1="21" y1="12" x2="9" y2="12" />
+          </svg>
+        </button>
       </nav>
 
       {/* AGENT HEADER */}
@@ -550,29 +697,54 @@ export default function ChatPage() {
           <span style={{ fontWeight: 600, fontSize: '0.95rem' }}>{agentName}</span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginLeft: 'auto' }}>
+          {/* Credits Display */}
           <div
-            onClick={() => setShowModal(true)}
+            title={`AI Credits: ${creditsUsed.toLocaleString()} / ${FREE_CREDITS_LIMIT.toLocaleString()} tokens used`}
             style={{
-              display: 'flex', alignItems: 'center', gap: '0.3rem',
+              display: 'flex', alignItems: 'center', gap: '0.4rem',
               fontFamily: "'JetBrains Mono', monospace",
-              fontSize: '0.75rem',
+              fontSize: '0.7rem',
               padding: '0.35rem 0.6rem',
               background: '#0A0A0A',
-              border: '1px solid #1E1E1E',
+              border: `1px solid ${creditsExceeded ? '#FF4757' : '#1E1E1E'}`,
               borderRadius: 4,
-              cursor: 'pointer',
             }}>
-            <span style={{ color: '#00C805' }}>{'⚡'}</span>
-            <span style={{ fontWeight: 600 }}>100K</span>
+            <span style={{ color: creditsExceeded ? '#FF4757' : '#00C805' }}>{'⚡'}</span>
+            {creditsLoading ? (
+              <span style={{ color: '#6E6E6E' }}>...</span>
+            ) : (
+              <>
+                <span style={{ fontWeight: 600, color: creditsExceeded ? '#FF4757' : '#FFFFFF' }}>
+                  {formatCredits(creditsUsed)}
+                </span>
+                <div style={{
+                  width: 40,
+                  height: 4,
+                  background: '#1E1E1E',
+                  borderRadius: 2,
+                  overflow: 'hidden',
+                }}>
+                  <div style={{
+                    width: `${creditsPercent}%`,
+                    height: '100%',
+                    background: creditsExceeded ? '#FF4757' : creditsPercent > 80 ? '#FFD000' : '#00C805',
+                    borderRadius: 2,
+                  }} />
+                </div>
+              </>
+            )}
           </div>
-          <button
-            onClick={() => setShowModal(true)}
+          <a
+            href="https://yieldr.org"
+            target="_blank"
+            rel="noopener noreferrer"
             style={{
               fontSize: '0.65rem', fontWeight: 600,
               padding: '0.35rem 0.5rem',
               background: '#00C805', border: 'none', borderRadius: 4,
               color: '#000', cursor: 'pointer',
-            }}>+ Get YLDR</button>
+              textDecoration: 'none',
+            }}>+ Get YLDR</a>
         </div>
       </div>
 
@@ -999,8 +1171,10 @@ export default function ChatPage() {
                         <span style={{ color: '#9E9E9E', fontSize: '0.65rem' }}>Training Fuel:</span>
                         <span style={{ fontWeight: 700 }}>100K YLDR</span>
                       </div>
-                      <button
-                        onClick={() => setShowModal(true)}
+                      <a
+                        href="https://yieldr.org"
+                        target="_blank"
+                        rel="noopener noreferrer"
                         style={{
                           fontSize: '0.6rem', fontWeight: 600,
                           padding: '0.3rem 0.5rem',
@@ -1009,8 +1183,9 @@ export default function ChatPage() {
                           borderRadius: 4,
                           color: '#00C805',
                           cursor: 'pointer',
+                          textDecoration: 'none',
                         }}
-                      >Train Agent</button>
+                      >Train Agent</a>
                     </div>
 
                     {/* Current Phase */}
@@ -1120,15 +1295,21 @@ export default function ChatPage() {
                     </div>
 
                     {/* Train Agent CTA */}
-                    <button
-                      onClick={() => setShowModal(true)}
+                    <a
+                      href="https://yieldr.org"
+                      target="_blank"
+                      rel="noopener noreferrer"
                       style={{
+                        display: 'block',
                         width: '100%', padding: '0.6rem',
                         background: '#00C805', border: 'none', borderRadius: 4,
                         color: '#000', fontSize: '0.75rem', fontWeight: 700,
                         cursor: 'pointer',
+                        textAlign: 'center',
+                        textDecoration: 'none',
+                        boxSizing: 'border-box',
                       }}
-                    >Train Agent</button>
+                    >Train Agent</a>
 
                     {/* V1 label + docs */}
                     <div style={{
@@ -1512,12 +1693,66 @@ export default function ChatPage() {
             <div ref={chatEndRef} />
           </div>
 
+          {/* Credits Exceeded Banner */}
+          {creditsExceeded && (
+            <div style={{
+              background: 'linear-gradient(90deg, rgba(255, 71, 87, 0.15) 0%, rgba(255, 71, 87, 0.08) 100%)',
+              borderTop: '1px solid #FF4757',
+              padding: '0.75rem 1rem',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              flexWrap: 'wrap',
+              gap: '0.5rem',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <span style={{ fontSize: '1rem' }}>{'⚠️'}</span>
+                <div>
+                  <div style={{ fontSize: '0.8rem', fontWeight: 600, color: '#FF4757' }}>
+                    100% demo credits used
+                  </div>
+                  <div style={{ fontSize: '0.7rem', color: '#9E9E9E' }}>
+                    Buy YLDR to get more AI compute credits
+                  </div>
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                <a
+                  href="https://yieldr.org"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{
+                    fontSize: '0.7rem', fontWeight: 600,
+                    padding: '0.4rem 0.75rem',
+                    background: '#00C805', border: 'none', borderRadius: 4,
+                    color: '#000', cursor: 'pointer',
+                    textDecoration: 'none',
+                  }}
+                >Get YLDR</a>
+                <a
+                  href="https://discord.gg/yieldr"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{
+                    fontSize: '0.7rem', fontWeight: 600,
+                    padding: '0.4rem 0.75rem',
+                    background: '#5865F2', border: 'none', borderRadius: 4,
+                    color: '#FFFFFF', cursor: 'pointer',
+                    textDecoration: 'none',
+                  }}
+                >Join Discord</a>
+              </div>
+            </div>
+          )}
+
           {/* Chat Input */}
           <div style={{
             borderTop: '1px solid #1E1E1E',
             background: '#0A0A0A',
             padding: '0.75rem 1rem',
             flexShrink: 0,
+            opacity: creditsExceeded ? 0.5 : 1,
+            pointerEvents: creditsExceeded ? 'none' : 'auto',
           }}>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem', marginBottom: '0.6rem' }}>
               {suggestedPrompts.map((prompt, i) => (
@@ -1528,7 +1763,7 @@ export default function ChatPage() {
                   border: '1px solid #1E1E1E',
                   borderRadius: 4,
                   color: '#9E9E9E',
-                  cursor: 'pointer',
+                  cursor: creditsExceeded ? 'not-allowed' : 'pointer',
                 }}>{prompt}</button>
               ))}
             </div>
@@ -1545,18 +1780,20 @@ export default function ChatPage() {
                   cursor: 'pointer',
                   display: 'flex', alignItems: 'center', justifyContent: 'center',
                   fontSize: '1rem', flexShrink: 0,
+                  pointerEvents: 'auto',
                 }}
               >{'☰'}</button>
               <textarea
                 value={inputValue}
                 onChange={e => setInputValue(e.target.value)}
-                onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
-                placeholder="Ask about your positions, traders, or strategies..."
+                onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey && !creditsExceeded) { e.preventDefault(); handleSend(); } }}
+                placeholder={creditsExceeded ? "Credits exceeded - Get YLDR to continue" : "Ask about your positions, traders, or strategies..."}
                 rows={1}
+                disabled={creditsExceeded}
                 style={{
                   flex: 1,
                   background: '#111111',
-                  border: '1px solid #1E1E1E',
+                  border: `1px solid ${creditsExceeded ? '#FF4757' : '#1E1E1E'}`,
                   borderRadius: 6,
                   padding: '0.6rem 0.75rem',
                   color: '#FFFFFF',
@@ -1566,13 +1803,13 @@ export default function ChatPage() {
                   outline: 'none',
                 }}
               />
-              <button onClick={handleSend} disabled={isStreaming} style={{
+              <button onClick={handleSend} disabled={isStreaming || creditsExceeded} style={{
                 width: 40, height: 40,
-                background: isStreaming ? '#0A0A0A' : '#111111',
+                background: isStreaming || creditsExceeded ? '#0A0A0A' : '#111111',
                 border: '1px solid #1E1E1E',
                 borderRadius: 6,
-                color: isStreaming ? '#333' : '#9E9E9E',
-                cursor: isStreaming ? 'not-allowed' : 'pointer',
+                color: isStreaming || creditsExceeded ? '#333' : '#9E9E9E',
+                cursor: isStreaming || creditsExceeded ? 'not-allowed' : 'pointer',
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
                 fontSize: '1rem',
               }}>{isStreaming ? '...' : '➤'}</button>

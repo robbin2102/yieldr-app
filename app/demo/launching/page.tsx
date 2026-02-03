@@ -282,6 +282,10 @@ export default function LaunchingPage() {
   }, [mounted, address, startStep, completeStep, scanPositions, saveData]);
 
   const handleLetsGo = () => {
+    // Store auth wallet for persistent login
+    if (address) {
+      localStorage.setItem('yieldr_auth_wallet', address.toLowerCase());
+    }
     localStorage.setItem('agentCreated', JSON.stringify({
       name: agentName,
       wallet: address,

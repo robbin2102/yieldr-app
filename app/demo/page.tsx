@@ -77,6 +77,17 @@ export default function CreateAgentPage() {
 
   useEffect(() => { setMounted(true); }, []);
 
+  // Auto-redirect to chat if already authenticated
+  useEffect(() => {
+    if (!mounted) return;
+    const authWallet = localStorage.getItem('yieldr_auth_wallet');
+    const agentCreated = localStorage.getItem('agentCreated');
+    if (authWallet && agentCreated) {
+      // User already has an agent, redirect to chat
+      router.push('/demo/chat');
+    }
+  }, [mounted, router]);
+
   // Load saved data
   useEffect(() => {
     if (!mounted) return;
