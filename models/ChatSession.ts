@@ -25,11 +25,21 @@ export interface ITokenUsage {
   perMessage: IPerMessageUsage[];
 }
 
+export interface ICachedTokenBalance {
+  symbol: string;
+  chain: string;
+  balance: string;
+  usdValue: number;
+}
+
 export interface IChatSession extends Document {
   walletAddress: string;
   title: string;
   messages: IChatMessage[];
   tokenUsage: ITokenUsage;
+  cachedTokenBalances?: ICachedTokenBalance[];
+  cachedTokensTotalUsd?: number;
+  tokenBalancesFetchedAt?: Date;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -71,6 +81,14 @@ const ChatSessionSchema = new Schema<IChatSession>({
     lastModel: { type: String, default: '' },
     perMessage: [PerMessageUsageSchema],
   },
+  cachedTokenBalances: [{
+    symbol: String,
+    chain: String,
+    balance: String,
+    usdValue: Number,
+  }],
+  cachedTokensTotalUsd: { type: Number, default: 0 },
+  tokenBalancesFetchedAt: Date,
   createdAt: {
     type: Date,
     default: Date.now,

@@ -189,7 +189,7 @@ ${traderContext}
         try {
           const response = await anthropic.messages.create({
             model: 'claude-sonnet-4-5-20250929',
-            max_tokens: 1024,
+            max_tokens: 2048,
             system: systemPrompt,
             messages: [{ role: 'user', content: userPrompt }],
             stream: true,
@@ -221,6 +221,10 @@ ${traderContext}
                 messages: [
                   { role: 'agent', content: fullResponse, timestamp: new Date() },
                 ],
+                // Cache token balances so subsequent chat messages don't re-fetch from Moralis
+                cachedTokenBalances: tokenList,
+                cachedTokensTotalUsd: tokensTotalUsd,
+                tokenBalancesFetchedAt: new Date(),
               });
               controller.enqueue(encoder.encode(
                 JSON.stringify({ type: 'session', sessionId: session._id.toString() }) + '\n'

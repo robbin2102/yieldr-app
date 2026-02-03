@@ -57,33 +57,36 @@ const toolDefinitions: Anthropic.Tool[] = [
   },
   {
     name: 'get_hl_live_positions',
-    description: 'Get real-time open positions from Hyperliquid for any wallet. Returns current positions with PnL, leverage, liquidation prices. Use when user asks what a trader is currently doing, their open positions, or if they are LONG/SHORT.',
+    description: 'Get top open positions from Hyperliquid for any wallet, sorted by position value. Returns positions with PnL, leverage, liquidation prices.',
     input_schema: {
       type: 'object' as const,
       properties: {
         walletAddress: { type: 'string', description: 'Ethereum wallet address (0x...)' },
+        limit: { type: 'number', description: 'Max positions to return (default: 10)' },
       },
       required: ['walletAddress'],
     },
   },
   {
     name: 'get_avantis_live_positions',
-    description: 'Get real-time open positions from Avantis (Base chain) for any wallet. Returns positions with PnL, leverage, direction.',
+    description: 'Get top open positions from Avantis (Base chain) for any wallet, sorted by position value.',
     input_schema: {
       type: 'object' as const,
       properties: {
         walletAddress: { type: 'string', description: 'Ethereum wallet address (0x...)' },
+        limit: { type: 'number', description: 'Max positions to return (default: 10)' },
       },
       required: ['walletAddress'],
     },
   },
   {
     name: 'get_pm_live_positions',
-    description: 'Get real-time open positions from Polymarket for any wallet. Returns current prediction market positions with market titles, prices, PnL.',
+    description: 'Get top open positions from Polymarket for any wallet, sorted by current value. Filters out dust (<$1).',
     input_schema: {
       type: 'object' as const,
       properties: {
         walletAddress: { type: 'string', description: 'Ethereum wallet address (0x...)' },
+        limit: { type: 'number', description: 'Max positions to return (default: 10)' },
       },
       required: ['walletAddress'],
     },
@@ -114,6 +117,22 @@ const toolDefinitions: Anthropic.Tool[] = [
     },
   },
   {
+    name: 'get_hl_live_positions_batch',
+    description: 'Get open positions for multiple Hyperliquid wallets in ONE call. ALWAYS use this instead of calling get_hl_live_positions multiple times when you have multiple wallet addresses.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        walletAddresses: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Array of wallet addresses (max 10)',
+        },
+        limit: { type: 'number', description: 'Max positions per wallet (default: 5)' },
+      },
+      required: ['walletAddresses'],
+    },
+  },
+  {
     name: 'get_hl_portfolio',
     description: 'Get Hyperliquid portfolio overview with 30-day PnL history curve and account value for a wallet.',
     input_schema: {
@@ -123,6 +142,7 @@ const toolDefinitions: Anthropic.Tool[] = [
       },
       required: ['walletAddress'],
     },
+    cache_control: { type: 'ephemeral' as const },
   },
 ];
 
@@ -153,6 +173,8 @@ function getToolStatusLabel(name: string, input: any): string {
       return `Pulling trade history for ${input.walletAddress?.slice(0, 10)}...`;
     case 'get_pm_closed_positions':
       return `Checking resolved positions for ${input.walletAddress?.slice(0, 10)}...`;
+    case 'get_hl_live_positions_batch':
+      return `Checking positions for ${input.walletAddresses?.length || 0} wallets...`;
     case 'get_hl_portfolio':
       return `Loading portfolio for ${input.walletAddress?.slice(0, 10)}...`;
     case 'web_search':
@@ -273,41 +295,106 @@ async function executeTool(name: string, input: any): Promise<string> {
         });
       }
       case 'get_hl_live_positions': {
+        const { walletAddress, limit = 10 } = input;
         const res = await fetch(HYPERLIQUID_API_URL, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ type: 'clearinghouseState', user: input.walletAddress }),
+          body: JSON.stringify({ type: 'clearinghouseState', user: walletAddress }),
         });
         if (!res.ok) throw new Error(`HL API error: ${res.status}`);
         const data = await res.json();
-        const positions = (data.assetPositions || []).map((ap: any) => {
+        const allPositions = (data.assetPositions || []).map((ap: any) => {
           const pos = ap.position;
           const szi = parseFloat(pos.szi);
+          const entryPx = parseFloat(pos.entryPx);
           return {
             coin: pos.coin, side: szi > 0 ? 'LONG' : 'SHORT',
-            size: Math.abs(szi), entryPrice: parseFloat(pos.entryPx),
+            size: Math.abs(szi), entryPrice: entryPx,
             leverage: pos.leverage?.value || 1,
             unrealizedPnl: parseFloat(pos.unrealizedPnl),
             marginUsed: parseFloat(pos.marginUsed),
+            notionalValue: Math.abs(szi) * entryPx, // for sorting
           };
         });
+        // Sort by notional value descending, limit results
+        allPositions.sort((a: any, b: any) => b.notionalValue - a.notionalValue);
+        const topPositions = allPositions.slice(0, limit).map((p: any) => {
+          const { notionalValue, ...rest } = p; // remove sorting field
+          return rest;
+        });
         return JSON.stringify({
-          wallet: input.walletAddress, totalPositions: positions.length, positions,
-          accountValue: data.marginSummary?.accountValue,
+          wallet: walletAddress, totalPositions: allPositions.length, showing: topPositions.length,
+          positions: topPositions, accountValue: data.marginSummary?.accountValue,
         });
       }
+      case 'get_hl_live_positions_batch': {
+        const { walletAddresses, limit = 5 } = input;
+        const addresses = (walletAddresses || []).slice(0, 10); // max 10 wallets
+        const results = await Promise.all(
+          addresses.map(async (addr: string) => {
+            try {
+              const res = await fetch(HYPERLIQUID_API_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ type: 'clearinghouseState', user: addr }),
+              });
+              if (!res.ok) return { wallet: addr, error: `API error: ${res.status}`, positions: [] };
+              const data = await res.json();
+              const allPos = (data.assetPositions || []).map((ap: any) => {
+                const pos = ap.position;
+                const szi = parseFloat(pos.szi);
+                const entryPx = parseFloat(pos.entryPx);
+                return {
+                  coin: pos.coin, side: szi > 0 ? 'LONG' : 'SHORT',
+                  size: Math.abs(szi), entryPrice: entryPx,
+                  leverage: pos.leverage?.value || 1,
+                  unrealizedPnl: parseFloat(pos.unrealizedPnl),
+                  notionalValue: Math.abs(szi) * entryPx,
+                };
+              });
+              allPos.sort((a: any, b: any) => b.notionalValue - a.notionalValue);
+              const topPos = allPos.slice(0, limit).map((p: any) => {
+                const { notionalValue, ...rest } = p;
+                return rest;
+              });
+              return {
+                wallet: addr, totalPositions: allPos.length, showing: topPos.length,
+                positions: topPos, accountValue: data.marginSummary?.accountValue,
+              };
+            } catch (e: any) {
+              return { wallet: addr, error: e.message, positions: [] };
+            }
+          })
+        );
+        return JSON.stringify({ wallets: results });
+      }
       case 'get_avantis_live_positions': {
+        const { walletAddress, limit = 10 } = input;
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 30000);
         try {
           const res = await fetch(AVANTIS_API_URL, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ walletAddress: input.walletAddress, rpcUrl: BASE_RPC_URL }),
+            body: JSON.stringify({ walletAddress, rpcUrl: BASE_RPC_URL }),
             signal: controller.signal,
           });
           clearTimeout(timeout);
           const data = await res.json();
+          // If positions exist, sort by collateral/value and limit
+          if (data.positions && Array.isArray(data.positions)) {
+            const sorted = [...data.positions].sort((a: any, b: any) => {
+              const aVal = parseFloat(a.collateral || a.positionSizeCollateral || 0);
+              const bVal = parseFloat(b.collateral || b.positionSizeCollateral || 0);
+              return bVal - aVal;
+            });
+            return JSON.stringify({
+              ...data,
+              totalPositions: data.positions.length,
+              showing: Math.min(limit, sorted.length),
+              positions: sorted.slice(0, limit),
+            });
+          }
           return JSON.stringify(data);
         } catch (e: any) {
           clearTimeout(timeout);
@@ -315,10 +402,11 @@ async function executeTool(name: string, input: any): Promise<string> {
         }
       }
       case 'get_pm_live_positions': {
+        const { walletAddress, limit = 10 } = input;
         const allPositions: any[] = [];
         let offset = 0;
         while (true) {
-          const res = await fetch(`${POLYMARKET_API_BASE}/positions?user=${input.walletAddress}&limit=500&offset=${offset}`);
+          const res = await fetch(`${POLYMARKET_API_BASE}/positions?user=${walletAddress}&limit=500&offset=${offset}`);
           if (!res.ok) throw new Error(`PM API error: ${res.status}`);
           const data = await res.json();
           if (!Array.isArray(data) || data.length === 0) break;
@@ -326,18 +414,22 @@ async function executeTool(name: string, input: any): Promise<string> {
           if (data.length < 500) break;
           offset += 500;
         }
+        // Filter: active positions (price between 0.1% and 99.9%) AND current value >= $1
         const active = allPositions.filter(p => {
           const cp = parseFloat(p.curPrice || '0');
-          return cp >= 0.001 && cp <= 0.999;
-        });
+          const cv = parseFloat(p.currentValue || '0');
+          return cp >= 0.001 && cp <= 0.999 && cv >= 1;
+        }).map(p => ({
+          title: p.title, outcome: p.outcome,
+          size: parseFloat(p.size || '0'), avgPrice: parseFloat(p.avgPrice || '0'),
+          currentPrice: parseFloat(p.curPrice || '0'), currentValue: parseFloat(p.currentValue || '0'),
+          pnl: parseFloat(p.cashPnl || '0'), pnlPercent: parseFloat(p.percentPnl || '0'),
+        }));
+        // Sort by current value descending, limit
+        active.sort((a, b) => b.currentValue - a.currentValue);
         return JSON.stringify({
-          wallet: input.walletAddress, totalPositions: active.length,
-          positions: active.map(p => ({
-            title: p.title, outcome: p.outcome,
-            size: parseFloat(p.size || '0'), avgPrice: parseFloat(p.avgPrice || '0'),
-            currentPrice: parseFloat(p.curPrice || '0'), currentValue: parseFloat(p.currentValue || '0'),
-            pnl: parseFloat(p.cashPnl || '0'), pnlPercent: parseFloat(p.percentPnl || '0'),
-          })),
+          wallet: walletAddress, totalPositions: active.length, showing: Math.min(limit, active.length),
+          positions: active.slice(0, limit),
         });
       }
       case 'get_hl_trade_history': {
@@ -402,66 +494,14 @@ async function executeTool(name: string, input: any): Promise<string> {
 
 // ─── System Prompt ─────────────────────────────────────────────────────────
 
-function buildSystemPrompt(context: {
-  agentName: string;
-  positions: any[];
-  followedTraders: any[];
-  portfolioSummary: any;
-  tokens: any[];
-  tokensTotalUsd: number;
-}) {
-  const { agentName, positions, followedTraders, portfolioSummary, tokens, tokensTotalUsd } = context;
-
-  const positionSummary = positions.length > 0
-    ? positions.map(p => {
-        if (p.type === 'PERP') {
-          return `- ${p.pair} ${p.direction} ${p.leverage}x on ${p.platform} | Size: $${p.positionSize} | PnL: $${p.pnl} (${p.roi}%)`;
-        }
-        if (p.type === 'PREDICTION') {
-          return `- PM: ${p.market} | ${p.outcome} | Size: ${p.size} shares | Value: $${p.currentValue}`;
-        }
-        return `- ${p.pair || p.market || 'Unknown'} on ${p.platform}`;
-      }).join('\n')
-    : 'No open positions detected.';
-
-  const traderSummary = followedTraders.length > 0
-    ? followedTraders.map(t => {
-        const wr = t.winRate <= 1 ? (t.winRate * 100).toFixed(0) : t.winRate.toFixed(0);
-        const reason = t.matchReason ? ` | Matched: ${t.matchReason}` : '';
-        return `- ${t.username || t.wallet.slice(0, 10)} (${t.platform}) | 30d PnL: $${t.pnl30d.toLocaleString()} | Win Rate: ${wr}%${reason}`;
-      }).join('\n')
-    : 'No traders followed yet.';
-
-  const tokenSummary = tokens.length > 0
-    ? tokens.map(t => `- ${t.symbol} on ${t.chain}: ${t.balance} ($${t.usdValue?.toFixed(2) || '?'})`).join('\n')
-    : 'No tokens detected.';
-
-  const totalPortfolioValue = (portfolioSummary?.totalValue || 0) + tokensTotalUsd;
-
-  return `You are ${agentName}, an AI trading and investment agent on the Yieldr platform.
+// Static system prompt (cached) — agent instructions, rules — NO dynamic content
+const STATIC_SYSTEM_PROMPT = `You are an AI trading and investment agent on the Yieldr platform.
 
 You serve two roles:
 
 1. TRADING ADVISOR — Help active traders analyze positions, compare with top performers, understand market context, and optimize entries/exits.
 
 2. PORTFOLIO MANAGER — Help investors discover alpha by finding top traders across platforms, building allocation plans, constructing diversified portfolios, and suggesting execution paths.
-
----
-
-## 📊 User's Current Portfolio
-
-Total Value: ~$${totalPortfolioValue.toFixed(2)}
-Positions: ${portfolioSummary?.positionCount || 0}
-Token Holdings: $${tokensTotalUsd.toFixed(2)} across ${tokens.length} tokens
-
-### Open Positions
-${positionSummary}
-
-### Token Holdings
-${tokenSummary}
-
-### Currently Following
-${traderSummary}
 
 ---
 
@@ -663,7 +703,85 @@ If a tool call fails or returns an error:
 2. If still failing, use whatever context you already have to give a partial answer
 3. Say "I couldn't pull live [X] data right now — here's what I can tell you from [available context]"
 4. Never ask the user to provide data that your tools should fetch
-5. Never show raw error messages to the user`;
+5. Never show raw error messages to the user
+
+---
+
+## 🚨 Critical Rules
+
+1. NEVER fabricate position data. If you haven't called the appropriate tool (get_hl_live_positions, get_pm_live_positions, etc.) for a specific wallet in this conversation, you MUST call it before presenting any position data. Never create fake position tables or invent share counts, entry prices, or PnL numbers.
+
+2. NEVER use "copy", "follow", or "copy-trade" when describing recommendations. Frame all recommendations as: "Based on my analysis of market data and top performer positioning patterns, I recommend..." You are an AI analyst providing data-driven insights, not a copy-trading service.
+
+3. For allocation/portfolio recommendations, be concise. Use this table format:
+   | Asset | Direction | Size | Entry | Stop | TP1 | TP2 |
+   Keep allocation responses under 350 words total. Do not write multi-paragraph rationales for each position.
+
+4. NEVER project forward returns from trailing performance metrics. Do not say "Expected Monthly Return: X%". Instead say: "Historical context: X% win rate, Y profit factor over Z trades in the last 30 days."
+
+5. When you already have trader or position data from earlier in this conversation, reference it instead of re-fetching. Say "Based on the data we pulled earlier..." Only re-fetch if the user explicitly asks for fresh/updated data.
+
+6. Filter out noise from position displays:
+   • Skip positions with current value < $1
+   • Skip positions with PnL worse than -80% (dead bets)
+   • Show maximum 10 positions per trader unless user asks for more
+
+7. When you need positions for multiple wallets on Hyperliquid, ALWAYS use get_hl_live_positions_batch instead of calling get_hl_live_positions multiple times.
+
+8. Keep responses concise. Target 200-350 words unless the user explicitly asks for detailed analysis. Use tables for data, not paragraphs.`;
+
+// Build dynamic user context (NOT cached — changes per session)
+function buildDynamicUserContext(context: {
+  agentName: string;
+  positions: any[];
+  followedTraders: any[];
+  portfolioSummary: any;
+  tokens: any[];
+  tokensTotalUsd: number;
+}): string {
+  const { agentName, positions, followedTraders, portfolioSummary, tokens, tokensTotalUsd } = context;
+
+  const positionSummary = positions.length > 0
+    ? positions.map(p => {
+        if (p.type === 'PERP') {
+          return `- ${p.pair} ${p.direction} ${p.leverage}x on ${p.platform} | Size: $${p.positionSize} | PnL: $${p.pnl} (${p.roi}%)`;
+        }
+        if (p.type === 'PREDICTION') {
+          return `- PM: ${p.market} | ${p.outcome} | Size: ${p.size} shares | Value: $${p.currentValue}`;
+        }
+        return `- ${p.pair || p.market || 'Unknown'} on ${p.platform}`;
+      }).join('\n')
+    : 'No open positions detected.';
+
+  const traderSummary = followedTraders.length > 0
+    ? followedTraders.map(t => {
+        const wr = t.winRate <= 1 ? (t.winRate * 100).toFixed(0) : t.winRate.toFixed(0);
+        const reason = t.matchReason ? ` | Matched: ${t.matchReason}` : '';
+        return `- ${t.username || t.wallet.slice(0, 10)} (${t.platform}) | 30d PnL: $${t.pnl30d.toLocaleString()} | Win Rate: ${wr}%${reason}`;
+      }).join('\n')
+    : 'No traders followed yet.';
+
+  const tokenSummary = tokens.length > 0
+    ? tokens.map(t => `- ${t.symbol} on ${t.chain}: ${t.balance} ($${t.usdValue?.toFixed(2) || '?'})`).join('\n')
+    : 'No tokens detected.';
+
+  const totalPortfolioValue = (portfolioSummary?.totalValue || 0) + tokensTotalUsd;
+
+  return `## 📊 User's Current Portfolio
+
+Agent Name: ${agentName}
+Total Value: ~$${totalPortfolioValue.toFixed(2)}
+Positions: ${portfolioSummary?.positionCount || 0}
+Token Holdings: $${tokensTotalUsd.toFixed(2)} across ${tokens.length} tokens
+
+### Open Positions
+${positionSummary}
+
+### Token Holdings
+${tokenSummary}
+
+### Currently Following
+${traderSummary}`;
 }
 
 // ─── Chat API ──────────────────────────────────────────────────────────────
@@ -710,35 +828,73 @@ export async function POST(request: NextRequest) {
         portfolioSummary = agent.portfolioSummary || {};
       }
 
-      try {
-        const tokenApiUrl = `${process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'}/api/demo/tokens?address=${wallet}`;
-        const tokenRes = await fetch(tokenApiUrl);
-        if (tokenRes.ok) {
-          const tokenData = await tokenRes.json();
-          if (tokenData.success && tokenData.data) {
-            tokens = tokenData.data.tokens || [];
-            tokensTotalUsd = tokenData.data.totalUsdValue || 0;
+      // Try to get cached token balances from session first (avoids 2-3s Moralis API call)
+      let usedCachedTokens = false;
+      if (sessionId) {
+        try {
+          const session = await db.collection('chatsessions').findOne({ _id: new mongoose.Types.ObjectId(sessionId) });
+          if (session?.cachedTokenBalances && session.cachedTokenBalances.length > 0) {
+            tokens = session.cachedTokenBalances;
+            tokensTotalUsd = session.cachedTokensTotalUsd || 0;
+            usedCachedTokens = true;
+            console.log(`[chat] Using cached tokens from session (${tokens.length} tokens, $${tokensTotalUsd.toFixed(2)})`);
           }
+        } catch (e) {
+          console.log('[chat] Failed to read cached tokens:', (e as Error).message);
         }
-      } catch (e) {
-        console.log('[chat] Token fetch failed:', (e as Error).message);
+      }
+
+      // Fallback to Moralis API if no cached tokens
+      if (!usedCachedTokens) {
+        try {
+          const tokenApiUrl = `${process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'}/api/demo/tokens?address=${wallet}`;
+          const tokenRes = await fetch(tokenApiUrl);
+          if (tokenRes.ok) {
+            const tokenData = await tokenRes.json();
+            if (tokenData.success && tokenData.data) {
+              tokens = tokenData.data.tokens || [];
+              tokensTotalUsd = tokenData.data.totalUsdValue || 0;
+              console.log(`[chat] Fetched tokens from Moralis (${tokens.length} tokens, $${tokensTotalUsd.toFixed(2)})`);
+            }
+          }
+        } catch (e) {
+          console.log('[chat] Token fetch failed:', (e as Error).message);
+        }
       }
       positions = positionDocs || [];
     }
 
-    const systemPrompt = buildSystemPrompt({
+    // Build system message array: static (cached) + dynamic (user context)
+    const dynamicUserContext = buildDynamicUserContext({
       agentName, positions, followedTraders, portfolioSummary, tokens, tokensTotalUsd,
     });
 
+    const systemMessage: Anthropic.TextBlockParam[] = [
+      {
+        type: 'text' as const,
+        text: STATIC_SYSTEM_PROMPT,
+        cache_control: { type: 'ephemeral' as const },
+      },
+      {
+        type: 'text' as const,
+        text: dynamicUserContext,
+        // No cache_control — this part is dynamic per session
+      },
+    ];
+
     // ═══ TOKEN BREAKDOWN LOGGING ═══
     const estimateTokens = (text: string) => text ? Math.ceil(text.length / 4) : 0;
-    const systemPromptTokens = estimateTokens(systemPrompt);
+    const staticPromptTokens = estimateTokens(STATIC_SYSTEM_PROMPT);
+    const dynamicContextTokens = estimateTokens(dynamicUserContext);
+    const systemPromptTokens = staticPromptTokens + dynamicContextTokens;
     const toolsJson = JSON.stringify(allTools);
     const toolsTokens = estimateTokens(toolsJson);
     console.log('\n╔══════════════════════════════════════════════════╗');
     console.log('║         TOKEN BREAKDOWN — CHAT REQUEST           ║');
     console.log('╠══════════════════════════════════════════════════╣');
-    console.log(`║ System prompt:      ${String(systemPromptTokens).padStart(6)} tokens (${systemPrompt.length} chars)`);
+    console.log(`║ System prompt total: ${String(systemPromptTokens).padStart(5)} tokens`);
+    console.log(`║   └ Static (cached):  ${String(staticPromptTokens).padStart(5)} tokens (${STATIC_SYSTEM_PROMPT.length} chars)`);
+    console.log(`║   └ Dynamic (user):   ${String(dynamicContextTokens).padStart(5)} tokens (${dynamicUserContext.length} chars)`);
     console.log(`║ Tool definitions:   ${String(toolsTokens).padStart(6)} tokens (${toolsJson.length} chars)`);
     // Per-tool breakdown
     (toolDefinitions as any[]).forEach((tool: any, i: number) => {
@@ -789,8 +945,8 @@ export async function POST(request: NextRequest) {
 
             const response = await anthropic.messages.create({
               model: 'claude-sonnet-4-5-20250929',
-              max_tokens: 2048,
-              system: systemPrompt,
+              max_tokens: 4096,
+              system: systemMessage,
               messages: currentMessages,
               tools: allTools,
               stream: true,
@@ -835,9 +991,13 @@ export async function POST(request: NextRequest) {
                 }
               } else if (event.type === 'message_start') {
                 if ((event as any).message?.usage) {
-                  const iterInput = (event as any).message.usage.input_tokens || 0;
+                  const usage = (event as any).message.usage;
+                  const iterInput = usage.input_tokens || 0;
+                  const cacheCreate = usage.cache_creation_input_tokens || 0;
+                  const cacheRead = usage.cache_read_input_tokens || 0;
                   totalInputTokens += iterInput;
-                  console.log(`[TOKENS] Iteration input_tokens: ${iterInput} (cache_creation: ${(event as any).message.usage.cache_creation_input_tokens || 0}, cache_read: ${(event as any).message.usage.cache_read_input_tokens || 0})`);
+                  console.log(`[TOKENS] Iteration input_tokens: ${iterInput}`);
+                  console.log(`[CACHE] cache_creation: ${cacheCreate}, cache_read: ${cacheRead} ${cacheRead > 0 ? '✓ CACHE HIT' : cacheCreate > 0 ? '→ CACHE WRITE' : '✗ NO CACHE'}`);
                 }
               } else if (event.type === 'content_block_delta') {
                 if (event.delta.type === 'text_delta') {
