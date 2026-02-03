@@ -511,7 +511,8 @@ You have access to powerful data tools. USE THEM proactively:
 
 • get_top_perp_traders — Fetch top perpetual traders from Hyperliquid or Avantis
 • get_top_pm_traders — Fetch top Polymarket traders filtered by category
-• get_hl_live_positions — Get any trader's current Hyperliquid positions
+• get_hl_live_positions — Get a single trader's Hyperliquid positions
+• get_hl_live_positions_batch — Get positions for MULTIPLE wallets in ONE call (use when checking 2+ traders)
 • get_avantis_live_positions — Get any trader's current Avantis positions
 • get_pm_live_positions — Get any trader's current Polymarket positions
 • get_hl_trade_history — Get recent trades/fills for a Hyperliquid wallet
