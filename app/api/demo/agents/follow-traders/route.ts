@@ -194,7 +194,12 @@ export async function POST(request: NextRequest) {
       }
 
       // Avantis: 1 trader (position-matched if possible)
-      const avQuery: any = { walletAddress: { $ne: walletLower } };
+      // IMPORTANT: managers collection has mixed platform data (HL, Avantis, LP)
+      // Must filter by avantisPositions > 0 to get actual Avantis traders
+      const avQuery: any = {
+        walletAddress: { $ne: walletLower },
+        'metrics.avantisPositions': { $gt: 0 },
+      };
       if (userPerpCoins.length > 0) {
         // Check if managers have positions with matching pairs
         avQuery['positions.pair'] = { $in: userPerpCoins.map(c => new RegExp(c, 'i')) };
@@ -203,9 +208,12 @@ export async function POST(request: NextRequest) {
         .find(avQuery)
         .sort({ 'metrics.totalPnL30d': -1 }).limit(1).toArray();
 
-      // Fallback if regex query returned nothing
+      // Fallback if regex query returned nothing (still filter by avantisPositions > 0)
       const avResult = avTop.length > 0 ? avTop : await db.collection('managers')
-        .find({ walletAddress: { $ne: walletLower } })
+        .find({
+          walletAddress: { $ne: walletLower },
+          'metrics.avantisPositions': { $gt: 0 },
+        })
         .sort({ 'metrics.totalPnL30d': -1 }).limit(1).toArray();
 
       for (const t of avResult) {
