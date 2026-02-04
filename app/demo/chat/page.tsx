@@ -1730,7 +1730,7 @@ export default function ChatPage() {
                   }}
                 >Get YLDR</a>
                 <a
-                  href="https://discord.gg/yieldr"
+                  href="https://discord.gg/jhRvvWsc"
                   target="_blank"
                   rel="noopener noreferrer"
                   style={{
