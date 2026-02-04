@@ -80,10 +80,30 @@ export async function POST(request: NextRequest) {
     // If user has no positions at all, return a simple welcome (no LLM call needed)
     if (perpPositions.length === 0 && pmPositions.length === 0 && tokenList.length === 0) {
       console.log(`[initial-analysis] No positions found, returning static welcome`);
+      const emptyWalletMessage = `👋 Hey — I'm ${agentName}, your AI trading agent powered by Yieldr.
+
+No positions found in this wallet, but if you're trading from another wallet or on exchanges like Coinbase or Binance, just tell me what you're holding — I'll analyze your positions against what the top traders are doing right now.
+
+Here's what I can do for you:
+
+🔍 **Discover Alpha**
+I track top traders on Hyperliquid, Avantis, and Polymarket in real-time — their entries, exits, win rates, and what's driving their edge. Want to see what $33M PnL whales are doing with BTC? Or which sports bettors are crushing it at 90% win rates?
+
+💼 **Invest & Manage**
+Tell me a budget and I'll find the best traders across perps and prediction markets, design an allocation, and once trading agents launch — execute, monitor, and rebalance your portfolio on-chain automatically.
+
+📊 **Get Smarter Over Time**
+The agent learns from your trades and top performer patterns to give you sharper insights, better entries, and stronger risk management with every interaction.
+
+Whether you trade crypto, sports, or macro — start here:
+→ "I'm long BTC at $78K, what are top traders doing?"
+→ "Find the best Polymarket sports bettors"
+→ "Build me a $10K portfolio from top performers"`;
+
       return new Response(
         JSON.stringify({
           type: 'static',
-          content: `Welcome! I'm ${agentName}, your AI trading agent. I'm ready to help you analyze markets, track positions, and learn from top traders.\n\nConnect your positions or ask me about any market!`,
+          content: emptyWalletMessage,
         }),
         { headers: { 'Content-Type': 'application/json' } }
       );
