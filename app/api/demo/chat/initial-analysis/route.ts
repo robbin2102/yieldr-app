@@ -93,7 +93,7 @@ I track top traders on Hyperliquid, Avantis, and Polymarket in real-time — the
 Tell me a budget and I'll find the best traders across perps and prediction markets, design an allocation, and once trading agents launch — execute, monitor, and rebalance your portfolio on-chain automatically.
 
 📊 **Get Smarter Over Time**
-The agent learns from your trades and top performer patterns to give you sharper insights, better entries, and stronger risk management with every interaction.
+The agent learns from your trades and top performer patterns to give you sharper insights, better entries, and stronger risk management with every interaction. (coming in V1 launch)
 
 Whether you trade crypto, sports, or macro — start here:
 → "I'm long BTC at $78K, what are top traders doing?"
