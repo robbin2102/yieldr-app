@@ -824,33 +824,6 @@ export default function ChatPage() {
             </div>
           </div>
 
-          {/* Filter bar (positions tab only) */}
-          {activeTab === 'positions' && (
-            <div style={{
-              padding: '0.5rem',
-              borderBottom: '1px solid #1E1E1E',
-              background: '#0A0A0A',
-              flexShrink: 0,
-            }}>
-              <select style={{
-                width: '100%',
-                padding: '0.4rem 0.6rem',
-                background: '#111111',
-                border: '1px solid #1E1E1E',
-                borderRadius: 4,
-                color: '#FFFFFF',
-                fontSize: '0.75rem',
-                fontFamily: "'Inter', sans-serif",
-                cursor: 'pointer',
-              }}>
-                <option>Your Positions</option>
-                {displayTraders.map((t, i) => (
-                  <option key={i}>{t.username || t.wallet.slice(0, 10)}</option>
-                ))}
-              </select>
-            </div>
-          )}
-
           {/* Scrollable content */}
           <div style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden' }}>
             {/* POSITIONS TAB */}
