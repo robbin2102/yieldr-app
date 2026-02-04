@@ -8,6 +8,7 @@ import {
   coinbaseWallet,
   walletConnectWallet,
   trustWallet,
+  phantomWallet,
 } from '@rainbow-me/rainbowkit/wallets';
 import { WagmiProvider } from 'wagmi';
 import { createConfig, http } from 'wagmi';
@@ -24,6 +25,7 @@ const connectors = connectorsForWallets(
       groupName: 'Popular',
       wallets: [
         metaMaskWallet,
+        phantomWallet,
         rainbowWallet,
         coinbaseWallet,
         trustWallet,
