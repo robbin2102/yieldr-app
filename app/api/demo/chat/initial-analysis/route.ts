@@ -79,7 +79,7 @@ export async function POST(request: NextRequest) {
 
     // If user has no positions at all, return a simple welcome (no LLM call needed)
     if (perpPositions.length === 0 && pmPositions.length === 0 && tokenList.length === 0) {
-      console.log(`[initial-analysis] No positions found, returning static welcome`);
+      console.log(`[initial-analysis] No positions found, streaming static welcome`);
       const emptyWalletMessage = `👋 Hey — I'm ${agentName}, your AI trading agent powered by Yieldr.
 
 No positions found in this wallet, but if you're trading from another wallet or on exchanges like Coinbase or Binance, just tell me what you're holding — I'll analyze your positions against what the top traders are doing right now.
@@ -100,13 +100,44 @@ Whether you trade crypto, sports, or macro — start here:
 → "Find the best Polymarket sports bettors"
 → "Build me a $10K portfolio from top performers"`;
 
-      return new Response(
-        JSON.stringify({
-          type: 'static',
-          content: emptyWalletMessage,
-        }),
-        { headers: { 'Content-Type': 'application/json' } }
-      );
+      // Stream the message with typewriter effect
+      const encoder = new TextEncoder();
+      const stream = new ReadableStream({
+        async start(controller) {
+          // Split message into chunks (by words for natural typing feel)
+          const words = emptyWalletMessage.split(/(\s+)/);
+          for (const word of words) {
+            const chunk = JSON.stringify({ type: 'text', text: word }) + '\n';
+            controller.enqueue(encoder.encode(chunk));
+            // Small delay between words for typewriter effect
+            await new Promise(resolve => setTimeout(resolve, 15));
+          }
+
+          // Save as the first message in a new chat session
+          try {
+            await connectDB();
+            const session = await ChatSession.create({
+              walletAddress: walletLower,
+              title: 'Welcome',
+              messages: [
+                { role: 'agent', content: emptyWalletMessage, timestamp: new Date() },
+              ],
+            });
+            controller.enqueue(encoder.encode(
+              JSON.stringify({ type: 'session', sessionId: session._id.toString() }) + '\n'
+            ));
+            console.log(`[initial-analysis] Saved empty wallet session: ${session._id}`);
+          } catch (err) {
+            console.error('[initial-analysis] Failed to save session:', err);
+          }
+
+          controller.close();
+        },
+      });
+
+      return new Response(stream, {
+        headers: { 'Content-Type': 'application/x-ndjson' },
+      });
     }
 
     // Build the position context for the prompt
