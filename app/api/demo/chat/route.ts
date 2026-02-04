@@ -15,6 +15,60 @@ const POLYMARKET_API_BASE = 'https://data-api.polymarket.com';
 const AVANTIS_API_URL = 'https://yieldr-app-production.up.railway.app/fetch-positions';
 const BASE_RPC_URL = process.env.BASE_RPC_URL || 'https://mainnet.base.org';
 
+// ─── Position Cache (30 second TTL) ──────────────────────────────────────────
+interface CachedPosition {
+  data: any;
+  timestamp: number;
+}
+const positionCache = new Map<string, CachedPosition>();
+const CACHE_TTL_MS = 30000; // 30 seconds
+
+function getCachedPositions(wallet: string): any | null {
+  const cached = positionCache.get(wallet.toLowerCase());
+  if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
+    console.log(`[CACHE HIT] Returning cached positions for ${wallet.slice(0, 10)}...`);
+    return { ...cached.data, cached: true, cachedAge: Math.round((Date.now() - cached.timestamp) / 1000) };
+  }
+  return null;
+}
+
+function setCachedPositions(wallet: string, data: any): void {
+  positionCache.set(wallet.toLowerCase(), { data, timestamp: Date.now() });
+}
+
+// ─── Retry Helper with Exponential Backoff ───────────────────────────────────
+async function fetchWithRetry(
+  url: string,
+  options: RequestInit,
+  maxRetries = 3,
+  baseDelay = 500
+): Promise<Response> {
+  let lastError: Error | null = null;
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      const res = await fetch(url, options);
+      if (res.ok) return res;
+      // Retry on 5xx errors
+      if (res.status >= 500) {
+        lastError = new Error(`Server error: ${res.status}`);
+        console.log(`[RETRY] Attempt ${attempt + 1}/${maxRetries} failed with ${res.status}`);
+      } else {
+        // Don't retry on 4xx errors
+        return res;
+      }
+    } catch (err: any) {
+      lastError = err;
+      console.log(`[RETRY] Attempt ${attempt + 1}/${maxRetries} failed: ${err.message}`);
+    }
+    // Wait before next retry (exponential backoff)
+    if (attempt < maxRetries - 1) {
+      const delay = baseDelay * Math.pow(2, attempt);
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+  throw lastError || new Error('Max retries exceeded');
+}
+
 // ─── Tool Definitions (Anthropic format) ───────────────────────────────────
 
 const toolDefinitions: Anthropic.Tool[] = [
@@ -296,7 +350,21 @@ async function executeTool(name: string, input: any): Promise<string> {
       }
       case 'get_hl_live_positions': {
         const { walletAddress, limit = 10 } = input;
-        const res = await fetch(HYPERLIQUID_API_URL, {
+
+        // Check cache first
+        const cached = getCachedPositions(walletAddress);
+        if (cached) {
+          // Apply limit to cached data
+          const limitedPositions = cached.positions?.slice(0, limit) || [];
+          return JSON.stringify({
+            ...cached,
+            positions: limitedPositions,
+            showing: limitedPositions.length,
+          });
+        }
+
+        // Fetch with retry logic
+        const res = await fetchWithRetry(HYPERLIQUID_API_URL, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ type: 'clearinghouseState', user: walletAddress }),
@@ -322,10 +390,20 @@ async function executeTool(name: string, input: any): Promise<string> {
           const { notionalValue, ...rest } = p; // remove sorting field
           return rest;
         });
-        return JSON.stringify({
+
+        const result = {
           wallet: walletAddress, totalPositions: allPositions.length, showing: topPositions.length,
           positions: topPositions, accountValue: data.marginSummary?.accountValue,
+        };
+
+        // Cache the result (store all positions for flexible limit on cache hit)
+        setCachedPositions(walletAddress, {
+          wallet: walletAddress, totalPositions: allPositions.length,
+          positions: allPositions.map((p: any) => { const { notionalValue, ...rest } = p; return rest; }),
+          accountValue: data.marginSummary?.accountValue,
         });
+
+        return JSON.stringify(result);
       }
       case 'get_hl_live_positions_batch': {
         const { walletAddresses, limit = 5 } = input;
@@ -333,7 +411,19 @@ async function executeTool(name: string, input: any): Promise<string> {
         const results = await Promise.all(
           addresses.map(async (addr: string) => {
             try {
-              const res = await fetch(HYPERLIQUID_API_URL, {
+              // Check cache first
+              const cached = getCachedPositions(addr);
+              if (cached) {
+                const limitedPositions = cached.positions?.slice(0, limit) || [];
+                return {
+                  ...cached,
+                  positions: limitedPositions,
+                  showing: limitedPositions.length,
+                };
+              }
+
+              // Fetch with retry logic
+              const res = await fetchWithRetry(HYPERLIQUID_API_URL, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ type: 'clearinghouseState', user: addr }),
@@ -357,11 +447,32 @@ async function executeTool(name: string, input: any): Promise<string> {
                 const { notionalValue, ...rest } = p;
                 return rest;
               });
-              return {
+
+              const result = {
                 wallet: addr, totalPositions: allPos.length, showing: topPos.length,
                 positions: topPos, accountValue: data.marginSummary?.accountValue,
               };
+
+              // Cache for future requests
+              setCachedPositions(addr, {
+                wallet: addr, totalPositions: allPos.length,
+                positions: allPos.map((p: any) => { const { notionalValue, ...rest } = p; return rest; }),
+                accountValue: data.marginSummary?.accountValue,
+              });
+
+              return result;
             } catch (e: any) {
+              // On failure, try to return cached data even if stale
+              const staleCache = positionCache.get(addr.toLowerCase());
+              if (staleCache) {
+                console.log(`[CACHE STALE] Returning stale cache for ${addr.slice(0, 10)} after error`);
+                return {
+                  ...staleCache.data,
+                  positions: staleCache.data.positions?.slice(0, limit) || [],
+                  cached: true,
+                  stale: true,
+                };
+              }
               return { wallet: addr, error: e.message, positions: [] };
             }
           })
@@ -683,6 +794,22 @@ If you catch yourself about to use any of these, rephrase immediately.
 
 ---
 
+## 🚧 Features NOT Available in Demo — NEVER OFFER
+
+These features do NOT exist yet. NEVER offer or suggest them:
+• Monitoring alerts / price alerts
+• Telegram or Discord notifications
+• Automated trading or trade execution
+• Portfolio rebalancing
+• Setting up alerts for trader activity
+• SMS or email notifications
+• Watchlists with notifications
+• Any form of automated action
+
+If a user asks about these, say: "That's coming in V1! For now, I can show you live data and analysis whenever you ask."
+
+---
+
 ## 📈 ROI Projections — Methodology Required
 
 Every return projection or performance estimate MUST include:
@@ -729,7 +856,13 @@ If a tool call fails or returns an error:
 
 7. When you need positions for multiple wallets on Hyperliquid, ALWAYS use get_hl_live_positions_batch instead of calling get_hl_live_positions multiple times.
 
-8. Keep responses concise. Target 200-350 words unless the user explicitly asks for detailed analysis. Use tables for data, not paragraphs.`;
+8. Keep responses concise. Target 200-350 words unless the user explicitly asks for detailed analysis. Use tables for data, not paragraphs.
+
+9. FALLBACK RULE: If a followed trader returns zero positions (empty array), do NOT dead-end with "no positions found." Instead:
+   • Briefly note that the specific trader appears to have no active positions currently
+   • Immediately fetch top traders for the relevant asset using get_top_perp_traders or get_top_pm_traders
+   • Present those top traders' positions instead, so the user still gets actionable data
+   • Example: "0x7fda... appears flat right now. Here's what the top BTC traders are doing instead: [data]"`;
 
 // Build dynamic user context (NOT cached — changes per session)
 function buildDynamicUserContext(context: {
@@ -758,7 +891,9 @@ function buildDynamicUserContext(context: {
     ? followedTraders.map(t => {
         const wr = t.winRate <= 1 ? (t.winRate * 100).toFixed(0) : t.winRate.toFixed(0);
         const reason = t.matchReason ? ` | Matched: ${t.matchReason}` : '';
-        return `- ${t.username || t.wallet.slice(0, 10)} (${t.platform}) | 30d PnL: $${t.pnl30d.toLocaleString()} | Win Rate: ${wr}%${reason}`;
+        const displayName = t.username || `Wallet ${t.wallet.slice(0, 6)}...${t.wallet.slice(-4)}`;
+        // Include full wallet address for API calls
+        return `- ${displayName} (${t.platform}) | Wallet: ${t.wallet} | 30d PnL: $${t.pnl30d.toLocaleString()} | Win Rate: ${wr}%${reason}`;
       }).join('\n')
     : 'No traders followed yet.';
 
