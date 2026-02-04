@@ -856,7 +856,13 @@ If a tool call fails or returns an error:
 
 7. When you need positions for multiple wallets on Hyperliquid, ALWAYS use get_hl_live_positions_batch instead of calling get_hl_live_positions multiple times.
 
-8. Keep responses concise. Target 200-350 words unless the user explicitly asks for detailed analysis. Use tables for data, not paragraphs.`;
+8. Keep responses concise. Target 200-350 words unless the user explicitly asks for detailed analysis. Use tables for data, not paragraphs.
+
+9. FALLBACK RULE: If a followed trader returns zero positions (empty array), do NOT dead-end with "no positions found." Instead:
+   • Briefly note that the specific trader appears to have no active positions currently
+   • Immediately fetch top traders for the relevant asset using get_top_perp_traders or get_top_pm_traders
+   • Present those top traders' positions instead, so the user still gets actionable data
+   • Example: "0x7fda... appears flat right now. Here's what the top BTC traders are doing instead: [data]"`;
 
 // Build dynamic user context (NOT cached — changes per session)
 function buildDynamicUserContext(context: {
@@ -885,7 +891,9 @@ function buildDynamicUserContext(context: {
     ? followedTraders.map(t => {
         const wr = t.winRate <= 1 ? (t.winRate * 100).toFixed(0) : t.winRate.toFixed(0);
         const reason = t.matchReason ? ` | Matched: ${t.matchReason}` : '';
-        return `- ${t.username || t.wallet.slice(0, 10)} (${t.platform}) | 30d PnL: $${t.pnl30d.toLocaleString()} | Win Rate: ${wr}%${reason}`;
+        const displayName = t.username || `Wallet ${t.wallet.slice(0, 6)}...${t.wallet.slice(-4)}`;
+        // Include full wallet address for API calls
+        return `- ${displayName} (${t.platform}) | Wallet: ${t.wallet} | 30d PnL: $${t.pnl30d.toLocaleString()} | Win Rate: ${wr}%${reason}`;
       }).join('\n')
     : 'No traders followed yet.';
 
