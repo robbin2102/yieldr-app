@@ -87,7 +87,7 @@ No positions found in this wallet, but if you're trading from another wallet or 
 Here's what I can do for you:
 
 🔍 **Discover Alpha**
-I track top traders on Hyperliquid, Avantis, and Polymarket in real-time — their entries, exits, win rates, and what's driving their edge. Want to see what $33M PnL whales are doing with BTC? Or which sports bettors are crushing it at 90% win rates?
+I track top traders on Hyperliquid, Avantis, and Polymarket in real-time — their entries, exits, win rates, and what's driving their edge. Want to see what the top PnL whales are doing with BTC? Or which sports bettors are crushing it with 90%+ win rates?
 
 💼 **Invest & Manage**
 Tell me a budget and I'll find the best traders across perps and prediction markets, design an allocation, and once trading agents launch — execute, monitor, and rebalance your portfolio on-chain automatically.
