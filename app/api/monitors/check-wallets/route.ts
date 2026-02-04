@@ -16,11 +16,12 @@ export async function GET(request: NextRequest) {
   const startTime = Date.now();
 
   try {
-    // Security: Check for API key (skip in development for easy testing)
+    // Security: Check for API key or Vercel Cron
     const isDevelopment = process.env.NODE_ENV === 'development';
     const authHeader = request.headers.get('authorization');
+    const isVercelCron = request.headers.get('user-agent')?.includes('vercel-cron');
 
-    if (!isDevelopment) {
+    if (!isDevelopment && !isVercelCron) {
       const expectedKey = process.env.CRON_API_KEY;
       if (!expectedKey || authHeader !== `Bearer ${expectedKey}`) {
         console.warn('[Cron] Unauthorized request blocked');

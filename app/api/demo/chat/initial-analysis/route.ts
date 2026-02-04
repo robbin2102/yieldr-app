@@ -1,0 +1,278 @@
+import { NextRequest } from 'next/server';
+import Anthropic from '@anthropic-ai/sdk';
+import connectDB from '@/lib/mongoose';
+import mongoose from 'mongoose';
+import Agent from '@/models/Agent';
+import ChatSession from '@/models/ChatSession';
+import { trackUsage, TokenUsageData } from '@/lib/tokenTracking';
+
+const anthropic = new Anthropic({
+  apiKey: process.env.ANTHROPIC_API_KEY || '',
+});
+
+/**
+ * POST /api/demo/chat/initial-analysis
+ * Generates the first agent message by analyzing user positions + matched traders.
+ * Called automatically when the chat page loads (replaces hardcoded greeting).
+ * Streams the response so the user sees it typing out.
+ *
+ * Body: { wallet: string }
+ */
+export async function POST(request: NextRequest) {
+  try {
+    if (!process.env.ANTHROPIC_API_KEY) {
+      return new Response(
+        JSON.stringify({ error: 'ANTHROPIC_API_KEY not configured' }),
+        { status: 500, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+
+    const { wallet } = await request.json();
+    if (!wallet) {
+      return new Response(
+        JSON.stringify({ error: 'Wallet address required' }),
+        { status: 400, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+
+    const walletLower = wallet.toLowerCase();
+    console.log(`[initial-analysis] Starting for wallet: ${walletLower}`);
+
+    await connectDB();
+    const db = mongoose.connection.db;
+    if (!db) {
+      return new Response(
+        JSON.stringify({ error: 'DB not connected' }),
+        { status: 500, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // Fetch all context in parallel
+    const [agent, positions, tokens] = await Promise.all([
+      Agent.findOne({ ownerWallet: walletLower }),
+      db.collection('positions').find({ walletAddress: walletLower }).toArray(),
+      (async () => {
+        try {
+          const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000';
+          const res = await fetch(`${baseUrl}/api/demo/tokens?address=${wallet}`);
+          if (res.ok) {
+            const data = await res.json();
+            return data.success ? data.data : { tokens: [], totalUsdValue: 0 };
+          }
+        } catch (e) {
+          console.log(`[initial-analysis] Token fetch failed: ${(e as Error).message}`);
+        }
+        return { tokens: [], totalUsdValue: 0 };
+      })(),
+    ]);
+
+    const agentName = agent?.name || 'YieldrAgent';
+    const followedTraders = agent?.followedTraders || [];
+    const portfolioSummary = agent?.portfolioSummary || {};
+
+    const perpPositions = positions.filter(p => p.type === 'PERP');
+    const pmPositions = positions.filter(p => p.type === 'PREDICTION');
+    const tokenList = tokens.tokens || [];
+    const tokensTotalUsd = tokens.totalUsdValue || 0;
+
+    console.log(`[initial-analysis] Context: ${perpPositions.length} perps, ${pmPositions.length} PM, ${tokenList.length} tokens, ${followedTraders.length} traders`);
+
+    // If user has no positions at all, return a simple welcome (no LLM call needed)
+    if (perpPositions.length === 0 && pmPositions.length === 0 && tokenList.length === 0) {
+      console.log(`[initial-analysis] No positions found, returning static welcome`);
+      return new Response(
+        JSON.stringify({
+          type: 'static',
+          content: `Welcome! I'm ${agentName}, your AI trading agent. I'm ready to help you analyze markets, track positions, and learn from top traders.\n\nConnect your positions or ask me about any market!`,
+        }),
+        { headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // Build the position context for the prompt
+    const positionContext = [
+      ...perpPositions.map(p =>
+        `- ${p.pair} ${p.direction} ${p.leverage}x on ${p.platform} | Size: $${p.positionSize} | Entry: $${p.entryPrice} | Current: $${p.currentPrice} | PnL: $${p.pnl} (${p.roi}%)`
+      ),
+      ...pmPositions.map(p =>
+        `- PM: ${p.market} | ${p.outcome} | Size: ${p.size} shares @ avg ${p.avgPrice} | Value: $${p.currentValue} | PnL: $${p.pnl}`
+      ),
+    ].join('\n');
+
+    const traderContext = followedTraders.length > 0
+      ? followedTraders.map((t: any) => {
+          const wr = t.winRate <= 1 ? (t.winRate * 100).toFixed(0) : t.winRate.toFixed(0);
+          return `- ${t.username || t.wallet?.slice(0, 10)} (${t.platform}) | 30d PnL: $${t.pnl30d?.toLocaleString()} | Win Rate: ${wr}% | Why matched: ${t.matchReason || 'Top trader'}`;
+        }).join('\n')
+      : 'No traders matched yet.';
+
+    const tokenContext = tokenList.length > 0
+      ? tokenList.map((t: any) => `- ${t.symbol} on ${t.chain}: ${t.balance} ($${t.usdValue?.toFixed(2) || '?'})`).join('\n')
+      : '';
+
+    const totalValue = (portfolioSummary?.totalValue || 0) + tokensTotalUsd +
+      perpPositions.reduce((s: number, p: any) => s + (p.margin || p.positionSize || 0), 0) +
+      pmPositions.reduce((s: number, p: any) => s + (p.currentValue || 0), 0);
+
+    const systemPrompt = `You are ${agentName}, an AI trading and investment agent on Yieldr. This is the FIRST message the user sees. Hook them with immediate value from their real data.
+
+---
+
+## 📊 User's Portfolio (Total: ~$${totalValue.toFixed(2)})
+
+### Positions
+${positionContext}
+
+${tokenContext ? `### Token Holdings\n${tokenContext}\n` : ''}### Matched Traders (auto-followed based on position overlap)
+${traderContext}
+
+---
+
+## 🎯 What To Do
+
+1. One-line greeting mentioning you scanned their wallet
+
+2. For each position:
+   • Quick assessment (profit/loss, risk level)
+   • If a matched trader trades the same asset, note what they do differently
+   • One specific observation (not a directive — frame as "the data shows..." or "one thing to consider...")
+
+3. End with 2-3 questions to continue (e.g., "Want me to pull up what the top ETH traders are doing right now?" or "I can find NBA specialists on Polymarket — interested?")
+
+---
+
+## ✍️ Formatting Rules
+
+1. Use emoji status indicators: 🟢 profit | 🔴 loss | ⚪ flat | ⚠️ risk
+2. Use • for bullets, never - or *
+3. Use --- between sections
+4. Bold only for tickers and dollar amounts
+5. Never use **text** for emphasis in prose
+6. Under 300 words total
+
+---
+
+## 🗣️ Style
+
+• Lead with key insight, then data
+• Use $ and % throughout
+• Keep it scannable — short paragraphs, clear spacing
+• Say "one approach to consider..." not "you should immediately..."
+• Never judgmental ("you're violating..." / "your strategy is wrong")
+• Frame as analysis, not financial advice`;
+
+    const userPrompt = 'Analyze my portfolio and give me insights based on my positions and the top traders you matched me with.';
+
+    // ═══ TOKEN BREAKDOWN LOGGING ═══
+    const estimateTokens = (text: string) => text ? Math.ceil(text.length / 4) : 0;
+    const systemPromptTokens = estimateTokens(systemPrompt);
+    const userPromptTokens = estimateTokens(userPrompt);
+    console.log('\n╔══════════════════════════════════════════════════╗');
+    console.log('║     TOKEN BREAKDOWN — INITIAL ANALYSIS           ║');
+    console.log('╠══════════════════════════════════════════════════╣');
+    console.log(`║ System prompt:      ${String(systemPromptTokens).padStart(6)} tokens (${systemPrompt.length} chars)`);
+    console.log(`║ User prompt:        ${String(userPromptTokens).padStart(6)} tokens (${userPrompt.length} chars)`);
+    console.log(`║ ESTIMATED TOTAL:    ${String(systemPromptTokens + userPromptTokens).padStart(6)} tokens`);
+    console.log('╚══════════════════════════════════════════════════╝\n');
+
+    console.log(`[initial-analysis] Calling Claude Sonnet 4.5...`);
+
+    // Stream the response
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      async start(controller) {
+        let fullResponse = '';
+        const startTime = Date.now();
+        let totalInputTokens = 0;
+        let totalOutputTokens = 0;
+        const modelUsed = 'claude-sonnet-4-5-20250929';
+        try {
+          const response = await anthropic.messages.create({
+            model: 'claude-sonnet-4-5-20250929',
+            max_tokens: 2048,
+            system: systemPrompt,
+            messages: [{ role: 'user', content: userPrompt }],
+            stream: true,
+          });
+
+          for await (const event of response) {
+            if (event.type === 'message_start' && (event as any).message?.usage) {
+              totalInputTokens += (event as any).message.usage.input_tokens || 0;
+              console.log(`[TOKENS][initial] Actual input_tokens: ${totalInputTokens} (estimated was: ${systemPromptTokens + userPromptTokens}, overhead: ${totalInputTokens - systemPromptTokens - userPromptTokens})`);
+            } else if (event.type === 'message_delta' && (event as any).usage) {
+              totalOutputTokens += (event as any).usage.output_tokens || 0;
+              console.log(`[TOKENS][initial] Actual output_tokens: ${totalOutputTokens}`);
+            } else if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
+              fullResponse += event.delta.text;
+              const chunk = JSON.stringify({ type: 'text', text: event.delta.text }) + '\n';
+              controller.enqueue(encoder.encode(chunk));
+            }
+          }
+
+          console.log(`[initial-analysis] Response complete: ${fullResponse.length} chars`);
+
+          // Save as the first message in a new chat session
+          if (fullResponse) {
+            try {
+              await connectDB();
+              const session = await ChatSession.create({
+                walletAddress: walletLower,
+                title: 'Portfolio Analysis',
+                messages: [
+                  { role: 'agent', content: fullResponse, timestamp: new Date() },
+                ],
+                // Cache token balances so subsequent chat messages don't re-fetch from Moralis
+                cachedTokenBalances: tokenList,
+                cachedTokensTotalUsd: tokensTotalUsd,
+                tokenBalancesFetchedAt: new Date(),
+              });
+              controller.enqueue(encoder.encode(
+                JSON.stringify({ type: 'session', sessionId: session._id.toString() }) + '\n'
+              ));
+              console.log(`[initial-analysis] Saved session: ${session._id}`);
+
+              // Track token usage
+              if (totalInputTokens > 0 || totalOutputTokens > 0) {
+                const usageData: TokenUsageData = {
+                  inputTokens: totalInputTokens,
+                  outputTokens: totalOutputTokens,
+                  model: modelUsed,
+                  latencyMs: Date.now() - startTime,
+                };
+                trackUsage({
+                  sessionId: session._id.toString(),
+                  walletAddress: walletLower,
+                  usage: usageData,
+                  endpoint: 'initial-analysis',
+                }).catch(err => console.error('[initial-analysis] Token tracking error:', err));
+              }
+            } catch (saveErr) {
+              console.error('[initial-analysis] Failed to save session:', saveErr);
+            }
+          }
+
+          controller.enqueue(encoder.encode(JSON.stringify({ type: 'done' }) + '\n'));
+          controller.close();
+        } catch (err: any) {
+          console.error('[initial-analysis] Stream error:', err.message);
+          const errorMsg = JSON.stringify({ type: 'error', error: err.message }) + '\n';
+          controller.enqueue(encoder.encode(errorMsg));
+          controller.close();
+        }
+      },
+    });
+
+    return new Response(stream, {
+      headers: {
+        'Content-Type': 'text/plain; charset=utf-8',
+        'Transfer-Encoding': 'chunked',
+      },
+    });
+  } catch (error: any) {
+    console.error('[initial-analysis] Error:', error);
+    return new Response(
+      JSON.stringify({ error: error.message }),
+      { status: 500, headers: { 'Content-Type': 'application/json' } }
+    );
+  }
+}

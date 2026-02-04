@@ -19,6 +19,12 @@ const nextConfig = {
         net: false,
         tls: false,
       };
+
+      // MetaMask SDK tries to import this React Native module - provide stub for browser
+      config.resolve.alias = {
+        ...config.resolve.alias,
+        '@react-native-async-storage/async-storage': require.resolve('./lib/empty-async-storage.js'),
+      };
     }
 
     // Only externalize idb-related packages on the server
@@ -29,6 +35,12 @@ const nextConfig = {
         'idb': 'idb',
       });
     }
+
+    // Suppress MetaMask SDK async-storage warning
+    config.ignoreWarnings = [
+      ...(config.ignoreWarnings || []),
+      { module: /@metamask\/sdk/ },
+    ];
 
     return config;
   },

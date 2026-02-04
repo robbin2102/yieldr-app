@@ -57,6 +57,13 @@ const ManagerSchema = new mongoose.Schema({
     default: []
   },
   
+  // Primary trading platform (derived from metrics: avantis, hyperliquid, or unknown)
+  tradingPlatform: {
+    type: String,
+    enum: ['avantis', 'hyperliquid', 'unknown'],
+    default: 'unknown'
+  },
+
   // Performance metrics
   metrics: {
     totalPnL30d: { type: Number, default: 0 },
@@ -64,7 +71,11 @@ const ManagerSchema = new mongoose.Schema({
     winRate: { type: Number, default: 0 },
     totalAUM: { type: Number, default: 0 },
     totalTrades: { type: Number, default: 0 },
-    avgPositionSize: { type: Number, default: 0 }
+    avgPositionSize: { type: Number, default: 0 },
+    hyperliquidPositions: { type: Number, default: 0 },
+    avantisPositions: { type: Number, default: 0 },
+    lpPositions: { type: Number, default: 0 },
+    lastUpdated: { type: Date, default: null }
   },
   
   // Live positions
