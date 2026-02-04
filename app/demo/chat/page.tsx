@@ -551,10 +551,6 @@ export default function ChatPage() {
     if (wallet) fetchCredits(wallet);
   }, [inputValue, isStreaming, creditsExceeded, messages, address, authenticatedWallet, sessionId, loadChatSessions, fetchCredits]);
 
-  const handlePromptClick = (prompt: string) => {
-    setInputValue(prompt);
-  };
-
   // Use either wagmi address or stored authenticated wallet
   const effectiveWallet = address || authenticatedWallet;
   const shortWallet = effectiveWallet ? `${effectiveWallet.slice(0, 6)}...${effectiveWallet.slice(-4)}` : '';
@@ -569,13 +565,6 @@ export default function ChatPage() {
   const yldrPrice = 9000000 / 210000000;
   const yldrTokens = Math.floor(yldrInput / yldrPrice);
   const tradeCapacity = Math.floor(yldrTokens / 1000);
-
-  const suggestedPrompts = [
-    'Analyze my losing positions',
-    'What are top traders doing?',
-    'Market outlook today',
-    'Alert me on Telegram',
-  ];
 
   // Format credits display (e.g., 32.1k/300k)
   const formatCredits = (used: number) => {
@@ -1727,25 +1716,12 @@ export default function ChatPage() {
             opacity: creditsExceeded ? 0.5 : 1,
             pointerEvents: creditsExceeded ? 'none' : 'auto',
           }}>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem', marginBottom: '0.6rem' }}>
-              {suggestedPrompts.map((prompt, i) => (
-                <button key={i} onClick={() => handlePromptClick(prompt)} style={{
-                  fontSize: '0.7rem',
-                  padding: '0.35rem 0.6rem',
-                  background: '#111111',
-                  border: '1px solid #1E1E1E',
-                  borderRadius: 4,
-                  color: '#9E9E9E',
-                  cursor: creditsExceeded ? 'not-allowed' : 'pointer',
-                }}>{prompt}</button>
-              ))}
-            </div>
-            <div style={{ display: 'flex', gap: '0.5rem' }}>
+            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-end' }}>
               <button
                 onClick={() => { setShowHistory(!showHistory); loadChatSessions(); }}
                 title="Chat History"
                 style={{
-                  width: 40, height: 40,
+                  width: 40, height: 48,
                   background: '#111111',
                   border: '1px solid #1E1E1E',
                   borderRadius: 6,
@@ -1761,23 +1737,24 @@ export default function ChatPage() {
                 onChange={e => setInputValue(e.target.value)}
                 onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey && !creditsExceeded) { e.preventDefault(); handleSend(); } }}
                 placeholder={creditsExceeded ? "Credits exceeded - Get YLDR to continue" : "Ask about your positions, traders, or strategies..."}
-                rows={1}
+                rows={2}
                 disabled={creditsExceeded}
                 style={{
                   flex: 1,
                   background: '#111111',
                   border: `1px solid ${creditsExceeded ? '#FF4757' : '#1E1E1E'}`,
                   borderRadius: 6,
-                  padding: '0.6rem 0.75rem',
+                  padding: '0.75rem',
                   color: '#FFFFFF',
                   fontSize: '0.9rem',
                   fontFamily: "'Inter', sans-serif",
                   resize: 'none',
                   outline: 'none',
+                  minHeight: '48px',
                 }}
               />
               <button onClick={handleSend} disabled={isStreaming || creditsExceeded} style={{
-                width: 40, height: 40,
+                width: 40, height: 48,
                 background: isStreaming || creditsExceeded ? '#0A0A0A' : '#111111',
                 border: '1px solid #1E1E1E',
                 borderRadius: 6,
