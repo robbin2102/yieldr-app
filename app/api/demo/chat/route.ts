@@ -69,6 +69,51 @@ async function fetchWithRetry(
   throw lastError || new Error('Max retries exceeded');
 }
 
+// ─── Claude API Retry Helper ─────────────────────────────────────────────────
+async function callClaudeWithRetry<T>(
+  apiCall: () => Promise<T>,
+  maxRetries = 3,
+  baseDelay = 1000
+): Promise<T> {
+  let lastError: Error | null = null;
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      return await apiCall();
+    } catch (err: any) {
+      lastError = err;
+      // Check if it's an overloaded error (529)
+      const isOverloaded = err.status === 529 ||
+                           err.message?.includes('overloaded') ||
+                           err.message?.includes('Overloaded') ||
+                           err.error?.type === 'overloaded_error';
+
+      if (isOverloaded && attempt < maxRetries - 1) {
+        const delay = baseDelay * Math.pow(2, attempt);
+        console.log(`[CLAUDE RETRY] Overloaded, attempt ${attempt + 1}/${maxRetries}, waiting ${delay}ms...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      } else if (!isOverloaded) {
+        // Don't retry non-overload errors
+        throw err;
+      }
+    }
+  }
+  throw lastError || new Error('Claude API max retries exceeded');
+}
+
+// Helper to format Claude errors for user display
+function formatClaudeError(err: any): string {
+  if (err.status === 529 || err.error?.type === 'overloaded_error') {
+    return "I'm experiencing high demand right now. Please try again in a moment.";
+  }
+  if (err.status === 401) {
+    return "Authentication error. Please contact support.";
+  }
+  if (err.status === 400) {
+    return "I encountered an issue processing your request. Please try rephrasing.";
+  }
+  return "Something went wrong. Please try again.";
+}
+
 // ─── Tool Definitions (Anthropic format) ───────────────────────────────────
 
 const toolDefinitions: Anthropic.Tool[] = [
@@ -1079,14 +1124,16 @@ export async function POST(request: NextRequest) {
           while (maxIterations > 0) {
             maxIterations--;
 
-            const response = await anthropic.messages.create({
-              model: 'claude-sonnet-4-5-20250929',
-              max_tokens: 4096,
-              system: systemMessage,
-              messages: currentMessages,
-              tools: allTools,
-              stream: true,
-            });
+            const response = await callClaudeWithRetry(() =>
+              anthropic.messages.create({
+                model: 'claude-sonnet-4-5-20250929',
+                max_tokens: 4096,
+                system: systemMessage,
+                messages: currentMessages,
+                tools: allTools,
+                stream: true,
+              })
+            );
 
             let currentToolUseId = '';
             let currentToolName = '';
@@ -1256,8 +1303,10 @@ export async function POST(request: NextRequest) {
           controller.enqueue(encoder.encode(JSON.stringify({ type: 'done' }) + '\n'));
           controller.close();
         } catch (err: any) {
-          console.error('[chat] Stream error:', err.message);
-          const errorMsg = JSON.stringify({ type: 'error', error: err.message }) + '\n';
+          console.error('[chat] Stream error:', err.message, err.status || '', err.error?.type || '');
+          // Use friendly error message for users
+          const friendlyError = formatClaudeError(err);
+          const errorMsg = JSON.stringify({ type: 'error', error: friendlyError }) + '\n';
           controller.enqueue(encoder.encode(errorMsg));
           controller.close();
         }
