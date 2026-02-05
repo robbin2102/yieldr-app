@@ -83,8 +83,8 @@ function pickDisplayTraders(traders: FollowedTrader[]): FollowedTrader[] {
   return [hlPick, avPick, pmPick].filter(Boolean);
 }
 
-// Free credits limit (300k tokens)
-const FREE_CREDITS_LIMIT = 300000;
+// Free credits limit (500k tokens)
+const FREE_CREDITS_LIMIT = 500000;
 
 export default function ChatPage() {
   const [mounted, setMounted] = useState(false);
