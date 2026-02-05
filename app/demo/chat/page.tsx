@@ -103,7 +103,7 @@ export default function ChatPage() {
   // Credits state
   const [creditsUsed, setCreditsUsed] = useState(0);
   const [creditsLoading, setCreditsLoading] = useState(true);
-  const creditsExceeded = creditsUsed >= FREE_CREDITS_LIMIT;
+  const creditsExceeded = false; // TEMP: Disabled for demo - was: creditsUsed >= FREE_CREDITS_LIMIT
 
   // Data
   const [perpPositions, setPerpPositions] = useState<PerpPosition[]>([]);
