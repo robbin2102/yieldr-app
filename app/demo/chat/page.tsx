@@ -630,14 +630,6 @@ export default function ChatPage() {
               borderRadius: 4,
               background: 'rgba(0, 200, 5, 0.08)',
             }}>Home</a>
-            <a href="#" style={{
-              color: '#9E9E9E',
-              textDecoration: 'none',
-              fontWeight: 500,
-              fontSize: '0.8rem',
-              padding: '0.4rem 0.6rem',
-              borderRadius: 4,
-            }}>Traders</a>
           </div>
         </div>
         <button
