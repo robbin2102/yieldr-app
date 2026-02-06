@@ -13,7 +13,7 @@ const anthropic = new Anthropic({
 const HYPERLIQUID_API_URL = 'https://api.hyperliquid.xyz/info';
 const POLYMARKET_API_BASE = 'https://data-api.polymarket.com';
 const AVANTIS_API_URL = 'https://yieldr-app-production.up.railway.app/fetch-positions';
-const BASE_RPC_URL = process.env.BASE_RPC_URL || 'https://mainnet.base.org';
+const BASE_RPC_URL = process.env.QUICKNODE_BASE_RPC_URL || process.env.BASE_RPC_URL || 'https://mainnet.base.org';
 
 // ─── Position Cache (30 second TTL) ──────────────────────────────────────────
 interface CachedPosition {
@@ -911,6 +911,7 @@ If a tool call fails or returns an error:
 
 // Build dynamic user context (NOT cached — changes per session)
 function buildDynamicUserContext(context: {
+  walletAddress: string;
   agentName: string;
   positions: any[];
   followedTraders: any[];
@@ -918,7 +919,7 @@ function buildDynamicUserContext(context: {
   tokens: any[];
   tokensTotalUsd: number;
 }): string {
-  const { agentName, positions, followedTraders, portfolioSummary, tokens, tokensTotalUsd } = context;
+  const { walletAddress, agentName, positions, followedTraders, portfolioSummary, tokens, tokensTotalUsd } = context;
 
   const positionSummary = positions.length > 0
     ? positions.map(p => {
@@ -950,6 +951,7 @@ function buildDynamicUserContext(context: {
 
   return `## 📊 User's Current Portfolio
 
+User Wallet Address: ${walletAddress}
 Agent Name: ${agentName}
 Total Value: ~$${totalPortfolioValue.toFixed(2)}
 Positions: ${portfolioSummary?.positionCount || 0}
@@ -1046,8 +1048,9 @@ export async function POST(request: NextRequest) {
     }
 
     // Build system message array: static (cached) + dynamic (user context)
+    const walletLower = wallet?.toLowerCase() || '';
     const dynamicUserContext = buildDynamicUserContext({
-      agentName, positions, followedTraders, portfolioSummary, tokens, tokensTotalUsd,
+      walletAddress: walletLower, agentName, positions, followedTraders, portfolioSummary, tokens, tokensTotalUsd,
     });
 
     const systemMessage: Anthropic.TextBlockParam[] = [
