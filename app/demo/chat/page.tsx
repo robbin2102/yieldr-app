@@ -763,7 +763,7 @@ export default function ChatPage() {
               fontFamily: "'JetBrains Mono', monospace",
               fontSize: '0.7rem', fontWeight: 700, color: '#FFFFFF',
             }}>
-              ${(perpTotal + pmTotal + tokensTotalUsd).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+              ${(perpTotal + pmTotal).toLocaleString(undefined, { maximumFractionDigits: 0 })} pos
             </span>
             <button
               onClick={() => setPanelCollapsed(true)}
