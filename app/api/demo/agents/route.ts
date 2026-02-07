@@ -7,7 +7,7 @@ export async function POST(request: NextRequest) {
     await connectDB();
 
     const body = await request.json();
-    const { name, ownerWallet, markets, positions, followedTraders } = body;
+    const { name, ownerWallet, markets, positions, followedTraders, cachedTokenBalances, cachedTokensTotalUsd } = body;
 
     if (!name || !ownerWallet) {
       return NextResponse.json(
@@ -20,7 +20,7 @@ export async function POST(request: NextRequest) {
       ownerWallet: ownerWallet.toLowerCase(),
     });
 
-    const agentData = {
+    const agentData: any = {
       name,
       markets: markets || ['perps'],
       status: 'active',
@@ -35,6 +35,14 @@ export async function POST(request: NextRequest) {
       },
       followedTraders: followedTraders || [],
     };
+
+    // Add token cache if provided
+    if (cachedTokenBalances !== undefined) {
+      agentData.cachedTokenBalances = cachedTokenBalances;
+    }
+    if (cachedTokensTotalUsd !== undefined) {
+      agentData.cachedTokensTotalUsd = cachedTokensTotalUsd;
+    }
 
     if (existingAgent) {
       Object.assign(existingAgent, agentData);
