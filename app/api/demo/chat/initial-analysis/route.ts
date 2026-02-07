@@ -47,33 +47,22 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Fetch all context in parallel
-    const [agent, positions, tokens] = await Promise.all([
+    // Fetch agent and positions in parallel
+    const [agent, positions] = await Promise.all([
       Agent.findOne({ ownerWallet: walletLower }),
       db.collection('positions').find({ walletAddress: walletLower }).toArray(),
-      (async () => {
-        try {
-          const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000';
-          const res = await fetch(`${baseUrl}/api/demo/tokens?address=${wallet}`);
-          if (res.ok) {
-            const data = await res.json();
-            return data.success ? data.data : { tokens: [], totalUsdValue: 0 };
-          }
-        } catch (e) {
-          console.log(`[initial-analysis] Token fetch failed: ${(e as Error).message}`);
-        }
-        return { tokens: [], totalUsdValue: 0 };
-      })(),
     ]);
 
     const agentName = agent?.name || 'YieldrAgent';
     const followedTraders = agent?.followedTraders || [];
     const portfolioSummary = agent?.portfolioSummary || {};
 
+    // Use cached tokens from agent (fetched once during onboarding)
+    const tokenList = agent?.cachedTokenBalances || [];
+    const tokensTotalUsd = agent?.cachedTokensTotalUsd || 0;
+
     const perpPositions = positions.filter(p => p.type === 'PERP');
     const pmPositions = positions.filter(p => p.type === 'PREDICTION');
-    const tokenList = tokens.tokens || [];
-    const tokensTotalUsd = tokens.totalUsdValue || 0;
 
     console.log(`[initial-analysis] Context: ${perpPositions.length} perps, ${pmPositions.length} PM, ${tokenList.length} tokens, ${followedTraders.length} traders`);
 
@@ -272,10 +261,6 @@ ${traderContext}
                 messages: [
                   { role: 'agent', content: fullResponse, timestamp: new Date() },
                 ],
-                // Cache token balances so subsequent chat messages don't re-fetch from Moralis
-                cachedTokenBalances: tokenList,
-                cachedTokensTotalUsd: tokensTotalUsd,
-                tokenBalancesFetchedAt: new Date(),
               });
               controller.enqueue(encoder.encode(
                 JSON.stringify({ type: 'session', sessionId: session._id.toString() }) + '\n'

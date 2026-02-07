@@ -1,5 +1,15 @@
 import mongoose, { Schema, Document } from 'mongoose';
 
+export interface ICachedToken {
+  symbol: string;
+  chain: string;
+  balance: number;
+  usdValue: number | null;
+  usdPrice: number | null;
+  logo: string | null;
+  isNative: boolean;
+}
+
 export interface IFollowedTrader {
   wallet: string;
   platform: 'avantis' | 'hyperliquid' | 'polymarket';
@@ -29,6 +39,10 @@ export interface IAgent extends Document {
 
   // Traders being followed
   followedTraders: IFollowedTrader[];
+
+  // Cached token balances (fetched once during onboarding)
+  cachedTokenBalances?: ICachedToken[];
+  cachedTokensTotalUsd?: number;
 
   createdAt: Date;
   updatedAt: Date;
@@ -82,6 +96,16 @@ const AgentSchema = new Schema<IAgent>({
     positionCount: { type: Number, default: 0 },
   },
   followedTraders: [FollowedTraderSchema],
+  cachedTokenBalances: [{
+    symbol: String,
+    chain: String,
+    balance: Number,
+    usdValue: Number,
+    usdPrice: Number,
+    logo: String,
+    isNative: Boolean,
+  }],
+  cachedTokensTotalUsd: { type: Number, default: 0 },
   createdAt: {
     type: Date,
     default: Date.now,

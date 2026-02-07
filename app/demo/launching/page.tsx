@@ -215,6 +215,7 @@ export default function LaunchingPage() {
       startStep(4);
       let tokenDetail = 'No tokens found';
       let tokenTotalUsd = 0;
+      let tokenList: any[] = [];
       try {
         const tokenRes = await fetch(`/api/demo/tokens?address=${address}`);
         if (tokenRes.ok) {
@@ -222,10 +223,22 @@ export default function LaunchingPage() {
           if (tokenData.success && tokenData.data) {
             const count = tokenData.data.tokenCount || 0;
             tokenTotalUsd = tokenData.data.totalUsdValue || 0;
-            const chains = (tokenData.data.tokens || []).reduce((acc: Set<string>, t: any) => { acc.add(t.chain); return acc; }, new Set<string>());
+            tokenList = tokenData.data.tokens || [];
+            const chains = tokenList.reduce((acc: Set<string>, t: any) => { acc.add(t.chain); return acc; }, new Set<string>());
             if (count > 0) {
               tokenDetail = `${count} tokens ($${tokenTotalUsd.toLocaleString(undefined, { maximumFractionDigits: 0 })}) on ${chains.size} chain${chains.size > 1 ? 's' : ''}`;
             }
+            // Cache tokens in agent (one-time save during onboarding)
+            await fetch('/api/demo/agents', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                name: setup.name || 'AlphaHunter',
+                ownerWallet: address,
+                cachedTokenBalances: tokenList,
+                cachedTokensTotalUsd: tokenTotalUsd,
+              }),
+            });
           }
         }
       } catch (e) {

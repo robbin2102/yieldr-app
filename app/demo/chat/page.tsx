@@ -257,29 +257,21 @@ export default function ChatPage() {
       })
       .catch(() => {});
 
-    // Fetch token balances
+    // Fetch agent (for followed traders + cached tokens)
     setTokensLoading(true);
-    fetch(`/api/demo/tokens?address=${wallet}`)
-      .then(r => r.json())
-      .then(data => {
-        if (data.success && data.data) {
-          setTokens(data.data.tokens || []);
-          setTokensTotalUsd(data.data.totalUsdValue || 0);
-        }
-      })
-      .catch(() => {})
-      .finally(() => setTokensLoading(false));
-
-    // Fetch agent (for followed traders)
     fetch(`/api/demo/agents?wallet=${wallet}`)
       .then(r => r.json())
       .then(data => {
         if (data.success && data.agent) {
           setFollowedTraders(data.agent.followedTraders || []);
           if (data.agent.name) setAgentName(data.agent.name);
+          // Use cached tokens from agent (fetched once during onboarding)
+          setTokens(data.agent.cachedTokenBalances || []);
+          setTokensTotalUsd(data.agent.cachedTokensTotalUsd || 0);
         }
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => setTokensLoading(false));
   }, [mounted, address, authenticatedWallet]);
 
   // Load chat sessions list

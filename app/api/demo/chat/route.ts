@@ -1009,40 +1009,10 @@ export async function POST(request: NextRequest) {
         agentName = agent.name || agentName;
         followedTraders = agent.followedTraders || [];
         portfolioSummary = agent.portfolioSummary || {};
-      }
-
-      // Try to get cached token balances from session first (avoids 2-3s Moralis API call)
-      let usedCachedTokens = false;
-      if (sessionId) {
-        try {
-          const session = await db.collection('chatsessions').findOne({ _id: new mongoose.Types.ObjectId(sessionId) });
-          if (session?.cachedTokenBalances && session.cachedTokenBalances.length > 0) {
-            tokens = session.cachedTokenBalances;
-            tokensTotalUsd = session.cachedTokensTotalUsd || 0;
-            usedCachedTokens = true;
-            console.log(`[chat] Using cached tokens from session (${tokens.length} tokens, $${tokensTotalUsd.toFixed(2)})`);
-          }
-        } catch (e) {
-          console.log('[chat] Failed to read cached tokens:', (e as Error).message);
-        }
-      }
-
-      // Fallback to Moralis API if no cached tokens
-      if (!usedCachedTokens) {
-        try {
-          const tokenApiUrl = `${process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'}/api/demo/tokens?address=${wallet}`;
-          const tokenRes = await fetch(tokenApiUrl);
-          if (tokenRes.ok) {
-            const tokenData = await tokenRes.json();
-            if (tokenData.success && tokenData.data) {
-              tokens = tokenData.data.tokens || [];
-              tokensTotalUsd = tokenData.data.totalUsdValue || 0;
-              console.log(`[chat] Fetched tokens from Moralis (${tokens.length} tokens, $${tokensTotalUsd.toFixed(2)})`);
-            }
-          }
-        } catch (e) {
-          console.log('[chat] Token fetch failed:', (e as Error).message);
-        }
+        // Use cached tokens from agent (fetched once during onboarding)
+        tokens = agent.cachedTokenBalances || [];
+        tokensTotalUsd = agent.cachedTokensTotalUsd || 0;
+        console.log(`[chat] Using cached tokens from agent (${tokens.length} tokens, $${tokensTotalUsd.toFixed(2)})`);
       }
       positions = positionDocs || [];
     }
