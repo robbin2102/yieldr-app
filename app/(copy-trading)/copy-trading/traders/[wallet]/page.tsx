@@ -613,7 +613,7 @@ export default function TraderProfilePage() {
             High Conviction Trades ({profile.asymmetricTradesCount} total)
           </h3>
           <p className="text-xs text-[#6E6E6E] mb-4">
-            Trades &gt;{profile.asymmetricThreshold?.toFixed(0)}x average size ({formatValue(profile.avgTradeSize)} avg)
+            Trades &gt;{formatValue(profile.asymmetricThreshold)} (10x average of {formatValue(profile.avgTradeSize)})
           </p>
           <div className="space-y-2 max-h-[400px] overflow-y-auto">
             {profile.recentHighConvictionTrades.map((trade, i) => (
