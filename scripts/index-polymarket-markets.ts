@@ -29,27 +29,43 @@ import {
   getTopHoldersAcrossAllMarkets,
 } from '../services/polymarket-tracker/services/holdersFetcher';
 
+// Default target categories for copy trading
+const DEFAULT_CATEGORIES = ['sports', 'politics', 'economics', 'finance'];
+
 // Parse command line arguments
 function parseArgs(): {
   marketsOnly: boolean;
   holdersOnly: boolean;
   days: number;
   minVolume: number;
+  categories: string[];
+  allCategories: boolean;
 } {
   const args = process.argv.slice(2);
   let marketsOnly = false;
   let holdersOnly = false;
   let days = 30;
   let minVolume = 50000;
+  let categories = DEFAULT_CATEGORIES;
+  let allCategories = false;
 
   args.forEach((arg) => {
     if (arg === '--markets-only') marketsOnly = true;
     if (arg === '--holders-only') holdersOnly = true;
+    if (arg === '--all-categories') allCategories = true;
     if (arg.startsWith('--days=')) days = parseInt(arg.split('=')[1], 10);
     if (arg.startsWith('--min-volume=')) minVolume = parseInt(arg.split('=')[1], 10);
+    if (arg.startsWith('--categories=')) {
+      categories = arg.split('=')[1].split(',').map(s => s.trim());
+    }
   });
 
-  return { marketsOnly, holdersOnly, days, minVolume };
+  // If --all-categories, don't filter
+  if (allCategories) {
+    categories = [];
+  }
+
+  return { marketsOnly, holdersOnly, days, minVolume, categories, allCategories };
 }
 
 async function connectToMongo(): Promise<void> {
@@ -72,7 +88,7 @@ async function connectToMongo(): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  const { marketsOnly, holdersOnly, days, minVolume } = parseArgs();
+  const { marketsOnly, holdersOnly, days, minVolume, categories, allCategories } = parseArgs();
 
   console.log('\n');
   console.log('████████████████████████████████████████████████████████████████');
@@ -80,6 +96,11 @@ async function main(): Promise<void> {
   console.log('█              POLYMARKET MARKETS INDEXER                      █');
   console.log('█                                                              █');
   console.log('████████████████████████████████████████████████████████████████');
+  console.log('\n');
+  console.log(`  Days: ${days}`);
+  console.log(`  Min Volume: $${minVolume.toLocaleString()}`);
+  console.log(`  Categories: ${allCategories ? 'ALL' : categories.join(', ')}`);
+  console.log(`  Top Holders per side: 15`);
   console.log('\n');
 
   // Connect to MongoDB
@@ -90,7 +111,7 @@ async function main(): Promise<void> {
     if (!holdersOnly) {
       console.log('📊 STEP 1: Indexing markets ending within', days, 'days...\n');
 
-      const marketResult = await indexMarketsEndingWithinDays(days, minVolume);
+      const marketResult = await indexMarketsEndingWithinDays(days, minVolume, categories);
 
       console.log('\n📈 Market Index Results:');
       console.log(`   Total fetched: ${marketResult.totalFetched}`);

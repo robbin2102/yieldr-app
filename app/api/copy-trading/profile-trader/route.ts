@@ -244,6 +244,182 @@ interface CashFlowPnL {
   positionPnLs: PositionPnL[];  // Per-position P&L for market analysis
 }
 
+// Multi-timeframe metrics for P&L consistency analysis
+interface TimeframePnL {
+  timeframe: '1d' | '7d' | '15d' | '30d';
+  days: number;
+  pnl: number;
+  buys: number;
+  sells: number;
+  redeems: number;
+  endingValue: number;
+  capitalDeployed: number;  // Total buys (capital at risk)
+  roce: number;             // Return on Capital Employed: pnl / capitalDeployed
+  tradeCount: number;
+  tradesPerDay: number;
+  positionCount: number;
+  wins: number;
+  losses: number;
+  winRate: number;
+  hasData: boolean;         // True if we have activity data for this timeframe
+  hitApiLimit: boolean;     // True if API limit prevented full data for this timeframe
+}
+
+// Calculate cash flow P&L for a specific time window
+function calculateTimeframePnL(
+  activities: Activity[],
+  positions: OpenPosition[],
+  timeframeDays: number,
+  timeframeName: '1d' | '7d' | '15d' | '30d',
+  firstTs: number | null,
+  lastTs: number | null,
+  hitApiLimit: boolean
+): TimeframePnL {
+  const now = Math.floor(Date.now() / 1000);
+  const cutoffTs = now - (timeframeDays * 24 * 60 * 60);
+
+  // Filter activities to this timeframe
+  const timeframeActivities = activities.filter(a => a.timestamp >= cutoffTs);
+
+  // Check if we have data for this timeframe
+  // If API limit was hit and oldest activity is newer than cutoff, we don't have full data
+  const hasFullData = !hitApiLimit || (lastTs !== null && lastTs <= cutoffTs);
+  const hasData = timeframeActivities.length > 0;
+
+  if (!hasData) {
+    return {
+      timeframe: timeframeName,
+      days: timeframeDays,
+      pnl: 0,
+      buys: 0,
+      sells: 0,
+      redeems: 0,
+      endingValue: 0,
+      capitalDeployed: 0,
+      roce: 0,
+      tradeCount: 0,
+      tradesPerDay: 0,
+      positionCount: 0,
+      wins: 0,
+      losses: 0,
+      winRate: 0,
+      hasData: false,
+      hitApiLimit: hitApiLimit && !hasFullData,
+    };
+  }
+
+  // Build position lookup
+  const positionMap = new Map<string, OpenPosition>();
+  for (const pos of positions) {
+    const key = `${pos.conditionId}-${pos.outcome}`;
+    positionMap.set(key, pos);
+  }
+
+  // Group activities by position
+  const activityByPosition = new Map<string, {
+    conditionId: string;
+    outcome: string;
+    title: string;
+    buys: number;
+    sells: number;
+    redeems: number;
+    netShares: number;
+  }>();
+
+  let tradeCount = 0;
+
+  for (const activity of timeframeActivities) {
+    const key = `${activity.conditionId}-${activity.outcome}`;
+
+    if (!activityByPosition.has(key)) {
+      activityByPosition.set(key, {
+        conditionId: activity.conditionId,
+        outcome: activity.outcome,
+        title: activity.title,
+        buys: 0,
+        sells: 0,
+        redeems: 0,
+        netShares: 0,
+      });
+    }
+
+    const pa = activityByPosition.get(key)!;
+
+    if (activity.type === 'TRADE') {
+      tradeCount++;
+      if (activity.side === 'BUY') {
+        pa.buys += activity.usdcSize;
+        pa.netShares += activity.size;
+      } else if (activity.side === 'SELL') {
+        pa.sells += activity.usdcSize;
+        pa.netShares -= activity.size;
+      }
+    } else if (activity.type === 'REDEEM') {
+      pa.redeems += activity.usdcSize;
+      pa.netShares -= activity.size;
+    } else if (activity.type === 'SPLIT') {
+      pa.netShares += activity.size;
+    } else if (activity.type === 'MERGE') {
+      pa.netShares -= activity.size;
+    }
+  }
+
+  // Calculate P&L for each position
+  let totalBuys = 0;
+  let totalSells = 0;
+  let totalRedeems = 0;
+  let totalEndingValue = 0;
+  let wins = 0;
+  let losses = 0;
+
+  for (const [key, pa] of activityByPosition) {
+    totalBuys += pa.buys;
+    totalSells += pa.sells;
+    totalRedeems += pa.redeems;
+
+    // Get current price for ending value
+    const position = positionMap.get(key);
+    let endingValue = 0;
+
+    if (pa.netShares > 0 && position) {
+      endingValue = pa.netShares * position.curPrice;
+    }
+
+    totalEndingValue += endingValue;
+
+    // Calculate P&L for this position
+    const positionPnL = pa.sells + pa.redeems + endingValue - pa.buys;
+    if (positionPnL >= 0) wins++;
+    else losses++;
+  }
+
+  const totalPnl = totalSells + totalRedeems + totalEndingValue - totalBuys;
+  const positionCount = activityByPosition.size;
+  const tradesPerDay = tradeCount / timeframeDays;
+  const winRate = positionCount > 0 ? (wins / positionCount) * 100 : 0;
+  const roce = totalBuys > 0 ? (totalPnl / totalBuys) * 100 : 0;
+
+  return {
+    timeframe: timeframeName,
+    days: timeframeDays,
+    pnl: totalPnl,
+    buys: totalBuys,
+    sells: totalSells,
+    redeems: totalRedeems,
+    endingValue: totalEndingValue,
+    capitalDeployed: totalBuys,
+    roce,
+    tradeCount,
+    tradesPerDay,
+    positionCount,
+    wins,
+    losses,
+    winRate,
+    hasData: true,
+    hitApiLimit: hitApiLimit && !hasFullData,
+  };
+}
+
 function calculateCashFlowPnL(activities: Activity[], positions: OpenPosition[]): CashFlowPnL {
   // Build position lookup by conditionId + outcome
   const positionMap = new Map<string, OpenPosition>();
@@ -505,6 +681,41 @@ export async function POST(request: NextRequest) {
     // Calculate Cash Flow P&L - most accurate method
     // P&L = (Sells + Redeems + Ending Value) - Buys
     const cashFlowPnL = calculateCashFlowPnL(activities, allOpenPositions);
+
+    // Calculate multi-timeframe P&L for consistency analysis
+    // Each timeframe shows: P&L, ROCE (capital efficiency), trades/day, win rate
+    const timeframePnL = {
+      '1d': calculateTimeframePnL(activities, allOpenPositions, 1, '1d', firstTs, lastTs, hitApiLimit),
+      '7d': calculateTimeframePnL(activities, allOpenPositions, 7, '7d', firstTs, lastTs, hitApiLimit),
+      '15d': calculateTimeframePnL(activities, allOpenPositions, 15, '15d', firstTs, lastTs, hitApiLimit),
+      '30d': calculateTimeframePnL(activities, allOpenPositions, 30, '30d', firstTs, lastTs, hitApiLimit),
+    };
+
+    // P&L Consistency Score: How consistent is performance across timeframes?
+    // A high-quality trader should have positive P&L and similar ROCE across multiple timeframes
+    const availableTimeframes = Object.values(timeframePnL).filter(t => t.hasData && !t.hitApiLimit);
+    const pnlConsistency = {
+      timeframesAvailable: availableTimeframes.length,
+      allPositive: availableTimeframes.every(t => t.pnl >= 0),
+      positiveCount: availableTimeframes.filter(t => t.pnl >= 0).length,
+      avgRoce: availableTimeframes.length > 0
+        ? availableTimeframes.reduce((sum, t) => sum + t.roce, 0) / availableTimeframes.length
+        : 0,
+      roceVariance: availableTimeframes.length > 1
+        ? (() => {
+            const avgRoce = availableTimeframes.reduce((sum, t) => sum + t.roce, 0) / availableTimeframes.length;
+            return Math.sqrt(
+              availableTimeframes.reduce((sum, t) => sum + Math.pow(t.roce - avgRoce, 2), 0) / availableTimeframes.length
+            );
+          })()
+        : 0,
+      // Consistency score: Higher is better (high avg ROCE, low variance)
+      // Formula: avgRoce / (1 + roceVariance) - rewards consistent positive returns
+      score: 0, // Calculated below
+    };
+    pnlConsistency.score = pnlConsistency.roceVariance > 0
+      ? pnlConsistency.avgRoce / (1 + pnlConsistency.roceVariance / 100)
+      : pnlConsistency.avgRoce;
 
     // Count activities by type
     let buyCount = 0, sellCount = 0, redeemCount = 0, splitCount = 0, mergeCount = 0, otherCount = 0;
@@ -962,6 +1173,14 @@ export async function POST(request: NextRequest) {
           ? (cashFlowPnL.wins / cashFlowPnL.positionCount) * 100
           : 0,
       },
+
+      // Multi-timeframe P&L (Cash Flow) for consistency analysis
+      // Each timeframe: P&L, ROCE, trades/day, win rate
+      timeframePnL,
+
+      // P&L Consistency Score - measures how consistent performance is across timeframes
+      // Higher score = more consistent positive returns
+      pnlConsistency,
 
       // Basic stats
       totalActivities: activities.length,

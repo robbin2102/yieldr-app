@@ -93,6 +93,35 @@ interface BatchProgress {
   lastWallet?: string;
 }
 
+// Multi-timeframe metrics for P&L consistency analysis
+interface TimeframePnL {
+  timeframe: '1d' | '7d' | '15d' | '30d';
+  days: number;
+  pnl: number;
+  buys: number;
+  sells: number;
+  redeems: number;
+  endingValue: number;
+  capitalDeployed: number;
+  roce: number;
+  tradeCount: number;
+  tradesPerDay: number;
+  positionCount: number;
+  wins: number;
+  losses: number;
+  winRate: number;
+  hasData: boolean;
+  hitApiLimit: boolean;
+}
+
+interface FetchActivitiesResult {
+  activities: Activity[];
+  firstTs: number | null;
+  lastTs: number | null;
+  hitApiLimit: boolean;
+  actualDays: number;
+}
+
 // ═══════════════════════════════════════════════════════════════
 // API Functions
 // ═══════════════════════════════════════════════════════════════
@@ -124,27 +153,38 @@ async function fetchWithRetry<T>(
   throw new Error('Max retries exceeded');
 }
 
-async function fetchActivities(wallet: string, days: number): Promise<Activity[]> {
+async function fetchActivities(wallet: string, days: number): Promise<FetchActivitiesResult> {
   const now = Math.floor(Date.now() / 1000);
-  const startTs = now - (days * 24 * 60 * 60);
+  const cutoffTs = now - (days * 24 * 60 * 60);
   const LIMIT = 500;
-  const MAX_OFFSET = 5000;
+  const MAX_OFFSET = 3000;  // Polymarket API limit
 
   let allActivities: Activity[] = [];
   let offset = 0;
-  let done = false;
+  let reachedTimeLimit = false;
+  let hitApiLimit = false;
 
-  while (!done && offset <= MAX_OFFSET) {
+  while (!reachedTimeLimit && offset <= MAX_OFFSET) {
     const url = `${API_BASE}/activity?user=${wallet}&limit=${LIMIT}&offset=${offset}&sortBy=TIMESTAMP&sortDirection=DESC`;
-    const batch = await fetchWithRetry<Activity[]>(url);
+
+    let batch: Activity[];
+    try {
+      batch = await fetchWithRetry<Activity[]>(url);
+    } catch (error: any) {
+      if (error.message?.includes('400')) {
+        hitApiLimit = true;
+        break;
+      }
+      throw error;
+    }
 
     if (batch.length === 0) break;
 
     for (const activity of batch) {
-      if (activity.timestamp >= startTs) {
+      if (activity.timestamp >= cutoffTs) {
         allActivities.push(activity);
       } else {
-        done = true;
+        reachedTimeLimit = true;
         break;
       }
     }
@@ -153,7 +193,15 @@ async function fetchActivities(wallet: string, days: number): Promise<Activity[]
     offset += LIMIT;
   }
 
-  return allActivities;
+  if (offset > MAX_OFFSET && !reachedTimeLimit) {
+    hitApiLimit = true;
+  }
+
+  const firstTs = allActivities.length > 0 ? allActivities[0].timestamp : null;
+  const lastTs = allActivities.length > 0 ? allActivities[allActivities.length - 1].timestamp : null;
+  const actualDays = (firstTs && lastTs) ? (firstTs - lastTs) / (24 * 60 * 60) : days;
+
+  return { activities: allActivities, firstTs, lastTs, hitApiLimit, actualDays };
 }
 
 async function fetchOpenPositions(wallet: string): Promise<OpenPosition[]> {
@@ -213,6 +261,126 @@ async function fetchClosedPositions(wallet: string, days: number): Promise<Close
 // Profiling Logic (mirrors route.ts)
 // ═══════════════════════════════════════════════════════════════
 
+// Cash Flow P&L calculation
+interface CashFlowPnL {
+  totalPnl: number;
+  totalBuys: number;
+  totalSells: number;
+  totalRedeems: number;
+  totalEndingValue: number;
+  positionCount: number;
+  wins: number;
+  losses: number;
+}
+
+function calculateCashFlowPnL(activities: Activity[], positions: OpenPosition[]): CashFlowPnL {
+  const positionMap = new Map<string, OpenPosition>();
+  for (const pos of positions) {
+    positionMap.set(`${pos.conditionId}-${pos.outcome}`, pos);
+  }
+
+  const activityByPosition = new Map<string, {
+    buys: number; sells: number; redeems: number; netShares: number;
+  }>();
+
+  for (const activity of activities) {
+    const key = `${activity.conditionId}-${activity.outcome}`;
+    if (!activityByPosition.has(key)) {
+      activityByPosition.set(key, { buys: 0, sells: 0, redeems: 0, netShares: 0 });
+    }
+    const pa = activityByPosition.get(key)!;
+
+    if (activity.type === 'TRADE') {
+      if (activity.side === 'BUY') { pa.buys += activity.usdcSize; pa.netShares += activity.size; }
+      else if (activity.side === 'SELL') { pa.sells += activity.usdcSize; pa.netShares -= activity.size; }
+    } else if (activity.type === 'REDEEM') { pa.redeems += activity.usdcSize; pa.netShares -= activity.size; }
+    else if (activity.type === 'SPLIT') { pa.netShares += activity.size; }
+    else if (activity.type === 'MERGE') { pa.netShares -= activity.size; }
+  }
+
+  let totalBuys = 0, totalSells = 0, totalRedeems = 0, totalEndingValue = 0, wins = 0, losses = 0;
+
+  for (const [key, pa] of activityByPosition) {
+    totalBuys += pa.buys; totalSells += pa.sells; totalRedeems += pa.redeems;
+    const position = positionMap.get(key);
+    let endingValue = pa.netShares > 0 && position ? pa.netShares * position.curPrice : 0;
+    totalEndingValue += endingValue;
+    const positionPnL = pa.sells + pa.redeems + endingValue - pa.buys;
+    if (positionPnL >= 0) wins++; else losses++;
+  }
+
+  return {
+    totalPnl: totalSells + totalRedeems + totalEndingValue - totalBuys,
+    totalBuys, totalSells, totalRedeems, totalEndingValue,
+    positionCount: activityByPosition.size, wins, losses,
+  };
+}
+
+function calculateTimeframePnL(
+  activities: Activity[],
+  positions: OpenPosition[],
+  timeframeDays: number,
+  timeframeName: '1d' | '7d' | '15d' | '30d',
+  firstTs: number | null,
+  lastTs: number | null,
+  hitApiLimit: boolean
+): TimeframePnL {
+  const now = Math.floor(Date.now() / 1000);
+  const cutoffTs = now - (timeframeDays * 24 * 60 * 60);
+  const timeframeActivities = activities.filter(a => a.timestamp >= cutoffTs);
+  const hasFullData = !hitApiLimit || (lastTs !== null && lastTs <= cutoffTs);
+  const hasData = timeframeActivities.length > 0;
+
+  if (!hasData) {
+    return {
+      timeframe: timeframeName, days: timeframeDays, pnl: 0, buys: 0, sells: 0, redeems: 0,
+      endingValue: 0, capitalDeployed: 0, roce: 0, tradeCount: 0, tradesPerDay: 0,
+      positionCount: 0, wins: 0, losses: 0, winRate: 0, hasData: false, hitApiLimit: hitApiLimit && !hasFullData,
+    };
+  }
+
+  const positionMap = new Map<string, OpenPosition>();
+  for (const pos of positions) positionMap.set(`${pos.conditionId}-${pos.outcome}`, pos);
+
+  const activityByPosition = new Map<string, { buys: number; sells: number; redeems: number; netShares: number }>();
+  let tradeCount = 0;
+
+  for (const activity of timeframeActivities) {
+    const key = `${activity.conditionId}-${activity.outcome}`;
+    if (!activityByPosition.has(key)) activityByPosition.set(key, { buys: 0, sells: 0, redeems: 0, netShares: 0 });
+    const pa = activityByPosition.get(key)!;
+
+    if (activity.type === 'TRADE') {
+      tradeCount++;
+      if (activity.side === 'BUY') { pa.buys += activity.usdcSize; pa.netShares += activity.size; }
+      else if (activity.side === 'SELL') { pa.sells += activity.usdcSize; pa.netShares -= activity.size; }
+    } else if (activity.type === 'REDEEM') { pa.redeems += activity.usdcSize; pa.netShares -= activity.size; }
+    else if (activity.type === 'SPLIT') { pa.netShares += activity.size; }
+    else if (activity.type === 'MERGE') { pa.netShares -= activity.size; }
+  }
+
+  let totalBuys = 0, totalSells = 0, totalRedeems = 0, totalEndingValue = 0, wins = 0, losses = 0;
+  for (const [key, pa] of activityByPosition) {
+    totalBuys += pa.buys; totalSells += pa.sells; totalRedeems += pa.redeems;
+    const position = positionMap.get(key);
+    let endingValue = pa.netShares > 0 && position ? pa.netShares * position.curPrice : 0;
+    totalEndingValue += endingValue;
+    if (pa.sells + pa.redeems + endingValue - pa.buys >= 0) wins++; else losses++;
+  }
+
+  const totalPnl = totalSells + totalRedeems + totalEndingValue - totalBuys;
+  const positionCount = activityByPosition.size;
+
+  return {
+    timeframe: timeframeName, days: timeframeDays, pnl: totalPnl,
+    buys: totalBuys, sells: totalSells, redeems: totalRedeems, endingValue: totalEndingValue,
+    capitalDeployed: totalBuys, roce: totalBuys > 0 ? (totalPnl / totalBuys) * 100 : 0,
+    tradeCount, tradesPerDay: tradeCount / timeframeDays, positionCount,
+    wins, losses, winRate: positionCount > 0 ? (wins / positionCount) * 100 : 0,
+    hasData: true, hitApiLimit: hitApiLimit && !hasFullData,
+  };
+}
+
 function categorizeMarket(title: string): string {
   const lower = title.toLowerCase();
 
@@ -262,16 +430,61 @@ async function profileTrader(wallet: string, days: number): Promise<any> {
   const traderLabel = `Trader-${cleanWallet.slice(0, 6)}`;
 
   // Fetch all data
-  const [activities, allOpenPositions, closedPositions] = await Promise.all([
+  const [activitiesResult, allOpenPositions, closedPositions] = await Promise.all([
     fetchActivities(cleanWallet, days),
     fetchOpenPositions(cleanWallet),
     fetchClosedPositions(cleanWallet, days),
   ]);
 
+  const { activities, firstTs, lastTs, hitApiLimit, actualDays } = activitiesResult;
+
   // Skip if no activity
   if (activities.length === 0 && closedPositions.length === 0) {
     return null;
   }
+
+  // Period info
+  const periodInfo = {
+    requestedDays: days,
+    actualDays: hitApiLimit ? actualDays : days,
+    hitApiLimit,
+    startDate: lastTs ? new Date(lastTs * 1000).toISOString() : null,
+    endDate: firstTs ? new Date(firstTs * 1000).toISOString() : null,
+    activitiesCount: activities.length,
+    lastActiveAt: firstTs ? new Date(firstTs * 1000).toISOString() : null,
+  };
+
+  // Cash Flow P&L - most accurate method
+  const cashFlowPnL = calculateCashFlowPnL(activities, allOpenPositions);
+
+  // Multi-timeframe P&L for consistency analysis
+  const timeframePnL = {
+    '1d': calculateTimeframePnL(activities, allOpenPositions, 1, '1d', firstTs, lastTs, hitApiLimit),
+    '7d': calculateTimeframePnL(activities, allOpenPositions, 7, '7d', firstTs, lastTs, hitApiLimit),
+    '15d': calculateTimeframePnL(activities, allOpenPositions, 15, '15d', firstTs, lastTs, hitApiLimit),
+    '30d': calculateTimeframePnL(activities, allOpenPositions, 30, '30d', firstTs, lastTs, hitApiLimit),
+  };
+
+  // P&L Consistency Score
+  const availableTimeframes = Object.values(timeframePnL).filter(t => t.hasData && !t.hitApiLimit);
+  const pnlConsistency = {
+    timeframesAvailable: availableTimeframes.length,
+    allPositive: availableTimeframes.every(t => t.pnl >= 0),
+    positiveCount: availableTimeframes.filter(t => t.pnl >= 0).length,
+    avgRoce: availableTimeframes.length > 0
+      ? availableTimeframes.reduce((sum, t) => sum + t.roce, 0) / availableTimeframes.length
+      : 0,
+    roceVariance: availableTimeframes.length > 1
+      ? Math.sqrt(availableTimeframes.reduce((sum, t) => {
+          const avgRoce = availableTimeframes.reduce((s, tf) => s + tf.roce, 0) / availableTimeframes.length;
+          return sum + Math.pow(t.roce - avgRoce, 2);
+        }, 0) / availableTimeframes.length)
+      : 0,
+    score: 0,
+  };
+  pnlConsistency.score = pnlConsistency.roceVariance > 0
+    ? pnlConsistency.avgRoce / (1 + pnlConsistency.roceVariance / 100)
+    : pnlConsistency.avgRoce;
 
   // Separate positions
   const LOSS_THRESHOLD = 0.001;
@@ -543,6 +756,22 @@ async function profileTrader(wallet: string, days: number): Promise<any> {
     label: traderLabel,
     profiledAt: new Date(),
     periodDays: days,
+    periodInfo,
+    // Cash Flow P&L - Most accurate calculation
+    cashFlowPnL: {
+      totalPnl: cashFlowPnL.totalPnl,
+      totalBuys: cashFlowPnL.totalBuys,
+      totalSells: cashFlowPnL.totalSells,
+      totalRedeems: cashFlowPnL.totalRedeems,
+      endingValue: cashFlowPnL.totalEndingValue,
+      positionsWithActivity: cashFlowPnL.positionCount,
+      wins: cashFlowPnL.wins,
+      losses: cashFlowPnL.losses,
+      winRate: cashFlowPnL.positionCount > 0 ? (cashFlowPnL.wins / cashFlowPnL.positionCount) * 100 : 0,
+    },
+    // Multi-timeframe P&L for consistency analysis
+    timeframePnL,
+    pnlConsistency,
     totalActivities: activities.length,
     buyCount, sellCount, redeemCount, splitCount, mergeCount, otherCount,
     tradesPerDay, volumeLabel, buyRatio, strategyLabel,

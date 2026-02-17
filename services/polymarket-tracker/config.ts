@@ -21,7 +21,7 @@ export const CONFIG = {
     ACTIVITY: 500,            // Max per call for historical fetch
     POLLING: 50,              // Limit for 60s polling (efficient)
     MARKETS: 99,              // Max markets per call (using max-1 for safety)
-    HOLDERS: 20,              // Max holders per token (API cap)
+    HOLDERS: 15,              // Top holders per side (API caps at 20)
   },
 
   // Time Ranges

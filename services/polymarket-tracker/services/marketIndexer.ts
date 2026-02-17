@@ -257,13 +257,62 @@ export interface IndexResult {
   };
 }
 
+// Target categories for filtering (case-insensitive matching)
+export const TARGET_CATEGORIES = [
+  'sports',
+  'politics',
+  'economics',
+  'finance',
+  'economy',
+];
+
+/**
+ * Check if a market matches target categories
+ */
+function matchesTargetCategory(market: GammaMarketResponse, categoryFilter: string[]): boolean {
+  if (!categoryFilter || categoryFilter.length === 0) return true;
+
+  const marketCategory = (market.category || '').toLowerCase();
+  if (categoryFilter.some(c => marketCategory.includes(c.toLowerCase()))) return true;
+
+  // Check events categories
+  if (market.events && Array.isArray(market.events)) {
+    for (const event of market.events as any[]) {
+      const eventCategory = (event.category || '').toLowerCase();
+      const eventSubcategory = (event.subcategory || '').toLowerCase();
+      if (categoryFilter.some(c => {
+        const lc = c.toLowerCase();
+        return eventCategory.includes(lc) || eventSubcategory.includes(lc);
+      })) return true;
+    }
+  }
+
+  // Check categories array
+  if (market.categories && Array.isArray(market.categories)) {
+    for (const cat of market.categories as any[]) {
+      const catLabel = (cat.label || '').toLowerCase();
+      const parentCat = (cat.parentCategory || '').toLowerCase();
+      if (categoryFilter.some(c => {
+        const lc = c.toLowerCase();
+        return catLabel.includes(lc) || parentCat.includes(lc);
+      })) return true;
+    }
+  }
+
+  return false;
+}
+
 /**
  * Index all markets ending within specified days
  * Upserts data (updates existing, inserts new)
+ * @param days - Days ahead to look for markets
+ * @param minVolume - Minimum volume filter
+ * @param categoryFilter - Optional array of categories to filter by
  */
 export async function indexMarketsEndingWithinDays(
   days: number = CONFIG.DAYS.MARKET_END_WINDOW,
-  minVolume: number = CONFIG.MARKET_INDEX.MIN_VOLUME
+  minVolume: number = CONFIG.MARKET_INDEX.MIN_VOLUME,
+  categoryFilter: string[] = []
 ): Promise<IndexResult> {
   const startTime = Date.now();
 
@@ -272,10 +321,20 @@ export async function indexMarketsEndingWithinDays(
   logger.info('═══════════════════════════════════════════════════════════════');
   logger.info(`Days ahead: ${days}`);
   logger.info(`Min volume: $${minVolume.toLocaleString()}`);
+  if (categoryFilter.length > 0) {
+    logger.info(`Category filter: ${categoryFilter.join(', ')}`);
+  }
   logger.info('═══════════════════════════════════════════════════════════════\n');
 
   // Fetch markets from API
-  const markets = await fetchMarketsEndingWithinDays(days, minVolume);
+  let markets = await fetchMarketsEndingWithinDays(days, minVolume);
+
+  // Apply category filter if specified
+  if (categoryFilter.length > 0) {
+    const beforeCount = markets.length;
+    markets = markets.filter(m => matchesTargetCategory(m, categoryFilter));
+    logger.info(`Category filter: ${beforeCount} → ${markets.length} markets`);
+  }
 
   if (markets.length === 0) {
     logger.warn('No markets found matching criteria');
