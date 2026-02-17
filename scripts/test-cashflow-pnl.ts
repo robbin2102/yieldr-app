@@ -140,6 +140,63 @@ async function fetchPositions(wallet: string): Promise<Position[]> {
   return allPositions;
 }
 
+interface ClosedPosition {
+  conditionId: string;
+  title: string;
+  outcome: string;
+  realizedPnl: number;
+  boughtShares: number;
+  soldShares: number;
+  redeemedShares: number;
+  avgPrice: number;
+  settlePrice: number;
+  timestamp: number;
+}
+
+async function fetchClosedPositions(wallet: string, days: number): Promise<ClosedPosition[]> {
+  const now = Math.floor(Date.now() / 1000);
+  const startTs = now - (days * 24 * 60 * 60);
+  const LIMIT = 500;
+  const MAX_OFFSET = 10000;
+
+  let allClosed: ClosedPosition[] = [];
+  let offset = 0;
+
+  console.log(`  Fetching closed positions for last ${days} days...`);
+
+  while (offset <= MAX_OFFSET) {
+    // Use start parameter for time filtering on closed positions endpoint
+    const url = `${API_BASE}/v1/closed-positions?user=${wallet}&limit=${LIMIT}&offset=${offset}&startTime=${startTs}`;
+
+    let response: Response;
+    try {
+      response = await fetch(url);
+    } catch (err: any) {
+      console.log(`  Network error at offset ${offset}, stopping`);
+      break;
+    }
+
+    if (!response.ok) {
+      if (response.status === 400) {
+        console.log(`  API limit reached at offset ${offset}`);
+        break;
+      }
+      throw new Error(`Closed positions API error: ${response.status}`);
+    }
+
+    const batch = await response.json() as ClosedPosition[];
+    if (batch.length === 0) break;
+
+    allClosed = allClosed.concat(batch);
+    if (batch.length < LIMIT) break;
+    offset += LIMIT;
+    await new Promise(r => setTimeout(r, 100));
+  }
+
+  console.log(`  Found ${allClosed.length} closed positions in ${days}d window`);
+  return allClosed;
+}
+
 function calculateCashFlowPnL(
   activities: Activity[],
   positions: Position[]
@@ -292,33 +349,67 @@ async function analyzeWallet(wallet: string, label: string) {
     console.log(`\n--- ${days}D P&L Analysis ---`);
 
     try {
+      // Method 1: Cash flow from activities (limited to ~3500 most recent)
       const activities = await fetchActivities(wallet, days);
 
+      // Method 2: Closed positions with timestamp filtering (more reliable for redeems)
+      const closedPositions = await fetchClosedPositions(wallet, days);
+
+      // Calculate closed positions P&L
+      const closedPnL = closedPositions.reduce((sum, cp) => sum + cp.realizedPnl, 0);
+      const closedWins = closedPositions.filter(cp => cp.realizedPnl >= 0).length;
+      const closedLosses = closedPositions.filter(cp => cp.realizedPnl < 0).length;
+
+      console.log(`\n  Closed Positions (from /v1/closed-positions):`);
+      console.log(`    Count: ${closedPositions.length}`);
+      console.log(`    Realized P&L: ${formatUSD(closedPnL)}`);
+      console.log(`    Wins: ${closedWins}, Losses: ${closedLosses}`);
+
       if (activities.length === 0) {
-        console.log(`  No activities in ${days}d window`);
+        console.log(`\n  No activities in ${days}d window`);
+        console.log(`\n    *** ${days}D P&L (closed only): ${formatUSD(closedPnL)} ***`);
         continue;
       }
 
       const result = calculateCashFlowPnL(activities, positions);
 
-      console.log(`\n  Activity Breakdown:`);
+      console.log(`\n  Activities (from /activity, max ~3500):`);
       console.log(`    Trades: ${result.activityBreakdown.trades}`);
       console.log(`    Redeems: ${result.activityBreakdown.redeems}`);
       console.log(`    Splits: ${result.activityBreakdown.splits}`);
       console.log(`    Merges: ${result.activityBreakdown.merges}`);
-      console.log(`    Other: ${result.activityBreakdown.other}`);
 
-      console.log(`\n  Cash Flow:`);
+      console.log(`\n  Cash Flow (activities-based):`);
       console.log(`    Total Buys (cash out):     ${formatUSD(result.totalBuys)}`);
       console.log(`    Total Sells (cash in):     ${formatUSD(result.totalSells)}`);
       console.log(`    Total Redeems (cash in):   ${formatUSD(result.totalRedeems)}`);
       console.log(`    Ending Value (still held): ${formatUSD(result.totalEndingValue)}`);
+      console.log(`    Activities P&L:            ${formatUSD(result.totalPnL)}`);
+
+      // For open positions that had activity, calculate unrealized P&L
+      // Get conditionIds from activities
+      const activityConditionIds = new Set(activities.map(a => `${a.conditionId}-${a.outcome}`));
+      const openWithActivity = positions.filter(p => {
+        const key = `${p.conditionId}-${p.outcome}`;
+        return activityConditionIds.has(key) && p.curPrice >= 0.001 && p.curPrice <= 0.99;
+      });
+      const unrealizedPnL = openWithActivity.reduce((sum, p) => sum + p.cashPnl, 0);
+
+      console.log(`\n  Open Positions with ${days}d Activity:`);
+      console.log(`    Count: ${openWithActivity.length}`);
+      console.log(`    Unrealized P&L: ${formatUSD(unrealizedPnL)}`);
+
+      // Combined P&L = Closed positions realized + Open positions unrealized
+      const combinedPnL = closedPnL + unrealizedPnL;
 
       console.log(`\n  Results:`);
-      console.log(`    Positions with activity: ${result.positionCount}`);
-      console.log(`    Wins: ${result.wins}, Losses: ${result.losses}`);
-      console.log(`    Win Rate: ${result.positionCount > 0 ? ((result.wins / result.positionCount) * 100).toFixed(1) : 0}%`);
-      console.log(`\n    *** ${days}D P&L: ${formatUSD(result.totalPnL)} ***`);
+      console.log(`    Closed positions: ${closedPositions.length}`);
+      console.log(`    Open with activity: ${openWithActivity.length}`);
+      console.log(`    Total: ${closedPositions.length + openWithActivity.length}`);
+      console.log(`    Win Rate (closed): ${closedPositions.length > 0 ? ((closedWins / closedPositions.length) * 100).toFixed(1) : 0}%`);
+
+      console.log(`\n    *** ${days}D P&L: ${formatUSD(combinedPnL)} ***`);
+      console.log(`        (Closed: ${formatUSD(closedPnL)} + Open Unrealized: ${formatUSD(unrealizedPnL)})`);
 
     } catch (error: any) {
       console.error(`  Error: ${error.message}`);
