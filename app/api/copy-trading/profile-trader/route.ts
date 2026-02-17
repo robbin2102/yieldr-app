@@ -64,6 +64,14 @@ interface Activity {
   transactionHash: string;
 }
 
+interface FetchActivitiesResult {
+  activities: Activity[];
+  firstTs: number | null;  // Most recent activity timestamp
+  lastTs: number | null;   // Oldest activity timestamp
+  hitApiLimit: boolean;    // True if we couldn't fetch all activities in time window
+  actualDays: number;      // Actual days covered by activities
+}
+
 interface OpenPosition {
   conditionId: string;
   asset: string;
@@ -91,39 +99,62 @@ interface ClosedPosition {
   timestamp: number;
 }
 
-// Fetch activities with pagination
-async function fetchActivities(wallet: string, days: number): Promise<Activity[]> {
+// Fetch activities with pagination - returns metadata about coverage
+async function fetchActivities(wallet: string, days: number): Promise<FetchActivitiesResult> {
   const now = Math.floor(Date.now() / 1000);
-  const startTs = now - (days * 24 * 60 * 60);
+  const cutoffTs = now - (days * 24 * 60 * 60);
   const LIMIT = 500;  // API max per request
-  const MAX_OFFSET = 2500;  // Polymarket API limit is 3000, stay under
+  const MAX_OFFSET = 3000;  // Actual API limit (returns 400 above this)
 
   let allActivities: Activity[] = [];
   let offset = 0;
-  let done = false;
+  let reachedTimeLimit = false;
+  let hitApiLimit = false;
 
-  while (!done && offset <= MAX_OFFSET) {
+  while (!reachedTimeLimit && offset <= MAX_OFFSET) {
     const url = `${API_BASE}/activity?user=${wallet}&limit=${LIMIT}&offset=${offset}&sortBy=TIMESTAMP&sortDirection=DESC`;
-    const response = await fetchWithRetry(url);
+
+    let response: Response;
+    try {
+      response = await fetchWithRetry(url);
+    } catch (error: any) {
+      // If we hit 400 error (API limit), stop gracefully
+      if (error.message?.includes('client error: 400')) {
+        hitApiLimit = true;
+        break;
+      }
+      throw error;
+    }
 
     const batch = await response.json() as Activity[];
     if (batch.length === 0) break;
 
     for (const activity of batch) {
-      if (activity.timestamp >= startTs) {
+      if (activity.timestamp >= cutoffTs) {
         allActivities.push(activity);
       } else {
-        done = true;
+        // Since sorted DESC, once we hit an old activity, all remaining are older
+        reachedTimeLimit = true;
         break;
       }
     }
 
-    if (batch.length < LIMIT) break;
+    if (batch.length < LIMIT) break; // Last page
     offset += LIMIT;
     await new Promise(r => setTimeout(r, 50));
   }
 
-  return allActivities;
+  // Check if we hit the offset limit without reaching time cutoff
+  if (offset > MAX_OFFSET && !reachedTimeLimit) {
+    hitApiLimit = true;
+  }
+
+  // Get first and last timestamps (sorted DESC, so first is newest, last is oldest)
+  const firstTs = allActivities.length > 0 ? allActivities[0].timestamp : null;
+  const lastTs = allActivities.length > 0 ? allActivities[allActivities.length - 1].timestamp : null;
+  const actualDays = (firstTs && lastTs) ? (firstTs - lastTs) / (24 * 60 * 60) : days;
+
+  return { activities: allActivities, firstTs, lastTs, hitApiLimit, actualDays };
 }
 
 // Fetch open positions WITH PAGINATION
@@ -185,6 +216,122 @@ async function fetchClosedPositions(wallet: string, days: number): Promise<Close
   }
 
   return allPositions;
+}
+
+// Cash Flow P&L Calculation - Most accurate method
+// P&L = (Sells + Redeems + Ending Value) - Buys
+interface CashFlowPnL {
+  totalPnl: number;
+  totalBuys: number;
+  totalSells: number;
+  totalRedeems: number;
+  totalEndingValue: number;
+  positionCount: number;
+  wins: number;
+  losses: number;
+}
+
+function calculateCashFlowPnL(activities: Activity[], positions: OpenPosition[]): CashFlowPnL {
+  // Build position lookup by conditionId + outcome
+  const positionMap = new Map<string, OpenPosition>();
+  for (const pos of positions) {
+    const key = `${pos.conditionId}-${pos.outcome}`;
+    positionMap.set(key, pos);
+  }
+
+  // Group activities by conditionId + outcome
+  const activityByPosition = new Map<string, {
+    conditionId: string;
+    outcome: string;
+    buys: number;
+    sells: number;
+    redeems: number;
+    netShares: number;
+  }>();
+
+  for (const activity of activities) {
+    const key = `${activity.conditionId}-${activity.outcome}`;
+
+    if (!activityByPosition.has(key)) {
+      activityByPosition.set(key, {
+        conditionId: activity.conditionId,
+        outcome: activity.outcome,
+        buys: 0,
+        sells: 0,
+        redeems: 0,
+        netShares: 0,
+      });
+    }
+
+    const pa = activityByPosition.get(key)!;
+
+    if (activity.type === 'TRADE') {
+      if (activity.side === 'BUY') {
+        pa.buys += activity.usdcSize;
+        pa.netShares += activity.size;
+      } else if (activity.side === 'SELL') {
+        pa.sells += activity.usdcSize;
+        pa.netShares -= activity.size;
+      }
+    } else if (activity.type === 'REDEEM') {
+      pa.redeems += activity.usdcSize;
+      pa.netShares -= activity.size;
+    } else if (activity.type === 'SPLIT') {
+      // SPLIT: $1 USDC -> 1 YES + 1 NO (neutral, no P&L impact)
+      pa.netShares += activity.size;
+    } else if (activity.type === 'MERGE') {
+      // MERGE: 1 YES + 1 NO -> $1 USDC (neutral, no P&L impact)
+      pa.netShares -= activity.size;
+    }
+  }
+
+  // Calculate P&L for each position
+  let totalBuys = 0;
+  let totalSells = 0;
+  let totalRedeems = 0;
+  let totalEndingValue = 0;
+  let wins = 0;
+  let losses = 0;
+
+  for (const [key, pa] of activityByPosition) {
+    totalBuys += pa.buys;
+    totalSells += pa.sells;
+    totalRedeems += pa.redeems;
+
+    // Get current price for ending value
+    const position = positionMap.get(key);
+    let endingValue = 0;
+
+    if (pa.netShares > 0) {
+      if (position) {
+        // Use actual current price
+        endingValue = pa.netShares * position.curPrice;
+      } else {
+        // Position not found - might have been fully sold/redeemed
+        endingValue = 0;
+      }
+    }
+
+    totalEndingValue += endingValue;
+
+    // Calculate P&L for this position
+    const positionPnL = pa.sells + pa.redeems + endingValue - pa.buys;
+    if (positionPnL >= 0) wins++;
+    else losses++;
+  }
+
+  const totalPnl = totalSells + totalRedeems + totalEndingValue - totalBuys;
+
+  return {
+    totalPnl,
+    totalBuys,
+    totalSells,
+    totalRedeems,
+    totalEndingValue,
+    positionCount: activityByPosition.size,
+    wins,
+    losses,
+  };
 }
 
 // Categorize market
@@ -266,11 +413,23 @@ export async function POST(request: NextRequest) {
     const traderLabel = label || `Trader-${cleanWallet.slice(0, 6)}`;
 
     // Fetch all data in parallel
-    const [activities, allOpenPositions, closedPositions] = await Promise.all([
+    const [activitiesResult, allOpenPositions, closedPositions] = await Promise.all([
       fetchActivities(cleanWallet, days),
       fetchOpenPositions(cleanWallet),
       fetchClosedPositions(cleanWallet, days),
     ]);
+
+    const { activities, firstTs, lastTs, hitApiLimit, actualDays } = activitiesResult;
+
+    // Period info - shows actual coverage when API limit is hit
+    const periodInfo = {
+      requestedDays: days,
+      actualDays: hitApiLimit ? actualDays : days,
+      hitApiLimit,
+      startDate: lastTs ? new Date(lastTs * 1000).toISOString() : null,
+      endDate: firstTs ? new Date(firstTs * 1000).toISOString() : null,
+      activitiesCount: activities.length,
+    };
 
     // Separate active positions from resolved ones
     // 0¢ = lost (market resolved against them, unredeemed)
@@ -312,13 +471,12 @@ export async function POST(request: NextRequest) {
       activityConditionIds.has(p.conditionId)
     );
 
-    // Count activities by type and calculate P&L from cash flows
-    // P&L = (Cash received from SELLs + REDEEMs + Unredeemed Wins) - (Cash spent on BUYs)
-    // SPLIT/MERGE are neutral operations (no P&L impact)
+    // Calculate Cash Flow P&L - most accurate method
+    // P&L = (Sells + Redeems + Ending Value) - Buys
+    const cashFlowPnL = calculateCashFlowPnL(activities, allOpenPositions);
+
+    // Count activities by type
     let buyCount = 0, sellCount = 0, redeemCount = 0, splitCount = 0, mergeCount = 0, otherCount = 0;
-    let cashOut = 0;  // USDC spent (BUYs)
-    let cashIn = 0;   // USDC received (SELLs + REDEEMs)
-    let unredeemedWinValue = 0;  // Expected redemption value from unredeemed wins
     const tradeSizes: number[] = [];
 
     activities.forEach(a => {
@@ -326,25 +484,15 @@ export async function POST(request: NextRequest) {
         tradeSizes.push(a.usdcSize);
         if (a.side === 'BUY') {
           buyCount++;
-          cashOut += a.usdcSize;
-          // If this BUY is for a position that won but hasn't been redeemed yet,
-          // add the expected redemption value (shares × $1.00)
-          if (unredeemedWinConditionIds.has(a.conditionId)) {
-            unredeemedWinValue += a.size;  // Each share redeems for $1.00
-          }
         } else if (a.side === 'SELL') {
           sellCount++;
-          cashIn += a.usdcSize;
         }
       } else if (a.type === 'REDEEM') {
         redeemCount++;
-        cashIn += a.usdcSize;
       } else if (a.type === 'SPLIT') {
         splitCount++;
-        // SPLIT: USDC → Yes/No shares (neutral, no P&L)
       } else if (a.type === 'MERGE') {
         mergeCount++;
-        // MERGE: Yes/No shares → USDC (neutral, no P&L)
       } else {
         otherCount++;
       }
@@ -786,6 +934,25 @@ export async function POST(request: NextRequest) {
       label: traderLabel,
       profiledAt: new Date(),
       periodDays: days,
+
+      // Period coverage info (important when API limit is hit)
+      periodInfo,
+
+      // Cash Flow P&L - Most accurate calculation
+      // P&L = (Sells + Redeems + Ending Value) - Buys
+      cashFlowPnL: {
+        totalPnl: cashFlowPnL.totalPnl,
+        totalBuys: cashFlowPnL.totalBuys,
+        totalSells: cashFlowPnL.totalSells,
+        totalRedeems: cashFlowPnL.totalRedeems,
+        endingValue: cashFlowPnL.totalEndingValue,
+        positionsWithActivity: cashFlowPnL.positionCount,
+        wins: cashFlowPnL.wins,
+        losses: cashFlowPnL.losses,
+        winRate: cashFlowPnL.positionCount > 0
+          ? (cashFlowPnL.wins / cashFlowPnL.positionCount) * 100
+          : 0,
+      },
 
       // Basic stats
       totalActivities: activities.length,
