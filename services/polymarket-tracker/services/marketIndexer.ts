@@ -329,6 +329,20 @@ export async function indexMarketsEndingWithinDays(
   // Fetch markets from API
   let markets = await fetchMarketsEndingWithinDays(days, minVolume);
 
+  // Log unique categories from API for debugging
+  if (markets.length > 0) {
+    const uniqueCategories = new Set<string>();
+    markets.forEach(m => {
+      if (m.category) uniqueCategories.add(m.category);
+      if (m.events) {
+        (m.events as any[]).forEach(e => {
+          if (e.category) uniqueCategories.add(`event:${e.category}`);
+        });
+      }
+    });
+    logger.info(`Categories found in API: ${Array.from(uniqueCategories).slice(0, 15).join(', ')}`);
+  }
+
   // Apply category filter if specified
   if (categoryFilter.length > 0) {
     const beforeCount = markets.length;
