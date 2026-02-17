@@ -220,6 +220,18 @@ async function fetchClosedPositions(wallet: string, days: number): Promise<Close
 
 // Cash Flow P&L Calculation - Most accurate method
 // P&L = (Sells + Redeems + Ending Value) - Buys
+interface PositionPnL {
+  conditionId: string;
+  outcome: string;
+  title: string;
+  buys: number;
+  sells: number;
+  redeems: number;
+  endingValue: number;
+  pnl: number;
+  isWin: boolean;
+}
+
 interface CashFlowPnL {
   totalPnl: number;
   totalBuys: number;
@@ -229,6 +241,7 @@ interface CashFlowPnL {
   positionCount: number;
   wins: number;
   losses: number;
+  positionPnLs: PositionPnL[];  // Per-position P&L for market analysis
 }
 
 function calculateCashFlowPnL(activities: Activity[], positions: OpenPosition[]): CashFlowPnL {
@@ -243,6 +256,7 @@ function calculateCashFlowPnL(activities: Activity[], positions: OpenPosition[])
   const activityByPosition = new Map<string, {
     conditionId: string;
     outcome: string;
+    title: string;
     buys: number;
     sells: number;
     redeems: number;
@@ -256,6 +270,7 @@ function calculateCashFlowPnL(activities: Activity[], positions: OpenPosition[])
       activityByPosition.set(key, {
         conditionId: activity.conditionId,
         outcome: activity.outcome,
+        title: activity.title,
         buys: 0,
         sells: 0,
         redeems: 0,
@@ -292,6 +307,7 @@ function calculateCashFlowPnL(activities: Activity[], positions: OpenPosition[])
   let totalEndingValue = 0;
   let wins = 0;
   let losses = 0;
+  const positionPnLs: PositionPnL[] = [];
 
   for (const [key, pa] of activityByPosition) {
     totalBuys += pa.buys;
@@ -316,8 +332,21 @@ function calculateCashFlowPnL(activities: Activity[], positions: OpenPosition[])
 
     // Calculate P&L for this position
     const positionPnL = pa.sells + pa.redeems + endingValue - pa.buys;
-    if (positionPnL >= 0) wins++;
+    const isWin = positionPnL >= 0;
+    if (isWin) wins++;
     else losses++;
+
+    positionPnLs.push({
+      conditionId: pa.conditionId,
+      outcome: pa.outcome,
+      title: pa.title,
+      buys: pa.buys,
+      sells: pa.sells,
+      redeems: pa.redeems,
+      endingValue,
+      pnl: positionPnL,
+      isWin,
+    });
   }
 
   const totalPnl = totalSells + totalRedeems + totalEndingValue - totalBuys;
@@ -331,6 +360,7 @@ function calculateCashFlowPnL(activities: Activity[], positions: OpenPosition[])
     positionCount: activityByPosition.size,
     wins,
     losses,
+    positionPnLs,
   };
 }
 
@@ -429,6 +459,7 @@ export async function POST(request: NextRequest) {
       startDate: lastTs ? new Date(lastTs * 1000).toISOString() : null,
       endDate: firstTs ? new Date(firstTs * 1000).toISOString() : null,
       activitiesCount: activities.length,
+      lastActiveAt: firstTs ? new Date(firstTs * 1000).toISOString() : null,  // Most recent activity timestamp
     };
 
     // Separate active positions from resolved ones
@@ -577,41 +608,19 @@ export async function POST(request: NextRequest) {
     const medianTradeSize = tradeSizes.length > 0 ? tradeSizes[Math.floor(tradeSizes.length / 2)] : 0;
     const maxTradeSize = tradeSizes.length > 0 ? Math.max(...tradeSizes) : 0;
 
-    // Market specialization analysis - From ALL resolved positions (redeemed + unredeemed)
+    // Market specialization analysis - Using cash flow P&L per position
     const byCategory: Record<string, { trades: number; wins: number; losses: number; totalPnl: number }> = {};
 
-    // Add redeemed (closed) positions
-    for (const pos of closedPositions) {
-      const category = categorizeMarket(pos.title);
+    // Use cash flow P&L per position for accurate market analysis
+    for (const posPnL of cashFlowPnL.positionPnLs) {
+      const category = categorizeMarket(posPnL.title);
       if (!byCategory[category]) {
         byCategory[category] = { trades: 0, wins: 0, losses: 0, totalPnl: 0 };
       }
       byCategory[category].trades++;
-      byCategory[category].totalPnl += pos.realizedPnl;
-      if (pos.realizedPnl >= 0) byCategory[category].wins++;
+      byCategory[category].totalPnl += posPnL.pnl;
+      if (posPnL.isWin) byCategory[category].wins++;
       else byCategory[category].losses++;
-    }
-
-    // Add unredeemed resolved positions (time-filtered losses at 0¢)
-    for (const pos of timeFilteredLosses) {
-      const category = categorizeMarket(pos.title);
-      if (!byCategory[category]) {
-        byCategory[category] = { trades: 0, wins: 0, losses: 0, totalPnl: 0 };
-      }
-      byCategory[category].trades++;
-      byCategory[category].totalPnl += pos.cashPnl; // cashPnl is negative for losses
-      byCategory[category].losses++;
-    }
-
-    // Add unredeemed resolved positions (time-filtered wins at 100¢)
-    for (const pos of timeFilteredWins) {
-      const category = categorizeMarket(pos.title);
-      if (!byCategory[category]) {
-        byCategory[category] = { trades: 0, wins: 0, losses: 0, totalPnl: 0 };
-      }
-      byCategory[category].trades++;
-      byCategory[category].totalPnl += pos.cashPnl; // cashPnl is positive for wins
-      byCategory[category].wins++;
     }
 
     const marketPerformance = Object.entries(byCategory)

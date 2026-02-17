@@ -51,6 +51,7 @@ interface PeriodInfo {
   startDate: string | null;
   endDate: string | null;
   activitiesCount: number;
+  lastActiveAt: string | null;
 }
 
 interface CashFlowPnL {
@@ -411,6 +412,11 @@ export default function TraderProfilePage() {
           </span>
         ) : (
           `Last ${profile.periodDays} days of activity`
+        )}
+        {profile.periodInfo?.lastActiveAt && (
+          <span className="ml-2">
+            • Last active: {timeAgo(profile.periodInfo.lastActiveAt)}
+          </span>
         )}
       </div>
       {profile.periodInfo?.hitApiLimit && profile.periodInfo.startDate && profile.periodInfo.endDate && (
