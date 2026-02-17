@@ -48,7 +48,14 @@ interface PositionActivity {
   redeemCount: number;
 }
 
-async function fetchActivities(wallet: string, days: number): Promise<Activity[]> {
+interface FetchResult {
+  activities: Activity[];
+  firstTs: number | null;
+  lastTs: number | null;
+  hitApiLimit: boolean;
+}
+
+async function fetchActivities(wallet: string, days: number): Promise<FetchResult> {
   const now = Math.floor(Date.now() / 1000);
   const cutoffTs = now - (days * 24 * 60 * 60);
   const LIMIT = 500;
@@ -57,6 +64,7 @@ async function fetchActivities(wallet: string, days: number): Promise<Activity[]
   let allActivities: Activity[] = [];
   let offset = 0;
   let reachedTimeLimit = false;
+  let hitApiLimit = false;
 
   console.log(`  Fetching activities for last ${days} days...`);
 
@@ -78,6 +86,7 @@ async function fetchActivities(wallet: string, days: number): Promise<Activity[]
         // Log the actual error to understand the limit
         const errorText = await response.text();
         console.log(`  API 400 at offset ${offset}: ${errorText}`);
+        hitApiLimit = true;
         break;
       }
       throw new Error(`API error: ${response.status}`);
@@ -107,8 +116,12 @@ async function fetchActivities(wallet: string, days: number): Promise<Activity[]
     await new Promise(r => setTimeout(r, 100));
   }
 
+  // Get first and last timestamps (sorted DESC, so first is newest, last is oldest)
+  const firstTs = allActivities.length > 0 ? allActivities[0].timestamp : null;
+  const lastTs = allActivities.length > 0 ? allActivities[allActivities.length - 1].timestamp : null;
+
   console.log(`  Found ${allActivities.length} activities in ${days}d window (offset reached: ${offset})`);
-  return allActivities;
+  return { activities: allActivities, firstTs, lastTs, hitApiLimit };
 }
 
 async function fetchPositions(wallet: string): Promise<Position[]> {
@@ -277,6 +290,20 @@ function formatUSD(value: number): string {
   return `$${value.toFixed(2)}`;
 }
 
+function formatDate(ts: number): string {
+  return new Date(ts * 1000).toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+}
+
+function daysBetween(ts1: number, ts2: number): number {
+  return Math.abs(ts2 - ts1) / (24 * 60 * 60);
+}
+
 async function analyzeWallet(wallet: string, label: string) {
   console.log(`\n${'='.repeat(60)}`);
   console.log(`Analyzing: ${label}`);
@@ -293,7 +320,7 @@ async function analyzeWallet(wallet: string, label: string) {
     console.log(`\n--- ${days}D P&L Analysis ---`);
 
     try {
-      const activities = await fetchActivities(wallet, days);
+      const { activities, firstTs, lastTs, hitApiLimit } = await fetchActivities(wallet, days);
 
       if (activities.length === 0) {
         console.log(`  No activities in ${days}d window`);
@@ -301,6 +328,16 @@ async function analyzeWallet(wallet: string, label: string) {
       }
 
       const result = calculateCashFlowPnL(activities, positions);
+
+      // Show actual date range if API limit was hit
+      if (hitApiLimit && firstTs && lastTs) {
+        const actualDays = daysBetween(firstTs, lastTs);
+        console.log(`\n  ⚠️  API LIMIT HIT - Showing partial data:`);
+        console.log(`    Requested: ${days} days`);
+        console.log(`    Actual coverage: ${actualDays.toFixed(1)} days`);
+        console.log(`    From: ${formatDate(lastTs)}`);
+        console.log(`    To:   ${formatDate(firstTs)}`);
+      }
 
       console.log(`\n  Activity Breakdown:`);
       console.log(`    Trades: ${result.activityBreakdown.trades}`);
@@ -319,7 +356,14 @@ async function analyzeWallet(wallet: string, label: string) {
       console.log(`    Positions with activity: ${result.positionCount}`);
       console.log(`    Wins: ${result.wins}, Losses: ${result.losses}`);
       console.log(`    Win Rate: ${result.positionCount > 0 ? ((result.wins / result.positionCount) * 100).toFixed(1) : 0}%`);
-      console.log(`\n    *** ${days}D P&L: ${formatUSD(result.totalPnL)} ***`);
+
+      // Show P&L with actual period if API limit was hit
+      if (hitApiLimit && firstTs && lastTs) {
+        const actualDays = daysBetween(firstTs, lastTs);
+        console.log(`\n    *** ${actualDays.toFixed(1)}D P&L: ${formatUSD(result.totalPnL)} *** (requested ${days}D)`);
+      } else {
+        console.log(`\n    *** ${days}D P&L: ${formatUSD(result.totalPnL)} ***`);
+      }
 
     } catch (error: any) {
       console.error(`  Error: ${error.message}`);
