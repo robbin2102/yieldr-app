@@ -1226,7 +1226,7 @@ export async function POST(request: NextRequest) {
       // Open positions
       openPositionsCount: openPositions.length,
       openValue,
-      unrealizedPnl,
+      openUnrealizedPnl: unrealizedPnl,
 
       // Trade sizing
       avgTradeSize,

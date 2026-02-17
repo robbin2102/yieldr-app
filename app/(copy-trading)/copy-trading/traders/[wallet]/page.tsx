@@ -105,7 +105,7 @@ interface TraderProfile {
   // Open positions
   openPositionsCount: number;
   openValue: number;
-  unrealizedPnl: number;
+  openUnrealizedPnl: number;
 
   // Trade sizing
   avgTradeSize: number;

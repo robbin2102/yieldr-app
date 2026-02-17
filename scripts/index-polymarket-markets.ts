@@ -4,7 +4,7 @@
  * Polymarket Markets Indexer Script
  *
  * Fetches all Polymarket markets ending within 30 days with $50k+ volume,
- * then fetches top 20 holders for each market.
+ * then fetches top 15 holders for each market side.
  *
  * Usage:
  *   npm run polymarket:index-markets
@@ -12,10 +12,12 @@
  *   npm run polymarket:full-index
  *
  * Options:
- *   --markets-only    Only index markets, skip holders
- *   --holders-only    Only fetch holders for existing markets
- *   --days=N          Days ahead to look for markets (default: 30)
- *   --min-volume=N    Minimum volume filter (default: 50000)
+ *   --markets-only      Only index markets, skip holders
+ *   --holders-only      Only fetch holders for existing markets
+ *   --days=N            Days ahead to look for markets (default: 30)
+ *   --min-volume=N      Minimum volume filter (default: 50000)
+ *   --categories=x,y    Filter by tags (default: sports, politics, economics, finance)
+ *   --all-categories    Fetch all categories (no tag filtering)
  */
 
 import 'dotenv/config';
@@ -99,7 +101,7 @@ async function main(): Promise<void> {
   console.log('\n');
   console.log(`  Days: ${days}`);
   console.log(`  Min Volume: $${minVolume.toLocaleString()}`);
-  console.log(`  Categories: ${allCategories ? 'ALL' : categories.join(', ')}`);
+  console.log(`  Tags: ${allCategories ? 'ALL (no tag filter)' : categories.join(', ')}`);
   console.log(`  Top Holders per side: 15`);
   console.log('\n');
 
@@ -124,7 +126,7 @@ async function main(): Promise<void> {
 
     // Step 2: Fetch holders (unless markets-only)
     if (!marketsOnly) {
-      console.log('👥 STEP 2: Fetching top 20 holders for each market...\n');
+      console.log('👥 STEP 2: Fetching top 15 holders for each market side...\n');
 
       const holdersResult = await fetchHoldersForAllMarkets();
 

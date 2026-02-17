@@ -7,6 +7,7 @@ import { CONFIG } from '../config';
 import { createLogger } from '../utils/logger';
 import {
   fetchMarketsEndingWithinDays,
+  fetchMarketsByTags,
   calculateDaysUntilEnd,
   GammaMarketResponse,
 } from '../api/markets';
@@ -322,12 +323,20 @@ export async function indexMarketsEndingWithinDays(
   logger.info(`Days ahead: ${days}`);
   logger.info(`Min volume: $${minVolume.toLocaleString()}`);
   if (categoryFilter.length > 0) {
-    logger.info(`Category filter: ${categoryFilter.join(', ')}`);
+    logger.info(`Category filter (tags): ${categoryFilter.join(', ')}`);
   }
   logger.info('═══════════════════════════════════════════════════════════════\n');
 
-  // Fetch markets from API
-  let markets = await fetchMarketsEndingWithinDays(days, minVolume);
+  // Fetch markets from API - use tag-based filtering if categories specified
+  let markets: GammaMarketResponse[];
+
+  if (categoryFilter.length > 0) {
+    // Use tag-based API filtering (makes separate requests per tag)
+    markets = await fetchMarketsByTags(days, minVolume, categoryFilter);
+  } else {
+    // No filter - fetch all markets
+    markets = await fetchMarketsEndingWithinDays(days, minVolume);
+  }
 
   // Log unique categories from API for debugging
   if (markets.length > 0) {
@@ -340,14 +349,7 @@ export async function indexMarketsEndingWithinDays(
         });
       }
     });
-    logger.info(`Categories found in API: ${Array.from(uniqueCategories).slice(0, 15).join(', ')}`);
-  }
-
-  // Apply category filter if specified
-  if (categoryFilter.length > 0) {
-    const beforeCount = markets.length;
-    markets = markets.filter(m => matchesTargetCategory(m, categoryFilter));
-    logger.info(`Category filter: ${beforeCount} → ${markets.length} markets`);
+    logger.info(`Categories found in results: ${Array.from(uniqueCategories).slice(0, 15).join(', ')}`);
   }
 
   if (markets.length === 0) {

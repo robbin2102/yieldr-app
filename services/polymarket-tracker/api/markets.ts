@@ -180,6 +180,7 @@ export async function fetchMarkets(params: {
   end_date_min?: string;
   end_date_max?: string;
   volume_num_min?: number;
+  tag?: string;  // Filter by tag (sports, politics, finance, economics)
 }): Promise<GammaMarketResponse[]> {
   const url = buildGammaUrl('/markets', params);
 
@@ -208,10 +209,14 @@ export async function fetchMarkets(params: {
 /**
  * Fetch all markets ending within specified days with volume filter
  * Uses pagination to get all results
+ * @param days - Days ahead to look for markets
+ * @param minVolume - Minimum volume filter
+ * @param tag - Optional tag filter (sports, politics, finance, economics)
  */
 export async function fetchMarketsEndingWithinDays(
   days: number = CONFIG.DAYS.MARKET_END_WINDOW,
-  minVolume: number = CONFIG.MARKET_INDEX.MIN_VOLUME
+  minVolume: number = CONFIG.MARKET_INDEX.MIN_VOLUME,
+  tag?: string
 ): Promise<GammaMarketResponse[]> {
   const now = new Date();
   const endDateMax = new Date(now.getTime() + days * 24 * 60 * 60 * 1000);
@@ -222,6 +227,9 @@ export async function fetchMarketsEndingWithinDays(
 
   logger.info(`Fetching markets ending between ${endDateMinStr} and ${endDateMaxStr}`);
   logger.info(`Minimum volume filter: $${minVolume.toLocaleString()}`);
+  if (tag) {
+    logger.info(`Tag filter: ${tag}`);
+  }
 
   const allMarkets: GammaMarketResponse[] = [];
   let offset = 0;
@@ -238,6 +246,7 @@ export async function fetchMarketsEndingWithinDays(
       end_date_min: endDateMinStr,
       end_date_max: endDateMaxStr,
       volume_num_min: minVolume,
+      tag,
     });
 
     if (markets.length === 0) {
@@ -257,6 +266,55 @@ export async function fetchMarketsEndingWithinDays(
   }
 
   logger.success(`Total markets fetched: ${allMarkets.length}`);
+
+  return allMarkets;
+}
+
+/**
+ * Fetch markets for multiple tags with deduplication
+ * Makes separate API requests per tag and combines results
+ * @param days - Days ahead to look for markets
+ * @param minVolume - Minimum volume filter
+ * @param tags - Array of tags to fetch (sports, politics, finance, economics)
+ */
+export async function fetchMarketsByTags(
+  days: number = CONFIG.DAYS.MARKET_END_WINDOW,
+  minVolume: number = CONFIG.MARKET_INDEX.MIN_VOLUME,
+  tags: string[]
+): Promise<GammaMarketResponse[]> {
+  if (!tags || tags.length === 0) {
+    // No tags specified, fetch all markets
+    return fetchMarketsEndingWithinDays(days, minVolume);
+  }
+
+  logger.info(`\nFetching markets for ${tags.length} tags: ${tags.join(', ')}`);
+
+  const allMarkets: GammaMarketResponse[] = [];
+  const seenConditionIds = new Set<string>();
+
+  for (const tag of tags) {
+    logger.info(`\n--- Fetching tag: ${tag} ---`);
+
+    try {
+      const markets = await fetchMarketsEndingWithinDays(days, minVolume, tag);
+
+      // Deduplicate by conditionId
+      let newCount = 0;
+      for (const market of markets) {
+        if (!seenConditionIds.has(market.conditionId)) {
+          seenConditionIds.add(market.conditionId);
+          allMarkets.push(market);
+          newCount++;
+        }
+      }
+
+      logger.info(`Tag "${tag}": ${markets.length} fetched, ${newCount} new (${markets.length - newCount} duplicates)`);
+    } catch (error: any) {
+      logger.error(`Failed to fetch tag "${tag}": ${error.message}`);
+    }
+  }
+
+  logger.success(`\nTotal unique markets across all tags: ${allMarkets.length}`);
 
   return allMarkets;
 }
