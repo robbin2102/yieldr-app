@@ -42,6 +42,13 @@ export async function GET(request: NextRequest) {
         profiledAt: profile.profiledAt,
         periodDays: profile.periodDays,
 
+        // Period coverage info (shows actual date range when API limit is hit)
+        periodInfo: profile.periodInfo || null,
+
+        // Cash Flow P&L - Most accurate calculation
+        // P&L = (Sells + Redeems + Ending Value) - Buys
+        cashFlowPnL: profile.cashFlowPnL || null,
+
         // Activity stats
         totalActivities: profile.totalActivities,
         buyCount: profile.buyCount,
