@@ -50,28 +50,56 @@ interface PositionActivity {
 
 async function fetchActivities(wallet: string, days: number): Promise<Activity[]> {
   const now = Math.floor(Date.now() / 1000);
-  const startTs = now - (days * 24 * 60 * 60);
+  const cutoffTs = now - (days * 24 * 60 * 60);
   const LIMIT = 500;
-  const MAX_OFFSET = 10000; // API allows up to 10000
+  const MAX_OFFSET = 3000; // API actual limit is 3000 despite docs saying 10000
 
   let allActivities: Activity[] = [];
   let offset = 0;
+  let reachedTimeLimit = false;
 
-  console.log(`  Fetching activities for last ${days} days (start=${startTs})...`);
+  console.log(`  Fetching activities for last ${days} days...`);
 
   while (offset <= MAX_OFFSET) {
-    // Use API's start parameter for server-side time filtering
-    const url = `${API_BASE}/activity?user=${wallet}&limit=${LIMIT}&offset=${offset}&start=${startTs}&sortBy=TIMESTAMP&sortDirection=DESC`;
-    const response = await fetch(url);
+    // Don't use 'start' param - it causes 400 errors for some users
+    // Instead, fetch all and filter client-side (sorted DESC so newest first)
+    const url = `${API_BASE}/activity?user=${wallet}&limit=${LIMIT}&offset=${offset}&sortBy=TIMESTAMP&sortDirection=DESC`;
+
+    let response: Response;
+    try {
+      response = await fetch(url);
+    } catch (err: any) {
+      console.log(`  Network error at offset ${offset}, stopping`);
+      break;
+    }
 
     if (!response.ok) {
+      if (response.status === 400) {
+        // Hit API limit, stop gracefully
+        console.log(`  API limit reached at offset ${offset}`);
+        break;
+      }
       throw new Error(`API error: ${response.status}`);
     }
 
     const batch = await response.json() as Activity[];
     if (batch.length === 0) break;
 
-    allActivities = allActivities.concat(batch);
+    // Filter by time and check if we've gone past our time window
+    for (const activity of batch) {
+      if (activity.timestamp >= cutoffTs) {
+        allActivities.push(activity);
+      } else {
+        // Since sorted DESC, once we hit an old activity, all remaining are older
+        reachedTimeLimit = true;
+        break;
+      }
+    }
+
+    if (reachedTimeLimit) {
+      console.log(`  Reached time cutoff at offset ${offset}`);
+      break;
+    }
 
     if (batch.length < LIMIT) break; // Last page
     offset += LIMIT;
