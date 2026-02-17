@@ -75,8 +75,9 @@ async function fetchActivities(wallet: string, days: number): Promise<Activity[]
 
     if (!response.ok) {
       if (response.status === 400) {
-        // Hit API limit, stop gracefully
-        console.log(`  API limit reached at offset ${offset}`);
+        // Log the actual error to understand the limit
+        const errorText = await response.text();
+        console.log(`  API 400 at offset ${offset}: ${errorText}`);
         break;
       }
       throw new Error(`API error: ${response.status}`);
