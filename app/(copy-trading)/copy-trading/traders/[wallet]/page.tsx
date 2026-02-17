@@ -651,38 +651,6 @@ export default function TraderProfilePage() {
         </div>
       )}
 
-      {/* Copy Rules */}
-      <div className="bg-[#0A0A0A] border border-primary-green/30 rounded-xl p-4">
-        <h3 className="text-sm font-semibold text-white mb-3">Copy Trading Recommendations</h3>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
-          <div>
-            <div className="text-primary-green font-medium mb-1">PRIORITY</div>
-            <p className="text-[#9E9E9E]">
-              {profile.volumeLabel === 'LOW' && profile.winRate >= 60
-                ? 'Entry odds < 40¢ in their specialty. Copy at full size.'
-                : 'High conviction trades (10x+ avg size). Copy at full size.'}
-            </p>
-          </div>
-          <div>
-            <div className="text-yellow-500 font-medium mb-1">COPY</div>
-            <p className="text-[#9E9E9E]">
-              Standard trades in {profile.specialty || 'their specialty'}. Copy at 50% size.
-            </p>
-          </div>
-          <div>
-            <div className="text-orange-400 font-medium mb-1">CAUTIOUS</div>
-            <p className="text-[#9E9E9E]">
-              Trades outside specialty or entry &gt; 60¢. Copy at 25% size.
-            </p>
-          </div>
-          <div>
-            <div className="text-[#6E6E6E] font-medium mb-1">SKIP</div>
-            <p className="text-[#9E9E9E]">
-              Small bets (&lt;20% of avg), SELL trades, or non-trade activities.
-            </p>
-          </div>
-        </div>
-      </div>
     </div>
   );
 }

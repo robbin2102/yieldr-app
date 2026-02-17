@@ -28,9 +28,6 @@ export default function CopyTradingLayout({
               <span className="font-mono text-xl font-bold text-primary-green">
                 YIELDR
               </span>
-              <span className="text-[#6E6E6E] text-sm font-medium">
-                Copy Trading
-              </span>
             </Link>
 
             {/* Navigation */}
