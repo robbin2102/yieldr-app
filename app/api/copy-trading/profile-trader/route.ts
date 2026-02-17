@@ -5,6 +5,29 @@ export const dynamic = 'force-dynamic';
 export const maxDuration = 60; // Allow up to 60s for profiling
 
 const API_BASE = 'https://data-api.polymarket.com';
+const FETCH_TIMEOUT = 30000; // 30 second timeout
+const MAX_RETRIES = 3;
+
+// Fetch with timeout and retry
+async function fetchWithRetry(url: string, retries = MAX_RETRIES): Promise<Response> {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT);
+
+      const response = await fetch(url, { signal: controller.signal });
+      clearTimeout(timeoutId);
+
+      if (!response.ok) throw new Error(`API error: ${response.status}`);
+      return response;
+    } catch (error: any) {
+      if (attempt === retries) throw error;
+      console.log(`Retry ${attempt}/${retries} for ${url.substring(0, 80)}...`);
+      await new Promise(r => setTimeout(r, 1000 * attempt)); // Backoff
+    }
+  }
+  throw new Error('Max retries exceeded');
+}
 
 interface Activity {
   conditionId: string;
@@ -61,8 +84,7 @@ async function fetchActivities(wallet: string, days: number): Promise<Activity[]
 
   while (!done && offset <= MAX_OFFSET) {
     const url = `${API_BASE}/activity?user=${wallet}&limit=${LIMIT}&offset=${offset}&sortBy=TIMESTAMP&sortDirection=DESC`;
-    const response = await fetch(url);
-    if (!response.ok) throw new Error(`API error: ${response.status}`);
+    const response = await fetchWithRetry(url);
 
     const batch = await response.json() as Activity[];
     if (batch.length === 0) break;
@@ -94,8 +116,7 @@ async function fetchOpenPositions(wallet: string): Promise<OpenPosition[]> {
 
   while (offset <= MAX_OFFSET) {
     const url = `${API_BASE}/positions?user=${wallet}&sizeThreshold=0.1&limit=${LIMIT}&offset=${offset}`;
-    const response = await fetch(url);
-    if (!response.ok) throw new Error(`API error: ${response.status}`);
+    const response = await fetchWithRetry(url);
 
     const batch = await response.json() as OpenPosition[];
     if (batch.length === 0) break;
@@ -124,8 +145,7 @@ async function fetchClosedPositions(wallet: string, days: number): Promise<Close
 
   while (!done && offset <= MAX_OFFSET) {
     const url = `${API_BASE}/v1/closed-positions?user=${wallet}&limit=${LIMIT}&offset=${offset}&sortBy=TIMESTAMP&sortDirection=DESC`;
-    const response = await fetch(url);
-    if (!response.ok) throw new Error(`API error: ${response.status}`);
+    const response = await fetchWithRetry(url);
 
     const batch = await response.json() as ClosedPosition[];
     if (batch.length === 0) break;
