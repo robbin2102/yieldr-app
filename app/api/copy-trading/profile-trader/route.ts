@@ -8,8 +8,10 @@ const API_BASE = 'https://data-api.polymarket.com';
 const FETCH_TIMEOUT = 30000; // 30 second timeout
 const MAX_RETRIES = 3;
 
-// Fetch with timeout and retry
+// Fetch with timeout and retry (only retries network errors and 5xx, not 4xx)
 async function fetchWithRetry(url: string, retries = MAX_RETRIES): Promise<Response> {
+  let lastError: Error | null = null;
+
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
       const controller = new AbortController();
@@ -18,15 +20,33 @@ async function fetchWithRetry(url: string, retries = MAX_RETRIES): Promise<Respo
       const response = await fetch(url, { signal: controller.signal });
       clearTimeout(timeoutId);
 
-      if (!response.ok) throw new Error(`API error: ${response.status}`);
+      // Don't retry 4xx client errors - they won't resolve with retries
+      if (response.status >= 400 && response.status < 500) {
+        const errorBody = await response.text().catch(() => '');
+        console.error(`Polymarket API ${response.status}: ${errorBody.substring(0, 200)}`);
+        throw new Error(`API client error: ${response.status} - ${errorBody.substring(0, 100)}`);
+      }
+
+      // Retry 5xx server errors
+      if (response.status >= 500) {
+        throw new Error(`API server error: ${response.status}`);
+      }
+
       return response;
     } catch (error: any) {
+      lastError = error;
+
+      // Don't retry client errors (4xx)
+      if (error.message?.includes('client error')) {
+        throw error;
+      }
+
       if (attempt === retries) throw error;
       console.log(`Retry ${attempt}/${retries} for ${url.substring(0, 80)}...`);
       await new Promise(r => setTimeout(r, 1000 * attempt)); // Backoff
     }
   }
-  throw new Error('Max retries exceeded');
+  throw lastError || new Error('Max retries exceeded');
 }
 
 interface Activity {
