@@ -62,7 +62,8 @@ export async function GET(request: NextRequest) {
         winRate: profile.winRate,
         grossProfit: profile.grossProfit,
         grossLoss: profile.grossLoss,
-        netPnl: profile.netPnl,
+        realizedPnl: profile.realizedPnl,
+        totalPnl: profile.totalPnl,
         profitFactor: profile.profitFactor,
 
         // Open positions - recalculate after filtering resolved
