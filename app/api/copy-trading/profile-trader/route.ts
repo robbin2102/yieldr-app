@@ -350,23 +350,39 @@ export async function POST(request: NextRequest) {
       }
     });
 
-    // P&L calculation - Keep it simple and accurate
-    // 1. Realized P&L: From closed (redeemed) positions - time filtered, accurate
-    // 2. Unrealized P&L: From truly open positions (not resolved yet)
-    // This avoids the complexity of trying to time-filter unredeemed resolved positions
+    // P&L calculation - Include ALL resolved positions (redeemed + unredeemed)
+    // 1. Realized P&L: From closed (redeemed) positions - time filtered
+    // 2. Unrealized P&L from active positions: Markets not yet resolved
+    // 3. Unrealized P&L from unredeemed resolved: 0¢ losses + 100¢ wins with activity in time window
 
     // Realized P&L from redeemed positions (time-filtered by fetchClosedPositions)
     const realizedPnl = closedPositions.reduce((sum, p) => sum + p.realizedPnl, 0);
 
     // Unrealized P&L from truly open positions (markets not yet resolved)
-    const unrealizedPnl = openPositions.reduce((sum, p) => sum + p.cashPnl, 0);
+    const unrealizedPnlActive = openPositions.reduce((sum, p) => sum + p.cashPnl, 0);
 
-    // Total P&L = Realized + Unrealized
+    // Unrealized P&L from time-filtered unredeemed resolved positions
+    // These are positions that resolved but weren't redeemed, with activity in the 30d window
+    const unrealizedPnlLosses = timeFilteredLosses.reduce((sum, p) => sum + p.cashPnl, 0);
+    const unrealizedPnlWins = timeFilteredWins.reduce((sum, p) => sum + p.cashPnl, 0);
+    const unrealizedPnlResolved = unrealizedPnlLosses + unrealizedPnlWins;
+
+    // Total unrealized = active positions + time-filtered unredeemed resolved
+    const unrealizedPnl = unrealizedPnlActive + unrealizedPnlResolved;
+
+    // Total P&L = Realized (redeemed) + Unrealized (active + unredeemed resolved)
     const totalPnl = realizedPnl + unrealizedPnl;
 
-    // Gross profit/loss from closed positions only (for profit factor)
-    const grossProfit = closedPositions.filter(p => p.realizedPnl > 0).reduce((sum, p) => sum + p.realizedPnl, 0);
-    const grossLoss = Math.abs(closedPositions.filter(p => p.realizedPnl < 0).reduce((sum, p) => sum + p.realizedPnl, 0));
+    // Gross profit/loss - include both redeemed and unredeemed resolved positions
+    const grossProfitRedeemed = closedPositions.filter(p => p.realizedPnl > 0).reduce((sum, p) => sum + p.realizedPnl, 0);
+    const grossLossRedeemed = Math.abs(closedPositions.filter(p => p.realizedPnl < 0).reduce((sum, p) => sum + p.realizedPnl, 0));
+
+    // Add unredeemed resolved positions to gross profit/loss
+    const grossProfitUnredeemed = timeFilteredWins.reduce((sum, p) => sum + p.cashPnl, 0);
+    const grossLossUnredeemed = Math.abs(timeFilteredLosses.reduce((sum, p) => sum + p.cashPnl, 0));
+
+    const grossProfit = grossProfitRedeemed + grossProfitUnredeemed;
+    const grossLoss = grossLossRedeemed + grossLossUnredeemed;
 
     const totalTrades = buyCount + sellCount;
 
@@ -384,16 +400,24 @@ export async function POST(request: NextRequest) {
     else if (buyRatio >= 60) strategyLabel = 'SWING_TRADER';
     else strategyLabel = 'ACTIVE_TRADER';
 
-    // Win/loss counts from closed (redeemed) positions only - time filtered
-    let wins = 0, losses = 0;
+    // Win/loss counts from ALL resolved positions (redeemed + unredeemed with activity in time window)
+    let winsRedeemed = 0, lossesRedeemed = 0;
     closedPositions.forEach(p => {
-      if (p.realizedPnl >= 0) wins++;
-      else losses++;
+      if (p.realizedPnl >= 0) winsRedeemed++;
+      else lossesRedeemed++;
     });
 
-    // Win rate and profit factor from closed positions
+    // Add unredeemed resolved positions (time-filtered)
+    const winsUnredeemed = timeFilteredWins.length;
+    const lossesUnredeemed = timeFilteredLosses.length;
+
+    const wins = winsRedeemed + winsUnredeemed;
+    const losses = lossesRedeemed + lossesUnredeemed;
+
+    // Win rate and profit factor from ALL resolved positions (redeemed + unredeemed)
     const totalClosedCount = closedPositions.length;
-    const winRate = totalClosedCount > 0 ? (wins / totalClosedCount) * 100 : 0;
+    const totalResolvedCount = wins + losses; // Includes both redeemed and time-filtered unredeemed
+    const winRate = totalResolvedCount > 0 ? (wins / totalResolvedCount) * 100 : 0;
     const profitFactor = grossLoss > 0 ? grossProfit / grossLoss : grossProfit > 0 ? 999 : 0;
 
     // Open positions stats
@@ -405,9 +429,10 @@ export async function POST(request: NextRequest) {
     const medianTradeSize = tradeSizes.length > 0 ? tradeSizes[Math.floor(tradeSizes.length / 2)] : 0;
     const maxTradeSize = tradeSizes.length > 0 ? Math.max(...tradeSizes) : 0;
 
-    // Market specialization analysis - From closed (redeemed) positions only (time-filtered)
+    // Market specialization analysis - From ALL resolved positions (redeemed + unredeemed)
     const byCategory: Record<string, { trades: number; wins: number; losses: number; totalPnl: number }> = {};
 
+    // Add redeemed (closed) positions
     for (const pos of closedPositions) {
       const category = categorizeMarket(pos.title);
       if (!byCategory[category]) {
@@ -417,6 +442,28 @@ export async function POST(request: NextRequest) {
       byCategory[category].totalPnl += pos.realizedPnl;
       if (pos.realizedPnl >= 0) byCategory[category].wins++;
       else byCategory[category].losses++;
+    }
+
+    // Add unredeemed resolved positions (time-filtered losses at 0¢)
+    for (const pos of timeFilteredLosses) {
+      const category = categorizeMarket(pos.title);
+      if (!byCategory[category]) {
+        byCategory[category] = { trades: 0, wins: 0, losses: 0, totalPnl: 0 };
+      }
+      byCategory[category].trades++;
+      byCategory[category].totalPnl += pos.cashPnl; // cashPnl is negative for losses
+      byCategory[category].losses++;
+    }
+
+    // Add unredeemed resolved positions (time-filtered wins at 100¢)
+    for (const pos of timeFilteredWins) {
+      const category = categorizeMarket(pos.title);
+      if (!byCategory[category]) {
+        byCategory[category] = { trades: 0, wins: 0, losses: 0, totalPnl: 0 };
+      }
+      byCategory[category].trades++;
+      byCategory[category].totalPnl += pos.cashPnl; // cashPnl is positive for wins
+      byCategory[category].wins++;
     }
 
     const marketPerformance = Object.entries(byCategory)
@@ -755,21 +802,28 @@ export async function POST(request: NextRequest) {
       buyRatio,
       strategyLabel,
 
-      // Performance - Simple P&L calculation
+      // Performance - Complete P&L calculation including unredeemed resolved positions
       // Realized P&L: From closed (redeemed) positions - time filtered
-      // Unrealized P&L: From open positions (markets not resolved)
+      // Unrealized P&L: From active positions + time-filtered unredeemed resolved (0¢ losses, 100¢ wins)
       realizedPnl,          // P&L from redeemed positions (time-filtered)
-      unrealizedPnl,        // P&L from open positions (paper gains/losses)
-      totalPnl,             // realizedPnl + unrealizedPnl
-      grossProfit,          // Sum of winning closed positions
-      grossLoss,            // Sum of losing closed positions (absolute)
+      unrealizedPnl,        // P&L from active + unredeemed resolved (time-filtered)
+      unrealizedPnlActive,  // P&L from truly active positions only
+      unrealizedPnlResolved, // P&L from unredeemed resolved positions (time-filtered)
+      totalPnl,             // realizedPnl + unrealizedPnl (matches Polymarket 30d P&L)
+      grossProfit,          // Sum of winning positions (redeemed + unredeemed)
+      grossLoss,            // Sum of losing positions (redeemed + unredeemed)
       profitFactor,
 
-      // Win/loss stats from closed positions (time-filtered)
-      closedPositionsCount: closedPositions.length,
-      wins,
-      losses,
-      winRate,
+      // Win/loss stats from ALL resolved positions (redeemed + unredeemed with activity in 30d)
+      closedPositionsCount: closedPositions.length, // Redeemed only
+      totalResolvedCount,   // Redeemed + time-filtered unredeemed (wins + losses)
+      wins,                 // Total wins (redeemed + unredeemed)
+      losses,               // Total losses (redeemed + unredeemed)
+      winsRedeemed,         // Wins from redeemed positions
+      lossesRedeemed,       // Losses from redeemed positions
+      winsUnredeemed,       // Wins from unredeemed resolved (100¢)
+      lossesUnredeemed,     // Losses from unredeemed resolved (0¢)
+      winRate,              // Based on total resolved
 
       // Recent closed positions (for display)
       recentClosedPositions,
