@@ -96,7 +96,7 @@ async function fetchActivities(wallet: string, days: number): Promise<Activity[]
   const now = Math.floor(Date.now() / 1000);
   const startTs = now - (days * 24 * 60 * 60);
   const LIMIT = 500;  // API max per request
-  const MAX_OFFSET = 5000;  // Keep conservative to avoid fetching beyond time window
+  const MAX_OFFSET = 2500;  // Polymarket API limit is 3000, stay under
 
   let allActivities: Activity[] = [];
   let offset = 0;
@@ -157,7 +157,7 @@ async function fetchClosedPositions(wallet: string, days: number): Promise<Close
   const now = Math.floor(Date.now() / 1000);
   const startTs = now - (days * 24 * 60 * 60);
   const LIMIT = 500;  // Increased for efficiency
-  const MAX_OFFSET = 5000;  // Increased to capture more positions
+  const MAX_OFFSET = 2500;  // Polymarket API limit is 3000, stay under
 
   let allPositions: ClosedPosition[] = [];
   let offset = 0;
