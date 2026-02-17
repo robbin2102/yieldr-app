@@ -52,16 +52,16 @@ async function fetchActivities(wallet: string, days: number): Promise<Activity[]
   const now = Math.floor(Date.now() / 1000);
   const startTs = now - (days * 24 * 60 * 60);
   const LIMIT = 500;
-  const MAX_OFFSET = 2500; // API limit is 3000
+  const MAX_OFFSET = 10000; // API allows up to 10000
 
   let allActivities: Activity[] = [];
   let offset = 0;
-  let done = false;
 
-  console.log(`  Fetching activities for last ${days} days...`);
+  console.log(`  Fetching activities for last ${days} days (start=${startTs})...`);
 
-  while (!done && offset <= MAX_OFFSET) {
-    const url = `${API_BASE}/activity?user=${wallet}&limit=${LIMIT}&offset=${offset}&sortBy=TIMESTAMP&sortDirection=DESC`;
+  while (offset <= MAX_OFFSET) {
+    // Use API's start parameter for server-side time filtering
+    const url = `${API_BASE}/activity?user=${wallet}&limit=${LIMIT}&offset=${offset}&start=${startTs}&sortBy=TIMESTAMP&sortDirection=DESC`;
     const response = await fetch(url);
 
     if (!response.ok) {
@@ -71,21 +71,14 @@ async function fetchActivities(wallet: string, days: number): Promise<Activity[]
     const batch = await response.json() as Activity[];
     if (batch.length === 0) break;
 
-    for (const activity of batch) {
-      if (activity.timestamp >= startTs) {
-        allActivities.push(activity);
-      } else {
-        done = true;
-        break;
-      }
-    }
+    allActivities = allActivities.concat(batch);
 
-    if (batch.length < LIMIT) break;
+    if (batch.length < LIMIT) break; // Last page
     offset += LIMIT;
     await new Promise(r => setTimeout(r, 100));
   }
 
-  console.log(`  Found ${allActivities.length} activities in ${days}d window`);
+  console.log(`  Found ${allActivities.length} activities in ${days}d window (offset reached: ${offset})`);
   return allActivities;
 }
 
