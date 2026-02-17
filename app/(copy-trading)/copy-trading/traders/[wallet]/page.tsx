@@ -44,11 +44,38 @@ interface ClosedPosition {
   status: 'REDEEMED' | 'WON' | 'LOST';
 }
 
+interface PeriodInfo {
+  requestedDays: number;
+  actualDays: number;
+  hitApiLimit: boolean;
+  startDate: string | null;
+  endDate: string | null;
+  activitiesCount: number;
+}
+
+interface CashFlowPnL {
+  totalPnl: number;
+  totalBuys: number;
+  totalSells: number;
+  totalRedeems: number;
+  endingValue: number;
+  positionsWithActivity: number;
+  wins: number;
+  losses: number;
+  winRate: number;
+}
+
 interface TraderProfile {
   wallet: string;
   label: string;
   profiledAt: string;
   periodDays: number;
+
+  // Period coverage info (shows actual date range when API limit is hit)
+  periodInfo?: PeriodInfo | null;
+
+  // Cash Flow P&L - Most accurate calculation
+  cashFlowPnL?: CashFlowPnL | null;
 
   // Activity stats
   totalActivities: number;
@@ -62,7 +89,7 @@ interface TraderProfile {
   strategyLabel: string;
   buyRatio: number;
 
-  // Performance
+  // Performance (legacy - kept for backwards compatibility)
   closedPositionsCount: number;
   wins: number;
   losses: number;
@@ -378,22 +405,39 @@ export default function TraderProfilePage() {
 
       {/* Profile Info */}
       <div className="text-xs text-[#6E6E6E]">
-        Profiled {formatDate(profile.profiledAt)} • Last {profile.periodDays} days of activity
+        Profiled {formatDate(profile.profiledAt)} • {profile.periodInfo?.hitApiLimit ? (
+          <span className="text-yellow-500">
+            ⚠️ {profile.periodInfo.actualDays.toFixed(1)} days of activity (API limit hit, requested {profile.periodDays}d)
+          </span>
+        ) : (
+          `Last ${profile.periodDays} days of activity`
+        )}
       </div>
+      {profile.periodInfo?.hitApiLimit && profile.periodInfo.startDate && profile.periodInfo.endDate && (
+        <div className="text-xs text-yellow-500/70">
+          Data covers: {formatDate(profile.periodInfo.startDate)} → {formatDate(profile.periodInfo.endDate)}
+        </div>
+      )}
 
       {/* Key Stats Grid */}
       <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
         <div className="bg-[#0A0A0A] border border-[#1E1E1E] rounded-xl p-4">
           <div className="text-xs text-[#6E6E6E] uppercase mb-1">Win Rate</div>
-          <div className="text-xl font-bold text-white">{profile.winRate.toFixed(1)}%</div>
-          <div className="text-xs text-[#6E6E6E]">{profile.wins}W / {profile.losses}L</div>
+          <div className="text-xl font-bold text-white">
+            {(profile.cashFlowPnL?.winRate ?? profile.winRate).toFixed(1)}%
+          </div>
+          <div className="text-xs text-[#6E6E6E]">
+            {profile.cashFlowPnL?.wins ?? profile.wins}W / {profile.cashFlowPnL?.losses ?? profile.losses}L
+          </div>
         </div>
         <div className="bg-[#0A0A0A] border border-[#1E1E1E] rounded-xl p-4">
-          <div className="text-xs text-[#6E6E6E] uppercase mb-1">Realized P&L</div>
-          <div className={`text-xl font-bold ${profile.realizedPnl >= 0 ? 'text-primary-green' : 'text-red-400'}`}>
-            {profile.realizedPnl >= 0 ? '+' : ''}{formatValue(profile.realizedPnl)}
+          <div className="text-xs text-[#6E6E6E] uppercase mb-1">
+            {profile.periodInfo?.actualDays ? `${profile.periodInfo.actualDays.toFixed(1)}D` : `${profile.periodDays}D`} P&L
           </div>
-          <div className="text-xs text-[#6E6E6E]">{profile.closedPositionsCount} closed</div>
+          <div className={`text-xl font-bold ${(profile.cashFlowPnL?.totalPnl ?? profile.realizedPnl) >= 0 ? 'text-primary-green' : 'text-red-400'}`}>
+            {(profile.cashFlowPnL?.totalPnl ?? profile.realizedPnl) >= 0 ? '+' : ''}{formatValue(profile.cashFlowPnL?.totalPnl ?? profile.realizedPnl)}
+          </div>
+          <div className="text-xs text-[#6E6E6E]">{profile.cashFlowPnL?.positionsWithActivity ?? profile.closedPositionsCount} positions</div>
         </div>
         <div className="bg-[#0A0A0A] border border-[#1E1E1E] rounded-xl p-4">
           <div className="text-xs text-[#6E6E6E] uppercase mb-1">Profit Factor</div>
