@@ -1369,6 +1369,17 @@ export async function POST(request: NextRequest) {
           realizedPnl,
           unrealizedPnl,
           avgTradeSize,
+          tradesPerDay,
+          netPnl: totalPnl,
+          // P&L Consistency metrics
+          pnlConsistency: {
+            score: pnlConsistency.score,
+            avgRoce: pnlConsistency.avgRoce,
+            allPositive: pnlConsistency.allPositive,
+            timeframesAvailable: pnlConsistency.timeframesAvailable,
+          },
+          // Strengths for display
+          topStrength: strengths.length > 0 ? strengths[0].category : null,
           lastUpdatedAt: new Date(),
         },
         $setOnInsert: {

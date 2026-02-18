@@ -3,15 +3,11 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 
-interface Position {
-  title: string;
-  outcome: string;
-  size: number;
-  avgPrice: number;
-  curPrice: number;
-  currentValue: number;
-  cashPnl: number;
-  percentPnl: number;
+interface PnLConsistency {
+  score: number;
+  avgRoce: number;
+  allPositive: boolean;
+  timeframesAvailable: number;
 }
 
 interface TrackedTrader {
@@ -25,6 +21,7 @@ interface TrackedTrader {
   winRate?: number;
   profitFactor?: number;
   avgTradeSize?: number;
+  tradesPerDay?: number;
   netPnl?: number;
   lastSeenTimestamp?: number;
   isActive: boolean;
@@ -32,12 +29,13 @@ interface TrackedTrader {
   totalAlerts: number;
   totalCopied: number;
   totalPnl: number;
-  // Position data
+  // P&L Consistency
+  pnlConsistency?: PnLConsistency;
+  topStrength?: string;
+  // Position data (kept for backwards compatibility)
   positionCount: number;
   totalPositionValue: number;
   totalUnrealizedPnl: number;
-  topPositions: Position[];
-  positionsUpdatedAt?: string;
 }
 
 export default function TradersPage() {
@@ -254,51 +252,59 @@ export default function TradersPage() {
                   </div>
                 </div>
 
-                {/* Strategy Badge */}
-                {(trader.strategyLabel || trader.specialty) && (
-                  <div className="flex gap-1.5 mb-3">
-                    {trader.strategyLabel && (
+                {/* Performance Metrics */}
+                <div className="border-t border-[#1E1E1E] pt-3">
+                  <div className="grid grid-cols-3 gap-2">
+                    {/* P&L Consistency */}
+                    <div className="bg-[#111] rounded px-2 py-2 text-center">
+                      <div className="text-[10px] text-[#6E6E6E] uppercase mb-1">Consistency</div>
+                      <div className={`text-sm font-semibold ${
+                        trader.pnlConsistency?.score && trader.pnlConsistency.score > 0
+                          ? 'text-primary-green'
+                          : trader.pnlConsistency?.score && trader.pnlConsistency.score < 0
+                            ? 'text-red-400'
+                            : 'text-white'
+                      }`}>
+                        {trader.pnlConsistency?.score
+                          ? `${trader.pnlConsistency.score > 0 ? '+' : ''}${trader.pnlConsistency.score.toFixed(1)}`
+                          : '-'}
+                      </div>
+                      {trader.pnlConsistency?.allPositive && (
+                        <div className="text-[9px] text-primary-green">All +ve</div>
+                      )}
+                    </div>
+
+                    {/* Avg Daily Trades */}
+                    <div className="bg-[#111] rounded px-2 py-2 text-center">
+                      <div className="text-[10px] text-[#6E6E6E] uppercase mb-1">Trades/Day</div>
+                      <div className="text-sm font-semibold text-white">
+                        {trader.tradesPerDay ? trader.tradesPerDay.toFixed(1) : '-'}
+                      </div>
+                      {trader.tradesPerDay && trader.tradesPerDay < 50 && (
+                        <div className="text-[9px] text-primary-green">Human</div>
+                      )}
+                      {trader.tradesPerDay && trader.tradesPerDay >= 50 && (
+                        <div className="text-[9px] text-yellow-500">Bot?</div>
+                      )}
+                    </div>
+
+                    {/* Specialty/Strength */}
+                    <div className="bg-[#111] rounded px-2 py-2 text-center">
+                      <div className="text-[10px] text-[#6E6E6E] uppercase mb-1">Specialist</div>
+                      <div className="text-sm font-semibold text-primary-green truncate">
+                        {trader.topStrength || trader.specialty || '-'}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Strategy Badge */}
+                  {trader.strategyLabel && (
+                    <div className="mt-2">
                       <span className="px-2 py-0.5 text-[10px] bg-[#1A1A1A] text-[#9E9E9E] rounded">
                         {trader.strategyLabel.replace(/_/g, ' ')}
                       </span>
-                    )}
-                    {trader.specialty && (
-                      <span className="px-2 py-0.5 text-[10px] bg-primary-green/10 text-primary-green rounded">
-                        {trader.specialty}
-                      </span>
-                    )}
-                  </div>
-                )}
-
-                {/* Open Positions */}
-                <div className="border-t border-[#1E1E1E] pt-3">
-                  <div className="text-[10px] text-[#6E6E6E] uppercase mb-2">
-                    Top Positions ({trader.positionCount || 0} total)
-                  </div>
-                  <div className="space-y-1.5 max-h-[140px] overflow-y-auto scrollbar-thin">
-                    {trader.topPositions && trader.topPositions.length > 0 ? (
-                      trader.topPositions.map((pos, idx) => (
-                        <div key={idx} className="flex items-center justify-between text-xs bg-[#111] rounded px-2 py-1.5">
-                          <div className="truncate flex-1 min-w-0">
-                            <div className="text-[#6E6E6E] text-[10px] truncate">{pos.title?.substring(0, 30)}...</div>
-                            <div className="text-white truncate">{pos.outcome}</div>
-                          </div>
-                          <div className="text-right ml-2 flex-shrink-0">
-                            <div className={`font-mono ${pos.cashPnl >= 0 ? 'text-primary-green' : 'text-red-400'}`}>
-                              {pos.cashPnl >= 0 ? '+' : ''}{formatValue(pos.cashPnl)}
-                            </div>
-                            <div className="text-[#6E6E6E] text-[10px]">
-                              {(pos.avgPrice * 100).toFixed(0)}¢→{(pos.curPrice * 100).toFixed(0)}¢
-                            </div>
-                          </div>
-                        </div>
-                      ))
-                    ) : (
-                      <div className="text-xs text-[#4E4E4E] text-center py-2">
-                        No significant positions
-                      </div>
-                    )}
-                  </div>
+                    </div>
+                  )}
                 </div>
               </Link>
 

@@ -66,6 +66,7 @@ export async function GET(request: NextRequest) {
         winRate: trader.winRate,
         profitFactor: trader.profitFactor,
         avgTradeSize: trader.avgTradeSize,
+        tradesPerDay: trader.tradesPerDay,
         netPnl: trader.netPnl,
         copyMultiplier: trader.copyMultiplier,
         maxCopySize: trader.maxCopySize,
@@ -77,7 +78,10 @@ export async function GET(request: NextRequest) {
         totalPnl: trader.totalPnl,
         addedAt: trader.addedAt,
         profiledAt: trader.profiledAt,
-        // New position data
+        // P&L Consistency metrics
+        pnlConsistency: trader.pnlConsistency,
+        topStrength: trader.topStrength,
+        // Position data (kept for backwards compatibility)
         positionCount: positions.length,
         totalPositionValue,
         totalUnrealizedPnl: positions.reduce((sum, p) => sum + (p.cashPnl || 0), 0),

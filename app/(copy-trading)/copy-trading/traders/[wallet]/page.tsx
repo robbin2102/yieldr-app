@@ -66,6 +66,29 @@ interface CashFlowPnL {
   winRate: number;
 }
 
+interface TimeframePnL {
+  timeframe: '1d' | '7d' | '15d' | '30d';
+  days: number;
+  pnl: number;
+  capitalDeployed: number;
+  roce: number;
+  tradeCount: number;
+  tradesPerDay: number;
+  wins: number;
+  losses: number;
+  winRate: number;
+  hasData: boolean;
+  hitApiLimit: boolean;
+}
+
+interface PnLConsistency {
+  timeframesAvailable: number;
+  allPositive: boolean;
+  avgRoce: number;
+  roceVariance: number;
+  score: number;
+}
+
 interface TraderProfile {
   wallet: string;
   label: string;
@@ -77,6 +100,17 @@ interface TraderProfile {
 
   // Cash Flow P&L - Most accurate calculation
   cashFlowPnL?: CashFlowPnL | null;
+
+  // Multi-timeframe P&L for consistency analysis
+  timeframePnL?: {
+    '1d': TimeframePnL;
+    '7d': TimeframePnL;
+    '15d': TimeframePnL;
+    '30d': TimeframePnL;
+  };
+
+  // P&L Consistency Score
+  pnlConsistency?: PnLConsistency;
 
   // Activity stats
   totalActivities: number;
@@ -483,6 +517,78 @@ export default function TraderProfilePage() {
           </span>
         )}
       </div>
+
+      {/* P&L Consistency & Timeframe Analysis */}
+      {profile.timeframePnL && profile.pnlConsistency && (
+        <div className="bg-[#0A0A0A] border border-[#1E1E1E] rounded-xl p-4">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-sm font-semibold text-white">P&L Consistency Analysis</h3>
+            <div className="flex items-center gap-2">
+              <span className={`text-lg font-bold ${
+                profile.pnlConsistency.score > 0 ? 'text-primary-green' :
+                profile.pnlConsistency.score < 0 ? 'text-red-400' : 'text-white'
+              }`}>
+                {profile.pnlConsistency.score > 0 ? '+' : ''}{profile.pnlConsistency.score.toFixed(1)}
+              </span>
+              <span className="text-xs text-[#6E6E6E]">Consistency Score</span>
+            </div>
+          </div>
+
+          {/* Consistency Summary */}
+          <div className="grid grid-cols-3 gap-3 mb-4">
+            <div className="bg-[#111] rounded-lg p-3 text-center">
+              <div className="text-xs text-[#6E6E6E] mb-1">Avg ROCE</div>
+              <div className={`text-lg font-semibold ${profile.pnlConsistency.avgRoce >= 0 ? 'text-primary-green' : 'text-red-400'}`}>
+                {profile.pnlConsistency.avgRoce >= 0 ? '+' : ''}{profile.pnlConsistency.avgRoce.toFixed(1)}%
+              </div>
+            </div>
+            <div className="bg-[#111] rounded-lg p-3 text-center">
+              <div className="text-xs text-[#6E6E6E] mb-1">ROCE Variance</div>
+              <div className={`text-lg font-semibold ${profile.pnlConsistency.roceVariance < 50 ? 'text-primary-green' : 'text-yellow-500'}`}>
+                {profile.pnlConsistency.roceVariance.toFixed(1)}
+              </div>
+            </div>
+            <div className="bg-[#111] rounded-lg p-3 text-center">
+              <div className="text-xs text-[#6E6E6E] mb-1">All Positive</div>
+              <div className={`text-lg font-semibold ${profile.pnlConsistency.allPositive ? 'text-primary-green' : 'text-red-400'}`}>
+                {profile.pnlConsistency.allPositive ? '✓ Yes' : '✗ No'}
+              </div>
+            </div>
+          </div>
+
+          {/* Timeframe Breakdown */}
+          <div className="text-xs text-[#6E6E6E] uppercase mb-2">P&L by Timeframe</div>
+          <div className="grid grid-cols-4 gap-2">
+            {(['1d', '7d', '15d', '30d'] as const).map((tf) => {
+              const data = profile.timeframePnL?.[tf];
+              if (!data || !data.hasData) {
+                return (
+                  <div key={tf} className="bg-[#111] rounded-lg p-3 text-center opacity-50">
+                    <div className="text-xs font-semibold text-[#6E6E6E] mb-1">{tf.toUpperCase()}</div>
+                    <div className="text-sm text-[#4E4E4E]">No data</div>
+                  </div>
+                );
+              }
+              return (
+                <div key={tf} className="bg-[#111] rounded-lg p-3">
+                  <div className="text-xs font-semibold text-[#9E9E9E] mb-2 text-center">{tf.toUpperCase()}</div>
+                  <div className={`text-sm font-bold text-center mb-1 ${data.pnl >= 0 ? 'text-primary-green' : 'text-red-400'}`}>
+                    {data.pnl >= 0 ? '+' : ''}{formatValue(data.pnl)}
+                  </div>
+                  <div className="text-[10px] text-[#6E6E6E] text-center space-y-0.5">
+                    <div>ROCE: <span className={data.roce >= 0 ? 'text-primary-green' : 'text-red-400'}>{data.roce >= 0 ? '+' : ''}{data.roce.toFixed(1)}%</span></div>
+                    <div>Win: {data.winRate.toFixed(0)}% ({data.wins}W/{data.losses}L)</div>
+                    <div>{data.tradesPerDay.toFixed(1)} trades/day</div>
+                  </div>
+                  {data.hitApiLimit && (
+                    <div className="text-[9px] text-yellow-500 text-center mt-1">⚠️ Partial</div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Two Column Layout */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
