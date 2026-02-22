@@ -17,10 +17,10 @@ function extractDbName(mongoUri: string): string {
   try {
     const url = new URL(mongoUri);
     const dbName = url.pathname.replace('/', '');
-    return dbName || 'polymarket-test';
+    return dbName || 'yieldr';
   } catch {
     const match = mongoUri.match(/\/([^/?]+)(\?|$)/);
-    return match?.[1] || 'polymarket-test';
+    return match?.[1] || 'yieldr';
   }
 }
 
