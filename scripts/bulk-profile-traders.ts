@@ -817,7 +817,7 @@ async function getUniqueTraders(): Promise<string[]> {
     { $unwind: '$holders' },
     { $group: { _id: { $toLower: '$holders.proxyWallet' } } },
     { $sort: { _id: 1 } },
-  ];
+  ] as any[];
 
   const result = await PolyMarketHolder.aggregate(pipeline);
   const wallets = result.map(r => r._id).filter(Boolean);
@@ -834,14 +834,14 @@ async function getAlreadyProfiledWallets(db: mongoose.Connection): Promise<Set<s
 
 async function saveProgress(db: mongoose.Connection, progress: BatchProgress): Promise<void> {
   await db.collection('bulk-profile-progress').updateOne(
-    { _id: 'current' },
+    { _id: 'current' } as any,
     { $set: progress },
     { upsert: true }
   );
 }
 
 async function loadProgress(db: mongoose.Connection): Promise<BatchProgress | null> {
-  const doc = await db.collection('bulk-profile-progress').findOne({ _id: 'current' });
+  const doc = await db.collection('bulk-profile-progress').findOne({ _id: 'current' } as any);
   return doc as BatchProgress | null;
 }
 
@@ -1027,7 +1027,7 @@ async function main(): Promise<void> {
   console.log('\n');
 
   // Clean up progress
-  await db.collection('bulk-profile-progress').deleteOne({ _id: 'current' });
+  await db.collection('bulk-profile-progress').deleteOne({ _id: 'current' } as any);
 
   await mongoose.connection.close();
   console.log('MongoDB connection closed');
