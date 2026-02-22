@@ -21,8 +21,7 @@
  */
 
 import * as dotenv from 'dotenv';
-dotenv.config({ path: '.env.local' }); // Load .env.local first (Railway MongoDB)
-dotenv.config(); // Fallback to .env if .env.local doesn't have the var
+dotenv.config({ path: '.env.local', override: true }); // Load .env.local and override shell env vars
 import mongoose from 'mongoose';
 import {
   indexMarketsEndingWithinDays,

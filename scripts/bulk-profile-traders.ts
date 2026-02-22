@@ -19,8 +19,7 @@
  */
 
 import * as dotenv from 'dotenv';
-dotenv.config({ path: '.env.local' }); // Load .env.local first (Railway MongoDB)
-dotenv.config(); // Fallback to .env if .env.local doesn't have the var
+dotenv.config({ path: '.env.local', override: true }); // Load .env.local and override shell env vars
 import mongoose from 'mongoose';
 import PolyMarketHolder from '../models/PolyMarketHolder';
 
@@ -810,8 +809,8 @@ async function profileTrader(wallet: string, days: number): Promise<any> {
 // Main Script
 // ═══════════════════════════════════════════════════════════════
 
-async function getUniqueTraders(): Promise<string[]> {
-  console.log('Fetching unique traders from PolyMarketHolder collection...');
+async function getUniqueTraders(db: mongoose.Connection): Promise<string[]> {
+  console.log('Fetching unique traders from polyMarketHolders collection...');
 
   const pipeline = [
     { $unwind: '$holders' },
@@ -819,7 +818,8 @@ async function getUniqueTraders(): Promise<string[]> {
     { $sort: { _id: 1 } },
   ] as any[];
 
-  const result = await PolyMarketHolder.aggregate(pipeline);
+  // Use native MongoDB driver to avoid Mongoose model registration issues
+  const result = await db.collection('polyMarketHolders').aggregate(pipeline).toArray();
   const wallets = result.map(r => r._id).filter(Boolean);
 
   console.log(`Found ${wallets.length} unique traders\n`);
@@ -884,7 +884,7 @@ async function main(): Promise<void> {
   console.log('Connected to MongoDB\n');
 
   // Get all unique traders
-  const allTraders = await getUniqueTraders();
+  const allTraders = await getUniqueTraders(db);
   const totalBatches = Math.ceil(allTraders.length / CONFIG.BATCH_SIZE);
 
   console.log(`Total traders: ${allTraders.length}`);
