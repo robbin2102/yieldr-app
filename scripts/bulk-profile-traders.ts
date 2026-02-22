@@ -21,6 +21,7 @@
 import * as dotenv from 'dotenv';
 dotenv.config({ path: '.env.local', override: true }); // Load .env.local and override shell env vars
 import mongoose from 'mongoose';
+import { Db } from 'mongodb';
 import PolyMarketHolder from '../models/PolyMarketHolder';
 
 // ═══════════════════════════════════════════════════════════════
@@ -809,7 +810,7 @@ async function profileTrader(wallet: string, days: number): Promise<any> {
 // Main Script
 // ═══════════════════════════════════════════════════════════════
 
-async function getUniqueTraders(db: mongoose.Connection): Promise<string[]> {
+async function getUniqueTraders(db: Db): Promise<string[]> {
   console.log('Fetching unique traders from polyMarketHolders collection...');
 
   const pipeline = [
@@ -826,13 +827,13 @@ async function getUniqueTraders(db: mongoose.Connection): Promise<string[]> {
   return wallets;
 }
 
-async function getAlreadyProfiledWallets(db: mongoose.Connection): Promise<Set<string>> {
+async function getAlreadyProfiledWallets(db: Db): Promise<Set<string>> {
   const collection = db.collection(CONFIG.COLLECTION_NAME);
   const profiles = await collection.find({}, { projection: { wallet: 1 } }).toArray();
   return new Set(profiles.map(p => p.wallet.toLowerCase()));
 }
 
-async function saveProgress(db: mongoose.Connection, progress: BatchProgress): Promise<void> {
+async function saveProgress(db: Db, progress: BatchProgress): Promise<void> {
   await db.collection('bulk-profile-progress').updateOne(
     { _id: 'current' } as any,
     { $set: progress },
@@ -840,7 +841,7 @@ async function saveProgress(db: mongoose.Connection, progress: BatchProgress): P
   );
 }
 
-async function loadProgress(db: mongoose.Connection): Promise<BatchProgress | null> {
+async function loadProgress(db: Db): Promise<BatchProgress | null> {
   const doc = await db.collection('bulk-profile-progress').findOne({ _id: 'current' } as any);
   return doc as BatchProgress | null;
 }
@@ -880,7 +881,7 @@ async function main(): Promise<void> {
 
   console.log('Connecting to MongoDB...');
   await mongoose.connect(mongoUri);
-  const db = mongoose.connection;
+  const db = mongoose.connection.db!;
   console.log('Connected to MongoDB\n');
 
   // Get all unique traders
