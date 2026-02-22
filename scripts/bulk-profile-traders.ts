@@ -18,7 +18,9 @@
  *   - 1000 traders * 3 calls * 100ms = ~5 minutes per batch
  */
 
-import 'dotenv/config';
+import * as dotenv from 'dotenv';
+dotenv.config({ path: '.env.local' }); // Load .env.local first (Railway MongoDB)
+dotenv.config(); // Fallback to .env if .env.local doesn't have the var
 import mongoose from 'mongoose';
 import PolyMarketHolder from '../models/PolyMarketHolder';
 
