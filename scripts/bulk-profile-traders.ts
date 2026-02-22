@@ -871,10 +871,10 @@ async function main(): Promise<void> {
   console.log('████████████████████████████████████████████████████████████████');
   console.log('\n');
 
-  // Connect to MongoDB (support both MONGODB_URI and MONGO_URI)
-  const mongoUri = process.env.MONGODB_URI || process.env.MONGO_URI;
+  // Connect to MongoDB
+  const mongoUri = process.env.MONGODB_URI;
   if (!mongoUri) {
-    console.error('MONGODB_URI or MONGO_URI not found in environment');
+    console.error('MONGODB_URI not found in environment');
     process.exit(1);
   }
 
