@@ -5,7 +5,9 @@ if (!process.env.MONGODB_URI) {
 }
 
 const uri = process.env.MONGODB_URI;
-const options = {};
+const options = {
+  directConnection: true,
+};
 
 // Extract database name from URI (mongodb+srv://.../<dbname>?...)
 // Falls back to 'polymarket-test' if not specified
