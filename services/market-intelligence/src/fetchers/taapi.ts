@@ -121,6 +121,7 @@ export async function fetchStructureIndicators(symbols: string[]): Promise<Map<s
       },
     };
     const data = await postBulk(body);
+    logger.info('TAAPI', `BULK2 single raw data: ${JSON.stringify(data?.data)}`);
     const parsed = parseSingleConstructResponse(data, symbols[0]);
     return new Map([[symbols[0], parsed]]);
   }
@@ -134,7 +135,8 @@ export async function fetchStructureIndicators(symbols: string[]): Promise<Map<s
   }));
   const body = { secret: config.taapi.apiKey, construct: constructs };
   const data = await postBulk(body);
-  logger.debug('TAAPI', `BULK2 multi-construct raw data[0]: ${JSON.stringify(data?.data?.[0])}`);
+  logger.info('TAAPI', `BULK2 raw response keys: ${Object.keys(data ?? {}).join(', ')}`);
+  logger.info('TAAPI', `BULK2 data[0]: ${JSON.stringify(data?.data?.[0])}`);
   return parseMultiConstructResponse(data, symbols);
 }
 
