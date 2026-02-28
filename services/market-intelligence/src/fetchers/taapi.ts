@@ -101,8 +101,11 @@ export async function fetchCoreIndicators(symbol: string): Promise<Record<string
 
 export async function fetchStructureIndicators(symbols: string[]): Promise<Map<string, Record<string, unknown>>> {
   const structureIndicators = [
-    { id: 'fibonacci', indicator: 'fibonacciretracement' },
-    { id: 'psar',      indicator: 'psar' },
+    { id: 'fibonacci',  indicator: 'fibonacciretracement' },
+    { id: 'psar',       indicator: 'psar' },
+    { id: 'squeeze',    indicator: 'squeeze' },
+    { id: 'swing_high', indicator: 'swinghigh' },
+    { id: 'swing_low',  indicator: 'swinglow' },
   ];
 
   // Single symbol: use object construct (same format as BULK1) so parseSingleConstructResponse
@@ -360,6 +363,24 @@ function parseSingleConstructResponse(data: any, symbol: string): Record<string,
         indicators.supertrend = { value: result.value ?? null, direction: result.valueAdvice ?? null };
         break;
       case 'psar':        indicators.psar = result.value ?? null; break;
+      case 'squeeze':
+        indicators.squeeze = {
+          value:      result.value      ?? null,
+          is_squeeze: result.sqzmomOn   ?? result.isSqueezing ?? null,
+        };
+        break;
+      case 'swing_high':
+        indicators.swing_high = {
+          price:     result.value     ?? null,
+          timestamp: result.timestamp ? new Date(result.timestamp) : null,
+        };
+        break;
+      case 'swing_low':
+        indicators.swing_low = {
+          price:     result.value     ?? null,
+          timestamp: result.timestamp ? new Date(result.timestamp) : null,
+        };
+        break;
       case 'fibonacci':
         logger.debug('TAAPI', `Fibonacci raw: ${JSON.stringify(result)}`);
         indicators.fibonacci = parseFibonacci(result); break;
@@ -399,6 +420,12 @@ function parseMultiConstructResponse(data: any, symbols: string[]): Map<string, 
           logger.debug('TAAPI', `Fibonacci raw: ${JSON.stringify(res)}`);
           indicators.fibonacci = parseFibonacci(res); break;
         case 'psar':       indicators.psar = res.value ?? null; break;
+        case 'squeeze':
+          indicators.squeeze = {
+            value:      res.value      ?? null,
+            is_squeeze: res.sqzmomOn   ?? res.isSqueezing ?? null,
+          };
+          break;
         case 'swing_high':
           indicators.swing_high = {
             price: res.value ?? null,

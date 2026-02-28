@@ -23,9 +23,8 @@ export async function buildAndSaveSnapshot(args: BuildSnapshotArgs): Promise<voi
 
   const indicators = taapi.indicators as any;
 
-  // Price: prefer Binance candle (real OHLCV), fall back to VWAP/pivot for close
-  const closePrice: number | null =
-    binance?.close ?? indicators?.vwap ?? indicators?.pivot_points?.pp ?? null;
+  // Price: Binance OHLCV only — no fallback to VWAP (that would corrupt computed fields)
+  const closePrice: number | null = binance?.close ?? null;
 
   const price = {
     open:   binance?.open   ?? null,
