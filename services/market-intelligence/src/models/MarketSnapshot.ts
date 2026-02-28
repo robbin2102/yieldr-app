@@ -44,7 +44,7 @@ const IndicatorsSchema = new Schema({
   supertrend: { value: Number, direction: String },
   psar:       Number,
   pivot_points: { pp: Number, r1: Number, r2: Number, r3: Number, s1: Number, s2: Number, s3: Number },
-  fibonacci:  { level_236: Number, level_382: Number, level_500: Number, level_618: Number, level_786: Number },
+  fibonacci:  { trend: String, level_236: Number, level_382: Number, level_500: Number, level_618: Number, level_786: Number },
   swing_high: { price: Number, timestamp: Date },
   swing_low:  { price: Number, timestamp: Date },
 }, { _id: false });

@@ -262,6 +262,28 @@ export async function fetchAllCoins(coins: string[]): Promise<Map<string, TaapiC
 
 // ─── Response Parsers ─────────────────────────────────────────────────────────
 
+// API response: { value, trend, startPrice, endPrice, startTimestamp, endTimestamp }
+// `value` is the level at the requested retracement param (default 0.618).
+// Compute all standard levels from startPrice/endPrice instead.
+function parseFibonacci(res: any): Record<string, unknown> | null {
+  const startPrice: number | null = res.startPrice ?? null;
+  const endPrice:   number | null = res.endPrice   ?? null;
+  if (startPrice == null || endPrice == null) return null;
+  const trend = ((res.trend ?? '') as string).toUpperCase();
+  // DOWNTREND: startPrice=high, endPrice=low  |  UPTREND: startPrice=low, endPrice=high
+  const high  = trend === 'UPTREND' ? endPrice   : startPrice;
+  const low   = trend === 'UPTREND' ? startPrice : endPrice;
+  const range = high - low;
+  return {
+    trend,
+    level_236: low + range * 0.236,
+    level_382: low + range * 0.382,
+    level_500: low + range * 0.500,
+    level_618: low + range * 0.618,
+    level_786: low + range * 0.786,
+  };
+}
+
 function parseSingleConstructResponse(data: any, symbol: string): Record<string, unknown> {
   const indicators: Record<string, unknown> = {};
   if (!data?.data) {
@@ -338,15 +360,7 @@ function parseSingleConstructResponse(data: any, symbol: string): Record<string,
         indicators.supertrend = { value: result.value ?? null, direction: result.valueAdvice ?? null };
         break;
       case 'psar':        indicators.psar = result.value ?? null; break;
-      case 'fibonacci':
-        indicators.fibonacci = {
-          level_236: result.value236 ?? null,
-          level_382: result.value382 ?? null,
-          level_500: result.value500 ?? null,
-          level_618: result.value618 ?? null,
-          level_786: result.value786 ?? null,
-        };
-        break;
+      case 'fibonacci':  indicators.fibonacci = parseFibonacci(result); break;
       case 'pivot_points':
         logger.debug('TAAPI', `Pivot points raw: ${JSON.stringify(result)}`);
         indicators.pivot_points = {
@@ -379,18 +393,8 @@ function parseMultiConstructResponse(data: any, symbols: string[]): Map<string, 
       const res = item.result;
       if (!id || !res) continue;
       switch (id) {
-        case 'fibonacci':
-          indicators.fibonacci = {
-            level_236: res.value236 ?? null,
-            level_382: res.value382 ?? null,
-            level_500: res.value500 ?? null,
-            level_618: res.value618 ?? null,
-            level_786: res.value786 ?? null,
-          };
-          break;
-        case 'psar':
-          indicators.psar = res.value ?? null;
-          break;
+        case 'fibonacci':  indicators.fibonacci = parseFibonacci(res); break;
+        case 'psar':       indicators.psar = res.value ?? null; break;
         case 'swing_high':
           indicators.swing_high = {
             price: res.value ?? null,
