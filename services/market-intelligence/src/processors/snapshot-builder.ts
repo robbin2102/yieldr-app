@@ -279,6 +279,7 @@ function computeSnapshotFields(
   const vwap   = indicators?.vwap    ?? null;
   const macd   = indicators?.macd    ?? null;
   const funding = (derivatives as any)?.funding_rate?.current ?? null;
+  const ichimoku = indicators?.ichimoku ?? null;
 
   // ── MA crossovers (current alignment state) ──
   const ma_crossovers: unknown[] = [];
@@ -313,6 +314,20 @@ function computeSnapshotFields(
     else if (ema8 < ema21 && ema21 < ema50) trend = 'downtrend';
   }
 
+  // Ichimoku cloud position: above / inside / below current cloud (currentSpanA & currentSpanB)
+  let ichimoku_cloud_bias: string | null = null;
+  if (closePrice != null && ichimoku?.current_span_a != null && ichimoku?.current_span_b != null) {
+    const cloudTop    = Math.max(ichimoku.current_span_a, ichimoku.current_span_b);
+    const cloudBottom = Math.min(ichimoku.current_span_a, ichimoku.current_span_b);
+    ichimoku_cloud_bias = closePrice > cloudTop ? 'above' : closePrice < cloudBottom ? 'below' : 'inside';
+  }
+
+  // Tenkan vs Kijun cross direction (tk_cross)
+  let tk_cross: string | null = null;
+  if (ichimoku?.tenkan != null && ichimoku?.kijun != null) {
+    tk_cross = ichimoku.tenkan > ichimoku.kijun ? 'bullish' : 'bearish';
+  }
+
   const market_structure: Record<string, unknown> = {
     trend,
     ema_alignment,
@@ -321,6 +336,8 @@ function computeSnapshotFields(
     price_vs_vwap: closePrice != null && vwap != null ? (closePrice > vwap ? 'above' : 'below') : null,
     macd_bias: macd?.histogram != null ? (macd.histogram > 0 ? 'bullish' : 'bearish') : null,
     funding_bias: funding != null ? (funding > 0.01 ? 'positive' : funding < -0.01 ? 'negative' : 'neutral') : null,
+    ichimoku_cloud_bias,
+    ichimoku_tk_cross: tk_cross,
   };
 
   // ── Alerts ──
@@ -350,6 +367,16 @@ function computeSnapshotFields(
   }
   if (supertrend?.direction === 'long' && ema_alignment === 'bullish') {
     alerts.push({ type: 'bullish_confluence', severity: 'medium', message: 'Supertrend + EMA alignment both bullish', data: { supertrend_dir: 'long', ema_alignment }, timestamp: new Date() });
+  }
+
+  if (ichimoku_cloud_bias === 'inside') {
+    alerts.push({ type: 'ichimoku_in_cloud', severity: 'medium', message: 'Price inside Ichimoku cloud — consolidation / indecision zone', data: { current_span_a: ichimoku?.current_span_a, current_span_b: ichimoku?.current_span_b }, timestamp: new Date() });
+  }
+  if (ichimoku_cloud_bias != null && tk_cross != null && supertrend?.direction != null) {
+    const allBullish = ichimoku_cloud_bias === 'above' && tk_cross === 'bullish' && supertrend.direction === 'long';
+    const allBearish = ichimoku_cloud_bias === 'below' && tk_cross === 'bearish' && supertrend.direction === 'short';
+    if (allBullish) alerts.push({ type: 'ichimoku_bullish_confluence', severity: 'high', message: 'Strong bullish: price above cloud, TK cross bullish, Supertrend long', data: { ichimoku_cloud_bias, tk_cross }, timestamp: new Date() });
+    if (allBearish) alerts.push({ type: 'ichimoku_bearish_confluence', severity: 'high', message: 'Strong bearish: price below cloud, TK cross bearish, Supertrend short', data: { ichimoku_cloud_bias, tk_cross }, timestamp: new Date() });
   }
 
   return {

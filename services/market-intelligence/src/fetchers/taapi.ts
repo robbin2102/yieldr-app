@@ -284,13 +284,17 @@ function parseSingleConstructResponse(data: any, symbol: string): Record<string,
       case 'obv':        indicators.obv    = result.value ?? null; break;
       case 'cmf':        indicators.cmf    = result.value ?? null; break;
       case 'ichimoku':
-        logger.debug('TAAPI', `Ichimoku raw: ${JSON.stringify(result)}`);
+        // TAAPI response fields (individual & bulk): conversion, base, spanA, spanB,
+        // currentSpanA, currentSpanB, laggingSpanA, laggingSpanB
         indicators.ichimoku = {
-          tenkan:   result.valueTenkan    ?? result.tenkan_sen    ?? result.tenkan   ?? null,
-          kijun:    result.valueKijun     ?? result.kijun_sen     ?? result.kijun    ?? null,
-          senkou_a: result.valueSenkouA   ?? result.senkou_span_a ?? result.senkouA  ?? null,
-          senkou_b: result.valueSenkouB   ?? result.senkou_span_b ?? result.senkouB  ?? null,
-          chikou:   result.valueChikou    ?? result.chikou_span   ?? result.chikou   ?? null,
+          tenkan:          result.conversion    ?? null,  // conversion line (Tenkan-sen)
+          kijun:           result.base          ?? null,  // base line (Kijun-sen)
+          senkou_a:        result.spanA         ?? null,  // future cloud span A (displaced +26)
+          senkou_b:        result.spanB         ?? null,  // future cloud span B (displaced +26)
+          current_span_a:  result.currentSpanA  ?? null,  // cloud span A at current bar
+          current_span_b:  result.currentSpanB  ?? null,  // cloud span B at current bar
+          lagging_span_a:  result.laggingSpanA  ?? null,  // lagging span A (chikou context)
+          lagging_span_b:  result.laggingSpanB  ?? null,  // lagging span B
         };
         break;
       case 'supertrend':

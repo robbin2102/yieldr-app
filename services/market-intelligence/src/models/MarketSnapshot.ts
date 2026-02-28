@@ -35,7 +35,12 @@ const IndicatorsSchema = new Schema({
   atr_14:    Number,
   squeeze:   { value: Number, is_squeeze: Boolean },
   vwap: Number, obv: Number, cmf: Number,
-  ichimoku:   { tenkan: Number, kijun: Number, senkou_a: Number, senkou_b: Number, chikou: Number },
+  ichimoku: {
+    tenkan: Number, kijun: Number,                    // conversion & base lines
+    senkou_a: Number, senkou_b: Number,               // future cloud (displaced +26)
+    current_span_a: Number, current_span_b: Number,   // cloud at current bar
+    lagging_span_a: Number, lagging_span_b: Number,   // lagging span (chikou context)
+  },
   supertrend: { value: Number, direction: String },
   psar:       Number,
   pivot_points: { pp: Number, r1: Number, r2: Number, r3: Number, s1: Number, s2: Number, s3: Number },
