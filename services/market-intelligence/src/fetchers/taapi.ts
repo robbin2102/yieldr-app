@@ -33,6 +33,35 @@ function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+// Direct GET request for indicators that return null in /bulk on binancefutures
+// (psar, squeeze, fibonacciretracement, priorswinghigh, priorswinglow all affected)
+async function getDirect(endpoint: string, params: Record<string, string | number>, retries = 5): Promise<any> {
+  const url = new URL(`${config.taapi.baseUrl}/${endpoint}`);
+  url.searchParams.set('secret', config.taapi.apiKey);
+  for (const [k, v] of Object.entries(params)) url.searchParams.set(k, String(v));
+
+  for (let attempt = 0; attempt < retries; attempt++) {
+    try {
+      const res = await fetch(url.toString());
+      if (res.status === 429) {
+        const waitMs = 15000 * Math.pow(2, attempt);
+        logger.warn('TAAPI', `Rate limited (429) on ${endpoint}, waiting ${waitMs / 1000}s`);
+        await sleep(waitMs);
+        continue;
+      }
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(`TAAPI ${endpoint} ${res.status}: ${text.slice(0, 200)}`);
+      }
+      return await res.json();
+    } catch (err: any) {
+      if (attempt === retries - 1) throw err;
+      logger.warn('TAAPI', `${endpoint} attempt ${attempt + 1} failed: ${err.message}, retrying...`);
+      await sleep(2000 * (attempt + 1));
+    }
+  }
+}
+
 async function postBulk(body: object, retries = 5): Promise<any> {
   for (let attempt = 0; attempt < retries; attempt++) {
     try {
@@ -90,8 +119,9 @@ export async function fetchCoreIndicators(symbol: string): Promise<Record<string
         { id: 'cmf',         indicator: 'cmf' },
         { id: 'ichimoku',   indicator: 'ichimoku' },
         { id: 'supertrend', indicator: 'supertrend' },
-        // psar moved to BULK2 — keeps BULK1 at the 20-indicator maximum per call
-        // pivot_points: removed — computed locally from Binance prev-day OHLC (TAAPI bulk returns null)
+        // psar/squeeze/fibonacciretracement/priorswinghigh/priorswinglow: fetched via direct GET
+        //   (TAAPI /bulk returns null for these on binancefutures — same issue as pivot_points)
+        // pivot_points: computed locally from Binance prev-day OHLC
       ],
     },
   };
@@ -100,44 +130,66 @@ export async function fetchCoreIndicators(symbol: string): Promise<Record<string
 }
 
 export async function fetchStructureIndicators(symbols: string[]): Promise<Map<string, Record<string, unknown>>> {
-  const structureIndicators = [
-    { id: 'fibonacci',  indicator: 'fibonacciretracement' },
-    { id: 'psar',       indicator: 'psar' },
-    { id: 'squeeze',    indicator: 'squeeze' },
-    { id: 'swing_high', indicator: 'priorswinghigh' },
-    { id: 'swing_low',  indicator: 'priorswinglow' },
-  ];
+  const result = new Map<string, Record<string, unknown>>();
 
-  // Single symbol: use object construct (same format as BULK1) so parseSingleConstructResponse
-  // can be reused — avoids ambiguity with how TAAPI serialises a 1-element array construct.
-  if (symbols.length === 1) {
-    const body = {
-      secret: config.taapi.apiKey,
-      construct: {
-        exchange: config.taapi.exchange,
-        symbol: `${symbols[0]}/USDT`,
-        interval: config.taapi.interval,
-        indicators: structureIndicators,
-      },
+  // psar, squeeze, fibonacciretracement, priorswinghigh, priorswinglow all return null
+  // when fetched via /bulk on binancefutures — same issue as pivot_points. Use direct GETs.
+  for (const sym of symbols) {
+    const base = {
+      exchange: config.taapi.exchange,
+      symbol: `${sym}/USDT`,
+      interval: config.taapi.interval,
     };
-    const data = await postBulk(body);
-    logger.info('TAAPI', `BULK2 single raw data: ${JSON.stringify(data?.data)}`);
-    const parsed = parseSingleConstructResponse(data, symbols[0]);
-    return new Map([[symbols[0], parsed]]);
+    const indicators: Record<string, unknown> = {};
+
+    // psar → { value }
+    try {
+      const r = await getDirect('psar', base);
+      indicators.psar = r?.value ?? null;
+    } catch (err: any) {
+      logger.warn('TAAPI', `${sym} psar failed: ${err.message}`);
+    }
+    await sleep(config.taapi.rateDelayMs);
+
+    // squeeze → { value, squeeze }
+    try {
+      const r = await getDirect('squeeze', base);
+      indicators.squeeze = { value: r?.value ?? null, is_squeeze: r?.squeeze ?? null };
+    } catch (err: any) {
+      logger.warn('TAAPI', `${sym} squeeze failed: ${err.message}`);
+    }
+    await sleep(config.taapi.rateDelayMs);
+
+    // fibonacciretracement → { value, trend, startPrice, endPrice, ... }
+    try {
+      const r = await getDirect('fibonacciretracement', { ...base, period: 50, trend: 'auto' });
+      indicators.fibonacci = parseFibonacci(r);
+    } catch (err: any) {
+      logger.warn('TAAPI', `${sym} fibonacciretracement failed: ${err.message}`);
+    }
+    await sleep(config.taapi.rateDelayMs);
+
+    // priorswinghigh → { valueClose, valueHigh }
+    try {
+      const r = await getDirect('priorswinghigh', base);
+      indicators.swing_high = { close: r?.valueClose ?? null, high: r?.valueHigh ?? null };
+    } catch (err: any) {
+      logger.warn('TAAPI', `${sym} priorswinghigh failed: ${err.message}`);
+    }
+    await sleep(config.taapi.rateDelayMs);
+
+    // priorswinglow → { valueClose, valueLow }
+    try {
+      const r = await getDirect('priorswinglow', base);
+      indicators.swing_low = { close: r?.valueClose ?? null, low: r?.valueLow ?? null };
+    } catch (err: any) {
+      logger.warn('TAAPI', `${sym} priorswinglow failed: ${err.message}`);
+    }
+
+    result.set(sym, indicators);
   }
 
-  // Multiple symbols: array of constructs
-  const constructs = symbols.map(sym => ({
-    exchange: config.taapi.exchange,
-    symbol: `${sym}/USDT`,
-    interval: config.taapi.interval,
-    indicators: structureIndicators,
-  }));
-  const body = { secret: config.taapi.apiKey, construct: constructs };
-  const data = await postBulk(body);
-  logger.info('TAAPI', `BULK2 raw response keys: ${Object.keys(data ?? {}).join(', ')}`);
-  logger.info('TAAPI', `BULK2 data[0]: ${JSON.stringify(data?.data?.[0])}`);
-  return parseMultiConstructResponse(data, symbols);
+  return result;
 }
 
 export async function fetchPatternBatch(
@@ -366,10 +418,8 @@ function parseSingleConstructResponse(data: any, symbol: string): Record<string,
         break;
       case 'psar':        indicators.psar = result.value ?? null; break;
       case 'squeeze':
-        indicators.squeeze = {
-          value:      result.value      ?? null,
-          is_squeeze: result.sqzmomOn   ?? result.isSqueezing ?? null,
-        };
+        // TAAPI squeeze response: { value, squeeze }
+        indicators.squeeze = { value: result.value ?? null, is_squeeze: result.squeeze ?? null };
         break;
       case 'swing_high':
         // priorswinghigh response: { valueClose, valueHigh }
@@ -425,10 +475,7 @@ function parseMultiConstructResponse(data: any, symbols: string[]): Map<string, 
           indicators.fibonacci = parseFibonacci(res); break;
         case 'psar':       indicators.psar = res.value ?? null; break;
         case 'squeeze':
-          indicators.squeeze = {
-            value:      res.value      ?? null,
-            is_squeeze: res.sqzmomOn   ?? res.isSqueezing ?? null,
-          };
+          indicators.squeeze = { value: res.value ?? null, is_squeeze: res.squeeze ?? null };
           break;
         case 'swing_high':
           indicators.swing_high = {
