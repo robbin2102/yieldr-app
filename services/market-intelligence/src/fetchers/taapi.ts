@@ -101,11 +101,10 @@ export async function fetchCoreIndicators(symbol: string): Promise<Record<string
 
 export async function fetchStructureIndicators(symbols: string[]): Promise<Map<string, Record<string, unknown>>> {
   const structureIndicators = [
-    { id: 'fibonacci',  indicator: 'fibonacciretracement' },
-    { id: 'psar',       indicator: 'psar' },
-    { id: 'squeeze',    indicator: 'squeeze' },
-    { id: 'swing_high', indicator: 'swinghigh' },
-    { id: 'swing_low',  indicator: 'swinglow' },
+    { id: 'fibonacci', indicator: 'fibonacciretracement' },
+    { id: 'psar',      indicator: 'psar' },
+    { id: 'squeeze',   indicator: 'squeeze' },
+    // swing_high / swing_low: pending correct TAAPI indicator slug (swinghigh was invalid)
   ];
 
   // Single symbol: use object construct (same format as BULK1) so parseSingleConstructResponse
