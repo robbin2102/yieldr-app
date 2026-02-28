@@ -100,17 +100,38 @@ export async function fetchCoreIndicators(symbol: string): Promise<Record<string
 }
 
 export async function fetchStructureIndicators(symbols: string[]): Promise<Map<string, Record<string, unknown>>> {
+  const structureIndicators = [
+    { id: 'fibonacci', indicator: 'fibonacciretracement' },
+    { id: 'psar',      indicator: 'psar' },
+  ];
+
+  // Single symbol: use object construct (same format as BULK1) so parseSingleConstructResponse
+  // can be reused — avoids ambiguity with how TAAPI serialises a 1-element array construct.
+  if (symbols.length === 1) {
+    const body = {
+      secret: config.taapi.apiKey,
+      construct: {
+        exchange: config.taapi.exchange,
+        symbol: `${symbols[0]}/USDT`,
+        interval: config.taapi.interval,
+        indicators: structureIndicators,
+      },
+    };
+    const data = await postBulk(body);
+    const parsed = parseSingleConstructResponse(data, symbols[0]);
+    return new Map([[symbols[0], parsed]]);
+  }
+
+  // Multiple symbols: array of constructs
   const constructs = symbols.map(sym => ({
     exchange: config.taapi.exchange,
     symbol: `${sym}/USDT`,
     interval: config.taapi.interval,
-    indicators: [
-      { id: 'fibonacci', indicator: 'fibonacciretracement' },
-      { id: 'psar',      indicator: 'psar' },
-    ],
+    indicators: structureIndicators,
   }));
   const body = { secret: config.taapi.apiKey, construct: constructs };
   const data = await postBulk(body);
+  logger.debug('TAAPI', `BULK2 multi-construct raw data[0]: ${JSON.stringify(data?.data?.[0])}`);
   return parseMultiConstructResponse(data, symbols);
 }
 
@@ -317,6 +338,15 @@ function parseSingleConstructResponse(data: any, symbol: string): Record<string,
         indicators.supertrend = { value: result.value ?? null, direction: result.valueAdvice ?? null };
         break;
       case 'psar':        indicators.psar = result.value ?? null; break;
+      case 'fibonacci':
+        indicators.fibonacci = {
+          level_236: result.value236 ?? null,
+          level_382: result.value382 ?? null,
+          level_500: result.value500 ?? null,
+          level_618: result.value618 ?? null,
+          level_786: result.value786 ?? null,
+        };
+        break;
       case 'pivot_points':
         logger.debug('TAAPI', `Pivot points raw: ${JSON.stringify(result)}`);
         indicators.pivot_points = {
