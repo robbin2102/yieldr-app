@@ -79,6 +79,8 @@ export async function fetchCoreIndicators(symbol: string): Promise<Record<string
         { id: 'macd',        indicator: 'macd' },
         { id: 'stochrsi',    indicator: 'stochrsi' },
         { id: 'adx',         indicator: 'adx' },
+        { id: 'plus_di',     indicator: 'plusdi' },
+        { id: 'minus_di',    indicator: 'minusdi' },
         { id: 'momentum',    indicator: 'mom' },
         { id: 'bbands',      indicator: 'bbands' },
         { id: 'atr_14',      indicator: 'atr' },
@@ -102,9 +104,7 @@ export async function fetchStructureIndicators(symbols: string[]): Promise<Map<s
     symbol: `${sym}/USDT`,
     interval: config.taapi.interval,
     indicators: [
-      { id: 'fibonacci',  indicator: 'fibonacciretracement' },
-      { id: 'swing_high', indicator: 'swingHigh' },
-      { id: 'swing_low',  indicator: 'swingLow' },
+      { id: 'fibonacci', indicator: 'fibonacciretracement' },
     ],
   }));
   const body = { secret: config.taapi.apiKey, construct: constructs };
@@ -259,12 +259,17 @@ function parseSingleConstructResponse(data: any, symbol: string): Record<string,
         indicators.stoch_rsi = { k: result.valueFastK ?? null, d: result.valueFastD ?? null };
         break;
       case 'adx':
-        logger.debug('TAAPI', `ADX raw: ${JSON.stringify(result)}`);
-        indicators.adx = {
-          adx:      result.value       ?? null,
-          plus_di:  result.valuePDI    ?? result.valuePlusDI  ?? result.plus_di  ?? result.pdi ?? null,
-          minus_di: result.valueMDI    ?? result.valueMinusDI ?? result.minus_di ?? result.mdi ?? null,
-        };
+        // 'adx' indicator only returns the ADX line; DI lines come from plusdi/minusdi below
+        if (!indicators.adx) indicators.adx = { adx: null, plus_di: null, minus_di: null };
+        (indicators.adx as any).adx = result.value ?? null;
+        break;
+      case 'plus_di':
+        if (!indicators.adx) indicators.adx = { adx: null, plus_di: null, minus_di: null };
+        (indicators.adx as any).plus_di = result.value ?? null;
+        break;
+      case 'minus_di':
+        if (!indicators.adx) indicators.adx = { adx: null, plus_di: null, minus_di: null };
+        (indicators.adx as any).minus_di = result.value ?? null;
         break;
       case 'momentum':   indicators.momentum = result.value ?? null; break;
       case 'bbands': {

@@ -83,7 +83,7 @@ export async function buildAndSaveSnapshot(args: BuildSnapshotArgs): Promise<voi
     fetched_on_demand: false,
     on_demand_expires_at: null,
     fetch_duration_ms: Date.now() - start,
-    errors: taapi.errors,
+    fetch_errors: taapi.errors,
   };
 
   try {

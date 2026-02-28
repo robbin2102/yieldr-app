@@ -47,7 +47,7 @@ export async function fetchOnDemand(symbol: string): Promise<Record<string, unkn
         on_demand_expires_at: expiresAt,
         derivatives: enrichedDerivatives,
         fetch_duration_ms: (existing as any).fetch_duration_ms + fetchMs,
-        ...(perCoin.errors.length > 0 ? { $push: { errors: { $each: perCoin.errors } } } : {}),
+        ...(perCoin.errors.length > 0 ? { $push: { fetch_errors: { $each: perCoin.errors } } } : {}),
       },
     },
     { new: true },

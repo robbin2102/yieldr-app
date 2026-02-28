@@ -95,7 +95,7 @@ const MarketSnapshotSchema = new Schema<any>({
   fetched_on_demand:   { type: Boolean, default: false },
   on_demand_expires_at: { type: Date, default: null },
   fetch_duration_ms:   { type: Number, default: 0 },
-  errors:              [String],
+  fetch_errors:        { type: [String], default: [], suppressReservedKeysWarning: true },
 }, { collection: 'market_snapshots', timestamps: false });
 
 MarketSnapshotSchema.index({ symbol: 1, timestamp: -1 }, { unique: true });
