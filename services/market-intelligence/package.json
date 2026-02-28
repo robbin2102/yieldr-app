@@ -1,0 +1,27 @@
+{
+  "name": "market-intelligence",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts",
+    "fetch-coin": "tsx src/scripts/fetch-coin.ts",
+    "fetch-once": "tsx src/scripts/fetch-once.ts",
+    "refresh-coins": "tsx src/scripts/refresh-coins.ts"
+  },
+  "dependencies": {
+    "dotenv": "^16.0.0",
+    "express": "^4.18.0",
+    "mongoose": "^8.0.0",
+    "node-cron": "^3.0.0",
+    "uuid": "^9.0.0"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.0",
+    "@types/node": "^20.0.0",
+    "@types/node-cron": "^3.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.0.0"
+  }
+}
