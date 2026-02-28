@@ -360,7 +360,9 @@ function parseSingleConstructResponse(data: any, symbol: string): Record<string,
         indicators.supertrend = { value: result.value ?? null, direction: result.valueAdvice ?? null };
         break;
       case 'psar':        indicators.psar = result.value ?? null; break;
-      case 'fibonacci':  indicators.fibonacci = parseFibonacci(result); break;
+      case 'fibonacci':
+        logger.debug('TAAPI', `Fibonacci raw: ${JSON.stringify(result)}`);
+        indicators.fibonacci = parseFibonacci(result); break;
       case 'pivot_points':
         logger.debug('TAAPI', `Pivot points raw: ${JSON.stringify(result)}`);
         indicators.pivot_points = {
@@ -393,7 +395,9 @@ function parseMultiConstructResponse(data: any, symbols: string[]): Map<string, 
       const res = item.result;
       if (!id || !res) continue;
       switch (id) {
-        case 'fibonacci':  indicators.fibonacci = parseFibonacci(res); break;
+        case 'fibonacci':
+          logger.debug('TAAPI', `Fibonacci raw: ${JSON.stringify(res)}`);
+          indicators.fibonacci = parseFibonacci(res); break;
         case 'psar':       indicators.psar = res.value ?? null; break;
         case 'swing_high':
           indicators.swing_high = {
