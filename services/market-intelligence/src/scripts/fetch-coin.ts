@@ -8,6 +8,7 @@ dotenv.config();
 import { connectDB, disconnectDB } from '../db';
 import { fetchAllCoins } from '../fetchers/taapi';
 import { fetchAggregateData, fetchPerCoinData, fetchCoinbasePremium } from '../fetchers/coinglass';
+import { fetchBinanceCandle } from '../fetchers/binance';
 import { buildAndSaveSnapshot } from '../processors/snapshot-builder';
 import { logger } from '../utils/logger';
 
@@ -32,16 +33,21 @@ async function main(): Promise<void> {
   logger.info('Script', 'Fetching Coinbase premium...');
   const premium = await fetchCoinbasePremium();
 
+  logger.info('Script', 'Fetching Binance OHLCV...');
+  const binance = await fetchBinanceCandle(symbol);
+
   const taapi     = taapiMap.get(symbol) ?? { indicators: {}, candlestick_patterns: [], errors: [] };
   const aggregate = aggregateMap.get(symbol)!;
 
   logger.info('Script', 'Building snapshot...');
-  await buildAndSaveSnapshot({ symbol, timestamp, tier: 'full', taapi, aggregate, perCoin, coinbasePremium: premium });
+  await buildAndSaveSnapshot({ symbol, timestamp, tier: 'full', taapi, aggregate, perCoin, coinbasePremium: premium, binance });
 
   logger.info('Script', `✓ Snapshot for ${symbol} saved successfully`);
   logger.info('Script', `  Indicators: ${Object.keys(taapi.indicators).length}`);
   logger.info('Script', `  Patterns: ${taapi.candlestick_patterns.length}`);
   logger.info('Script', `  Errors: ${taapi.errors.length}`);
+  logger.info('Script', `  OHLCV: O=${binance.open} H=${binance.high} L=${binance.low} C=${binance.close} V=${binance.volume}`);
+  logger.info('Script', `  Pivot PP (daily): ${binance.daily_close != null ? '✓ computed from Binance' : '✗ missing daily candle'}`);
   if (taapi.errors.length > 0) {
     logger.warn('Script', `  Error details: ${taapi.errors.join(', ')}`);
   }

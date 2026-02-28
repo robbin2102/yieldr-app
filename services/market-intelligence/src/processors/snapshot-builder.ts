@@ -1,6 +1,7 @@
 import { logger } from '../utils/logger';
 import { TaapiCoinData } from '../fetchers/taapi';
 import { CoinAggregateData, CoinPerCoinData } from '../fetchers/coinglass';
+import { BinanceCandleData } from '../fetchers/binance';
 import MarketSnapshot from '../models/MarketSnapshot';
 import LiquidationLevels from '../models/LiquidationLevels';
 import { bucketLiquidations } from './liquidation-bucketer';
@@ -13,58 +14,70 @@ interface BuildSnapshotArgs {
   aggregate: CoinAggregateData;
   perCoin?: CoinPerCoinData;
   coinbasePremium?: { btc: number | null; eth: number | null };
+  binance?: BinanceCandleData;
 }
 
 export async function buildAndSaveSnapshot(args: BuildSnapshotArgs): Promise<void> {
-  const { symbol, timestamp, tier, taapi, aggregate, perCoin, coinbasePremium } = args;
+  const { symbol, timestamp, tier, taapi, aggregate, perCoin, coinbasePremium, binance } = args;
   const start = Date.now();
 
   const indicators = taapi.indicators as any;
-  const closePrice: number | null = indicators?.vwap ?? indicators?.pivot_points?.pp ?? null;
+
+  // Price: prefer Binance candle (real OHLCV), fall back to VWAP/pivot for close
+  const closePrice: number | null =
+    binance?.close ?? indicators?.vwap ?? indicators?.pivot_points?.pp ?? null;
+
+  const price = {
+    open:   binance?.open   ?? null,
+    high:   binance?.high   ?? null,
+    low:    binance?.low    ?? null,
+    close:  closePrice,
+    volume: binance?.volume ?? null,
+  };
+
+  // Pivot points: prefer TAAPI result, fall back to computing from Binance daily candle
+  const pivotPoints = computePivotPoints(indicators?.pivot_points, binance);
 
   const derivatives = buildDerivatives(aggregate, perCoin, coinbasePremium, symbol);
+
+  const indicatorsDoc = {
+    ema_8:        indicators?.ema_8        ?? null,
+    ema_21:       indicators?.ema_21       ?? null,
+    ema_50:       indicators?.ema_50       ?? null,
+    ema_200:      indicators?.ema_200      ?? null,
+    sma_50:       indicators?.sma_50       ?? null,
+    sma_200:      indicators?.sma_200      ?? null,
+    rsi_14:       indicators?.rsi_14       ?? null,
+    macd:         indicators?.macd         ?? null,
+    stoch_rsi:    indicators?.stoch_rsi    ?? null,
+    adx:          indicators?.adx          ?? null,
+    momentum:     indicators?.momentum     ?? null,
+    bbands:       indicators?.bbands       ?? null,
+    atr_14:       indicators?.atr_14       ?? null,
+    squeeze:      indicators?.squeeze      ?? null,
+    vwap:         indicators?.vwap         ?? null,
+    obv:          indicators?.obv          ?? null,
+    cmf:          indicators?.cmf          ?? null,
+    ichimoku:     indicators?.ichimoku     ?? null,
+    supertrend:   indicators?.supertrend   ?? null,
+    psar:         indicators?.psar         ?? null,
+    pivot_points: pivotPoints,
+    fibonacci:    indicators?.fibonacci    ?? null,
+    swing_high:   indicators?.swing_high   ?? null,
+    swing_low:    indicators?.swing_low    ?? null,
+  };
+
+  const computed = computeSnapshotFields(indicatorsDoc, derivatives, closePrice);
 
   const snapshotDoc = {
     symbol: symbol.toUpperCase(),
     timestamp,
     interval: '1h',
-    price: { open: null, high: null, low: null, close: closePrice, volume: null },
-    indicators: {
-      ema_8:        indicators?.ema_8        ?? null,
-      ema_21:       indicators?.ema_21       ?? null,
-      ema_50:       indicators?.ema_50       ?? null,
-      ema_200:      indicators?.ema_200      ?? null,
-      sma_50:       indicators?.sma_50       ?? null,
-      sma_200:      indicators?.sma_200      ?? null,
-      rsi_14:       indicators?.rsi_14       ?? null,
-      macd:         indicators?.macd         ?? null,
-      stoch_rsi:    indicators?.stoch_rsi    ?? null,
-      adx:          indicators?.adx          ?? null,
-      momentum:     indicators?.momentum     ?? null,
-      bbands:       indicators?.bbands       ?? null,
-      atr_14:       indicators?.atr_14       ?? null,
-      squeeze:      indicators?.squeeze      ?? null,
-      vwap:         indicators?.vwap         ?? null,
-      obv:          indicators?.obv          ?? null,
-      cmf:          indicators?.cmf          ?? null,
-      ichimoku:     indicators?.ichimoku     ?? null,
-      supertrend:   indicators?.supertrend   ?? null,
-      psar:         indicators?.psar         ?? null,
-      pivot_points: indicators?.pivot_points ?? null,
-      fibonacci:    indicators?.fibonacci    ?? null,
-      swing_high:   indicators?.swing_high   ?? null,
-      swing_low:    indicators?.swing_low    ?? null,
-    },
+    price,
+    indicators: indicatorsDoc,
     candlestick_patterns: taapi.candlestick_patterns,
     derivatives,
-    computed: {
-      ma_crossovers: [],
-      divergences: [],
-      market_structure: {},
-      fvg: [],
-      order_blocks: [],
-      alerts: [],
-    },
+    computed,
     chart_patterns: [],
     tier,
     fetched_on_demand: false,
@@ -90,6 +103,45 @@ export async function buildAndSaveSnapshot(args: BuildSnapshotArgs): Promise<voi
   }
 }
 
+// ─── Pivot Points ──────────────────────────────────────────────────────────────
+
+/**
+ * Returns TAAPI pivot points if populated, otherwise computes classic floor-trader
+ * pivots from the previous day's Binance OHLC.
+ *  PP = (H+L+C)/3
+ *  R1 = 2*PP-L,  R2 = PP+(H-L),  R3 = H+2*(PP-L)
+ *  S1 = 2*PP-H,  S2 = PP-(H-L),  S3 = L-2*(H-PP)
+ */
+function computePivotPoints(
+  taapiPivots: any,
+  binance: BinanceCandleData | undefined,
+): Record<string, number | null> {
+  // Use TAAPI if it returned real values
+  if (taapiPivots?.pp != null) return taapiPivots;
+
+  // Fall back to Binance daily OHLC
+  const H = binance?.daily_high  ?? null;
+  const L = binance?.daily_low   ?? null;
+  const C = binance?.daily_close ?? null;
+
+  if (H == null || L == null || C == null) {
+    return { pp: null, r1: null, r2: null, r3: null, s1: null, s2: null, s3: null };
+  }
+
+  const pp = (H + L + C) / 3;
+  return {
+    pp,
+    r1: 2 * pp - L,
+    r2: pp + (H - L),
+    r3: H + 2 * (pp - L),
+    s1: 2 * pp - H,
+    s2: pp - (H - L),
+    s3: L - 2 * (H - pp),
+  };
+}
+
+// ─── Derivatives ──────────────────────────────────────────────────────────────
+
 function buildDerivatives(
   aggregate: CoinAggregateData,
   perCoin: CoinPerCoinData | undefined,
@@ -101,72 +153,97 @@ function buildDerivatives(
   const fundingCurrent = aggregate.funding_rate_current;
   const fundingAnnualized = fundingCurrent != null ? fundingCurrent * 3 * 365 * 100 : null;
 
-  // OI from aggregated-history: [{ time, open, high, low, close }] strings
+  // OI: use extended history (limit=7 → ~28h) for both 4h and 24h change
   let oiTotal: number | null = null;
   let oiChange4h: number | null = null;
+  let oiChange24h: number | null = null;
+
   if (perCoin?.oi_history && perCoin.oi_history.length >= 1) {
     const vals = perCoin.oi_history;
-    const curr = parseFloat(vals[vals.length - 1]?.close ?? '') || null;
+    const curr  = parseFloat(vals[vals.length - 1]?.close ?? '') || null;
     oiTotal = curr;
+
+    // 4h change: compare last two candles
     if (vals.length >= 2) {
-      const prev = parseFloat(vals[vals.length - 2]?.close ?? '') || null;
-      if (curr && prev) oiChange4h = ((curr - prev) / prev) * 100;
+      const prev4h = parseFloat(vals[vals.length - 2]?.close ?? '') || null;
+      if (curr && prev4h) oiChange4h = ((curr - prev4h) / prev4h) * 100;
+    }
+
+    // 24h change: compare last candle to 6 candles ago (6 * 4h = 24h)
+    if (vals.length >= 7) {
+      const prev24h = parseFloat(vals[vals.length - 7]?.close ?? '') || null;
+      if (curr && prev24h) oiChange24h = ((curr - prev24h) / prev24h) * 100;
     }
   }
 
-  // Liquidation from aggregated-history: [{ time, aggregated_long_liquidation_usd, aggregated_short_liquidation_usd }]
-  let liqH4 = { long_usd: null as number | null, short_usd: null as number | null };
+  // Liquidations from extended history (limit=6 → 24h)
+  let liqH4  = { long_usd: null as number | null, short_usd: null as number | null };
+  let liqH24 = { long_usd: null as number | null, short_usd: null as number | null };
   let liqLatest = { long_usd: null as number | null, short_usd: null as number | null, count: null as number | null };
+
   if (perCoin?.liq_history && perCoin.liq_history.length > 0) {
-    const h1Data = perCoin.liq_history[perCoin.liq_history.length - 1];
+    const hist = perCoin.liq_history;
+    const latest = hist[hist.length - 1];
+
     liqLatest = {
-      long_usd:  h1Data?.aggregated_long_liquidation_usd  ?? null,
-      short_usd: h1Data?.aggregated_short_liquidation_usd ?? null,
+      long_usd:  latest?.aggregated_long_liquidation_usd  ?? null,
+      short_usd: latest?.aggregated_short_liquidation_usd ?? null,
       count:     null,
     };
-    if (perCoin.liq_history.length >= 2) {
-      const h4Long  = perCoin.liq_history.reduce((s: number, d: any) => s + (d?.aggregated_long_liquidation_usd  ?? 0), 0);
-      const h4Short = perCoin.liq_history.reduce((s: number, d: any) => s + (d?.aggregated_short_liquidation_usd ?? 0), 0);
-      liqH4 = { long_usd: h4Long, short_usd: h4Short };
-    }
+
+    // h4: sum of last 1 candle (4h window — single candle at 4h interval)
+    liqH4 = {
+      long_usd:  hist.slice(-1).reduce((s: number, d: any) => s + (d?.aggregated_long_liquidation_usd  ?? 0), 0) || null,
+      short_usd: hist.slice(-1).reduce((s: number, d: any) => s + (d?.aggregated_short_liquidation_usd ?? 0), 0) || null,
+    };
+
+    // h24: sum of all 6 candles (6 * 4h = 24h)
+    const h24Long  = hist.reduce((s: number, d: any) => s + (d?.aggregated_long_liquidation_usd  ?? 0), 0);
+    const h24Short = hist.reduce((s: number, d: any) => s + (d?.aggregated_short_liquidation_usd ?? 0), 0);
+    liqH24 = {
+      long_usd:  h24Long  || aggregate.liq_long_24h  || null,
+      short_usd: h24Short || aggregate.liq_short_24h || null,
+    };
+  } else {
+    // Fallback to aggregate-level 24h data
+    liqH24 = { long_usd: aggregate.liq_long_24h, short_usd: aggregate.liq_short_24h };
   }
 
   return {
     open_interest: {
       total_usd:      oiTotal,
       change_4h_pct:  oiChange4h,
-      change_24h_pct: null,    // not available on Hobby plan aggregate
+      change_24h_pct: oiChange24h,
     },
     funding_rate: {
-      current:     fundingCurrent,
-      predicted:   null,
-      oi_weighted: null,        // not available on Hobby plan
-      vol_weighted: null,       // not available on Hobby plan
-      annualized:  fundingAnnualized,
+      current:      fundingCurrent,
+      predicted:    null,
+      oi_weighted:  null,   // requires plan upgrade
+      vol_weighted: null,   // requires plan upgrade
+      annualized:   fundingAnnualized,
     },
-    funding_arbitrage: [],      // removed: requires plan upgrade
+    funding_arbitrage: [],
     long_short_ratio: {
-      global_accounts: perCoin?.long_short_global       ?? { long: null, short: null, ratio: null },
-      top_accounts:    perCoin?.long_short_top_accounts ?? { long: null, short: null, ratio: null },
+      global_accounts: perCoin?.long_short_global        ?? { long: null, short: null, ratio: null },
+      top_accounts:    perCoin?.long_short_top_accounts  ?? { long: null, short: null, ratio: null },
       top_positions:   perCoin?.long_short_top_positions ?? { long: null, short: null, ratio: null },
     },
     liquidations: {
-      latest: liqLatest,        // most recent 4h candle
-      h4:     liqH4,            // sum of available candles
-      h24: {
-        long_usd:  aggregate.liq_long_24h,
-        short_usd: aggregate.liq_short_24h,
-      },
+      latest: liqLatest,
+      h4:     liqH4,
+      h24:    liqH24,
     },
     taker_buy_sell: (() => {
-      // Use latest candle from v2 taker history (exchange-list requires plan upgrade)
       const th = perCoin?.taker_history ?? [];
       const takerLatest = th[th.length - 1];
+      const buyVol  = parseFloat(takerLatest?.taker_buy_volume_usd  ?? '') || null;
+      const sellVol = parseFloat(takerLatest?.taker_sell_volume_usd ?? '') || null;
+      const total   = buyVol != null && sellVol != null ? buyVol + sellVol : null;
       return {
-        buy_vol_usd:  parseFloat(takerLatest?.taker_buy_volume_usd  ?? '') || null,
-        sell_vol_usd: parseFloat(takerLatest?.taker_sell_volume_usd ?? '') || null,
-        buy_ratio:    null,
-        sell_ratio:   null,
+        buy_vol_usd:  buyVol,
+        sell_vol_usd: sellVol,
+        buy_ratio:    total ? buyVol! / total : null,
+        sell_ratio:   total ? sellVol! / total : null,
       };
     })(),
     basis:            perCoin?.basis ?? null,
@@ -174,13 +251,125 @@ function buildDerivatives(
   };
 }
 
+// ─── Computed Fields ───────────────────────────────────────────────────────────
+
+/**
+ * Derives market_structure, ma_crossovers, and alerts from current snapshot data.
+ * Note: divergences, fvg, order_blocks require multi-candle history (future work).
+ */
+function computeSnapshotFields(
+  indicators: any,
+  derivatives: any,
+  closePrice: number | null,
+): {
+  ma_crossovers:   unknown[];
+  divergences:     unknown[];
+  market_structure: Record<string, unknown>;
+  fvg:             unknown[];
+  order_blocks:    unknown[];
+  alerts:          unknown[];
+} {
+  const ema8   = indicators?.ema_8   ?? null;
+  const ema21  = indicators?.ema_21  ?? null;
+  const ema50  = indicators?.ema_50  ?? null;
+  const ema200 = indicators?.ema_200 ?? null;
+  const rsi    = indicators?.rsi_14  ?? null;
+  const adx    = indicators?.adx?.adx ?? null;
+  const supertrend = indicators?.supertrend ?? null;
+  const vwap   = indicators?.vwap    ?? null;
+  const macd   = indicators?.macd    ?? null;
+  const funding = (derivatives as any)?.funding_rate?.current ?? null;
+
+  // ── MA crossovers (current alignment state) ──
+  const ma_crossovers: unknown[] = [];
+  if (ema8 != null && ema21 != null) {
+    ma_crossovers.push({ fast: 'ema_8', slow: 'ema_21', state: ema8 > ema21 ? 'above' : 'below', fast_value: ema8, slow_value: ema21 });
+  }
+  if (ema21 != null && ema50 != null) {
+    ma_crossovers.push({ fast: 'ema_21', slow: 'ema_50', state: ema21 > ema50 ? 'above' : 'below', fast_value: ema21, slow_value: ema50 });
+  }
+  if (ema50 != null && ema200 != null) {
+    ma_crossovers.push({ fast: 'ema_50', slow: 'ema_200', state: ema50 > ema200 ? 'above' : 'below', fast_value: ema50, slow_value: ema200 });
+  }
+  if (closePrice != null && ema200 != null) {
+    ma_crossovers.push({ fast: 'price', slow: 'ema_200', state: closePrice > ema200 ? 'above' : 'below', fast_value: closePrice, slow_value: ema200 });
+  }
+  if (closePrice != null && vwap != null) {
+    ma_crossovers.push({ fast: 'price', slow: 'vwap', state: closePrice > vwap ? 'above' : 'below', fast_value: closePrice, slow_value: vwap });
+  }
+
+  // ── Market structure ──
+  let trend = 'neutral';
+  let ema_alignment: string | null = null;
+
+  if (ema8 != null && ema21 != null && ema50 != null && ema200 != null) {
+    const bull_stack = ema8 > ema21 && ema21 > ema50 && ema50 > ema200;
+    const bear_stack = ema8 < ema21 && ema21 < ema50 && ema50 < ema200;
+    ema_alignment = bull_stack ? 'bullish' : bear_stack ? 'bearish' : 'mixed';
+
+    if (bull_stack) trend = 'strong_uptrend';
+    else if (bear_stack) trend = 'strong_downtrend';
+    else if (ema8 > ema21 && ema21 > ema50) trend = 'uptrend';
+    else if (ema8 < ema21 && ema21 < ema50) trend = 'downtrend';
+  }
+
+  const market_structure: Record<string, unknown> = {
+    trend,
+    ema_alignment,
+    supertrend_direction: supertrend?.direction ?? null,
+    rsi_zone: rsi != null ? (rsi > 70 ? 'overbought' : rsi < 30 ? 'oversold' : 'neutral') : null,
+    price_vs_vwap: closePrice != null && vwap != null ? (closePrice > vwap ? 'above' : 'below') : null,
+    macd_bias: macd?.histogram != null ? (macd.histogram > 0 ? 'bullish' : 'bearish') : null,
+    funding_bias: funding != null ? (funding > 0.01 ? 'positive' : funding < -0.01 ? 'negative' : 'neutral') : null,
+  };
+
+  // ── Alerts ──
+  const alerts: unknown[] = [];
+
+  if (rsi != null) {
+    if (rsi <= 20)      alerts.push({ type: 'rsi_oversold',   severity: 'high',   message: `RSI extremely oversold at ${rsi.toFixed(1)}`,   data: { rsi }, timestamp: new Date() });
+    else if (rsi <= 30) alerts.push({ type: 'rsi_oversold',   severity: 'medium', message: `RSI oversold at ${rsi.toFixed(1)}`,              data: { rsi }, timestamp: new Date() });
+    else if (rsi >= 80) alerts.push({ type: 'rsi_overbought', severity: 'high',   message: `RSI extremely overbought at ${rsi.toFixed(1)}`,  data: { rsi }, timestamp: new Date() });
+    else if (rsi >= 70) alerts.push({ type: 'rsi_overbought', severity: 'medium', message: `RSI overbought at ${rsi.toFixed(1)}`,            data: { rsi }, timestamp: new Date() });
+  }
+
+  if (adx != null && adx >= 40) {
+    alerts.push({ type: 'strong_trend', severity: 'medium', message: `Strong trend: ADX=${adx.toFixed(1)}`, data: { adx }, timestamp: new Date() });
+  }
+
+  if (funding != null) {
+    const fundingPct = (funding * 100).toFixed(4);
+    if (funding <= -0.05)     alerts.push({ type: 'funding_extreme_negative', severity: 'high',   message: `Extreme negative funding: ${fundingPct}%`, data: { funding }, timestamp: new Date() });
+    else if (funding <= -0.02) alerts.push({ type: 'funding_negative',        severity: 'medium', message: `Negative funding rate: ${fundingPct}%`,    data: { funding }, timestamp: new Date() });
+    else if (funding >= 0.1)   alerts.push({ type: 'funding_extreme_positive', severity: 'high',  message: `Extreme positive funding: ${fundingPct}%`, data: { funding }, timestamp: new Date() });
+    else if (funding >= 0.05)  alerts.push({ type: 'funding_positive',         severity: 'medium', message: `High positive funding: ${fundingPct}%`,  data: { funding }, timestamp: new Date() });
+  }
+
+  if (supertrend?.direction === 'short' && ema_alignment === 'bearish') {
+    alerts.push({ type: 'bearish_confluence', severity: 'high', message: 'Supertrend + EMA alignment both bearish', data: { supertrend_dir: 'short', ema_alignment }, timestamp: new Date() });
+  }
+  if (supertrend?.direction === 'long' && ema_alignment === 'bullish') {
+    alerts.push({ type: 'bullish_confluence', severity: 'medium', message: 'Supertrend + EMA alignment both bullish', data: { supertrend_dir: 'long', ema_alignment }, timestamp: new Date() });
+  }
+
+  return {
+    ma_crossovers,
+    divergences:     [],   // requires multi-candle history
+    market_structure,
+    fvg:             [],   // requires multi-candle history
+    order_blocks:    [],   // requires multi-candle history
+    alerts,
+  };
+}
+
+// ─── Liquidation Levels ────────────────────────────────────────────────────────
+
 async function updateLiquidationLevels(
   symbol: string,
   liqHistory: any[],
   currentPrice: number | null,
 ): Promise<void> {
   try {
-    // liqHistory uses aggregated_long_liquidation_usd / aggregated_short_liquidation_usd
     const normalised = liqHistory.map((d: any) => ({
       ...d,
       longLiquidationUsd:  d.aggregated_long_liquidation_usd  ?? 0,
@@ -207,13 +396,13 @@ async function updateLiquidationLevels(
       { symbol: symbol.toUpperCase() },
       {
         $set: {
-          symbol:                symbol.toUpperCase(),
-          updated_at:            new Date(),
-          current_price:         currentPrice,
-          price_buckets:         buckets,
-          total_long_liq_24h:    totalLong,
-          total_short_liq_24h:   totalShort,
-          heaviest_cluster:      heaviest ? {
+          symbol:               symbol.toUpperCase(),
+          updated_at:           new Date(),
+          current_price:        currentPrice,
+          price_buckets:        buckets,
+          total_long_liq_24h:   totalLong,
+          total_short_liq_24h:  totalShort,
+          heaviest_cluster: heaviest ? {
             price_range: `${heaviest.price_low.toFixed(2)}–${heaviest.price_high.toFixed(2)}`,
             total_usd:   heaviest.total_usd,
             side:        heaviest.long_liq_usd > heaviest.short_liq_usd ? 'long' : 'short',

@@ -102,7 +102,9 @@ export async function fetchStructureIndicators(symbols: string[]): Promise<Map<s
     symbol: `${sym}/USDT`,
     interval: config.taapi.interval,
     indicators: [
-      { id: 'fibonacci', indicator: 'fibonacciretracement' },
+      { id: 'fibonacci',  indicator: 'fibonacciretracement' },
+      { id: 'swing_high', indicator: 'swingHigh' },
+      { id: 'swing_low',  indicator: 'swingLow' },
     ],
   }));
   const body = { secret: config.taapi.apiKey, construct: constructs };
@@ -257,32 +259,38 @@ function parseSingleConstructResponse(data: any, symbol: string): Record<string,
         indicators.stoch_rsi = { k: result.valueFastK ?? null, d: result.valueFastD ?? null };
         break;
       case 'adx':
+        logger.debug('TAAPI', `ADX raw: ${JSON.stringify(result)}`);
         indicators.adx = {
-          adx:      result.value    ?? null,
-          plus_di:  result.valuePDI ?? null,
-          minus_di: result.valueMDI ?? null,
+          adx:      result.value       ?? null,
+          plus_di:  result.valuePDI    ?? result.valuePlusDI  ?? result.plus_di  ?? result.pdi ?? null,
+          minus_di: result.valueMDI    ?? result.valueMinusDI ?? result.minus_di ?? result.mdi ?? null,
         };
         break;
       case 'momentum':   indicators.momentum = result.value ?? null; break;
-      case 'bbands':
-        indicators.bbands = {
-          upper:     result.valueUpperBand  ?? null,
-          middle:    result.valueMiddleBand ?? null,
-          lower:     result.valueLowerBand  ?? null,
-          bandwidth: result.valueBandWidth  ?? null,
-        };
+      case 'bbands': {
+        const bbUpper  = result.valueUpperBand  ?? null;
+        const bbMiddle = result.valueMiddleBand ?? null;
+        const bbLower  = result.valueLowerBand  ?? null;
+        // Compute bandwidth if API doesn't return it: (upper - lower) / middle * 100
+        const bbWidth  = result.valueBandWidth  ??
+          (bbUpper != null && bbLower != null && bbMiddle != null && bbMiddle !== 0
+            ? ((bbUpper - bbLower) / bbMiddle) * 100
+            : null);
+        indicators.bbands = { upper: bbUpper, middle: bbMiddle, lower: bbLower, bandwidth: bbWidth };
         break;
+      }
       case 'atr_14':     indicators.atr_14 = result.value ?? null; break;
       case 'vwap':       indicators.vwap   = result.value ?? null; break;
       case 'obv':        indicators.obv    = result.value ?? null; break;
       case 'cmf':        indicators.cmf    = result.value ?? null; break;
       case 'ichimoku':
+        logger.debug('TAAPI', `Ichimoku raw: ${JSON.stringify(result)}`);
         indicators.ichimoku = {
-          tenkan:   result.valueTenkan  ?? null,
-          kijun:    result.valueKijun   ?? null,
-          senkou_a: result.valueSenkouA ?? null,
-          senkou_b: result.valueSenkouB ?? null,
-          chikou:   result.valueChikou  ?? null,
+          tenkan:   result.valueTenkan    ?? result.tenkan_sen    ?? result.tenkan   ?? null,
+          kijun:    result.valueKijun     ?? result.kijun_sen     ?? result.kijun    ?? null,
+          senkou_a: result.valueSenkouA   ?? result.senkou_span_a ?? result.senkouA  ?? null,
+          senkou_b: result.valueSenkouB   ?? result.senkou_span_b ?? result.senkouB  ?? null,
+          chikou:   result.valueChikou    ?? result.chikou_span   ?? result.chikou   ?? null,
         };
         break;
       case 'supertrend':
@@ -290,10 +298,15 @@ function parseSingleConstructResponse(data: any, symbol: string): Record<string,
         break;
       case 'psar':        indicators.psar = result.value ?? null; break;
       case 'pivot_points':
+        logger.debug('TAAPI', `Pivot points raw: ${JSON.stringify(result)}`);
         indicators.pivot_points = {
-          pp: result.valuePP ?? null,
-          r1: result.valueR1 ?? null, r2: result.valueR2 ?? null, r3: result.valueR3 ?? null,
-          s1: result.valueS1 ?? null, s2: result.valueS2 ?? null, s3: result.valueS3 ?? null,
+          pp: result.valuePP ?? result.pp ?? null,
+          r1: result.valueR1 ?? result.r1 ?? null,
+          r2: result.valueR2 ?? result.r2 ?? null,
+          r3: result.valueR3 ?? result.r3 ?? null,
+          s1: result.valueS1 ?? result.s1 ?? null,
+          s2: result.valueS2 ?? result.s2 ?? null,
+          s3: result.valueS3 ?? result.s3 ?? null,
         };
         break;
     }

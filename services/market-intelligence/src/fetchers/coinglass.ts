@@ -171,9 +171,9 @@ export async function fetchPerCoinData(symbol: string): Promise<CoinPerCoinData>
     },
 
     // Aggregated OI OHLC history (coin-level, all exchanges)
-    // Hobby: min interval 4h. Response: [{ time, open, high, low, close }] values in USD
+    // Hobby: min interval 4h. limit=7 → 28h, enough to compute 24h pct change.
     {
-      path: `/api/futures/open-interest/aggregated-history?symbol=${symbol}&interval=4h&limit=4`,
+      path: `/api/futures/open-interest/aggregated-history?symbol=${symbol}&interval=4h&limit=7`,
       handler: (d) => { result.oi_history = d || []; },
     },
 
@@ -226,9 +226,9 @@ export async function fetchPerCoinData(symbol: string): Promise<CoinPerCoinData>
     },
 
     // Aggregated liquidation history (coin-level, multi-exchange)
-    // Hobby: min interval 4h. exchange_list required. Response: [{ time, aggregated_long_liquidation_usd, aggregated_short_liquidation_usd }]
+    // Hobby: min interval 4h. limit=6 → 24h window for h24 sum.
     {
-      path: `/api/futures/liquidation/aggregated-history?exchange_list=Binance,OKX,Bybit&symbol=${symbol}&interval=4h&limit=4`,
+      path: `/api/futures/liquidation/aggregated-history?exchange_list=Binance,OKX,Bybit&symbol=${symbol}&interval=4h&limit=6`,
       handler: (d) => { result.liq_history = d || []; },
     },
 
