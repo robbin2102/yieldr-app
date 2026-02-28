@@ -42,8 +42,8 @@ async function postBulk(body: object, retries = 5): Promise<any> {
         body: JSON.stringify(body),
       });
       if (res.status === 429) {
-        // TAAPI rate limits reset per minute; wait progressively longer
-        const waitMs = 30000 * (attempt + 1); // 30s, 60s, 90s, 120s, 150s
+        // TAAPI rate limit windows reset every 15s; wait 15s × 2^attempt
+        const waitMs = 15000 * Math.pow(2, attempt); // 15s, 30s, 60s, 120s, 240s
         logger.warn('TAAPI', `Rate limited (429), waiting ${waitMs / 1000}s before retry ${attempt + 1}/${retries}`);
         await sleep(waitMs);
         continue;
@@ -90,7 +90,7 @@ export async function fetchCoreIndicators(symbol: string): Promise<Record<string
         { id: 'cmf',         indicator: 'cmf' },
         { id: 'ichimoku',   indicator: 'ichimoku' },
         { id: 'supertrend', indicator: 'supertrend' },
-        { id: 'psar',       indicator: 'psar' },
+        // psar moved to BULK2 — keeps BULK1 at the 20-indicator maximum per call
         // pivot_points: removed — computed locally from Binance prev-day OHLC (TAAPI bulk returns null)
       ],
     },
@@ -106,6 +106,7 @@ export async function fetchStructureIndicators(symbols: string[]): Promise<Map<s
     interval: config.taapi.interval,
     indicators: [
       { id: 'fibonacci', indicator: 'fibonacciretracement' },
+      { id: 'psar',      indicator: 'psar' },
     ],
   }));
   const body = { secret: config.taapi.apiKey, construct: constructs };
@@ -138,6 +139,15 @@ export async function fetchAllForCoin(symbol: string): Promise<TaapiCoinData> {
   } catch (err: any) {
     errors.push(`BULK1: ${err.message}`);
     logger.warn('TAAPI', `${symbol} BULK1 failed: ${err.message}`);
+  }
+  try {
+    const structureData = await fetchStructureIndicators([symbol]);
+    const extra = structureData.get(symbol);
+    if (extra) indicators = { ...indicators, ...extra };
+    await sleep(config.taapi.rateDelayMs);
+  } catch (err: any) {
+    errors.push(`BULK2: ${err.message}`);
+    logger.warn('TAAPI', `${symbol} BULK2 failed: ${err.message}`);
   }
   return { indicators, candlestick_patterns: [], errors };
 }
@@ -347,6 +357,9 @@ function parseMultiConstructResponse(data: any, symbols: string[]): Map<string, 
             level_618: res.value618 ?? null,
             level_786: res.value786 ?? null,
           };
+          break;
+        case 'psar':
+          indicators.psar = res.value ?? null;
           break;
         case 'swing_high':
           indicators.swing_high = {
