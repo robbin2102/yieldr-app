@@ -33,7 +33,7 @@ function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-async function postBulk(body: object, retries = 3): Promise<any> {
+async function postBulk(body: object, retries = 5): Promise<any> {
   for (let attempt = 0; attempt < retries; attempt++) {
     try {
       const res = await fetch(BULK_URL, {
@@ -42,8 +42,9 @@ async function postBulk(body: object, retries = 3): Promise<any> {
         body: JSON.stringify(body),
       });
       if (res.status === 429) {
-        const waitMs = 15000 * (attempt + 1);
-        logger.warn('TAAPI', `Rate limited (429), waiting ${waitMs}ms before retry ${attempt + 1}/${retries}`);
+        // TAAPI rate limits reset per minute; wait progressively longer
+        const waitMs = 30000 * (attempt + 1); // 30s, 60s, 90s, 120s, 150s
+        logger.warn('TAAPI', `Rate limited (429), waiting ${waitMs / 1000}s before retry ${attempt + 1}/${retries}`);
         await sleep(waitMs);
         continue;
       }
@@ -87,10 +88,10 @@ export async function fetchCoreIndicators(symbol: string): Promise<Record<string
         { id: 'vwap',        indicator: 'vwap' },
         { id: 'obv',         indicator: 'obv' },
         { id: 'cmf',         indicator: 'cmf' },
-        { id: 'ichimoku',    indicator: 'ichimoku' },
-        { id: 'supertrend',  indicator: 'supertrend' },
-        { id: 'psar',        indicator: 'psar' },
-        { id: 'pivot_points', indicator: 'pivotpoints' },
+        { id: 'ichimoku',   indicator: 'ichimoku' },
+        { id: 'supertrend', indicator: 'supertrend' },
+        { id: 'psar',       indicator: 'psar' },
+        // pivot_points: removed — computed locally from Binance prev-day OHLC (TAAPI bulk returns null)
       ],
     },
   };
