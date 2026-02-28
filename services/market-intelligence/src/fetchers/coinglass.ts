@@ -141,11 +141,6 @@ export interface CoinPerCoinData {
   liq_history: any[];
   // Pair taker buy/sell history: [{ time, taker_buy_volume_usd, taker_sell_volume_usd }]
   taker_history: any[];
-  // Current taker snapshot from exchange-list
-  taker_buy_vol_usd: number | null;
-  taker_sell_vol_usd: number | null;
-  taker_buy_ratio: number | null;
-  taker_sell_ratio: number | null;
   // Futures basis close value
   basis: number | null;
   errors: string[];
@@ -161,10 +156,6 @@ export async function fetchPerCoinData(symbol: string): Promise<CoinPerCoinData>
     long_short_top_positions: { long: null, short: null, ratio: null },
     liq_history: [],
     taker_history: [],
-    taker_buy_vol_usd: null,
-    taker_sell_vol_usd: null,
-    taker_buy_ratio: null,
-    taker_sell_ratio: null,
     basis: null,
     errors: [],
   };
@@ -246,22 +237,6 @@ export async function fetchPerCoinData(symbol: string): Promise<CoinPerCoinData>
     {
       path: `/api/futures/v2/taker-buy-sell-volume/history?exchange=Binance&symbol=${pair}&interval=4h&limit=4`,
       handler: (d) => { result.taker_history = d || []; },
-    },
-
-    // Taker buy/sell current snapshot (coin-level)
-    // Response: single object { symbol, buy_ratio, sell_ratio, buy_vol_usd, sell_vol_usd }
-    {
-      path: `/api/futures/taker-buy-sell-volume/exchange-list?symbol=${symbol}&range=h1`,
-      handler: (d) => {
-        // Response is a single object, not an array
-        const obj = Array.isArray(d) ? d[0] : d;
-        if (obj) {
-          result.taker_buy_vol_usd  = obj.buy_vol_usd  ?? null;
-          result.taker_sell_vol_usd = obj.sell_vol_usd ?? null;
-          result.taker_buy_ratio    = obj.buy_ratio    ?? null;
-          result.taker_sell_ratio   = obj.sell_ratio   ?? null;
-        }
-      },
     },
 
     // Futures basis history (pair-level, Binance)

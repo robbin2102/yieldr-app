@@ -102,9 +102,7 @@ export async function fetchStructureIndicators(symbols: string[]): Promise<Map<s
     symbol: `${sym}/USDT`,
     interval: config.taapi.interval,
     indicators: [
-      { id: 'fibonacci',  indicator: 'fibonacciretracement' }, // fixed: was 'fibretrace'
-      { id: 'swing_high', indicator: 'priorswingigh' },
-      { id: 'swing_low',  indicator: 'priorswinglow' },
+      { id: 'fibonacci', indicator: 'fibonacciretracement' },
     ],
   }));
   const body = { secret: config.taapi.apiKey, construct: constructs };

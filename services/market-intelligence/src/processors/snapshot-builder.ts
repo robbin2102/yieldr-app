@@ -158,12 +158,17 @@ function buildDerivatives(
         short_usd: aggregate.liq_short_24h,
       },
     },
-    taker_buy_sell: {
-      buy_vol_usd:  perCoin?.taker_buy_vol_usd  ?? null,
-      sell_vol_usd: perCoin?.taker_sell_vol_usd ?? null,
-      buy_ratio:    perCoin?.taker_buy_ratio    ?? null,
-      sell_ratio:   perCoin?.taker_sell_ratio   ?? null,
-    },
+    taker_buy_sell: (() => {
+      // Use latest candle from v2 taker history (exchange-list requires plan upgrade)
+      const th = perCoin?.taker_history ?? [];
+      const takerLatest = th[th.length - 1];
+      return {
+        buy_vol_usd:  parseFloat(takerLatest?.taker_buy_volume_usd  ?? '') || null,
+        sell_vol_usd: parseFloat(takerLatest?.taker_sell_volume_usd ?? '') || null,
+        buy_ratio:    null,
+        sell_ratio:   null,
+      };
+    })(),
     basis:            perCoin?.basis ?? null,
     coinbase_premium: sym === 'BTC' ? (coinbasePremium?.btc ?? null) : null,
   };

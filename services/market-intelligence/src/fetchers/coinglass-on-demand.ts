@@ -94,23 +94,12 @@ function buildEnrichedDerivatives(
     };
   }
 
-  // Taker current snapshot from exchange-list
-  if (perCoin.taker_buy_vol_usd !== null || perCoin.taker_buy_ratio !== null) {
-    if (!enriched.taker_buy_sell) enriched.taker_buy_sell = {};
-    enriched.taker_buy_sell.buy_vol_usd  = perCoin.taker_buy_vol_usd;
-    enriched.taker_buy_sell.sell_vol_usd = perCoin.taker_sell_vol_usd;
-    enriched.taker_buy_sell.buy_ratio    = perCoin.taker_buy_ratio;
-    enriched.taker_buy_sell.sell_ratio   = perCoin.taker_sell_ratio;
-  }
-
-  // Taker volume history (pair-level)
-  // Response fields: taker_buy_volume_usd, taker_sell_volume_usd
+  // Taker volume from v2 history (exchange-list endpoint requires plan upgrade)
   if (perCoin.taker_history.length > 0) {
     const latest = perCoin.taker_history[perCoin.taker_history.length - 1];
     if (!enriched.taker_buy_sell) enriched.taker_buy_sell = {};
-    // Prefer exchange-list current values; fallback to history for vol if missing
-    enriched.taker_buy_sell.buy_vol_usd  ??= parseFloat(latest?.taker_buy_volume_usd  ?? '') || null;
-    enriched.taker_buy_sell.sell_vol_usd ??= parseFloat(latest?.taker_sell_volume_usd ?? '') || null;
+    enriched.taker_buy_sell.buy_vol_usd  = parseFloat(latest?.taker_buy_volume_usd  ?? '') || null;
+    enriched.taker_buy_sell.sell_vol_usd = parseFloat(latest?.taker_sell_volume_usd ?? '') || null;
   }
 
   // Basis
