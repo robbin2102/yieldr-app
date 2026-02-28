@@ -1,5 +1,11 @@
 import * as dotenv from 'dotenv';
-dotenv.config();
+import * as path from 'path';
+
+// __dirname = services/market-intelligence/src
+// Load local .env (services/market-intelligence/.env) first,
+// then fall back to project root .env.local
+dotenv.config({ path: path.resolve(__dirname, '../.env') });
+dotenv.config({ path: path.resolve(__dirname, '../../../.env.local') });
 
 function required(name: string): string {
   const val = process.env[name];

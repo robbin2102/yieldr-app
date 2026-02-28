@@ -3,7 +3,9 @@
  * Runs one full cycle and logs all output.
  */
 import * as dotenv from 'dotenv';
-dotenv.config();
+import * as path from 'path';
+dotenv.config({ path: path.resolve(__dirname, '../../.env') });
+dotenv.config({ path: path.resolve(__dirname, '../../../../.env.local') });
 
 import { connectDB, disconnectDB } from '../db';
 import { loadTrackedCoins } from '../coins/tracker';

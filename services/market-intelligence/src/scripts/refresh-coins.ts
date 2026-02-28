@@ -3,7 +3,9 @@
  * Forces a refresh of the dynamic tracked coins list.
  */
 import * as dotenv from 'dotenv';
-dotenv.config();
+import * as path from 'path';
+dotenv.config({ path: path.resolve(__dirname, '../../.env') });
+dotenv.config({ path: path.resolve(__dirname, '../../../../.env.local') });
 
 import { connectDB, disconnectDB } from '../db';
 import { refreshTrackedCoins } from '../coins/tracker';
