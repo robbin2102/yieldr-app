@@ -101,10 +101,11 @@ export async function fetchCoreIndicators(symbol: string): Promise<Record<string
 
 export async function fetchStructureIndicators(symbols: string[]): Promise<Map<string, Record<string, unknown>>> {
   const structureIndicators = [
-    { id: 'fibonacci', indicator: 'fibonacciretracement' },
-    { id: 'psar',      indicator: 'psar' },
-    { id: 'squeeze',   indicator: 'squeeze' },
-    // swing_high / swing_low: pending correct TAAPI indicator slug (swinghigh was invalid)
+    { id: 'fibonacci',  indicator: 'fibonacciretracement' },
+    { id: 'psar',       indicator: 'psar' },
+    { id: 'squeeze',    indicator: 'squeeze' },
+    { id: 'swing_high', indicator: 'priorswinghigh' },
+    { id: 'swing_low',  indicator: 'priorswinglow' },
   ];
 
   // Single symbol: use object construct (same format as BULK1) so parseSingleConstructResponse
@@ -369,15 +370,17 @@ function parseSingleConstructResponse(data: any, symbol: string): Record<string,
         };
         break;
       case 'swing_high':
+        // priorswinghigh response: { valueClose, valueHigh }
         indicators.swing_high = {
-          price:     result.value     ?? null,
-          timestamp: result.timestamp ? new Date(result.timestamp) : null,
+          close: result.valueClose ?? null,
+          high:  result.valueHigh  ?? null,
         };
         break;
       case 'swing_low':
+        // priorswinglow response: { valueClose, valueLow }
         indicators.swing_low = {
-          price:     result.value     ?? null,
-          timestamp: result.timestamp ? new Date(result.timestamp) : null,
+          close: result.valueClose ?? null,
+          low:   result.valueLow   ?? null,
         };
         break;
       case 'fibonacci':
@@ -427,14 +430,14 @@ function parseMultiConstructResponse(data: any, symbols: string[]): Map<string, 
           break;
         case 'swing_high':
           indicators.swing_high = {
-            price: res.value ?? null,
-            timestamp: res.timestamp ? new Date(res.timestamp) : null,
+            close: res.valueClose ?? null,
+            high:  res.valueHigh  ?? null,
           };
           break;
         case 'swing_low':
           indicators.swing_low = {
-            price: res.value ?? null,
-            timestamp: res.timestamp ? new Date(res.timestamp) : null,
+            close: res.valueClose ?? null,
+            low:   res.valueLow   ?? null,
           };
           break;
       }
