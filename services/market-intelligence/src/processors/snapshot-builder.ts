@@ -98,7 +98,7 @@ export async function buildAndSaveSnapshot(args: BuildSnapshotArgs): Promise<voi
   }
 
   if (perCoin?.liq_history && perCoin.liq_history.length > 0) {
-    await updateLiquidationLevels(symbol, perCoin.liq_history, closePrice);
+    await updateLiquidationLevels(symbol, perCoin.liq_history, closePrice ?? (indicators?.vwap as number | null) ?? null);
   }
 }
 
