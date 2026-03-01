@@ -243,6 +243,49 @@ const toolDefinitions: Anthropic.Tool[] = [
     },
     cache_control: { type: 'ephemeral' as const },
   },
+  {
+    name: 'get_market_snapshot',
+    description: 'Get latest technical indicators + derivatives data for a tracked coin from MongoDB. Returns price OHLCV, EMA/SMA (8/21/50/200), RSI, MACD, ADX, Bollinger Bands, Ichimoku, Supertrend, funding rate, open interest, long/short ratios, CVD, liquidations, taker buy/sell, and computed signals. Data refreshes every 1H. Use fields param to limit response size.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        symbol: { type: 'string', description: 'Coin symbol, e.g. BTC, ETH, SOL' },
+        fields: {
+          type: 'string',
+          enum: ['price', 'indicators', 'derivatives', 'computed', 'candlestick_patterns', 'all'],
+          description: 'Which fields to return. Default: all. Use specific fields to limit response size.',
+        },
+      },
+      required: ['symbol'],
+    },
+  },
+  {
+    name: 'fetch_live_indicator',
+    description: 'Fetch real-time indicator values from TAAPI for any coin. Use when the MongoDB snapshot is stale (data_age_minutes > 60) or user asks for current/live values. Fetches all 18 core indicators by default (EMA 8/21/50/200, SMA 50/200, RSI, MACD, StochRSI, ADX, BBands, ATR, VWAP, OBV, CMF, Ichimoku, Supertrend, Pivots), or specific ones if provided.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        symbol: { type: 'string', description: 'Coin symbol without /USDT, e.g. BTC, ETH, SOL' },
+        indicators: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Specific indicators, e.g. ["rsi", "macd", "ema_21"]. For EMAs/SMAs use format "ema_8", "sma_50". Omit to fetch all 18 core indicators.',
+        },
+        timeframe: { type: 'string', description: 'Candle timeframe: 1m, 5m, 15m, 1h, 4h, 1d. Default: 1h' },
+      },
+      required: ['symbol'],
+    },
+  },
+  {
+    name: 'get_macro_snapshot',
+    description: 'Get daily macro data: BTC + ETH ETF flows (total + by ticker), ETF net assets, Coinbase premium index (BTC + ETH), Fear & Greed index (0-100 + classification), and stablecoin market cap. Updated daily at 10:00 UTC. Use for macro context when analyzing any coin setup or market conditions.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        days: { type: 'number', description: 'Number of days to return (default: 1, max: 30)' },
+      },
+    },
+  },
 ];
 
 // Claude native web search tool
@@ -276,6 +319,12 @@ function getToolStatusLabel(name: string, input: any): string {
       return `Checking positions for ${input.walletAddresses?.length || 0} wallets...`;
     case 'get_hl_portfolio':
       return `Loading portfolio for ${input.walletAddress?.slice(0, 10)}...`;
+    case 'get_market_snapshot':
+      return `Fetching ${input.symbol?.toUpperCase()} market snapshot...`;
+    case 'fetch_live_indicator':
+      return `Fetching live ${input.indicators?.join(', ') || 'indicators'} for ${input.symbol?.toUpperCase()}...`;
+    case 'get_macro_snapshot':
+      return `Loading macro data (ETF flows, Fear & Greed, Coinbase premium)...`;
     case 'web_search':
       return `Searching the web...`;
     default:
@@ -639,6 +688,94 @@ async function executeTool(name: string, input: any): Promise<string> {
           openPositions: (data.assetPositions || []).length,
         });
       }
+      case 'get_market_snapshot': {
+        await connectDB();
+        const db = mongoose.connection.db!;
+        const { symbol, fields = 'all' } = input;
+        const projection: Record<string, 1> = {
+          symbol: 1, timestamp: 1, interval: 1, tier: 1,
+          fetched_on_demand: 1, on_demand_expires_at: 1, fetch_duration_ms: 1, errors: 1,
+        };
+        if (fields === 'all' || fields === 'price') projection.price = 1;
+        if (fields === 'all' || fields === 'indicators') projection.indicators = 1;
+        if (fields === 'all' || fields === 'derivatives') projection.derivatives = 1;
+        if (fields === 'all' || fields === 'computed') projection.computed = 1;
+        if (fields === 'all' || fields === 'candlestick_patterns') projection.candlestick_patterns = 1;
+        const snap = await db.collection('market_snapshots').findOne(
+          { symbol: symbol.toUpperCase() },
+          { sort: { timestamp: -1 }, projection }
+        );
+        if (!snap) {
+          return JSON.stringify({ found: false, symbol: symbol.toUpperCase(), message: `No snapshot found for ${symbol}. Cron may not have run yet.` });
+        }
+        const ageMs = Date.now() - new Date(snap.timestamp).getTime();
+        const activePatterns = (snap.candlestick_patterns as any[] | undefined)?.filter((p: any) => p.value !== 0) ?? [];
+        return JSON.stringify({
+          found: true, symbol: snap.symbol, timestamp: snap.timestamp,
+          data_age_minutes: Math.round(ageMs / 60000), tier: snap.tier,
+          ...(snap.price && { price: snap.price }),
+          ...(snap.indicators && { indicators: snap.indicators }),
+          ...(snap.derivatives && { derivatives: snap.derivatives }),
+          ...(snap.computed && { computed: snap.computed }),
+          ...(activePatterns.length && { candlestick_patterns: activePatterns }),
+        });
+      }
+      case 'fetch_live_indicator': {
+        const apiKey = process.env.TAAPI_API_KEY;
+        if (!apiKey) throw new Error('TAAPI_API_KEY not configured');
+        const { symbol, indicators, timeframe = '1h' } = input;
+        const CORE: Record<string, any>[] = [
+          { indicator: 'ema', period: 8 }, { indicator: 'ema', period: 21 },
+          { indicator: 'ema', period: 50 }, { indicator: 'ema', period: 200 },
+          { indicator: 'sma', period: 50 }, { indicator: 'sma', period: 200 },
+          { indicator: 'rsi' }, { indicator: 'macd' }, { indicator: 'stochrsi' },
+          { indicator: 'adx' }, { indicator: 'bbands' }, { indicator: 'atr', period: 14 },
+          { indicator: 'vwap' }, { indicator: 'obv' }, { indicator: 'cmf' },
+          { indicator: 'ichimoku' }, { indicator: 'supertrend' }, { indicator: 'pivot_points' },
+        ];
+        const parseInd = (ind: string) => {
+          const m = ind.match(/^([a-z]+)_(\d+)$/);
+          return m ? { indicator: m[1], period: parseInt(m[2]) } : { indicator: ind };
+        };
+        const indicatorList = indicators?.length ? indicators.map(parseInd) : CORE;
+        const results: Record<string, any> = {};
+        for (let i = 0; i < indicatorList.length; i += 20) {
+          const chunk = indicatorList.slice(i, i + 20);
+          const res = await fetch('https://api.taapi.io/bulk', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              secret: apiKey,
+              construct: { exchange: 'binancefutures', symbol: `${symbol.toUpperCase()}/USDT`, interval: timeframe, indicators: chunk },
+            }),
+          });
+          if (!res.ok) throw new Error(`TAAPI error ${res.status}: ${await res.text()}`);
+          const data = await res.json() as { data?: any[] };
+          for (const item of (data.data || [])) {
+            const key = item.indicator + (item.period != null ? `_${item.period}` : '');
+            results[key] = item.result ?? item.errors ?? null;
+          }
+        }
+        return JSON.stringify({ symbol: symbol.toUpperCase(), timeframe, fetched_at: new Date().toISOString(), source: 'TAAPI real-time', indicators: results });
+      }
+      case 'get_macro_snapshot': {
+        await connectDB();
+        const db = mongoose.connection.db!;
+        const limit = Math.min(input.days || 1, 30);
+        const docs = await db.collection('macro_daily').find({}).sort({ date: -1 }).limit(limit).toArray();
+        if (!docs.length) return JSON.stringify({ found: false, message: 'No macro data yet. Daily cron runs at 10:00 UTC.' });
+        const ageHours = Math.round((Date.now() - new Date(docs[0].date).getTime()) / 3600000);
+        return JSON.stringify({
+          found: true, data_age_hours: ageHours, days_returned: docs.length,
+          macro: docs.map(d => ({
+            date: d.date, fear_greed: d.fear_greed,
+            btc_etf: { total_flow_usd: d.btc_etf?.total_flow_usd, net_assets_usd: d.btc_etf?.net_assets_usd, top_flows: (d.btc_etf?.flows_by_ticker ?? []).slice(0, 5) },
+            eth_etf: { total_flow_usd: d.eth_etf?.total_flow_usd, net_assets_usd: d.eth_etf?.net_assets_usd, top_flows: (d.eth_etf?.flows_by_ticker ?? []).slice(0, 5) },
+            coinbase_premium: d.coinbase_premium,
+            stablecoin_mcap: d.stablecoin_mcap,
+          })),
+        });
+      }
       default:
         return JSON.stringify({ error: `Unknown tool: ${name}` });
     }
@@ -907,7 +1044,38 @@ If a tool call fails or returns an error:
    • Briefly note that the specific trader appears to have no active positions currently
    • Immediately fetch top traders for the relevant asset using get_top_perp_traders or get_top_pm_traders
    • Present those top traders' positions instead, so the user still gets actionable data
-   • Example: "0x7fda... appears flat right now. Here's what the top BTC traders are doing instead: [data]"`;
+   • Example: "0x7fda... appears flat right now. Here's what the top BTC traders are doing instead: [data]"
+
+---
+
+## 📈 Market Intelligence Tools
+
+You have access to live market data for 100 tracked coins (top by open interest on Binance Futures), refreshed every 1 hour.
+
+Tools:
+• get_market_snapshot — Latest TAAPI + CoinGlass indicators for any coin: price, EMA/SMA, RSI, MACD, ADX, BBands, Ichimoku, Supertrend, Pivots, funding rate, OI, long/short ratios, CVD, liquidations, taker buy/sell, computed signals, active candlestick patterns
+• fetch_live_indicator — Real-time TAAPI call when snapshot is stale (data_age_minutes > 60) or user explicitly asks for current/live values
+• get_macro_snapshot — Daily macro: BTC + ETH ETF flows, net assets, Coinbase premium (BTC + ETH), Fear & Greed index, stablecoin market cap
+
+When to call each:
+• User asks about a coin's setup, technicals, or indicators → call get_market_snapshot first
+• User asks "right now" / "current" / "live" data → use fetch_live_indicator
+• User asks about ETF flows, macro, Fear & Greed, Coinbase premium → call get_macro_snapshot
+• get_market_snapshot shows data_age_minutes > 60 → follow up with fetch_live_indicator for fresh values
+• NEVER fabricate indicator values (RSI, funding rate, EMA, etc.). Always call the tool first.
+
+Key signals to highlight when analyzing a coin:
+• RSI > 70 or < 30 → overbought / oversold
+• |funding_rate.current| > 0.0003 → extreme funding, mean reversion risk
+• OI rising + price falling → bearish divergence (smart money positioning against price)
+• EMA 8 > 21 > 50 > 200 → bullish MA ribbon alignment
+• Fear & Greed < 25 → extreme fear (contrarian buy signal); > 75 → extreme greed
+• Positive Coinbase premium → US spot buyers leading (bullish for BTC/ETH)
+
+Use fields param to keep responses lean:
+• fields="derivatives" → funding, OI, long/short ratios only
+• fields="indicators" → technicals only
+• fields="computed" → MA crossovers, market structure, alerts only`;
 
 // Build dynamic user context (NOT cached — changes per session)
 function buildDynamicUserContext(context: {
