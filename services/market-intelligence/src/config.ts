@@ -30,7 +30,7 @@ export const config = {
     get apiKey() { return required('COINGLASS_API_KEY'); },
     baseUrl: 'https://open-api-v4.coinglass.com',
     rateDelayMs: parseInt(process.env.COINGLASS_RATE_DELAY_MS || '2200'),
-    tokensPerMinute: 28,
+    tokensPerMinute: parseInt(process.env.COINGLASS_TOKENS_PER_MINUTE || '15'),
   },
 
   fullDerivativesTier: 20,

@@ -37,9 +37,21 @@ async function cgGet(path: string, retries = 3): Promise<any> {
 
       if (res.status === 429) {
         const waitMs = 30000 * (attempt + 1);
-        logger.warn('CoinGlass', `Rate limited on ${path}, waiting ${waitMs}ms`);
+        logger.warn('CoinGlass', `Rate limited (429) on ${path}, waiting ${waitMs}ms`);
         await sleep(waitMs);
         continue;
+      }
+
+      // CoinGlass returns 400 (not 429) for rate-limit errors — detect and retry
+      if (res.status === 400) {
+        const text = await res.text();
+        if (text.toLowerCase().includes('too many') || text.toLowerCase().includes('rate')) {
+          const waitMs = 30000 * (attempt + 1);
+          logger.warn('CoinGlass', `Rate limited (400) on ${path}, waiting ${waitMs}ms`);
+          await sleep(waitMs);
+          continue;
+        }
+        throw new Error(`CoinGlass 400 on ${path}: ${text.slice(0, 200)}`);
       }
 
       if (!res.ok) {
