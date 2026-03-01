@@ -12,6 +12,20 @@ const EXCLUDE_SYMBOLS = new Set([
     'USDT', 'USDC', 'BUSD', 'DAI', 'TUSD', 'USDP', 'GUSD', 'FRAX',
     'WBTC', 'WETH', 'STETH', 'RETH', 'CBETH', // wrapped tokens
 ]);
+// Fallback priority list used when CoinGlass /api/futures/coins-markets is
+// unavailable (plan restriction). Ordered approximately by futures OI.
+const FALLBACK_COIN_PRIORITY = [
+    'BTC', 'ETH', 'SOL', 'BNB', 'XRP', 'DOGE', 'ADA', 'AVAX', 'LINK', 'DOT',
+    'UNI', 'LTC', 'BCH', 'ATOM', 'FIL', 'APT', 'ARB', 'OP', 'INJ', 'SUI',
+    'TRX', 'NEAR', 'ICP', 'HBAR', 'PEPE', 'SHIB', 'WIF', 'BONK', 'TIA', 'SEI',
+    'WLD', 'ORDI', 'JUP', 'ENA', 'FTM', 'RUNE', 'CRV', 'AAVE', 'LDO', 'MKR',
+    'SNX', 'COMP', 'GRT', 'DYDX', 'IMX', 'APE', 'SAND', 'MANA', 'AXS', 'ENJ',
+    'GMT', 'RNDR', 'FET', 'OCEAN', 'FLOW', 'QNT', 'VET', 'ALGO', 'EOS', 'ZEC',
+    'DASH', 'WAVES', 'KSM', 'ONE', 'ZIL', 'IOTA', 'THETA', 'CHZ', 'BAT', 'STORJ',
+    'BAND', 'ROSE', 'JASMY', 'MINA', 'ANKR', 'CELR', 'KAVA', 'TRB', 'YFI', 'SUSHI',
+    'GMX', 'PENDLE', 'RPL', 'STX', 'EGLD', 'BLUR', 'CYBER', 'CFX', 'ZK', 'MANTA',
+    'JTO', 'PYTH', 'W', 'STRK', 'ALT', 'DYM', 'HOOK', 'SXP', 'ACE', 'AGIX',
+];
 /**
  * Refresh the dynamic tracked coins list.
  * Steps:
@@ -28,17 +42,29 @@ async function refreshTrackedCoins() {
     // Step 2: CoinGlass markets
     const cgCoins = await fetchCoinGlassMarkets();
     logger_1.logger.info('Tracker', `CoinGlass coins: ${cgCoins.length}`);
-    // Step 3: Intersect
-    const intersected = cgCoins.filter(item => {
-        const sym = item.symbol.toUpperCase();
-        return taapiSymbols.has(sym) && !EXCLUDE_SYMBOLS.has(sym);
-    });
-    const excluded = cgCoins
-        .filter(item => EXCLUDE_SYMBOLS.has(item.symbol.toUpperCase()))
-        .map(item => item.symbol.toUpperCase());
-    // Step 4: Sort by OI descending, take top 100
-    intersected.sort((a, b) => (b.openInterest ?? 0) - (a.openInterest ?? 0));
-    const all = intersected.slice(0, config_1.config.totalTrackedCoins).map(item => item.symbol.toUpperCase());
+    let all;
+    let excluded = [];
+    if (cgCoins.length > 0) {
+        // Step 3: Intersect with TAAPI symbols and sort by OI
+        const intersected = cgCoins.filter(item => {
+            const sym = item.symbol.toUpperCase();
+            return taapiSymbols.has(sym) && !EXCLUDE_SYMBOLS.has(sym);
+        });
+        excluded = cgCoins
+            .filter(item => EXCLUDE_SYMBOLS.has(item.symbol.toUpperCase()))
+            .map(item => item.symbol.toUpperCase());
+        intersected.sort((a, b) => (b.openInterest ?? 0) - (a.openInterest ?? 0));
+        all = intersected.slice(0, config_1.config.totalTrackedCoins).map(item => item.symbol.toUpperCase());
+    }
+    else {
+        // CoinGlass coins-markets unavailable (plan restriction) — use fallback priority list
+        // filtered to symbols TAAPI supports on binancefutures
+        logger_1.logger.warn('Tracker', 'CoinGlass markets unavailable — using hardcoded fallback coin list');
+        all = FALLBACK_COIN_PRIORITY
+            .filter(sym => taapiSymbols.has(sym) && !EXCLUDE_SYMBOLS.has(sym))
+            .slice(0, config_1.config.totalTrackedCoins);
+        logger_1.logger.info('Tracker', `Fallback list: ${all.length} coins matched TAAPI symbols`);
+    }
     const full = all.slice(0, config_1.config.fullDerivativesTier);
     const lite = all.slice(config_1.config.fullDerivativesTier);
     // Step 5: Save to DB
@@ -51,7 +77,7 @@ async function refreshTrackedCoins() {
             excluded,
             source_taapi_count: taapiSymbols.size,
             source_coinglass_count: cgCoins.length,
-            intersection_count: intersected.length,
+            intersection_count: all.length,
         },
     }, { upsert: true, new: true });
     logger_1.logger.info('Tracker', `Tracked coins updated: ${all.length} total, ${full.length} full, ${lite.length} lite`);
