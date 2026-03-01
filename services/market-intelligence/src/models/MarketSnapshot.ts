@@ -58,7 +58,7 @@ const MarketSnapshotSchema = new Schema<any>({
   indicators: IndicatorsSchema,
   candlestick_patterns: [{ pattern: String, value: Number, timeframe: { type: String, default: '1h' }, _id: false }],
   derivatives: {
-    open_interest: { total_usd: Number, change_1h_pct: Number, change_4h_pct: Number, change_24h_pct: Number },
+    open_interest: { total_usd: Number, change_4h_pct: Number, change_24h_pct: Number },
     funding_rate:  { current: Number, predicted: Number, oi_weighted: Number, vol_weighted: Number, annualized: Number },
     funding_arbitrage: [{ long_exchange: String, short_exchange: String, spread: Number, _id: false }],
     long_short_ratio: {

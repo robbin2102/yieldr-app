@@ -159,9 +159,8 @@ function buildDerivatives(
     oiWeightedFunding = parseFloat(latest?.close ?? '') || null;
   }
 
-  // OI: use 4h history (limit=7 → ~28h) for 4h and 24h change; 1h history for 1h change
+  // OI: use 4h history (limit=7 → ~28h) for 4h and 24h change
   let oiTotal: number | null = null;
-  let oiChange1h: number | null = null;
   let oiChange4h: number | null = null;
   let oiChange24h: number | null = null;
 
@@ -183,13 +182,6 @@ function buildDerivatives(
     }
   }
 
-  // 1h OI change from dedicated 1h-interval fetch (Startup+ plan; null on Hobby)
-  if (perCoin?.oi_history_1h && perCoin.oi_history_1h.length >= 2) {
-    const vals1h = perCoin.oi_history_1h;
-    const curr1h = parseFloat(vals1h[vals1h.length - 1]?.close ?? '') || null;
-    const prev1h = parseFloat(vals1h[vals1h.length - 2]?.close ?? '') || null;
-    if (curr1h && prev1h) oiChange1h = ((curr1h - prev1h) / prev1h) * 100;
-  }
 
   // Liquidations from extended history (limit=6 → 24h)
   let liqH4  = { long_usd: null as number | null, short_usd: null as number | null };
@@ -227,7 +219,6 @@ function buildDerivatives(
   return {
     open_interest: {
       total_usd:      oiTotal,
-      change_1h_pct:  oiChange1h,
       change_4h_pct:  oiChange4h,
       change_24h_pct: oiChange24h,
     },

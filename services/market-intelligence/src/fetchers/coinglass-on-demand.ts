@@ -75,16 +75,6 @@ function buildEnrichedDerivatives(
     }
   }
 
-  // OI history (1h) — extract 1h change (Startup+ plan; empty on Hobby)
-  if (perCoin.oi_history_1h.length >= 2) {
-    const curr = parseFloat(perCoin.oi_history_1h[perCoin.oi_history_1h.length - 1]?.close ?? '');
-    const prev = parseFloat(perCoin.oi_history_1h[perCoin.oi_history_1h.length - 2]?.close ?? '');
-    if (!isNaN(curr) && !isNaN(prev) && prev !== 0) {
-      if (!enriched.open_interest) enriched.open_interest = {};
-      enriched.open_interest.change_1h_pct = ((curr - prev) / prev) * 100;
-    }
-  }
-
   // Long/short ratios — now includes ratio field
   enriched.long_short_ratio = {
     global_accounts: perCoin.long_short_global,

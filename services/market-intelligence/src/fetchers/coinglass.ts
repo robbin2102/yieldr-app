@@ -138,8 +138,6 @@ export interface CoinPerCoinData {
   oi_weighted_funding_history: any[];
   // OI OHLC aggregated at 4h: [{ time, open, high, low, close }] — for 4h/24h change
   oi_history: any[];
-  // OI OHLC aggregated at 1h: [{ time, open, high, low, close }] — for 1h change (Startup+ plan)
-  oi_history_1h: any[];
   // Long/short ratios — percent values (0–100)
   long_short_global: { long: number | null; short: number | null; ratio: number | null };
   long_short_top_accounts: { long: number | null; short: number | null; ratio: number | null };
@@ -159,7 +157,6 @@ export async function fetchPerCoinData(symbol: string): Promise<CoinPerCoinData>
     funding_rate_history: [],
     oi_weighted_funding_history: [],
     oi_history: [],
-    oi_history_1h: [],
     long_short_global:       { long: null, short: null, ratio: null },
     long_short_top_accounts: { long: null, short: null, ratio: null },
     long_short_top_positions: { long: null, short: null, ratio: null },
@@ -191,14 +188,6 @@ export async function fetchPerCoinData(symbol: string): Promise<CoinPerCoinData>
     {
       path: `/api/futures/open-interest/aggregated-history?symbol=${symbol}&interval=4h&limit=7&unit=usd`,
       handler: (d) => { result.oi_history = d || []; },
-    },
-
-    // Aggregated OI OHLC history at 1h (coin-level, all exchanges)
-    // Requires Startup+ plan (min 30m); returns empty on Hobby — gracefully skipped.
-    // limit=2 → just enough to compute 1h pct change.
-    {
-      path: `/api/futures/open-interest/aggregated-history?symbol=${symbol}&interval=1h&limit=2&unit=usd`,
-      handler: (d) => { result.oi_history_1h = d || []; },
     },
 
     // Global long/short account ratio (pair-level, Binance)
