@@ -31,6 +31,7 @@ export async function buildAndSaveMacroDaily(): Promise<void> {
     logger.info('Macro', `Fear/Greed: ${doc.fear_greed.value} (${doc.fear_greed.classification})`);
     logger.info('Macro', `BTC ETF flows: ${formatUsd(doc.btc_etf.total_flow_usd)}`);
     logger.info('Macro', `Coinbase premium BTC: ${premium.btc}`);
+    logger.info('Macro', `Stablecoin mcap: total=${doc.stablecoin_mcap.total_usd}, change24h=${doc.stablecoin_mcap.change_24h_usd}`);
   } catch (err: any) {
     logger.error('Macro', `Failed to build macro daily: ${err.message}`);
   }

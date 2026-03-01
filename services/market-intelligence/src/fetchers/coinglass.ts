@@ -49,6 +49,9 @@ async function cgGet(path: string, retries = 3): Promise<any> {
         logger.warn('CoinGlass', `Non-zero code on ${path}: ${json.code} — ${json.msg}`);
         return null;
       }
+      if (json.data == null) {
+        logger.warn('CoinGlass', `Null data payload on ${path}`);
+      }
       return json.data;
     } catch (err: any) {
       if (attempt === retries - 1) {
