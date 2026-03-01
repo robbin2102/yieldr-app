@@ -49,7 +49,7 @@ function sleep(ms: number): Promise<void> {
 
 let _cgRateLimiter: RateLimiter | null = null;
 
-export function getCoinGlassRateLimiter(tokensPerMinute = 28): RateLimiter {
+export function getCoinGlassRateLimiter(tokensPerMinute = 8): RateLimiter {
   if (!_cgRateLimiter) {
     _cgRateLimiter = new RateLimiter(tokensPerMinute, 'CoinGlass');
     logger.info('RateLimiter', `CoinGlass rate limiter initialized: ${tokensPerMinute} req/min`);

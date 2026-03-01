@@ -61,6 +61,13 @@ async function cgGet(path: string, retries = 3): Promise<any> {
 
       const json = await res.json() as any;
       if (json.code !== '0' && json.code !== 0) {
+        const msg = String(json.msg || '');
+        if (msg.toLowerCase().includes('too many') || msg.toLowerCase().includes('rate')) {
+          const waitMs = 30000 * (attempt + 1);
+          logger.warn('CoinGlass', `Rate limited (JSON ${json.code}) on ${path}, waiting ${waitMs}ms`);
+          await sleep(waitMs);
+          continue;
+        }
         logger.warn('CoinGlass', `Non-zero code on ${path}: ${json.code} — ${json.msg}`);
         return null;
       }
