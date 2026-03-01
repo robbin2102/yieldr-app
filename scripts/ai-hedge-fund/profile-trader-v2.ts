@@ -17,11 +17,13 @@ import dotenv from 'dotenv';
 import path from 'path';
 import { MongoClient } from 'mongodb';
 
-// Load environment — try multiple locations (same as existing profile-trader.ts)
+// Load environment — .env.local first so AI hedge fund scripts use the same
+// MONGODB_URI as Next.js API routes (which always resolve to the yieldr db).
+// The polyagent env points to a different cluster and is only a fallback.
 const envLocations = [
-  path.resolve(process.cwd(), 'services/.private/poly-agent/.env.polyagent'),
   path.resolve(process.cwd(), '.env.local'),
   path.resolve(process.cwd(), '.env'),
+  path.resolve(process.cwd(), 'services/.private/poly-agent/.env.polyagent'),
 ];
 for (const envPath of envLocations) {
   const result = dotenv.config({ path: envPath });
