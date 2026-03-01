@@ -1485,16 +1485,29 @@ async function main() {
     process.exit(1);
   }
 
+  // Extract db name from URI — same logic as lib/mongodb.ts
+  function extractDbName(uri: string): string {
+    try {
+      const url = new URL(uri);
+      const name = url.pathname.replace('/', '');
+      return name || 'polymarket-test';
+    } catch {
+      const match = uri.match(/\/([^/?]+)(\?|$)/);
+      return match?.[1] || 'polymarket-test';
+    }
+  }
+  const dbName = extractDbName(mongoUri);
+
   console.log('Connecting to MongoDB...');
   const client = new MongoClient(mongoUri);
   await client.connect();
-  console.log('Connected\n');
+  console.log(`Connected → db: ${dbName}\n`);
 
   // Run the profiler
   const profileData = await profileTrader(wallet, { convictionMultiplier, verbose: true });
 
   // Save to polymarket-traderProfiles (production collection)
-  const db = client.db();
+  const db = client.db(dbName);
   const collection = db.collection('polymarket-traderProfiles');
 
   console.log('Saving to MongoDB (polymarket-traderProfiles)...');
