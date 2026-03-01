@@ -18,6 +18,10 @@ import { getPMClosedPositionsTool } from './live-api/get-pm-closed-positions.js'
 // Live API tools - Portfolio / PnL history
 import { getHLPortfolioTool } from './live-api/get-hl-portfolio.js';
 
+// Market intelligence tools
+import { getMarketSnapshotTool } from './market/get-market-snapshot.js';
+import { fetchLiveIndicatorTool } from './market/fetch-live-indicator.js';
+
 // Export individual tools
 export { getTopPMTradersTool } from './top-traders/index.js';
 export { getTopPerpTradersTool } from './top-traders/index.js';
@@ -30,6 +34,7 @@ export {
   getPMClosedPositionsTool,
   getHLPortfolioTool,
 } from './live-api/index.js';
+export { getMarketSnapshotTool, fetchLiveIndicatorTool } from './market/index.js';
 
 // Tool registry for MCP server
 export const tools = [
@@ -46,6 +51,10 @@ export const tools = [
   getPMClosedPositionsTool,
   // Live API queries - Portfolio / PnL history
   getHLPortfolioTool,
+  // Market intelligence - indexed snapshots
+  getMarketSnapshotTool,
+  // Market intelligence - live TAAPI fetch
+  fetchLiveIndicatorTool,
 ];
 
 // Tool map for quick lookup

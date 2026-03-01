@@ -63,4 +63,12 @@ export const COLLECTIONS = {
   AV_TRACKED_WALLETS: 'avantis-trackedWallets',
   AV_METRICS: 'avantismetrics',
   AV_POSITIONS: 'avantispositions',
+
+  // Market intelligence collections
+  MARKET_SNAPSHOTS: 'market_snapshots',
+  MARKET_STRUCTURE: 'market_structure_history',
+  LIQUIDATION_LEVELS: 'liquidation_levels',
+  CHART_PATTERNS: 'chart_patterns',
+  MACRO_DAILY: 'macro_daily',
+  TRACKED_COINS: 'tracked_coins',
 } as const;
