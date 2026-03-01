@@ -73,9 +73,7 @@ async function main() {
     console.log('█                                                                ██');
     console.log('██████████████████████████████████████████████████████████████████');
     console.log('');
-    // Connect to MongoDB
-    await (0, db_1.connectDB)();
-    // Set up Express health server
+    // Start HTTP server FIRST so Railway healthcheck passes immediately
     const app = (0, express_1.default)();
     app.use(express_1.default.json());
     app.get('/health', async (_req, res) => {
@@ -111,6 +109,8 @@ async function main() {
     app.listen(PORT, () => {
         logger_1.logger.info('Server', `Health server listening on port ${PORT}`);
     });
+    // Connect to MongoDB (after server is up so healthcheck doesn't time out)
+    await (0, db_1.connectDB)();
     // Load (or refresh) tracked coins on startup
     logger_1.logger.info('Startup', 'Loading tracked coins...');
     const { all } = await (0, tracker_1.loadTrackedCoins)();
