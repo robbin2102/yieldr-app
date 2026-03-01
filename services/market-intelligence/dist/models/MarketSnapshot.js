@@ -46,13 +46,18 @@ const IndicatorsSchema = new mongoose_1.Schema({
     atr_14: Number,
     squeeze: { value: Number, is_squeeze: Boolean },
     vwap: Number, obv: Number, cmf: Number,
-    ichimoku: { tenkan: Number, kijun: Number, senkou_a: Number, senkou_b: Number, chikou: Number },
+    ichimoku: {
+        tenkan: Number, kijun: Number, // conversion & base lines
+        senkou_a: Number, senkou_b: Number, // future cloud (displaced +26)
+        current_span_a: Number, current_span_b: Number, // cloud at current bar
+        lagging_span_a: Number, lagging_span_b: Number, // lagging span (chikou context)
+    },
     supertrend: { value: Number, direction: String },
     psar: Number,
     pivot_points: { pp: Number, r1: Number, r2: Number, r3: Number, s1: Number, s2: Number, s3: Number },
-    fibonacci: { level_236: Number, level_382: Number, level_500: Number, level_618: Number, level_786: Number },
-    swing_high: { price: Number, timestamp: Date },
-    swing_low: { price: Number, timestamp: Date },
+    fibonacci: { trend: String, level_236: Number, level_382: Number, level_500: Number, level_618: Number, level_786: Number },
+    swing_high: { close: Number, high: Number },
+    swing_low: { close: Number, low: Number },
 }, { _id: false });
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const MarketSnapshotSchema = new mongoose_1.Schema({
@@ -63,24 +68,22 @@ const MarketSnapshotSchema = new mongoose_1.Schema({
     indicators: IndicatorsSchema,
     candlestick_patterns: [{ pattern: String, value: Number, timeframe: { type: String, default: '1h' }, _id: false }],
     derivatives: {
-        open_interest: { total_usd: Number, change_1h_pct: Number, change_4h_pct: Number, change_24h_pct: Number },
+        open_interest: { total_usd: Number, change_4h_pct: Number, change_24h_pct: Number },
         funding_rate: { current: Number, predicted: Number, oi_weighted: Number, vol_weighted: Number, annualized: Number },
         funding_arbitrage: [{ long_exchange: String, short_exchange: String, spread: Number, _id: false }],
         long_short_ratio: {
-            global_accounts: { long: Number, short: Number },
-            top_accounts: { long: Number, short: Number },
-            top_positions: { long: Number, short: Number },
+            global_accounts: { long: Number, short: Number, ratio: Number },
+            top_accounts: { long: Number, short: Number, ratio: Number },
+            top_positions: { long: Number, short: Number, ratio: Number },
         },
         liquidations: {
-            h1: { long_usd: Number, short_usd: Number, count: Number },
+            latest: { long_usd: Number, short_usd: Number, count: Number },
             h4: { long_usd: Number, short_usd: Number },
             h24: { long_usd: Number, short_usd: Number },
         },
-        taker_buy_sell: { buy_vol: Number, sell_vol: Number, ratio: Number },
-        cvd: { value: Number, change_1h: Number, change_4h: Number },
-        basis: { aggregate: Number },
+        taker_buy_sell: { buy_vol_usd: Number, sell_vol_usd: Number, buy_ratio: Number, sell_ratio: Number },
+        basis: Number,
         coinbase_premium: Number,
-        net_flow: Number,
     },
     computed: {
         ma_crossovers: { type: [mongoose_1.Schema.Types.Mixed], default: [] },
@@ -102,7 +105,7 @@ const MarketSnapshotSchema = new mongoose_1.Schema({
     fetched_on_demand: { type: Boolean, default: false },
     on_demand_expires_at: { type: Date, default: null },
     fetch_duration_ms: { type: Number, default: 0 },
-    errors: [String],
+    fetch_errors: { type: [String], default: [], suppressReservedKeysWarning: true },
 }, { collection: 'market_snapshots', timestamps: false });
 MarketSnapshotSchema.index({ symbol: 1, timestamp: -1 }, { unique: true });
 MarketSnapshotSchema.index({ timestamp: 1 }, { expireAfterSeconds: 90 * 24 * 3600 });

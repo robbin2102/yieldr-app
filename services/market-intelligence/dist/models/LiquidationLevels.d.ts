@@ -20,5 +20,9 @@ export interface ILiquidationLevels extends Document {
     };
     nearest_cluster_distance_pct: number | null;
 }
-declare const _default: mongoose.Model<any, {}, {}, {}, any, any>;
+declare const _default: mongoose.Model<any, {}, {}, {}, any, any> | mongoose.Model<ILiquidationLevels, {}, {}, {}, mongoose.Document<unknown, {}, ILiquidationLevels, {}, {}> & ILiquidationLevels & Required<{
+    _id: mongoose.Types.ObjectId;
+}> & {
+    __v: number;
+}, any>;
 export default _default;

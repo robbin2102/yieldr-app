@@ -10,12 +10,16 @@ function required(name: string): string {
   return val;
 }
 
+// NOTE: apiKey and mongodbUri are lazy getters so they are evaluated only when
+// first accessed (inside running functions), NOT at module load time. This lets
+// the HTTP health-check server start before env-var validation occurs, which is
+// required for Railway's health-check to pass on deployment.
 export const config = {
   port: parseInt(process.env.PORT || '3000'),
-  mongodbUri: required('MONGODB_URI'),
+  get mongodbUri() { return required('MONGODB_URI'); },
 
   taapi: {
-    apiKey: required('TAAPI_API_KEY'),
+    get apiKey() { return required('TAAPI_API_KEY'); },
     baseUrl: 'https://api.taapi.io',
     exchange: 'binancefutures',
     interval: '1h',
@@ -23,7 +27,7 @@ export const config = {
   },
 
   coinglass: {
-    apiKey: required('COINGLASS_API_KEY'),
+    get apiKey() { return required('COINGLASS_API_KEY'); },
     baseUrl: 'https://open-api-v4.coinglass.com',
     rateDelayMs: parseInt(process.env.COINGLASS_RATE_DELAY_MS || '2200'),
     tokensPerMinute: 28,
@@ -32,4 +36,4 @@ export const config = {
   fullDerivativesTier: 20,
   totalTrackedCoins: 100,
   onDemandCacheTtlMs: 60 * 60 * 1000,
-} as const;
+};

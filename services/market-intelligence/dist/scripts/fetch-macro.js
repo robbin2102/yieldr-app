@@ -33,17 +33,22 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-const mongoose_1 = __importStar(require("mongoose"));
-const TrackedCoinsSchema = new mongoose_1.Schema({
-    updated_at: { type: Date, default: Date.now },
-    all: { type: [String], default: [] },
-    full_derivatives: { type: [String], default: [] },
-    lite_derivatives: { type: [String], default: [] },
-    excluded: { type: [String], default: [] },
-    source_taapi_count: { type: Number, default: 0 },
-    source_coinglass_count: { type: Number, default: 0 },
-    intersection_count: { type: Number, default: 0 },
-}, { collection: 'tracked_coins', timestamps: false });
-exports.default = mongoose_1.default.models.TrackedCoins ||
-    mongoose_1.default.model('TrackedCoins', TrackedCoinsSchema);
-//# sourceMappingURL=TrackedCoins.js.map
+/**
+ * npm run fetch-macro
+ * Fetches and saves the daily macro snapshot (ETF flows, fear/greed, stablecoin mcap).
+ */
+const dotenv = __importStar(require("dotenv"));
+dotenv.config({ path: '../../.env.local' });
+const db_1 = require("../db");
+const macro_builder_1 = require("../processors/macro-builder");
+async function main() {
+    await (0, db_1.connectDB)();
+    await (0, macro_builder_1.buildAndSaveMacroDaily)();
+    await (0, db_1.disconnectDB)();
+    process.exit(0);
+}
+main().catch(err => {
+    console.error(err);
+    process.exit(1);
+});
+//# sourceMappingURL=fetch-macro.js.map

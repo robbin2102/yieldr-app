@@ -1,20 +1,20 @@
 export declare const config: {
-    readonly port: number;
+    port: number;
     readonly mongodbUri: string;
-    readonly taapi: {
+    taapi: {
         readonly apiKey: string;
-        readonly baseUrl: "https://api.taapi.io";
-        readonly exchange: "binancefutures";
-        readonly interval: "1h";
-        readonly rateDelayMs: number;
+        baseUrl: string;
+        exchange: string;
+        interval: string;
+        rateDelayMs: number;
     };
-    readonly coinglass: {
+    coinglass: {
         readonly apiKey: string;
-        readonly baseUrl: "https://open-api-v4.coinglass.com";
-        readonly rateDelayMs: number;
-        readonly tokensPerMinute: 28;
+        baseUrl: string;
+        rateDelayMs: number;
+        tokensPerMinute: number;
     };
-    readonly fullDerivativesTier: 20;
-    readonly totalTrackedCoins: 100;
-    readonly onDemandCacheTtlMs: number;
+    fullDerivativesTier: number;
+    totalTrackedCoins: number;
+    onDemandCacheTtlMs: number;
 };

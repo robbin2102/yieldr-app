@@ -14,15 +14,7 @@ let connected = false;
 async function connectDB() {
     if (connected)
         return;
-    const uri = config_1.config.mongodbUri;
-    // Determine if we need to replace SRV with standard format for Railway proxy
-    // Railway MongoDB proxy does not support SRV records
-    let connectionUri = uri;
-    if (uri.startsWith('mongodb+srv://') && process.env.RAILWAY_ENVIRONMENT) {
-        // For Railway, the MONGODB_URI should already be the correct format
-        // but we keep this note for debugging
-    }
-    await mongoose_1.default.connect(connectionUri, {
+    await mongoose_1.default.connect(config_1.config.mongodbUri, {
         serverSelectionTimeoutMS: 30000,
         socketTimeoutMS: 45000,
     });

@@ -5,12 +5,10 @@ async function bucketLiquidations(symbol, liqHistory, currentPrice) {
     if (!liqHistory || liqHistory.length === 0)
         return [];
     if (!currentPrice || currentPrice <= 0) {
-        // If no current price, use a flat bucketing approach
         return flatBucket(liqHistory);
     }
-    // Create 20 buckets: 10% below to 10% above current price, each 1% wide
     const bucketCount = 20;
-    const bucketWidthPct = 1; // 1% per bucket
+    const bucketWidthPct = 1;
     const rangeStartPct = -10;
     const buckets = [];
     for (let i = 0; i < bucketCount; i++) {
@@ -25,18 +23,16 @@ async function bucketLiquidations(symbol, liqHistory, currentPrice) {
             count: 0,
         });
     }
-    // Distribute liquidation data across buckets based on price
     for (const item of liqHistory) {
         const price = item?.price ?? item?.liqPrice ?? null;
         const longUsd = item?.longLiquidationUsd ?? 0;
         const shortUsd = item?.shortLiquidationUsd ?? 0;
         if (!price) {
-            // No price info — distribute proportionally to middle bucket
-            const midBucket = buckets[Math.floor(bucketCount / 2)];
-            midBucket.long_liq_usd += longUsd;
-            midBucket.short_liq_usd += shortUsd;
-            midBucket.total_usd += longUsd + shortUsd;
-            midBucket.count += 1;
+            const mid = buckets[Math.floor(bucketCount / 2)];
+            mid.long_liq_usd += longUsd;
+            mid.short_liq_usd += shortUsd;
+            mid.total_usd += longUsd + shortUsd;
+            mid.count += 1;
             continue;
         }
         const pricePct = (price - currentPrice) / currentPrice * 100;
@@ -48,20 +44,16 @@ async function bucketLiquidations(symbol, liqHistory, currentPrice) {
             buckets[bucketIdx].count += 1;
         }
     }
-    // Only return non-empty buckets
     return buckets.filter(b => b.total_usd > 0);
 }
 function flatBucket(liqHistory) {
-    // Without price data, create a single aggregate bucket
     const totalLong = liqHistory.reduce((s, d) => s + (d?.longLiquidationUsd ?? 0), 0);
     const totalShort = liqHistory.reduce((s, d) => s + (d?.shortLiquidationUsd ?? 0), 0);
     if (totalLong === 0 && totalShort === 0)
         return [];
     return [{
-            price_low: 0,
-            price_high: 0,
-            long_liq_usd: totalLong,
-            short_liq_usd: totalShort,
+            price_low: 0, price_high: 0,
+            long_liq_usd: totalLong, short_liq_usd: totalShort,
             total_usd: totalLong + totalShort,
             count: liqHistory.length,
         }];

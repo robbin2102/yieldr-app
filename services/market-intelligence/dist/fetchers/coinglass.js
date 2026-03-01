@@ -8,24 +8,25 @@ const config_1 = require("../config");
 const logger_1 = require("../utils/logger");
 const rate_limiter_1 = require("./rate-limiter");
 const BASE = config_1.config.coinglass.baseUrl;
-const HEADERS = {
-    'CG-API-KEY': config_1.config.coinglass.apiKey,
-    'Content-Type': 'application/json',
-};
 function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
-// Endpoints that may return 403 on Hobby plan — skip after first failure
 const skipList = new Set();
 async function cgGet(path, retries = 3) {
     if (skipList.has(path))
         return null;
+    // Build headers here (not at module level) so the apiKey getter is only
+    // evaluated inside a running function, after the HTTP server has started.
+    const headers = {
+        'CG-API-KEY': config_1.config.coinglass.apiKey,
+        'Content-Type': 'application/json',
+    };
     const rl = (0, rate_limiter_1.getCoinGlassRateLimiter)(config_1.config.coinglass.tokensPerMinute);
     await rl.consume(1);
     const url = `${BASE}${path}`;
     for (let attempt = 0; attempt < retries; attempt++) {
         try {
-            const res = await fetch(url, { headers: HEADERS });
+            const res = await fetch(url, { headers });
             if (res.status === 403) {
                 logger_1.logger.warn('CoinGlass', `403 on ${path} — not on Hobby plan, skipping permanently`);
                 skipList.add(path);
@@ -42,10 +43,12 @@ async function cgGet(path, retries = 3) {
                 throw new Error(`CoinGlass ${res.status} on ${path}: ${text.slice(0, 200)}`);
             }
             const json = await res.json();
-            // CoinGlass wraps responses: { code: "0", data: [...] }
             if (json.code !== '0' && json.code !== 0) {
                 logger_1.logger.warn('CoinGlass', `Non-zero code on ${path}: ${json.code} — ${json.msg}`);
                 return null;
+            }
+            if (json.data == null) {
+                logger_1.logger.warn('CoinGlass', `Null data payload on ${path}`);
             }
             return json.data;
         }
@@ -59,48 +62,19 @@ async function cgGet(path, retries = 3) {
     }
     return null;
 }
-/**
- * Fetch all aggregate data (Phase 1).
- * Returns a map of { symbol → CoinAggregateData }.
- */
 async function fetchAggregateData(trackedCoins) {
     const result = new Map();
-    // Initialize with nulls for all tracked coins
     for (const coin of trackedCoins) {
         result.set(coin, {
             symbol: coin,
-            open_interest_usd: null,
-            oi_change_24h_pct: null,
-            price: null,
-            volume_24h: null,
             funding_rate_current: null,
             liq_long_24h: null,
             liq_short_24h: null,
-            taker_buy_vol: null,
-            taker_sell_vol: null,
-            taker_ratio: null,
-            basis: null,
         });
     }
     const trackedSet = new Set(trackedCoins.map(c => c.toUpperCase()));
-    // 1. coins-markets → OI, volume, price
-    logger_1.logger.info('CoinGlass', 'Fetching coins-markets (aggregate OI)');
-    const coinsMarkets = await cgGet('/api/futures/coins-markets');
-    if (coinsMarkets && Array.isArray(coinsMarkets)) {
-        for (const item of coinsMarkets) {
-            const sym = (item.symbol || item.coin || '').toUpperCase();
-            if (!trackedSet.has(sym))
-                continue;
-            const entry = result.get(sym);
-            if (entry) {
-                entry.open_interest_usd = item.openInterest ?? item.openInterestUsd ?? null;
-                entry.oi_change_24h_pct = item.openInterestChangePercent24h ?? item.h24Change ?? null;
-                entry.price = item.price ?? item.lastPrice ?? null;
-                entry.volume_24h = item.volUsd24h ?? item.volume ?? null;
-            }
-        }
-    }
-    // 2. funding-rate/exchange-list → current funding rates
+    // 1. funding-rate/exchange-list → current funding rates
+    // Response: [{ symbol, stablecoin_margin_list: [{ exchange, funding_rate }], token_margin_list }]
     logger_1.logger.info('CoinGlass', 'Fetching funding-rate/exchange-list');
     const fundingList = await cgGet('/api/futures/funding-rate/exchange-list');
     if (fundingList && Array.isArray(fundingList)) {
@@ -110,13 +84,17 @@ async function fetchAggregateData(trackedCoins) {
                 continue;
             const entry = result.get(sym);
             if (entry) {
-                // funding rate is often average across exchanges
-                const rate = item.fundingRate ?? item.averageFundingRate ?? item.rate ?? null;
+                // Use Binance stablecoin-margined rate as the reference funding rate
+                const binanceEntry = (item.stablecoin_margin_list ?? [])
+                    .find((e) => e.exchange === 'Binance');
+                const rate = binanceEntry?.funding_rate
+                    ?? (item.stablecoin_margin_list?.[0]?.funding_rate)
+                    ?? null;
                 entry.funding_rate_current = rate;
             }
         }
     }
-    // 3. liquidation/coin-list → 24h liquidation data
+    // 2. liquidation/coin-list → 24h liquidation totals
     logger_1.logger.info('CoinGlass', 'Fetching liquidation/coin-list');
     const liqList = await cgGet('/api/futures/liquidation/coin-list');
     if (liqList && Array.isArray(liqList)) {
@@ -131,38 +109,6 @@ async function fetchAggregateData(trackedCoins) {
             }
         }
     }
-    // 4. taker-buysell/exchange-list → taker buy/sell ratio
-    logger_1.logger.info('CoinGlass', 'Fetching taker-buysell/exchange-list');
-    const takerList = await cgGet('/api/futures/taker-buysell/exchange-list');
-    if (takerList && Array.isArray(takerList)) {
-        for (const item of takerList) {
-            const sym = (item.symbol || item.coin || '').toUpperCase();
-            if (!trackedSet.has(sym))
-                continue;
-            const entry = result.get(sym);
-            if (entry) {
-                entry.taker_buy_vol = item.buyVol ?? null;
-                entry.taker_sell_vol = item.sellVol ?? null;
-                entry.taker_ratio = item.buySellRatio ?? (entry.taker_buy_vol && entry.taker_sell_vol
-                    ? entry.taker_buy_vol / (entry.taker_buy_vol + entry.taker_sell_vol)
-                    : null);
-            }
-        }
-    }
-    // 5. basis (if available)
-    logger_1.logger.info('CoinGlass', 'Fetching basis data');
-    const basisList = await cgGet('/api/futures/basis');
-    if (basisList && Array.isArray(basisList)) {
-        for (const item of basisList) {
-            const sym = (item.symbol || item.coin || '').toUpperCase();
-            if (!trackedSet.has(sym))
-                continue;
-            const entry = result.get(sym);
-            if (entry) {
-                entry.basis = item.basis ?? item.basisRate ?? null;
-            }
-        }
-    }
     logger_1.logger.info('CoinGlass', `Aggregate fetch complete for ${trackedCoins.length} coins`);
     return result;
 }
@@ -170,91 +116,100 @@ async function fetchPerCoinData(symbol) {
     const result = {
         symbol,
         funding_rate_history: [],
-        funding_arbitrage: [],
+        oi_weighted_funding_history: [],
         oi_history: [],
-        long_short_global: { long: null, short: null },
-        long_short_top_accounts: { long: null, short: null },
-        long_short_top_positions: { long: null, short: null },
+        long_short_global: { long: null, short: null, ratio: null },
+        long_short_top_accounts: { long: null, short: null, ratio: null },
+        long_short_top_positions: { long: null, short: null, ratio: null },
         liq_history: [],
         taker_history: [],
-        cvd_history: [],
-        net_flow: null,
+        basis: null,
         errors: [],
     };
+    const pair = `${symbol}USDT`; // e.g. BTCUSDT — required by pair-level endpoints
     const endpoints = [
+        // Funding rate OHLC history (pair-level, Binance)
+        // Hobby: min interval 4h. Response: [{ time, open, high, low, close }]
         {
-            path: `/api/futures/funding-rate/ohlc-history?symbol=${symbol}&interval=1h&limit=1`,
+            path: `/api/futures/funding-rate/history?exchange=Binance&symbol=${pair}&interval=4h&limit=1`,
             handler: (d) => { result.funding_rate_history = d || []; },
         },
+        // OI-weighted funding rate OHLC (coin-level, all exchanges)
+        // Hobby: min interval 4h. Response: [{ time, open, high, low, close }]
         {
-            path: `/api/futures/funding-rate/arbitrage?symbol=${symbol}`,
-            handler: (d) => {
-                if (d && Array.isArray(d)) {
-                    result.funding_arbitrage = d.map((item) => ({
-                        long_exchange: item.longExchange ?? item.exchange1 ?? '',
-                        short_exchange: item.shortExchange ?? item.exchange2 ?? '',
-                        spread: item.spread ?? item.fundingSpread ?? 0,
-                    }));
-                }
-            },
+            path: `/api/futures/funding-rate/oi-weight-history?symbol=${symbol}&interval=4h&limit=1`,
+            handler: (d) => { result.oi_weighted_funding_history = d || []; },
         },
+        // Aggregated OI OHLC history at 4h (coin-level, all exchanges)
+        // Hobby: min interval 4h. limit=7 → 28h, enough to compute 4h and 24h pct change.
         {
-            path: `/api/futures/openInterest/ohlc-history?symbol=${symbol}&interval=1h&limit=4`,
+            path: `/api/futures/open-interest/aggregated-history?symbol=${symbol}&interval=4h&limit=7&unit=usd`,
             handler: (d) => { result.oi_history = d || []; },
         },
+        // Global long/short account ratio (pair-level, Binance)
+        // Hobby: min interval 4h. Response: [{ time, global_account_long_percent, global_account_short_percent, global_account_long_short_ratio }]
         {
-            path: `/api/futures/long-short/global-account-ratio?symbol=${symbol}&interval=1h&limit=1`,
+            path: `/api/futures/global-long-short-account-ratio/history?exchange=Binance&symbol=${pair}&interval=4h&limit=1`,
             handler: (d) => {
                 const latest = Array.isArray(d) ? d[0] : d;
                 if (latest) {
                     result.long_short_global = {
-                        long: latest.longRatio ?? latest.longAccount ?? null,
-                        short: latest.shortRatio ?? latest.shortAccount ?? null,
+                        long: latest.global_account_long_percent ?? null,
+                        short: latest.global_account_short_percent ?? null,
+                        ratio: latest.global_account_long_short_ratio ?? null,
                     };
                 }
             },
         },
+        // Top trader account long/short ratio (pair-level, Binance)
+        // Hobby: min interval 4h. Response: [{ time, top_account_long_percent, top_account_short_percent, top_account_long_short_ratio }]
         {
-            path: `/api/futures/long-short/top-account-ratio?symbol=${symbol}&interval=1h&limit=1`,
+            path: `/api/futures/top-long-short-account-ratio/history?exchange=Binance&symbol=${pair}&interval=4h&limit=1`,
             handler: (d) => {
                 const latest = Array.isArray(d) ? d[0] : d;
                 if (latest) {
                     result.long_short_top_accounts = {
-                        long: latest.longRatio ?? latest.longAccount ?? null,
-                        short: latest.shortRatio ?? latest.shortAccount ?? null,
+                        long: latest.top_account_long_percent ?? null,
+                        short: latest.top_account_short_percent ?? null,
+                        ratio: latest.top_account_long_short_ratio ?? null,
                     };
                 }
             },
         },
+        // Top trader position long/short ratio (pair-level, Binance)
+        // Hobby: min interval 4h. Response: [{ time, top_position_long_percent, top_position_short_percent, top_position_long_short_ratio }]
         {
-            path: `/api/futures/long-short/top-position-ratio?symbol=${symbol}&interval=1h&limit=1`,
+            path: `/api/futures/top-long-short-position-ratio/history?exchange=Binance&symbol=${pair}&interval=4h&limit=1`,
             handler: (d) => {
                 const latest = Array.isArray(d) ? d[0] : d;
                 if (latest) {
                     result.long_short_top_positions = {
-                        long: latest.longRatio ?? latest.longPosition ?? null,
-                        short: latest.shortRatio ?? latest.shortPosition ?? null,
+                        long: latest.top_position_long_percent ?? null,
+                        short: latest.top_position_short_percent ?? null,
+                        ratio: latest.top_position_long_short_ratio ?? null,
                     };
                 }
             },
         },
+        // Aggregated liquidation history (coin-level, multi-exchange)
+        // Hobby: min interval 4h. limit=6 → 24h window for h24 sum.
         {
-            path: `/api/futures/liquidation/aggregated-history?symbol=${symbol}&interval=1h&limit=4`,
+            path: `/api/futures/liquidation/aggregated-history?exchange_list=Binance,OKX,Bybit&symbol=${symbol}&interval=4h&limit=6`,
             handler: (d) => { result.liq_history = d || []; },
         },
+        // Taker buy/sell volume history (pair-level, Binance)
+        // Hobby: min interval 4h. Response: [{ time, taker_buy_volume_usd, taker_sell_volume_usd }]
         {
-            path: `/api/futures/taker-buysell/aggregated-history?symbol=${symbol}&interval=1h&limit=4`,
+            path: `/api/futures/v2/taker-buy-sell-volume/history?exchange=Binance&symbol=${pair}&interval=4h&limit=4`,
             handler: (d) => { result.taker_history = d || []; },
         },
+        // Futures basis history (pair-level, Binance)
+        // Hobby: min interval 4h. Response: [{ time, open_basis, close_basis, open_change, close_change }]
         {
-            path: `/api/futures/cvd/aggregated-history?symbol=${symbol}&interval=1h&limit=4`,
-            handler: (d) => { result.cvd_history = d || []; },
-        },
-        {
-            path: `/api/futures/netflow/list?symbol=${symbol}`,
+            path: `/api/futures/basis/history?exchange=Binance&symbol=${pair}&interval=4h&limit=1`,
             handler: (d) => {
-                const latest = Array.isArray(d) ? d[0] : d;
-                result.net_flow = latest?.netFlow ?? latest?.value ?? null;
+                const latest = Array.isArray(d) ? d[d.length - 1] : d;
+                result.basis = latest?.close_basis ?? null;
             },
         },
     ];
@@ -272,25 +227,30 @@ async function fetchPerCoinData(symbol) {
     return result;
 }
 // ─── Coinbase Premium ────────────────────────────────────────────────────────
+// Single BTC-only endpoint. ETH not available. Hobby: min interval 4h.
+// Response: [{ time, premium, premium_rate }]
 async function fetchCoinbasePremium() {
     const result = { btc: null, eth: null };
-    const btcData = await cgGet('/api/indicator/index/premium?symbol=BTC');
-    if (btcData)
-        result.btc = btcData.premium ?? btcData.value ?? null;
-    const ethData = await cgGet('/api/indicator/index/premium?symbol=ETH');
-    if (ethData)
-        result.eth = ethData.premium ?? ethData.value ?? null;
+    const data = await cgGet('/api/coinbase-premium-index?interval=4h&limit=1');
+    if (data && Array.isArray(data) && data.length > 0) {
+        const latest = data[data.length - 1];
+        result.btc = latest?.premium ?? null;
+    }
+    else if (data && !Array.isArray(data)) {
+        result.btc = data.premium ?? null;
+    }
+    // ETH coinbase premium is not available as a separate endpoint — stays null
     return result;
 }
 // ─── Macro / Daily endpoints ─────────────────────────────────────────────────
 async function fetchMacroData() {
     logger_1.logger.info('CoinGlass', 'Fetching daily macro data');
     const [btcEtfFlows, ethEtfFlows, btcEtfNetAssets, fearGreed, stablecoinMcap] = await Promise.all([
-        cgGet('/api/indicator/bitcoin-etf/flow-history?limit=1'),
-        cgGet('/api/indicator/ethereum-etf/flow-history?limit=1'),
-        cgGet('/api/indicator/bitcoin-etf/net-assets'),
-        cgGet('/api/indicator/fear-greed-index?limit=1'),
-        cgGet('/api/indicator/stablecoin-market-cap?limit=1'),
+        cgGet('/api/etf/bitcoin/flow-history?limit=1'),
+        cgGet('/api/etf/ethereum/flow-history?limit=1'),
+        cgGet('/api/etf/bitcoin/net-assets/history?limit=1'),
+        cgGet('/api/index/fear-greed-history'),
+        cgGet('/api/index/stableCoin-marketCap-history?limit=2'),
     ]);
     return { btcEtfFlows, ethEtfFlows, btcEtfNetAssets, fearGreed, stablecoinMcap };
 }

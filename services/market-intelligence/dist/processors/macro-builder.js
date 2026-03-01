@@ -7,9 +7,6 @@ exports.buildAndSaveMacroDaily = buildAndSaveMacroDaily;
 const logger_1 = require("../utils/logger");
 const coinglass_1 = require("../fetchers/coinglass");
 const MacroDaily_1 = __importDefault(require("../models/MacroDaily"));
-/**
- * Fetch all daily macro data from CoinGlass and upsert to macro_daily collection.
- */
 async function buildAndSaveMacroDaily() {
     logger_1.logger.info('Macro', 'Building daily macro snapshot');
     try {
@@ -29,7 +26,8 @@ async function buildAndSaveMacroDaily() {
         logger_1.logger.info('Macro', `Macro daily saved for ${today.toISOString().split('T')[0]}`);
         logger_1.logger.info('Macro', `Fear/Greed: ${doc.fear_greed.value} (${doc.fear_greed.classification})`);
         logger_1.logger.info('Macro', `BTC ETF flows: ${formatUsd(doc.btc_etf.total_flow_usd)}`);
-        logger_1.logger.info('Macro', `Coinbase premium BTC: ${premium.btc}, ETH: ${premium.eth}`);
+        logger_1.logger.info('Macro', `Coinbase premium BTC: ${premium.btc}`);
+        logger_1.logger.info('Macro', `Stablecoin mcap: total=${doc.stablecoin_mcap.total_usd}, change24h=${doc.stablecoin_mcap.change_24h_usd}`);
     }
     catch (err) {
         logger_1.logger.error('Macro', `Failed to build macro daily: ${err.message}`);
@@ -39,43 +37,64 @@ function buildEtfFlows(flowsData, netAssetsData) {
     if (!flowsData) {
         return { total_flow_usd: null, net_assets_usd: null, flows_by_ticker: [] };
     }
-    // Data is typically an array; take the latest entry
+    // /api/etf/bitcoin/flow-history returns array of daily entries
+    // Each entry: { timestamp, flow_usd, price_usd, etf_flows: [{ etf_ticker, flow_usd }] }
     const latest = Array.isArray(flowsData) ? flowsData[0] : flowsData;
-    const totalFlow = latest?.totalNetFlow ?? latest?.netFlow ?? latest?.total ?? null;
-    const netAssets = netAssetsData?.totalNetAssets ?? netAssetsData?.netAssets ?? null;
+    const totalFlow = latest?.flow_usd ?? null;
+    // /api/etf/bitcoin/net-assets/history returns array
+    // Each entry: { net_assets_usd, change_usd, timestamp, price_usd }
+    let netAssets = null;
+    if (netAssetsData) {
+        const netLatest = Array.isArray(netAssetsData) ? netAssetsData[0] : netAssetsData;
+        netAssets = netLatest?.net_assets_usd ?? null;
+    }
     const flowsByTicker = [];
-    const details = latest?.flowDetails ?? latest?.details ?? latest?.etfList ?? [];
-    if (Array.isArray(details)) {
-        for (const item of details) {
-            const ticker = item.ticker ?? item.symbol ?? item.name ?? '';
-            const flow = item.netFlow ?? item.flow ?? item.value ?? 0;
+    const etfFlows = latest?.etf_flows ?? [];
+    if (Array.isArray(etfFlows)) {
+        for (const item of etfFlows) {
+            const ticker = item.etf_ticker ?? item.ticker ?? '';
+            const flow = item.flow_usd ?? item.flow ?? 0;
             if (ticker)
                 flowsByTicker.push({ ticker, flow_usd: flow });
         }
     }
-    return {
-        total_flow_usd: totalFlow,
-        net_assets_usd: netAssets,
-        flows_by_ticker: flowsByTicker,
-    };
+    return { total_flow_usd: totalFlow, net_assets_usd: netAssets, flows_by_ticker: flowsByTicker };
+}
+function classifyFearGreed(value) {
+    if (value <= 24)
+        return 'Extreme Fear';
+    if (value <= 49)
+        return 'Fear';
+    if (value <= 74)
+        return 'Greed';
+    return 'Extreme Greed';
 }
 function buildFearGreed(data) {
     if (!data)
         return { value: null, classification: null };
-    const latest = Array.isArray(data) ? data[0] : data;
+    // /api/index/fear-greed-history returns:
+    // [{ data_list: [...values], price_list: [...], time_list: [...timestamps] }]
+    const entry = Array.isArray(data) ? data[0] : data;
+    const values = entry?.data_list ?? [];
+    const raw = values.length > 0 ? Number(values[values.length - 1]) : NaN;
+    const value = Number.isFinite(raw) ? raw : null;
     return {
-        value: latest?.value ?? latest?.score ?? null,
-        classification: latest?.valueClassification ?? latest?.classification ?? null,
+        value,
+        classification: value != null ? classifyFearGreed(value) : null,
     };
 }
 function buildStablecoinMcap(data) {
     if (!data)
         return { total_usd: null, change_24h_usd: null };
-    const latest = Array.isArray(data) ? data[0] : data;
-    return {
-        total_usd: latest?.marketCap ?? latest?.total ?? null,
-        change_24h_usd: latest?.change24h ?? latest?.changeUsd ?? null,
-    };
+    // /api/index/stableCoin-marketCap-history returns:
+    // [{ data_list: [...values], price_list: [...], time_list: [...timestamps] }]
+    const entry = Array.isArray(data) ? data[0] : data;
+    const values = entry?.data_list ?? [];
+    const last = values.length > 0 ? Number(values[values.length - 1]) : NaN;
+    const prev = values.length >= 2 ? Number(values[values.length - 2]) : NaN;
+    const total = Number.isFinite(last) ? last : null;
+    const change = Number.isFinite(last) && Number.isFinite(prev) ? last - prev : null;
+    return { total_usd: total, change_24h_usd: change };
 }
 function formatUsd(value) {
     if (value == null)

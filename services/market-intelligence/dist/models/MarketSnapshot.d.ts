@@ -1,11 +1,4 @@
 import mongoose, { Document } from 'mongoose';
-export interface IAlert {
-    type: string;
-    severity: 'high' | 'medium' | 'low';
-    message: string;
-    data: Record<string, unknown>;
-    timestamp: Date;
-}
 export interface IMarketSnapshot extends Document {
     symbol: string;
     timestamp: Date;
@@ -30,7 +23,7 @@ export interface IMarketSnapshot extends Document {
         market_structure: Record<string, unknown>;
         fvg: unknown[];
         order_blocks: unknown[];
-        alerts: IAlert[];
+        alerts: unknown[];
     };
     chart_patterns: unknown[];
     tier: 'full' | 'lite' | 'on_demand';
@@ -38,5 +31,9 @@ export interface IMarketSnapshot extends Document {
     on_demand_expires_at: Date | null;
     fetch_duration_ms: number;
 }
-declare const _default: mongoose.Model<any, {}, {}, {}, any, any>;
+declare const _default: mongoose.Model<any, {}, {}, {}, any, any> | mongoose.Model<IMarketSnapshot, {}, {}, {}, mongoose.Document<unknown, {}, IMarketSnapshot, {}, {}> & IMarketSnapshot & Required<{
+    _id: mongoose.Types.ObjectId;
+}> & {
+    __v: number;
+}, any>;
 export default _default;

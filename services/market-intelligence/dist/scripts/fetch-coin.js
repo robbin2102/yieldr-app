@@ -34,43 +34,76 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
 /**
- * npm run fetch-coin BTC
- * Fetches and saves data for a single coin.
+ * npm run fetch-coin BTC ETH SOL
+ * Fetches and saves data for one or more coins, processed one by one.
  */
 const dotenv = __importStar(require("dotenv"));
-dotenv.config();
+dotenv.config({ path: '../../.env.local' });
 const db_1 = require("../db");
 const taapi_1 = require("../fetchers/taapi");
 const coinglass_1 = require("../fetchers/coinglass");
+const binance_1 = require("../fetchers/binance");
 const snapshot_builder_1 = require("../processors/snapshot-builder");
 const logger_1 = require("../utils/logger");
 async function main() {
-    const symbol = (process.argv[2] || 'BTC').toUpperCase();
-    logger_1.logger.info('Script', `Fetching data for single coin: ${symbol}`);
+    const symbols = process.argv.slice(2).map(s => s.toUpperCase());
+    if (symbols.length === 0)
+        symbols.push('BTC');
+    logger_1.logger.info('Script', `Fetching data for ${symbols.length} coin(s): ${symbols.join(', ')}`);
     await (0, db_1.connectDB)();
     const timestamp = new Date();
     timestamp.setUTCMinutes(0, 0, 0);
-    logger_1.logger.info('Script', 'Fetching TAAPI indicators...');
-    const taapiMap = await (0, taapi_1.fetchAllCoins)([symbol]);
-    logger_1.logger.info('Script', 'Fetching CoinGlass aggregate...');
-    const aggregateMap = await (0, coinglass_1.fetchAggregateData)([symbol]);
-    logger_1.logger.info('Script', 'Fetching CoinGlass per-coin...');
-    const perCoin = await (0, coinglass_1.fetchPerCoinData)(symbol);
-    logger_1.logger.info('Script', 'Fetching Coinbase premium...');
+    // Bulk fetches (support multiple symbols in one call)
+    logger_1.logger.info('Script', 'Fetching TAAPI indicators (bulk)...');
+    const taapiMap = await (0, taapi_1.fetchAllCoins)(symbols);
+    logger_1.logger.info('Script', 'Fetching CoinGlass aggregate (bulk)...');
+    const aggregateMap = await (0, coinglass_1.fetchAggregateData)(symbols);
+    logger_1.logger.info('Script', 'Fetching Coinbase premium (shared)...');
     const premium = await (0, coinglass_1.fetchCoinbasePremium)();
-    const taapi = taapiMap.get(symbol) ?? { indicators: {}, candlestick_patterns: [], errors: [] };
-    const aggregate = aggregateMap.get(symbol);
-    logger_1.logger.info('Script', 'Building snapshot...');
-    await (0, snapshot_builder_1.buildAndSaveSnapshot)({ symbol, timestamp, tier: 'full', taapi, aggregate, perCoin, coinbasePremium: premium });
-    logger_1.logger.info('Script', `✓ Snapshot for ${symbol} saved successfully`);
-    logger_1.logger.info('Script', `  Indicators: ${Object.keys(taapi.indicators).length}`);
-    logger_1.logger.info('Script', `  Patterns: ${taapi.candlestick_patterns.length}`);
-    logger_1.logger.info('Script', `  Errors: ${taapi.errors.length}`);
-    if (taapi.errors.length > 0) {
-        logger_1.logger.warn('Script', `  Error details: ${taapi.errors.join(', ')}`);
+    // Per-coin processing — one by one
+    const results = [];
+    for (const symbol of symbols) {
+        logger_1.logger.info('Script', `--- Processing ${symbol} ---`);
+        try {
+            logger_1.logger.info('Script', `[${symbol}] Fetching CoinGlass per-coin...`);
+            const perCoin = await (0, coinglass_1.fetchPerCoinData)(symbol);
+            logger_1.logger.info('Script', `[${symbol}] Fetching Binance OHLCV...`);
+            const binance = await (0, binance_1.fetchBinanceCandle)(symbol);
+            const taapi = taapiMap.get(symbol) ?? { indicators: {}, candlestick_patterns: [], errors: [] };
+            const aggregate = aggregateMap.get(symbol);
+            logger_1.logger.info('Script', `[${symbol}] Building snapshot...`);
+            await (0, snapshot_builder_1.buildAndSaveSnapshot)({ symbol, timestamp, tier: 'full', taapi, aggregate, perCoin, coinbasePremium: premium, binance });
+            logger_1.logger.info('Script', `[${symbol}] ✓ Saved`);
+            logger_1.logger.info('Script', `  Indicators: ${Object.keys(taapi.indicators).length}`);
+            logger_1.logger.info('Script', `  Patterns:   ${taapi.candlestick_patterns.length}`);
+            logger_1.logger.info('Script', `  Errors:     ${taapi.errors.length}`);
+            logger_1.logger.info('Script', `  OHLCV: O=${binance.open} H=${binance.high} L=${binance.low} C=${binance.close} V=${binance.volume}`);
+            logger_1.logger.info('Script', `  Pivot PP:   ${binance.daily_close != null ? '✓ computed from Binance' : '✗ missing daily candle'}`);
+            if (taapi.errors.length > 0) {
+                logger_1.logger.warn('Script', `  Error details: ${taapi.errors.join(', ')}`);
+            }
+            results.push({ symbol, ok: true });
+        }
+        catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            logger_1.logger.error('Script', `[${symbol}] ✗ Failed: ${message}`);
+            results.push({ symbol, ok: false, error: message });
+        }
     }
+    // Summary
+    logger_1.logger.info('Script', '--- Summary ---');
+    for (const r of results) {
+        if (r.ok) {
+            logger_1.logger.info('Script', `  ✓ ${r.symbol}`);
+        }
+        else {
+            logger_1.logger.warn('Script', `  ✗ ${r.symbol}: ${r.error}`);
+        }
+    }
+    const failed = results.filter(r => !r.ok).length;
+    logger_1.logger.info('Script', `${results.length - failed}/${results.length} coin(s) succeeded`);
     await (0, db_1.disconnectDB)();
-    process.exit(0);
+    process.exit(failed > 0 ? 1 : 0);
 }
 main().catch(err => {
     console.error(err);

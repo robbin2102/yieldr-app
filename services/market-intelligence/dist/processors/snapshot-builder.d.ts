@@ -1,5 +1,6 @@
 import { TaapiCoinData } from '../fetchers/taapi';
 import { CoinAggregateData, CoinPerCoinData } from '../fetchers/coinglass';
+import { BinanceCandleData } from '../fetchers/binance';
 interface BuildSnapshotArgs {
     symbol: string;
     timestamp: Date;
@@ -11,9 +12,7 @@ interface BuildSnapshotArgs {
         btc: number | null;
         eth: number | null;
     };
+    binance?: BinanceCandleData;
 }
-/**
- * Merge TAAPI + CoinGlass data into a market_snapshots document and upsert to MongoDB.
- */
 export declare function buildAndSaveSnapshot(args: BuildSnapshotArgs): Promise<void>;
 export {};

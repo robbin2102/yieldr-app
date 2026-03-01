@@ -3,10 +3,6 @@ import { logger } from '../utils/logger';
 import { getCoinGlassRateLimiter } from './rate-limiter';
 
 const BASE = config.coinglass.baseUrl;
-const HEADERS = {
-  'CG-API-KEY': config.coinglass.apiKey,
-  'Content-Type': 'application/json',
-};
 
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -17,6 +13,13 @@ const skipList = new Set<string>();
 async function cgGet(path: string, retries = 3): Promise<any> {
   if (skipList.has(path)) return null;
 
+  // Build headers here (not at module level) so the apiKey getter is only
+  // evaluated inside a running function, after the HTTP server has started.
+  const headers = {
+    'CG-API-KEY': config.coinglass.apiKey,
+    'Content-Type': 'application/json',
+  };
+
   const rl = getCoinGlassRateLimiter(config.coinglass.tokensPerMinute);
   await rl.consume(1);
 
@@ -24,7 +27,7 @@ async function cgGet(path: string, retries = 3): Promise<any> {
 
   for (let attempt = 0; attempt < retries; attempt++) {
     try {
-      const res = await fetch(url, { headers: HEADERS });
+      const res = await fetch(url, { headers });
 
       if (res.status === 403) {
         logger.warn('CoinGlass', `403 on ${path} — not on Hobby plan, skipping permanently`);

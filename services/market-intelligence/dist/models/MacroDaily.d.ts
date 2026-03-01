@@ -30,5 +30,9 @@ export interface IMacroDaily extends Document {
         change_24h_usd: number | null;
     };
 }
-declare const _default: mongoose.Model<any, {}, {}, {}, any, any>;
+declare const _default: mongoose.Model<any, {}, {}, {}, any, any> | mongoose.Model<IMacroDaily, {}, {}, {}, mongoose.Document<unknown, {}, IMacroDaily, {}, {}> & IMacroDaily & Required<{
+    _id: mongoose.Types.ObjectId;
+}> & {
+    __v: number;
+}, any>;
 export default _default;
