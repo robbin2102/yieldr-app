@@ -84,7 +84,8 @@ function buildFearGreed(data: any): { value: number | null; classification: stri
   // [{ data_list: [...values], price_list: [...], time_list: [...timestamps] }]
   const entry = Array.isArray(data) ? data[0] : data;
   const values: number[] = entry?.data_list ?? [];
-  const value = values.length > 0 ? values[values.length - 1] : null;
+  const raw   = values.length > 0 ? Number(values[values.length - 1]) : NaN;
+  const value = Number.isFinite(raw) ? raw : null;
 
   return {
     value,
@@ -100,8 +101,11 @@ function buildStablecoinMcap(data: any): { total_usd: number | null; change_24h_
   const entry = Array.isArray(data) ? data[0] : data;
   const values: number[] = entry?.data_list ?? [];
 
-  const total  = values.length > 0 ? values[values.length - 1] : null;
-  const change = values.length >= 2 ? values[values.length - 1] - values[values.length - 2] : null;
+  const last  = values.length > 0 ? Number(values[values.length - 1]) : NaN;
+  const prev  = values.length >= 2 ? Number(values[values.length - 2]) : NaN;
+
+  const total  = Number.isFinite(last) ? last : null;
+  const change = Number.isFinite(last) && Number.isFinite(prev) ? last - prev : null;
 
   return { total_usd: total, change_24h_usd: change };
 }
