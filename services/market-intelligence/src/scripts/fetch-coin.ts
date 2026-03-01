@@ -3,7 +3,7 @@
  * Fetches and saves data for one or more coins, processed one by one.
  */
 import * as dotenv from 'dotenv';
-dotenv.config();
+dotenv.config({ path: '../../.env.local' });
 
 import { connectDB, disconnectDB } from '../db';
 import { fetchAllCoins } from '../fetchers/taapi';

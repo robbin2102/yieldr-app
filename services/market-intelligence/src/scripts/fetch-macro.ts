@@ -3,7 +3,7 @@
  * Fetches and saves the daily macro snapshot (ETF flows, fear/greed, stablecoin mcap).
  */
 import * as dotenv from 'dotenv';
-dotenv.config();
+dotenv.config({ path: '../../.env.local' });
 
 import { connectDB, disconnectDB } from '../db';
 import { buildAndSaveMacroDaily } from '../processors/macro-builder';
