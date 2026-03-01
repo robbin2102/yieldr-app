@@ -7,6 +7,7 @@
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
     "fetch-coin": "tsx src/scripts/fetch-coin.ts",
+    "fetch-macro": "tsx src/scripts/fetch-macro.ts",
     "fetch-once": "tsx src/scripts/fetch-once.ts",
     "refresh-coins": "tsx src/scripts/refresh-coins.ts"
   },
