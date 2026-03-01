@@ -301,7 +301,7 @@ export async function fetchMacroData(): Promise<{
     cgGet('/api/etf/ethereum/flow-history?limit=1'),
     cgGet('/api/etf/bitcoin/net-assets/history?limit=1'),
     cgGet('/api/index/fear-greed-history'),
-    cgGet('/api/index/stableCoin-marketCap-history'),
+    cgGet('/api/index/stableCoin-marketCap-history?limit=2'),
   ]);
 
   return { btcEtfFlows, ethEtfFlows, btcEtfNetAssets, fearGreed, stablecoinMcap };
