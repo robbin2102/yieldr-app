@@ -152,8 +152,16 @@ function buildDerivatives(
   const fundingCurrent = aggregate.funding_rate_current;
   const fundingAnnualized = fundingCurrent != null ? fundingCurrent * 3 * 365 * 100 : null;
 
-  // OI: use extended history (limit=7 → ~28h) for both 4h and 24h change
+  // OI-weighted funding rate — close of latest 4h candle
+  let oiWeightedFunding: number | null = null;
+  if (perCoin?.oi_weighted_funding_history && perCoin.oi_weighted_funding_history.length > 0) {
+    const latest = perCoin.oi_weighted_funding_history[perCoin.oi_weighted_funding_history.length - 1];
+    oiWeightedFunding = parseFloat(latest?.close ?? '') || null;
+  }
+
+  // OI: use 4h history (limit=7 → ~28h) for 4h and 24h change; 1h history for 1h change
   let oiTotal: number | null = null;
+  let oiChange1h: number | null = null;
   let oiChange4h: number | null = null;
   let oiChange24h: number | null = null;
 
@@ -173,6 +181,14 @@ function buildDerivatives(
       const prev24h = parseFloat(vals[vals.length - 7]?.close ?? '') || null;
       if (curr && prev24h) oiChange24h = ((curr - prev24h) / prev24h) * 100;
     }
+  }
+
+  // 1h OI change from dedicated 1h-interval fetch (Startup+ plan; null on Hobby)
+  if (perCoin?.oi_history_1h && perCoin.oi_history_1h.length >= 2) {
+    const vals1h = perCoin.oi_history_1h;
+    const curr1h = parseFloat(vals1h[vals1h.length - 1]?.close ?? '') || null;
+    const prev1h = parseFloat(vals1h[vals1h.length - 2]?.close ?? '') || null;
+    if (curr1h && prev1h) oiChange1h = ((curr1h - prev1h) / prev1h) * 100;
   }
 
   // Liquidations from extended history (limit=6 → 24h)
@@ -211,14 +227,15 @@ function buildDerivatives(
   return {
     open_interest: {
       total_usd:      oiTotal,
+      change_1h_pct:  oiChange1h,
       change_4h_pct:  oiChange4h,
       change_24h_pct: oiChange24h,
     },
     funding_rate: {
       current:      fundingCurrent,
       predicted:    null,
-      oi_weighted:  null,   // requires plan upgrade
-      vol_weighted: null,   // requires plan upgrade
+      oi_weighted:  oiWeightedFunding,
+      vol_weighted: null,
       annualized:   fundingAnnualized,
     },
     funding_arbitrage: [],

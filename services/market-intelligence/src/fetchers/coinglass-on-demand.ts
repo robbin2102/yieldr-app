@@ -63,7 +63,7 @@ function buildEnrichedDerivatives(
 ): Record<string, unknown> {
   const enriched = { ...(existing || {}) } as any;
 
-  // OI history — extract 4h change from aggregated-history OHLC
+  // OI history (4h) — extract total, 4h change
   // Response fields: { time, open, high, low, close } as strings
   if (perCoin.oi_history.length >= 2) {
     const curr = parseFloat(perCoin.oi_history[perCoin.oi_history.length - 1]?.close ?? '');
@@ -72,6 +72,16 @@ function buildEnrichedDerivatives(
       if (!enriched.open_interest) enriched.open_interest = {};
       enriched.open_interest.total_usd     = curr;
       enriched.open_interest.change_4h_pct = ((curr - prev) / prev) * 100;
+    }
+  }
+
+  // OI history (1h) — extract 1h change (Startup+ plan; empty on Hobby)
+  if (perCoin.oi_history_1h.length >= 2) {
+    const curr = parseFloat(perCoin.oi_history_1h[perCoin.oi_history_1h.length - 1]?.close ?? '');
+    const prev = parseFloat(perCoin.oi_history_1h[perCoin.oi_history_1h.length - 2]?.close ?? '');
+    if (!isNaN(curr) && !isNaN(prev) && prev !== 0) {
+      if (!enriched.open_interest) enriched.open_interest = {};
+      enriched.open_interest.change_1h_pct = ((curr - prev) / prev) * 100;
     }
   }
 
@@ -111,11 +121,17 @@ function buildEnrichedDerivatives(
   if (perCoin.funding_rate_history.length > 0) {
     const latest = perCoin.funding_rate_history[perCoin.funding_rate_history.length - 1];
     if (!enriched.funding_rate) enriched.funding_rate = {};
-    // No OI/vol weighted available on Hobby plan; use close as funding rate value
     enriched.funding_rate.history_close = parseFloat(latest?.close ?? '') || null;
     enriched.funding_rate.annualized = enriched.funding_rate.current != null
       ? enriched.funding_rate.current * 3 * 365 * 100
       : null;
+  }
+
+  // OI-weighted funding rate — close of latest 4h candle from oi-weight-history
+  if (perCoin.oi_weighted_funding_history.length > 0) {
+    const latest = perCoin.oi_weighted_funding_history[perCoin.oi_weighted_funding_history.length - 1];
+    if (!enriched.funding_rate) enriched.funding_rate = {};
+    enriched.funding_rate.oi_weighted = parseFloat(latest?.close ?? '') || null;
   }
 
   return enriched;
