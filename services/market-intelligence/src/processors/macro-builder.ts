@@ -21,7 +21,7 @@ export async function buildAndSaveMacroDaily(): Promise<void> {
       stablecoin_mcap: buildStablecoinMcap(stablecoinMcap),
     };
 
-    await MacroDaily.findOneAndUpdate(
+    await (MacroDaily as any).findOneAndUpdate(
       { date: today },
       { $set: doc },
       { upsert: true, new: true }

@@ -86,7 +86,7 @@ export async function buildAndSaveSnapshot(args: BuildSnapshotArgs): Promise<voi
   };
 
   try {
-    await MarketSnapshot.findOneAndUpdate(
+    await (MarketSnapshot as any).findOneAndUpdate(
       { symbol: snapshotDoc.symbol, timestamp },
       { $set: snapshotDoc },
       { upsert: true, new: true }
@@ -426,7 +426,7 @@ async function updateLiquidationLevels(
       nearestDistPct = Math.abs(mid - currentPrice) / currentPrice * 100;
     }
 
-    await LiquidationLevels.findOneAndUpdate(
+    await (LiquidationLevels as any).findOneAndUpdate(
       { symbol: symbol.toUpperCase() },
       {
         $set: {

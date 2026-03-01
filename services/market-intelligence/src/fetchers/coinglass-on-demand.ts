@@ -6,7 +6,7 @@ import MarketSnapshot from '../models/MarketSnapshot';
 export async function fetchOnDemand(symbol: string): Promise<Record<string, unknown> | null> {
   const upperSym = symbol.toUpperCase();
 
-  const existing = await MarketSnapshot.findOne({ symbol: upperSym })
+  const existing = await (MarketSnapshot as any).findOne({ symbol: upperSym })
     .sort({ timestamp: -1 })
     .select('tier on_demand_expires_at derivatives');
 
@@ -38,7 +38,7 @@ export async function fetchOnDemand(symbol: string): Promise<Record<string, unkn
   const expiresAt = new Date(Date.now() + config.onDemandCacheTtlMs);
   const enrichedDerivatives = buildEnrichedDerivatives(perCoin, existing.derivatives as Record<string, unknown>);
 
-  await MarketSnapshot.findOneAndUpdate(
+  await (MarketSnapshot as any).findOneAndUpdate(
     { symbol: upperSym, timestamp: (existing as any).timestamp },
     {
       $set: {
