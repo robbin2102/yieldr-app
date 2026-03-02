@@ -15,6 +15,7 @@
 
 import dotenv from 'dotenv';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import { MongoClient } from 'mongodb';
 
 // Load environment — .env.local first so AI hedge fund scripts use the same
@@ -1583,7 +1584,8 @@ async function main() {
 }
 
 // Only run when invoked directly (not when imported by bulk-profile-ahf.ts)
-if (require.main === module) {
+const isDirectRun = process.argv[1] === fileURLToPath(import.meta.url);
+if (isDirectRun) {
   main().catch(err => {
     console.error('Error:', err.message);
     process.exit(1);
