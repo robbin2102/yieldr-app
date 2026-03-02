@@ -2,39 +2,34 @@ import { logger } from '../utils/logger';
 import { fetchMacroData, fetchCoinbasePremium } from '../fetchers/coinglass';
 import MacroDaily from '../models/MacroDaily';
 
-export async function buildAndSaveMacroDaily(): Promise<void> {
+export async function buildAndSaveMacroDaily(): Promise<{ _id: string; doc: Record<string, unknown> }> {
   logger.info('Macro', 'Building daily macro snapshot');
 
-  try {
-    const { btcEtfFlows, ethEtfFlows, btcEtfNetAssets, fearGreed, stablecoinMcap } = await fetchMacroData();
-    const premium = await fetchCoinbasePremium();
+  const { btcEtfFlows, ethEtfFlows, btcEtfNetAssets, fearGreed, stablecoinMcap } = await fetchMacroData();
+  const premium = await fetchCoinbasePremium();
 
-    const today = new Date();
-    today.setUTCHours(0, 0, 0, 0);
+  const today = new Date();
+  today.setUTCHours(0, 0, 0, 0);
 
-    const doc = {
-      date: today,
-      btc_etf: buildEtfFlows(btcEtfFlows, btcEtfNetAssets),
-      eth_etf: buildEtfFlows(ethEtfFlows, null),
-      coinbase_premium: premium,
-      fear_greed: buildFearGreed(fearGreed),
-      stablecoin_mcap: buildStablecoinMcap(stablecoinMcap),
-    };
+  const doc = {
+    date: today,
+    btc_etf: buildEtfFlows(btcEtfFlows, btcEtfNetAssets),
+    eth_etf: buildEtfFlows(ethEtfFlows, null),
+    coinbase_premium: premium,
+    fear_greed: buildFearGreed(fearGreed),
+    stablecoin_mcap: buildStablecoinMcap(stablecoinMcap),
+  };
 
-    await (MacroDaily as any).findOneAndUpdate(
-      { date: today },
-      { $set: doc },
-      { upsert: true, new: true }
-    );
+  const saved = await (MacroDaily as any).findOneAndUpdate(
+    { date: today },
+    { $set: doc },
+    { upsert: true, new: true }
+  );
+  const _id = String(saved._id);
 
-    logger.info('Macro', `Macro daily saved for ${today.toISOString().split('T')[0]}`);
-    logger.info('Macro', `Fear/Greed: ${doc.fear_greed.value} (${doc.fear_greed.classification})`);
-    logger.info('Macro', `BTC ETF flows: ${formatUsd(doc.btc_etf.total_flow_usd)}`);
-    logger.info('Macro', `Coinbase premium BTC: ${premium.btc}`);
-    logger.info('Macro', `Stablecoin mcap: total=${doc.stablecoin_mcap.total_usd}, change24h=${doc.stablecoin_mcap.change_24h_usd}`);
-  } catch (err: any) {
-    logger.error('Macro', `Failed to build macro daily: ${err.message}`);
-  }
+  logger.debug('Macro', `Macro daily saved _id=${_id}`);
+
+  return { _id, doc: doc as unknown as Record<string, unknown> };
 }
 
 function buildEtfFlows(

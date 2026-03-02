@@ -17,7 +17,7 @@ interface BuildSnapshotArgs {
   binance?: BinanceCandleData;
 }
 
-export async function buildAndSaveSnapshot(args: BuildSnapshotArgs): Promise<void> {
+export async function buildAndSaveSnapshot(args: BuildSnapshotArgs): Promise<{ _id: string; snapshot: Record<string, unknown> }> {
   const { symbol, timestamp, tier, taapi, aggregate, perCoin, coinbasePremium, binance } = args;
   const start = Date.now();
 
@@ -85,13 +85,15 @@ export async function buildAndSaveSnapshot(args: BuildSnapshotArgs): Promise<voi
     fetch_errors: taapi.errors,
   };
 
+  let savedId: string;
   try {
-    await (MarketSnapshot as any).findOneAndUpdate(
+    const saved = await (MarketSnapshot as any).findOneAndUpdate(
       { symbol: snapshotDoc.symbol, timestamp },
       { $set: snapshotDoc },
       { upsert: true, new: true }
     );
-    logger.debug('Snapshot', `${symbol} saved (tier=${tier})`);
+    savedId = String(saved._id);
+    logger.debug('Snapshot', `${symbol} saved (tier=${tier}) _id=${savedId}`);
   } catch (err: any) {
     logger.error('Snapshot', `${symbol} save failed: ${err.message}`);
     throw err;
@@ -100,6 +102,8 @@ export async function buildAndSaveSnapshot(args: BuildSnapshotArgs): Promise<voi
   if (perCoin?.liq_history && perCoin.liq_history.length > 0) {
     await updateLiquidationLevels(symbol, perCoin.liq_history, closePrice ?? (indicators?.vwap as number | null) ?? null);
   }
+
+  return { _id: savedId, snapshot: snapshotDoc as unknown as Record<string, unknown> };
 }
 
 // ─── Pivot Points ──────────────────────────────────────────────────────────────
