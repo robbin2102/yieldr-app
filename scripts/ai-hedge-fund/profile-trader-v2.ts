@@ -1112,6 +1112,9 @@ export async function profileTrader(
   const traderLabel = `Trader-${cleanWallet.slice(0, 6)}`;
   const label = determineTraderLabel({ volumeLabel, strategyLabel, win_rate, profitFactor, strengths });
 
+  // ── avg_bet_size_usdc ─────────────────────────────────────
+  const avg_bet_size_usdc = win_rate_sample_size > 0 ? cashFlowPnL.totalBuys / win_rate_sample_size : 0;
+
   // ── Insider score ──────────────────────────────────────────
   const { insider_score, insider_probability, insider_signals_fired } = computeInsiderScore({
     account_age_days,
@@ -1123,9 +1126,6 @@ export async function profileTrader(
     medianTradeSize,
     activities,
   });
-
-  // ── avg_bet_size_usdc ─────────────────────────────────────
-  const avg_bet_size_usdc = win_rate_sample_size > 0 ? cashFlowPnL.totalBuys / win_rate_sample_size : 0;
 
   // ── Baseline snapshot ──────────────────────────────────────
   const baseline_snapshot = {
