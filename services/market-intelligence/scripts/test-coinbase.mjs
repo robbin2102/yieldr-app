@@ -18,8 +18,13 @@ const dayStart  = dayEnd - 86400;
 // Mix of top coins + some alts to check coverage
 const COINS = ['BTC', 'ETH', 'SOL', 'XRP', 'DOGE', 'AVAX', 'LINK', 'MATIC', 'ADA', 'DOT'];
 
+// Must match SYMBOL_MAP in src/fetchers/binance.ts
+const SYMBOL_MAP = {
+  MATIC: 'POL', // Polygon rebranded MATIC → POL in Sept 2024
+};
+
 async function fetchCandle(symbol) {
-  const productId = `${symbol}-USD`;
+  const productId = `${SYMBOL_MAP[symbol] ?? symbol}-USD`;
   const result = { symbol, close: null, high: null, low: null, daily_close: null, daily_high: null, daily_low: null, error_1h: null, error_daily: null };
 
   const startIso1h = new Date(hourStart * 1000).toISOString();
