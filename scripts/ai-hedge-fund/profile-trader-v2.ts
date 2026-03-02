@@ -1307,8 +1307,8 @@ export async function profileTrader(
       : '';
     console.log(`\n  ROCE Trend:    7d=${roce_trend.d7 !== null ? roce_trend.d7.toFixed(1) + '%' : 'n/a'}  15d=${roce_trend.d15 !== null ? roce_trend.d15.toFixed(1) + '%' : 'n/a'}  30d=${roce_trend.d30 !== null ? roce_trend.d30.toFixed(1) + '%' : 'n/a'}  → ${roce_trend.direction.toUpperCase()}${roceDirNote}`);
 
-    const lowSampleWarning = pnlConsistency.tradingDays30d < 15
-      ? `  ⚠️ LOW SAMPLE (${pnlConsistency.tradingDays30d} trading days — need 15+ for reliable score)`
+    const lowSampleWarning = (pnlConsistency.tradingDays30d ?? 0) < 15
+      ? `  ⚠️ LOW SAMPLE (${pnlConsistency.tradingDays30d ?? 0} trading days — need 15+ for reliable score)`
       : '';
     console.log(`\n  PnL Consistency:`);
     console.log(`    Score:          ${pnlConsistency.score.toFixed(1)}${lowSampleWarning}`);
