@@ -1,9 +1,13 @@
 /**
- * Quick local test for the Coinbase candle fetcher.
- * Run from your Mac: node services/market-intelligence/scripts/test-coinbase.mjs
+ * Quick local test for the Coinbase Exchange candle fetcher.
+ * Run from services/market-intelligence/: node scripts/test-coinbase.mjs
+ *
+ * Uses Coinbase Exchange public API (no auth required):
+ *   GET https://api.exchange.coinbase.com/products/{id}/candles
+ *   Response: [[time, low, high, open, close, volume], ...] newest-first
  */
 
-const BASE = 'https://api.coinbase.com';
+const BASE = 'https://api.exchange.coinbase.com';
 
 const now       = Math.floor(Date.now() / 1000);
 const hourEnd   = Math.floor(now / 3600) * 3600;
@@ -11,43 +15,49 @@ const hourStart = hourEnd - 3600;
 const dayEnd    = Math.floor(now / 86400) * 86400;
 const dayStart  = dayEnd - 86400;
 
-const COINS = ['BTC', 'ETH', 'SOL', 'XRP', 'DOGE', 'AVAX', 'LINK', 'PEPE'];
+// Mix of top coins + some alts to check coverage
+const COINS = ['BTC', 'ETH', 'SOL', 'XRP', 'DOGE', 'AVAX', 'LINK', 'MATIC', 'ADA', 'DOT'];
 
 async function fetchCandle(symbol) {
   const productId = `${symbol}-USD`;
-  const result = { symbol, open: null, high: null, low: null, close: null, volume: null, daily_high: null, daily_low: null, daily_close: null, error_1h: null, error_daily: null };
+  const result = { symbol, close: null, high: null, low: null, daily_close: null, daily_high: null, daily_low: null, error_1h: null, error_daily: null };
 
-  // 1h candle
+  const startIso1h = new Date(hourStart * 1000).toISOString();
+  const endIso1h   = new Date(hourEnd * 1000).toISOString();
+
   try {
-    const r = await fetch(`${BASE}/api/v3/brokerage/products/${productId}/candles?start=${hourStart}&end=${hourEnd}&granularity=ONE_HOUR`);
+    const r = await fetch(`${BASE}/products/${productId}/candles?start=${startIso1h}&end=${endIso1h}&granularity=3600`, {
+      headers: { 'Accept': 'application/json' },
+    });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    const data = await r.json();
-    const c = data?.candles?.[0];
-    if (c) {
-      result.open = parseFloat(c.open);
-      result.high = parseFloat(c.high);
-      result.low  = parseFloat(c.low);
-      result.close = parseFloat(c.close);
-      result.volume = parseFloat(c.volume);
+    const candles = await r.json();
+    if (Array.isArray(candles) && candles.length >= 1) {
+      // [time, low, high, open, close, volume]
+      result.close = parseFloat(candles[0][4]);
+      result.high  = parseFloat(candles[0][2]);
+      result.low   = parseFloat(candles[0][1]);
     } else {
-      result.error_1h = 'empty candles array';
+      result.error_1h = 'empty response';
     }
   } catch (e) {
     result.error_1h = e.message;
   }
 
-  // Daily candle
+  const startIsoDay = new Date(dayStart * 1000).toISOString();
+  const endIsoDay   = new Date(dayEnd * 1000).toISOString();
+
   try {
-    const r = await fetch(`${BASE}/api/v3/brokerage/products/${productId}/candles?start=${dayStart}&end=${dayEnd}&granularity=ONE_DAY`);
+    const r = await fetch(`${BASE}/products/${productId}/candles?start=${startIsoDay}&end=${endIsoDay}&granularity=86400`, {
+      headers: { 'Accept': 'application/json' },
+    });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    const data = await r.json();
-    const d = data?.candles?.[0];
-    if (d) {
-      result.daily_high  = parseFloat(d.high);
-      result.daily_low   = parseFloat(d.low);
-      result.daily_close = parseFloat(d.close);
+    const candles = await r.json();
+    if (Array.isArray(candles) && candles.length >= 1) {
+      result.daily_close = parseFloat(candles[0][4]);
+      result.daily_high  = parseFloat(candles[0][2]);
+      result.daily_low   = parseFloat(candles[0][1]);
     } else {
-      result.error_daily = 'empty candles array';
+      result.error_daily = 'empty response';
     }
   } catch (e) {
     result.error_daily = e.message;
@@ -57,25 +67,26 @@ async function fetchCandle(symbol) {
 }
 
 async function main() {
-  console.log(`Testing Coinbase candle API — ${new Date().toISOString()}`);
-  console.log(`1h window:    ${new Date(hourStart * 1000).toISOString()} → ${new Date(hourEnd * 1000).toISOString()}`);
-  console.log(`Daily window: ${new Date(dayStart * 1000).toISOString()} → ${new Date(dayEnd * 1000).toISOString()}`);
+  console.log(`Coinbase Exchange candle test — ${new Date().toISOString()}`);
+  console.log(`1h:    ${new Date(hourStart * 1000).toISOString()} → ${new Date(hourEnd * 1000).toISOString()}`);
+  console.log(`Daily: ${new Date(dayStart * 1000).toISOString()} → ${new Date(dayEnd * 1000).toISOString()}`);
   console.log('');
 
   let ok = 0, fail = 0;
   for (const symbol of COINS) {
     const r = await fetchCandle(symbol);
-    const priceLine = r.close != null
-      ? `close=$${r.close.toLocaleString()}  daily_H=$${r.daily_high?.toLocaleString() ?? 'null'}  daily_L=$${r.daily_low?.toLocaleString() ?? 'null'}`
-      : `FAILED — 1h: ${r.error_1h}  daily: ${r.error_daily}`;
-    const status = r.close != null ? '✅' : '❌';
-    console.log(`${status} ${symbol.padEnd(6)} ${priceLine}`);
-    r.close != null ? ok++ : fail++;
+    if (r.close != null) {
+      console.log(`✅ ${symbol.padEnd(6)} close=$${r.close.toLocaleString().padStart(10)}  daily H/L/C: $${r.daily_high?.toLocaleString() ?? 'null'} / $${r.daily_low?.toLocaleString() ?? 'null'} / $${r.daily_close?.toLocaleString() ?? 'null'}`);
+      ok++;
+    } else {
+      console.log(`❌ ${symbol.padEnd(6)} 1h: ${r.error_1h}  daily: ${r.error_daily}`);
+      fail++;
+    }
   }
 
   console.log('');
-  console.log(`Result: ${ok}/${COINS.length} coins returned price data`);
-  if (fail > 0) console.log(`⚠️  ${fail} coins returned no price (check if listed on Coinbase)`);
+  console.log(`Result: ${ok}/${COINS.length} coins have price data`);
+  if (fail > 0) console.log(`⚠️  ${fail} coins unavailable on Coinbase Exchange (will use null price)`);
 }
 
-main().catch(e => { console.error('Fatal:', e); process.exit(1); });
+main().catch(e => { console.error('Fatal:', e.message); process.exit(1); });
