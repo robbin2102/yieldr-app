@@ -1257,8 +1257,8 @@ export async function profileTrader(
 
     console.log(`\n  PnL Consistency:`);
     console.log(`    Score:          ${pnlConsistency.score.toFixed(1)}`);
-    console.log(`    Avg daily PnL:  $${pnlConsistency.avgDailyPnl.toFixed(0)}`);
-    console.log(`    Std deviation:  $${pnlConsistency.stdDev.toFixed(0)}`);
+    console.log(`    Avg daily PnL:  $${(pnlConsistency.avgDailyPnl ?? 0).toFixed(0)}`);
+    console.log(`    Std deviation:  $${(pnlConsistency.stdDev ?? 0).toFixed(0)}`);
     console.log(`    Trading days:   7d=${pnlConsistency.tradingDays7d}  15d=${pnlConsistency.tradingDays15d}  30d=${pnlConsistency.tradingDays30d}`);
     console.log(`    (avgROCE=${pnlConsistency.avgRoce.toFixed(1)}%  variance=${pnlConsistency.roceVariance.toFixed(1)})`);
 
@@ -1417,7 +1417,7 @@ export async function profileTrader(
   // ── Build and return profile document ─────────────────────
   return {
     wallet: cleanWallet,
-    label: traderLabel,
+    traderLabel,
     profiledAt,
     periodDays: 30,
     periodInfo,
