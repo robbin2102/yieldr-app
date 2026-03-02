@@ -432,7 +432,7 @@ function computeTimeframePnL(activities: Activity[], openPositions: OpenPosition
   const windowActivities = activities.filter(a => a.timestamp >= startTs);
 
   if (windowActivities.length === 0) {
-    return { timeframe: `${days}d`, days, pnl: 0, buys: 0, sells: 0, redeems: 0, endingValue: 0, capitalDeployed: 0, roce: 0, tradeCount: 0, tradesPerDay: 0, positionCount: 0, tradingDays: 0, wins: 0, losses: 0, winRate: 0, hasData: false, hitApiLimit: false };
+    return { timeframe: `${days}d`, days, pnl: 0, buys: 0, sells: 0, redeems: 0, endingValue: 0, capitalDeployed: 0, roce: 0, tradeCount: 0, tradesPerDay: 0, positionCount: 0, tradingDays: 0, wins: 0, losses: 0, winRate: 0, hasData: false, hitApiLimit: false, maxDrawdownAmt: null, maxDrawdownPct: null };
   }
 
   let buys = 0, sells = 0, redeems = 0, tradeCount = 0;
@@ -479,7 +479,38 @@ function computeTimeframePnL(activities: Activity[], openPositions: OpenPosition
   const winRate = (wins + losses) > 0 ? (wins / (wins + losses)) * 100 : 0;
   const tradingDays = new Set(windowActivities.map(a => new Date(a.timestamp * 1000).toISOString().split('T')[0])).size;
 
-  return { timeframe: `${days}d`, days, pnl, buys, sells, redeems, endingValue, capitalDeployed, roce, tradeCount, tradesPerDay: tradeCount / days, positionCount: conditionIds.size, tradingDays, wins, losses, winRate, hasData: true, hitApiLimit: false };
+  // Per-window drawdown (3-day gate, same peak-to-trough logic as computeMaxDrawdown30d)
+  let maxDrawdownAmt: number | null = null;
+  let maxDrawdownPct: number | null = null;
+
+  if (tradingDays >= 3) {
+    const ddDayMap = new Map<string, number>();
+    for (const a of windowActivities) {
+      const day = new Date(a.timestamp * 1000).toISOString().split('T')[0];
+      const cur = ddDayMap.get(day) ?? 0;
+      if (a.type === 'TRADE' && a.side === 'BUY') ddDayMap.set(day, cur - a.usdcSize);
+      else if (a.type === 'TRADE' && a.side === 'SELL') ddDayMap.set(day, cur + a.usdcSize);
+      else if (a.type === 'REDEEM') ddDayMap.set(day, cur + a.usdcSize);
+    }
+    const sortedDd = Array.from(ddDayMap.entries()).sort(([a], [b]) => a.localeCompare(b));
+    let ddCumPnl = 0, ddPeak = 0, ddMax = 0, ddFirstPos = false;
+    for (const [, dailyFlow] of sortedDd) {
+      ddCumPnl += dailyFlow;
+      if (!ddFirstPos) {
+        if (ddCumPnl > 0) { ddFirstPos = true; ddPeak = ddCumPnl; }
+        continue;
+      }
+      if (ddCumPnl > ddPeak) ddPeak = ddCumPnl;
+      const dd = ddPeak - ddCumPnl;
+      if (dd > ddMax) ddMax = dd;
+    }
+    if (ddFirstPos && ddPeak > 0) {
+      maxDrawdownAmt = ddMax;
+      maxDrawdownPct = Math.min((ddMax / ddPeak) * 100, 100);
+    }
+  }
+
+  return { timeframe: `${days}d`, days, pnl, buys, sells, redeems, endingValue, capitalDeployed, roce, tradeCount, tradesPerDay: tradeCount / days, positionCount: conditionIds.size, tradingDays, wins, losses, winRate, hasData: true, hitApiLimit: false, maxDrawdownAmt, maxDrawdownPct };
 }
 
 function computePnlConsistency(timeframePnL: Record<string, ReturnType<typeof computeTimeframePnL>>) {
@@ -1040,6 +1071,14 @@ export async function profileTrader(
 
   const pnlConsistency = computePnlConsistency(timeframePnL);
 
+  // ── Capital trend ──────────────────────────────────────────
+  const capital_trend: 'scaling_up' | 'scaling_down' | 'stable' | 'inactive' | null =
+    (!timeframePnL['15d'].hasData || !timeframePnL['30d'].hasData) ? null :
+    timeframePnL['15d'].capitalDeployed === 0 ? 'inactive' :
+    timeframePnL['15d'].capitalDeployed > timeframePnL['30d'].capitalDeployed * 0.6 ? 'scaling_up' :
+    timeframePnL['15d'].capitalDeployed < timeframePnL['30d'].capitalDeployed * 0.3 ? 'scaling_down' :
+    'stable';
+
   // ── ROCE trend ──────────────────────────────────────────────
   const _r7  = timeframePnL['7d'].hasData  ? timeframePnL['7d'].roce  : null;
   const _r15 = timeframePnL['15d'].hasData ? timeframePnL['15d'].roce : null;
@@ -1190,7 +1229,11 @@ export async function profileTrader(
     roce_trend,
     pnl_consistency_score: pnlConsistency.score,
     avg_unique_markets_per_day_7d,
-    max_drawdown_30d_pct: maxDrawdown30dPct,
+    max_drawdown_15d_amt: timeframePnL['15d'].maxDrawdownAmt,
+    max_drawdown_15d_pct: timeframePnL['15d'].maxDrawdownPct,
+    max_drawdown_30d_amt: timeframePnL['30d'].maxDrawdownAmt,
+    max_drawdown_30d_pct: timeframePnL['30d'].maxDrawdownPct,
+    capital_trend,
     last_active_days_ago,
     profiled_at: profiledAt,
   };
@@ -1303,7 +1346,10 @@ export async function profileTrader(
     console.log('\n  Timeframe P&L:');
     for (const [frame, data] of Object.entries(timeframePnL)) {
       if (data.hasData) {
-        console.log(`    ${frame.padEnd(4)}: PnL=$${data.pnl.toFixed(0).padStart(10)} | ROCE=${data.roce.toFixed(1)}% | Capital=$${data.capitalDeployed.toFixed(0)} | TradingDays=${data.tradingDays}`);
+        const ddStr = data.maxDrawdownAmt !== null && data.maxDrawdownPct !== null
+          ? ` | Drawdown=$${data.maxDrawdownAmt.toFixed(0)} (${data.maxDrawdownPct.toFixed(1)}%)`
+          : ' | Drawdown=n/a';
+        console.log(`    ${frame.padEnd(4)}: PnL=$${data.pnl.toFixed(0).padStart(10)} | ROCE=${data.roce.toFixed(1)}% | Capital=$${data.capitalDeployed.toFixed(0)}${ddStr} | TradingDays=${data.tradingDays}`);
       } else {
         console.log(`    ${frame.padEnd(4)}: no data`);
       }
@@ -1313,6 +1359,7 @@ export async function profileTrader(
       ? ` (15d vs 30d — 7d inactive${last_active_days_ago !== null ? `, last active ${last_active_days_ago.toFixed(0)}d ago` : ''})`
       : '';
     console.log(`\n  ROCE Trend:    7d=${roce_trend.d7 !== null ? roce_trend.d7.toFixed(1) + '%' : 'n/a'}  15d=${roce_trend.d15 !== null ? roce_trend.d15.toFixed(1) + '%' : 'n/a'}  30d=${roce_trend.d30 !== null ? roce_trend.d30.toFixed(1) + '%' : 'n/a'}  → ${roce_trend.direction.toUpperCase()}${roceDirNote}`);
+    console.log(`  Capital Trend: ${capital_trend ?? 'n/a'}`);
 
     const lowSampleWarning = (pnlConsistency.tradingDays30d ?? 0) < 15
       ? `  ⚠️ LOW SAMPLE (${pnlConsistency.tradingDays30d ?? 0} trading days — need 15+ for reliable score)`
@@ -1527,6 +1574,7 @@ export async function profileTrader(
     // P&L (cashFlow-based — source of truth)
     cashFlowPnL,
     timeframePnL,
+    capital_trend,
     pnlConsistency,
     profitFactor,
 
