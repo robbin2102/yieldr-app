@@ -14,5 +14,8 @@ interface BuildSnapshotArgs {
     };
     binance?: BinanceCandleData;
 }
-export declare function buildAndSaveSnapshot(args: BuildSnapshotArgs): Promise<void>;
+export declare function buildAndSaveSnapshot(args: BuildSnapshotArgs): Promise<{
+    _id: string;
+    snapshot: Record<string, unknown>;
+}>;
 export {};

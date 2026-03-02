@@ -1,4 +1,4 @@
-import mongoose, { Document } from 'mongoose';
+import { Document } from 'mongoose';
 export interface ITrackedCoins extends Document {
     updated_at: Date;
     all: string[];
@@ -9,9 +9,5 @@ export interface ITrackedCoins extends Document {
     source_coinglass_count: number;
     intersection_count: number;
 }
-declare const _default: mongoose.Model<any, {}, {}, {}, any, any> | mongoose.Model<ITrackedCoins, {}, {}, {}, mongoose.Document<unknown, {}, ITrackedCoins, {}, {}> & ITrackedCoins & Required<{
-    _id: mongoose.Types.ObjectId;
-}> & {
-    __v: number;
-}, any>;
+declare const _default: any;
 export default _default;

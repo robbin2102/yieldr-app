@@ -1,4 +1,4 @@
-import mongoose, { Document } from 'mongoose';
+import { Document } from 'mongoose';
 export interface ILiquidationLevels extends Document {
     symbol: string;
     updated_at: Date;
@@ -20,9 +20,5 @@ export interface ILiquidationLevels extends Document {
     };
     nearest_cluster_distance_pct: number | null;
 }
-declare const _default: mongoose.Model<any, {}, {}, {}, any, any> | mongoose.Model<ILiquidationLevels, {}, {}, {}, mongoose.Document<unknown, {}, ILiquidationLevels, {}, {}> & ILiquidationLevels & Required<{
-    _id: mongoose.Types.ObjectId;
-}> & {
-    __v: number;
-}, any>;
+declare const _default: any;
 export default _default;

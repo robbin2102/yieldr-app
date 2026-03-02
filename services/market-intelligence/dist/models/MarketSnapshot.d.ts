@@ -1,4 +1,4 @@
-import mongoose, { Document } from 'mongoose';
+import { Document } from 'mongoose';
 export interface IMarketSnapshot extends Document {
     symbol: string;
     timestamp: Date;
@@ -31,9 +31,5 @@ export interface IMarketSnapshot extends Document {
     on_demand_expires_at: Date | null;
     fetch_duration_ms: number;
 }
-declare const _default: mongoose.Model<any, {}, {}, {}, any, any> | mongoose.Model<IMarketSnapshot, {}, {}, {}, mongoose.Document<unknown, {}, IMarketSnapshot, {}, {}> & IMarketSnapshot & Required<{
-    _id: mongoose.Types.ObjectId;
-}> & {
-    __v: number;
-}, any>;
+declare const _default: any;
 export default _default;

@@ -67,9 +67,11 @@ async function buildAndSaveSnapshot(args) {
         fetch_duration_ms: Date.now() - start,
         fetch_errors: taapi.errors,
     };
+    let savedId;
     try {
-        await MarketSnapshot_1.default.findOneAndUpdate({ symbol: snapshotDoc.symbol, timestamp }, { $set: snapshotDoc }, { upsert: true, new: true });
-        logger_1.logger.debug('Snapshot', `${symbol} saved (tier=${tier})`);
+        const saved = await MarketSnapshot_1.default.findOneAndUpdate({ symbol: snapshotDoc.symbol, timestamp }, { $set: snapshotDoc }, { upsert: true, new: true });
+        savedId = String(saved._id);
+        logger_1.logger.debug('Snapshot', `${symbol} saved (tier=${tier}) _id=${savedId}`);
     }
     catch (err) {
         logger_1.logger.error('Snapshot', `${symbol} save failed: ${err.message}`);
@@ -78,6 +80,7 @@ async function buildAndSaveSnapshot(args) {
     if (perCoin?.liq_history && perCoin.liq_history.length > 0) {
         await updateLiquidationLevels(symbol, perCoin.liq_history, closePrice ?? indicators?.vwap ?? null);
     }
+    return { _id: savedId, snapshot: snapshotDoc };
 }
 // ─── Pivot Points ──────────────────────────────────────────────────────────────
 /**
