@@ -26,6 +26,11 @@ export interface BinanceCandleData {
   daily_close: number | null;
 }
 
+// Coinbase Exchange uses the rebranded ticker for some tokens
+const SYMBOL_MAP: Record<string, string> = {
+  MATIC: 'POL', // Polygon rebranded MATIC → POL in Sept 2024
+};
+
 async function cbGet(path: string): Promise<any> {
   const res = await fetch(`${BASE}${path}`, {
     headers: { 'Accept': 'application/json' },
@@ -50,7 +55,7 @@ export async function fetchBinanceCandle(symbol: string): Promise<BinanceCandleD
     daily_high: null, daily_low: null, daily_close: null,
   };
 
-  const productId = `${symbol}-USD`;
+  const productId = `${SYMBOL_MAP[symbol] ?? symbol}-USD`;
   const now = Math.floor(Date.now() / 1000);
 
   // 1h candle: end = start of current hour (excludes forming candle), start = 1h before

@@ -14,6 +14,10 @@ exports.fetchBinanceCandle = fetchBinanceCandle;
  */
 const logger_1 = require("../utils/logger");
 const BASE = 'https://api.exchange.coinbase.com';
+// Coinbase Exchange uses the rebranded ticker for some tokens
+const SYMBOL_MAP = {
+    MATIC: 'POL', // Polygon rebranded MATIC → POL in Sept 2024
+};
 async function cbGet(path) {
     const res = await fetch(`${BASE}${path}`, {
         headers: { 'Accept': 'application/json' },
@@ -27,7 +31,7 @@ async function fetchBinanceCandle(symbol) {
         open: null, high: null, low: null, close: null, volume: null,
         daily_high: null, daily_low: null, daily_close: null,
     };
-    const productId = `${symbol}-USD`;
+    const productId = `${SYMBOL_MAP[symbol] ?? symbol}-USD`;
     const now = Math.floor(Date.now() / 1000);
     // 1h candle: end = start of current hour (excludes forming candle), start = 1h before
     const hourEnd = Math.floor(now / 3600) * 3600;
