@@ -1079,6 +1079,14 @@ export async function profileTrader(
     timeframePnL['15d'].capitalDeployed < timeframePnL['30d'].capitalDeployed * 0.3 ? 'scaling_down' :
     'stable';
 
+  const _dd15 = timeframePnL['15d'].maxDrawdownPct;
+  const _dd30 = timeframePnL['30d'].maxDrawdownPct;
+  const drawdown_trend: 'improving' | 'worsening' | 'stable' | 'insufficient_data' =
+    (_dd15 === null || _dd30 === null) ? 'insufficient_data' :
+    _dd15 < _dd30 * 0.7 ? 'improving' :
+    _dd15 > _dd30 * 1.3 ? 'worsening' :
+    'stable';
+
   // ── ROCE trend ──────────────────────────────────────────────
   const _r7  = timeframePnL['7d'].hasData  ? timeframePnL['7d'].roce  : null;
   const _r15 = timeframePnL['15d'].hasData ? timeframePnL['15d'].roce : null;
@@ -1234,6 +1242,7 @@ export async function profileTrader(
     max_drawdown_30d_amt: timeframePnL['30d'].maxDrawdownAmt,
     max_drawdown_30d_pct: timeframePnL['30d'].maxDrawdownPct,
     capital_trend,
+    drawdown_trend,
     last_active_days_ago,
     profiled_at: profiledAt,
   };
@@ -1360,6 +1369,7 @@ export async function profileTrader(
       : '';
     console.log(`\n  ROCE Trend:    7d=${roce_trend.d7 !== null ? roce_trend.d7.toFixed(1) + '%' : 'n/a'}  15d=${roce_trend.d15 !== null ? roce_trend.d15.toFixed(1) + '%' : 'n/a'}  30d=${roce_trend.d30 !== null ? roce_trend.d30.toFixed(1) + '%' : 'n/a'}  → ${roce_trend.direction.toUpperCase()}${roceDirNote}`);
     console.log(`  Capital Trend: ${capital_trend ?? 'n/a'}`);
+    console.log(`  Drawdown Trend: ${drawdown_trend}`);
 
     const lowSampleWarning = (pnlConsistency.tradingDays30d ?? 0) < 15
       ? `  ⚠️ LOW SAMPLE (${pnlConsistency.tradingDays30d ?? 0} trading days — need 15+ for reliable score)`
@@ -1575,6 +1585,7 @@ export async function profileTrader(
     cashFlowPnL,
     timeframePnL,
     capital_trend,
+    drawdown_trend,
     pnlConsistency,
     profitFactor,
 
