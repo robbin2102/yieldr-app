@@ -515,8 +515,11 @@ function computePnlConsistency(timeframePnL: Record<string, ReturnType<typeof co
   return { timeframesAvailable: available.length, allPositive, positiveCount, avgRoce, roceVariance: variance, score, avgDailyPnl, stdDev, tradingDays7d, tradingDays15d, tradingDays30d };
 }
 
-// computeMaxDrawdown30d — NEW: from daily cash-flow series
-// null if fewer than 5 trading days or peak <= 0
+// computeMaxDrawdown30d — from daily cash-flow series
+// null if fewer than 5 trading days or cumPnl never goes positive.
+// Baseline = first day cumPnl turns positive, preventing inflated drawdowns
+// caused by net-negative opening periods (e.g. whale buying before any redemption).
+// Result is clamped to 100% — drawdown cannot exceed starting capital.
 function computeMaxDrawdown30d(activities: Activity[]): { maxDrawdown30dPct: number | null; maxDrawdown: number; maxDrawdownPercent: number } {
   const dayMap = new Map<string, number>(); // day → net daily cash flow (inflows - outflows)
 
@@ -539,18 +542,43 @@ function computeMaxDrawdown30d(activities: Activity[]): { maxDrawdown30dPct: num
 
   let cumPnl = 0;
   let peak = 0;
+  let troughAtMaxDrawdown = 0;
   let maxDrawdown = 0;
+  let firstPositiveSeen = false;
 
   for (const [, dailyFlow] of sortedDays) {
     cumPnl += dailyFlow;
+
+    // Start tracking only after cumPnl first goes positive.
+    // Skips opening period when trader is net-negative (buys before sells/redeems),
+    // which would create a false high fragmentation_ratio.
+    if (!firstPositiveSeen) {
+      if (cumPnl > 0) {
+        firstPositiveSeen = true;
+        peak = cumPnl;
+      }
+      continue;
+    }
+
     if (cumPnl > peak) peak = cumPnl;
     const drawdown = peak - cumPnl;
-    if (drawdown > maxDrawdown) maxDrawdown = drawdown;
+    if (drawdown > maxDrawdown) {
+      maxDrawdown = drawdown;
+      troughAtMaxDrawdown = cumPnl;
+    }
   }
 
-  if (peak <= 0) return { maxDrawdown30dPct: null, maxDrawdown: 0, maxDrawdownPercent: 0 };
+  if (!firstPositiveSeen || peak <= 0) {
+    console.log(`  [MaxDrawdown Debug] cumPnl never positive → no drawdown baseline (days=${dayMap.size})`);
+    return { maxDrawdown30dPct: null, maxDrawdown: 0, maxDrawdownPercent: 0 };
+  }
 
-  const pct = (maxDrawdown / peak) * 100;
+  const rawPct = (maxDrawdown / peak) * 100;
+  // Clamp: drawdown cannot exceed 100% of peak capital
+  const pct = Math.min(rawPct, 100);
+
+  console.log(`  [MaxDrawdown Debug] peak=$${peak.toFixed(0)} | trough=$${troughAtMaxDrawdown.toFixed(0)} | rawDrop=$${maxDrawdown.toFixed(0)} | raw=${rawPct.toFixed(1)}% → clamped=${pct.toFixed(1)}%`);
+
   return { maxDrawdown30dPct: pct, maxDrawdown, maxDrawdownPercent: pct };
 }
 
@@ -1012,10 +1040,21 @@ export async function profileTrader(
   const _r7  = timeframePnL['7d'].hasData  ? timeframePnL['7d'].roce  : null;
   const _r15 = timeframePnL['15d'].hasData ? timeframePnL['15d'].roce : null;
   const _r30 = timeframePnL['30d'].hasData ? timeframePnL['30d'].roce : null;
-  const _roceDirection = (_r7 !== null && _r30 !== null)
-    ? (_r7 > _r30 ? 'improving' : _r7 < _r30 * 0.7 ? 'degrading' : 'stable')
-    : 'unknown';
-  const roce_trend = { d7: _r7, d15: _r15, d30: _r30, direction: _roceDirection };
+
+  let _roceDirection: string;
+  let _roceTrendBasis: '7d_vs_30d' | '15d_vs_30d' | 'unknown';
+  if (_r7 !== null && _r30 !== null) {
+    _roceDirection = _r7 > _r30 ? 'improving' : _r7 < _r30 * 0.7 ? 'degrading' : 'stable';
+    _roceTrendBasis = '7d_vs_30d';
+  } else if (_r15 !== null && _r30 !== null) {
+    // 7d has no data (trader inactive <7d) — fall back to 15d vs 30d
+    _roceDirection = _r15 > _r30 ? 'improving' : _r15 < _r30 * 0.7 ? 'degrading' : 'stable';
+    _roceTrendBasis = '15d_vs_30d';
+  } else {
+    _roceDirection = 'unknown';
+    _roceTrendBasis = 'unknown';
+  }
+  const roce_trend = { d7: _r7, d15: _r15, d30: _r30, direction: _roceDirection, basis: _roceTrendBasis };
 
   // profitFactor — cashFlow-based (replaces closedPositions-based)
   // > 1 = profitable overall, < 1 = losing overall
@@ -1115,6 +1154,12 @@ export async function profileTrader(
 
   // ── avg_bet_size_usdc ─────────────────────────────────────
   const avg_bet_size_usdc = win_rate_sample_size > 0 ? cashFlowPnL.totalBuys / win_rate_sample_size : 0;
+
+  // ── Activity display classification ───────────────────────
+  // WHALE_CONCENTRATOR overrides HIGH_VOLUME when a trader makes many trades
+  // into very few markets with large average bets — they are scaling into
+  // concentrated positions, not bot-trading across hundreds of markets.
+  const isWhaleConcentrator = total_unique_markets_30d <= 15 && avg_bet_size_usdc > 50000;
 
   // ── Insider score ──────────────────────────────────────────
   const { insider_score, insider_probability, insider_signals_fired } = computeInsiderScore({
@@ -1218,7 +1263,10 @@ export async function profileTrader(
     console.log(`  REDEEM:             ${redeemCount}`);
     console.log(`  Other:              ${otherCount}`);
     console.log('');
-    console.log(`  Activity Level:     ${volumeLabel} VOLUME (${tradesPerDay.toFixed(1)} trades/day)`);
+    const activityLevelDisplay = isWhaleConcentrator
+      ? `WHALE_CONCENTRATOR (${total_unique_markets_30d} markets, avg bet $${avg_bet_size_usdc.toFixed(0)}, ${tradesPerDay.toFixed(1)} trades/day — scaling entries not fragmentation)`
+      : `${volumeLabel} VOLUME (${tradesPerDay.toFixed(1)} trades/day)`;
+    console.log(`  Activity Level:     ${activityLevelDisplay}`);
     console.log(`  Primary Strategy:   ${strategyLabel} (${buyRatio.toFixed(1)}% buys)`);
 
     // ── NEW: WIN RATE (CORRECTED) ──
@@ -1254,10 +1302,16 @@ export async function profileTrader(
       }
     }
 
-    console.log(`\n  ROCE Trend:    7d=${roce_trend.d7 !== null ? roce_trend.d7.toFixed(1) + '%' : 'n/a'}  15d=${roce_trend.d15 !== null ? roce_trend.d15.toFixed(1) + '%' : 'n/a'}  30d=${roce_trend.d30 !== null ? roce_trend.d30.toFixed(1) + '%' : 'n/a'}  → ${roce_trend.direction.toUpperCase()}`);
+    const roceDirNote = roce_trend.basis === '15d_vs_30d'
+      ? ` (15d vs 30d — 7d inactive${last_active_days_ago !== null ? `, last active ${last_active_days_ago.toFixed(0)}d ago` : ''})`
+      : '';
+    console.log(`\n  ROCE Trend:    7d=${roce_trend.d7 !== null ? roce_trend.d7.toFixed(1) + '%' : 'n/a'}  15d=${roce_trend.d15 !== null ? roce_trend.d15.toFixed(1) + '%' : 'n/a'}  30d=${roce_trend.d30 !== null ? roce_trend.d30.toFixed(1) + '%' : 'n/a'}  → ${roce_trend.direction.toUpperCase()}${roceDirNote}`);
 
+    const lowSampleWarning = pnlConsistency.tradingDays30d < 15
+      ? `  ⚠️ LOW SAMPLE (${pnlConsistency.tradingDays30d} trading days — need 15+ for reliable score)`
+      : '';
     console.log(`\n  PnL Consistency:`);
-    console.log(`    Score:          ${pnlConsistency.score.toFixed(1)}`);
+    console.log(`    Score:          ${pnlConsistency.score.toFixed(1)}${lowSampleWarning}`);
     console.log(`    Avg daily PnL:  $${(pnlConsistency.avgDailyPnl ?? 0).toFixed(0)}`);
     console.log(`    Std deviation:  $${(pnlConsistency.stdDev ?? 0).toFixed(0)}`);
     console.log(`    Trading days:   7d=${pnlConsistency.tradingDays7d}  15d=${pnlConsistency.tradingDays15d}  30d=${pnlConsistency.tradingDays30d}`);
@@ -1286,7 +1340,12 @@ export async function profileTrader(
     console.log('                    MARKET ACTIVITY                             ');
     console.log('═══════════════════════════════════════════════════════════════');
     console.log(`  Unique Markets (30d):       ${total_unique_markets_30d}`);
-    console.log(`  Fragmentation Ratio:        ${fragmentation_ratio !== null ? fragmentation_ratio.toFixed(2) : 'n/a'}`);
+    const fragLabel = fragmentation_ratio === null
+      ? 'n/a'
+      : (total_unique_markets_30d <= 10 && fragmentation_ratio > 50)
+        ? `CONCENTRATED (${total_unique_markets_30d} markets, scaling entries — not fragmented)`
+        : fragmentation_ratio.toFixed(2);
+    console.log(`  Fragmentation Ratio:        ${fragLabel}`);
     console.log(`  Avg Unique Mkts/Day (7d):   ${avg_unique_markets_per_day_7d.value !== null ? avg_unique_markets_per_day_7d.value.toFixed(1) + (avg_unique_markets_per_day_7d.is_low_sample ? ` (low sample: ${avg_unique_markets_per_day_7d.sample_days}d)` : '') : `n/a (0 active days)`}`);
     console.log(`  Max Drawdown (30d):         ${maxDrawdown30dPct !== null ? maxDrawdown30dPct.toFixed(1) + '%' : 'n/a'}`);
     console.log(`  Avg Entry Price (wins):     ${avg_entry_price_wins !== null ? avg_entry_price_wins.toFixed(3) : 'n/a'}`);
@@ -1344,6 +1403,16 @@ export async function profileTrader(
         const share = `${c.pnl_share.toFixed(1)}%`.padStart(7);
         console.log(`  ${cat} ${sub} ${pos} ${wr}% ${pnl} ${share}`);
       });
+
+      // Log top "Other" market titles so uncategorized bets are visible
+      const otherMarkets = market_titles_summary.filter(m => m.category === 'Other');
+      if (otherMarkets.length > 0) {
+        console.log('\n  ⚠ Top "Other" markets (uncategorized — consider adding keywords):');
+        otherMarkets.slice(0, 5).forEach(m => {
+          const pnlSign = m.total_pnl >= 0 ? '+' : '';
+          console.log(`    ${pnlSign}$${m.total_pnl.toFixed(0).padStart(9)} | ${m.title.slice(0, 72)}`);
+        });
+      }
     }
 
     // ── ENTRY ODDS ──
@@ -1367,7 +1436,11 @@ export async function profileTrader(
     console.log('\n═══════════════════════════════════════════════════════════════');
     console.log('                    COPY RULES                                  ');
     console.log('═══════════════════════════════════════════════════════════════');
-    if (volumeLabel === 'LOW' && strategyLabel === 'BUY_AND_HOLD' && win_rate >= 60) {
+    if (isWhaleConcentrator) {
+      console.log('  PRIORITY: Copy high-conviction bets (>5x avg) at 1.0x when insider signals fired');
+      console.log('  COPY:     Same market, same direction — scale in as they scale in');
+      console.log('  SKIP:     Do not copy partial scaling trades < 50% of their avg bet');
+    } else if (volumeLabel === 'LOW' && strategyLabel === 'BUY_AND_HOLD' && win_rate >= 60) {
       console.log('  PRIORITY: Entry odds < 40c in their specialty -> Copy at 1.0x');
       console.log('  COPY:     Entry odds 40-60c in their specialty -> Copy at 0.5x');
       console.log('  CAUTIOUS: Entry odds > 60c -> Copy at 0.3x');
@@ -1493,6 +1566,7 @@ export async function profileTrader(
     // Market activity metrics
     avg_unique_markets_per_day_7d,
     fragmentation_ratio,
+    isWhaleConcentrator,
     avg_entry_price_wins,
     avg_entry_price_losses,
 
@@ -1504,6 +1578,9 @@ export async function profileTrader(
     insider_score,
     insider_probability,
     insider_signals_fired,
+    // Pre-computed rank_score multiplier for filter-alpha-traders.ts:
+    // insider whales are statistically undersold by small n — boost their rank.
+    insider_rank_multiplier: insider_probability === 'high' ? 1.5 : 1.0,
 
     // Baseline snapshot (for monitoring drift)
     baseline_snapshot,
