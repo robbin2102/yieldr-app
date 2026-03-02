@@ -1,3 +1,4 @@
+/** OHLCV candle data — fetched from Coinbase Advanced Trade API (was Binance). */
 export interface BinanceCandleData {
     open: number | null;
     high: number | null;
@@ -9,7 +10,7 @@ export interface BinanceCandleData {
     daily_close: number | null;
 }
 /**
- * Fetches the last COMPLETE 1h candle + previous day's OHLC for a given symbol.
- * Binance klines response: [open_time, open, high, low, close, volume, close_time, ...]
+ * Fetches the last COMPLETE 1h candle + previous day's OHLC for a given symbol
+ * from the Coinbase Advanced Trade public REST API.
  */
 export declare function fetchBinanceCandle(symbol: string): Promise<BinanceCandleData>;
