@@ -300,7 +300,8 @@ function categorizeMarket(title: string): string {
   const soccerTeams = ['premier league', 'la liga', 'bundesliga', 'serie a', 'ligue 1', 'champions league',
     'europa league', 'conference league', 'manchester', 'liverpool', 'chelsea', 'arsenal', 'tottenham',
     'barcelona', 'real madrid', 'bayern', 'juventus', 'psg', 'fc ', ' fc', 'united', 'inter milan',
-    'ac milan', 'as roma', 'napoli', 'atletico', 'sevilla', 'ajax', 'benfica', 'porto'];
+    'ac milan', 'as roma', 'napoli', 'atletico', 'sevilla', 'ajax', 'benfica', 'porto',
+    'borussia', 'olympique', 'hamburger sv', ' az '];
   if (soccerTeams.some(team => lower.includes(team))) return 'Soccer';
 
   // MLB
@@ -358,14 +359,15 @@ function detectSubLeague(title: string, category: string): string | null {
     ['LA_LIGA', ['real madrid', 'fc barcelona', 'atletico madrid', 'sevilla', 'real betis',
       'valencia', 'villarreal', 'athletic club', 'rc celta', 'getafe', 'girona',
       'espanyol', 'cadiz', 'deportivo', 'la liga', 'osasuna', 'mallorca', 'rayo vallecano']],
-    ['BUNDESLIGA', ['fc bayern', 'borussia dortmund', 'rb leipzig', 'wolfsburg',
+    ['BUNDESLIGA', ['fc bayern', 'borussia dortmund', 'borussia', 'rb leipzig', 'wolfsburg',
       'eintracht frankfurt', 'borussia monchengladbach', 'freiburg', 'bayer leverkusen',
-      'hertha', 'schalke', 'augsburg', 'bundesliga', 'hoffenheim', 'werder bremen']],
+      'hertha', 'schalke', 'augsburg', 'bundesliga', 'hoffenheim', 'werder bremen', 'hamburger sv']],
     ['SERIE_A', ['juventus', 'inter milan', 'fc internazionale', 'ac milan', 'as roma',
       'ss lazio', 'napoli', 'atalanta', 'fiorentina', 'torino', 'bologna',
       'udinese', 'serie a', 'coppa italia', 'sampdoria', 'sassuolo']],
-    ['LIGUE_1', ['paris saint-germain', 'psg', 'olympique lyonnais', 'as monaco',
-      'olympique de marseille', 'lille', 'rennes', 'nice', 'lens', 'ligue 1', 'strasbourg']],
+    ['LIGUE_1', ['paris saint-germain', 'psg', 'olympique lyonnais', 'olympique de marseille', 'olympique',
+      'as monaco', 'lille', 'rennes', 'nice', 'lens', 'ligue 1', 'strasbourg']],
+    ['EREDIVISIE', ['ajax', 'psv eindhoven', 'feyenoord', 'az alkmaar', ' az ', 'vitesse', 'eredivisie']],
   ];
 
   for (const [league, keywords] of leagues) {
@@ -862,11 +864,13 @@ function determineTraderLabel(params: {
   win_rate: number;
   profitFactor: number;
   strengths: MarketPerformance[];
+  isWhaleConcentrator: boolean;
 }): string {
   const labels: string[] = [];
 
-  if (params.volumeLabel === 'LOW') labels.push('LOW_VOLUME');
-  if (params.volumeLabel === 'HIGH') labels.push('HIGH_VOLUME');
+  if (params.isWhaleConcentrator) labels.push('WHALE_CONCENTRATOR');
+  else if (params.volumeLabel === 'LOW') labels.push('LOW_VOLUME');
+  else if (params.volumeLabel === 'HIGH') labels.push('HIGH_VOLUME');
   if (params.strategyLabel === 'BUY_AND_HOLD') labels.push('HOLDER');
   if (params.win_rate >= 70) labels.push('HIGH_WIN_RATE');
   if (params.profitFactor >= 2) labels.push('PROFITABLE');
@@ -1074,7 +1078,8 @@ export async function profileTrader(
   }
 
   const wins_open_resolved = allOpenPositions.filter(p => p.curPrice >= 0.99 && p.size > 0).length;
-  const losses_open_resolved = allOpenPositions.filter(p => p.curPrice <= 0.001 && p.size > 0).length;
+  const openResolvedLossPositions = allOpenPositions.filter(p => p.curPrice <= 0.001 && p.size > 0);
+  const losses_open_resolved = openResolvedLossPositions.length;
 
   const totalWins = wins_closed + wins_open_resolved;
   const totalLosses = losses_closed + losses_open_resolved;
@@ -1086,8 +1091,10 @@ export async function profileTrader(
   const avg_entry_price_wins = wins_closed > 0
     ? closedPositions1000.filter(p => p.realizedPnl >= 0).reduce((sum, p) => sum + p.avgPrice, 0) / wins_closed
     : null;
-  const avg_entry_price_losses = losses_closed > 0
-    ? closedPositions1000.filter(p => p.realizedPnl < 0).reduce((sum, p) => sum + p.avgPrice, 0) / losses_closed
+  const totalLossesForAvg = losses_closed + losses_open_resolved;
+  const avg_entry_price_losses = totalLossesForAvg > 0
+    ? (closedPositions1000.filter(p => p.realizedPnl < 0).reduce((sum, p) => sum + p.avgPrice, 0)
+       + openResolvedLossPositions.reduce((sum, p) => sum + p.avgPrice, 0)) / totalLossesForAvg
     : null;
 
   // Current streak from 1000 sample
@@ -1148,10 +1155,6 @@ export async function profileTrader(
   const totalTradingVolume = tradeSizes.reduce((a, b) => a + b, 0);
   const asymmetricVolumePercent = totalTradingVolume > 0 ? (asymmetricVolume / totalTradingVolume) * 100 : 0;
 
-  // ── Trader label ───────────────────────────────────────────
-  const traderLabel = `Trader-${cleanWallet.slice(0, 6)}`;
-  const label = determineTraderLabel({ volumeLabel, strategyLabel, win_rate, profitFactor, strengths });
-
   // ── avg_bet_size_usdc ─────────────────────────────────────
   const avg_bet_size_usdc = win_rate_sample_size > 0 ? cashFlowPnL.totalBuys / win_rate_sample_size : 0;
 
@@ -1160,6 +1163,10 @@ export async function profileTrader(
   // into very few markets with large average bets — they are scaling into
   // concentrated positions, not bot-trading across hundreds of markets.
   const isWhaleConcentrator = total_unique_markets_30d <= 15 && avg_bet_size_usdc > 50000;
+
+  // ── Trader label ───────────────────────────────────────────
+  const traderLabel = `Trader-${cleanWallet.slice(0, 6)}`;
+  const label = determineTraderLabel({ volumeLabel, strategyLabel, win_rate, profitFactor, strengths, isWhaleConcentrator });
 
   // ── Insider score ──────────────────────────────────────────
   const { insider_score, insider_probability, insider_signals_fired } = computeInsiderScore({
