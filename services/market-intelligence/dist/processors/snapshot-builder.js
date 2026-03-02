@@ -76,7 +76,7 @@ async function buildAndSaveSnapshot(args) {
         throw err;
     }
     if (perCoin?.liq_history && perCoin.liq_history.length > 0) {
-        await updateLiquidationLevels(symbol, perCoin.liq_history, closePrice);
+        await updateLiquidationLevels(symbol, perCoin.liq_history, closePrice ?? indicators?.vwap ?? null);
     }
 }
 // ─── Pivot Points ──────────────────────────────────────────────────────────────

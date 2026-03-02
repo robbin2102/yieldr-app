@@ -11,23 +11,23 @@ const logger_1 = require("../utils/logger");
 const tracker_1 = require("../coins/tracker");
 const taapi_1 = require("../fetchers/taapi");
 const coinglass_1 = require("../fetchers/coinglass");
+const binance_1 = require("../fetchers/binance");
 const snapshot_builder_1 = require("../processors/snapshot-builder");
 const macro_builder_1 = require("../processors/macro-builder");
-let isRunning = false;
-exports.isRunning = isRunning;
+exports.isRunning = false;
 /**
  * Main hourly cycle:
  * Phase 1 — CoinGlass aggregate (5 calls, ~10s)
  * Phase 2 — TAAPI indicators for all 100 coins (~3 min)
  * Phase 3 — CoinGlass per-coin for top 20 (~7 min)
- * Phase 4 — Build and upsert snapshots
+ * Phase 4 — Build and upsert snapshots (includes Binance OHLCV per coin)
  */
 async function runHourlyCycle() {
-    if (isRunning) {
+    if (exports.isRunning) {
         logger_1.logger.warn('Cron', 'Previous cycle still running — skipping');
         return;
     }
-    exports.isRunning = isRunning = true;
+    exports.isRunning = true;
     const cycleStart = Date.now();
     const timestamp = roundToHour(new Date());
     logger_1.logger.info('Cron', `═══ HOURLY CYCLE START — ${timestamp.toISOString()} ═══`);
@@ -69,8 +69,17 @@ async function runHourlyCycle() {
             };
             const perCoin = perCoinMap.get(coin);
             const tier = perCoin ? 'full' : 'lite';
+            // Fetch Binance OHLCV for price data (used for closePrice and liquidation bucketing)
+            let binance;
             try {
-                await (0, snapshot_builder_1.buildAndSaveSnapshot)({ symbol: coin, timestamp, tier, taapi, aggregate, perCoin, coinbasePremium: premium });
+                binance = await (0, binance_1.fetchBinanceCandle)(coin);
+                logger_1.logger.debug('Cron', `Binance ${coin}: C=${binance.close}`);
+            }
+            catch (err) {
+                logger_1.logger.warn('Cron', `Binance ${coin} failed: ${err.message}`);
+            }
+            try {
+                await (0, snapshot_builder_1.buildAndSaveSnapshot)({ symbol: coin, timestamp, tier, taapi, aggregate, perCoin, coinbasePremium: premium, binance });
                 saved++;
             }
             catch (err) {
@@ -91,7 +100,7 @@ async function runHourlyCycle() {
         logger_1.logger.error('Cron', `Cycle failed: ${err.message}`);
     }
     finally {
-        exports.isRunning = isRunning = false;
+        exports.isRunning = false;
     }
 }
 /** Start all cron jobs */
