@@ -1,27 +1,34 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.fetchBinanceCandle = fetchBinanceCandle;
+exports.getNoSpotSymbols = getNoSpotSymbols;
 /**
  * Fetches OHLCV candle data from Binance public REST API (no key required).
  * Used for: price.open/high/low/close/volume + daily OHLC for pivot point computation.
  */
 const logger_1 = require("../utils/logger");
 const BASE = 'https://api.binance.com';
+// Symbols confirmed to have no Binance spot pair — skip API calls silently.
+// Populated at runtime on first 400 (invalid symbol) response; resets on restart.
+const noSpotSymbols = new Set();
 async function binanceGet(path) {
     const res = await fetch(`${BASE}${path}`);
     if (!res.ok)
         throw new Error(`Binance ${res.status}: ${path}`);
     return res.json();
 }
+const NULL_RESULT = {
+    open: null, high: null, low: null, close: null, volume: null,
+    daily_high: null, daily_low: null, daily_close: null,
+};
 /**
  * Fetches the last COMPLETE 1h candle + previous day's OHLC for a given symbol.
  * Binance klines response: [open_time, open, high, low, close, volume, close_time, ...]
  */
 async function fetchBinanceCandle(symbol) {
-    const result = {
-        open: null, high: null, low: null, close: null, volume: null,
-        daily_high: null, daily_low: null, daily_close: null,
-    };
+    if (noSpotSymbols.has(symbol))
+        return { ...NULL_RESULT };
+    const result = { ...NULL_RESULT };
     const pair = `${symbol}USDT`;
     // 1h candle — limit=2 gives [last_complete, currently_forming]; use index 0
     try {
@@ -37,22 +44,34 @@ async function fetchBinanceCandle(symbol) {
         }
     }
     catch (err) {
-        logger_1.logger.warn('Binance', `${symbol} 1h candle failed: ${err.message}`);
-    }
-    // Daily candle — limit=2, use index 0 (previous complete day)
-    try {
-        const dailyKlines = await binanceGet(`/api/v3/klines?symbol=${pair}&interval=1d&limit=2`);
-        if (Array.isArray(dailyKlines) && dailyKlines.length >= 1) {
-            const d = dailyKlines[0]; // previous complete day
-            result.daily_high = parseFloat(d[2]);
-            result.daily_low = parseFloat(d[3]);
-            result.daily_close = parseFloat(d[4]);
-            logger_1.logger.debug('Binance', `${symbol} prev-day H=${result.daily_high} L=${result.daily_low} C=${result.daily_close}`);
+        if (err.message.includes('400')) {
+            noSpotSymbols.add(symbol);
+            logger_1.logger.warn('Binance', `${symbol} has no spot pair on Binance — skipping price fetch for this session`);
+        }
+        else {
+            logger_1.logger.warn('Binance', `${symbol} 1h candle failed: ${err.message}`);
         }
     }
-    catch (err) {
-        logger_1.logger.warn('Binance', `${symbol} daily candle failed: ${err.message}`);
+    // Daily candle — limit=2, use index 0 (previous complete day)
+    if (!noSpotSymbols.has(symbol)) {
+        try {
+            const dailyKlines = await binanceGet(`/api/v3/klines?symbol=${pair}&interval=1d&limit=2`);
+            if (Array.isArray(dailyKlines) && dailyKlines.length >= 1) {
+                const d = dailyKlines[0]; // previous complete day
+                result.daily_high = parseFloat(d[2]);
+                result.daily_low = parseFloat(d[3]);
+                result.daily_close = parseFloat(d[4]);
+                logger_1.logger.debug('Binance', `${symbol} prev-day H=${result.daily_high} L=${result.daily_low} C=${result.daily_close}`);
+            }
+        }
+        catch (err) {
+            logger_1.logger.warn('Binance', `${symbol} daily candle failed: ${err.message}`);
+        }
     }
     return result;
+}
+/** Returns the set of symbols skipped this session due to missing Binance spot pair. */
+function getNoSpotSymbols() {
+    return noSpotSymbols;
 }
 //# sourceMappingURL=binance.js.map

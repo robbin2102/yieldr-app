@@ -13,3 +13,5 @@ export interface BinanceCandleData {
  * Binance klines response: [open_time, open, high, low, close, volume, close_time, ...]
  */
 export declare function fetchBinanceCandle(symbol: string): Promise<BinanceCandleData>;
+/** Returns the set of symbols skipped this session due to missing Binance spot pair. */
+export declare function getNoSpotSymbols(): ReadonlySet<string>;
