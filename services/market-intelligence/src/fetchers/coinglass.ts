@@ -154,21 +154,12 @@ export async function fetchAggregateData(trackedCoins: string[]): Promise<Map<st
 
 export interface CoinPerCoinData {
   symbol: string;
-  // Funding rate OHLC: [{ time, open, high, low, close }] — 4h candles, Binance BTCUSDT pair
-  funding_rate_history: any[];
-  // OI-weighted funding rate OHLC: [{ time, open, high, low, close }] — 4h candles, all exchanges
-  oi_weighted_funding_history: any[];
-  // OI OHLC aggregated at 4h: [{ time, open, high, low, close }] — for 4h/24h change
-  oi_history: any[];
-  // Long/short ratios — percent values (0–100)
-  long_short_global: { long: number | null; short: number | null; ratio: number | null };
-  long_short_top_accounts: { long: number | null; short: number | null; ratio: number | null };
-  long_short_top_positions: { long: number | null; short: number | null; ratio: number | null };
   // Aggregated liquidation history: [{ time, aggregated_long_liquidation_usd, aggregated_short_liquidation_usd }]
+  // Multi-exchange: Binance + OKX + Bybit
   liq_history: any[];
   // Pair taker buy/sell history: [{ time, taker_buy_volume_usd, taker_sell_volume_usd }]
   taker_history: any[];
-  // Futures basis close value
+  // Futures basis close value (Binance)
   basis: number | null;
   errors: string[];
 }
@@ -176,12 +167,6 @@ export interface CoinPerCoinData {
 export async function fetchPerCoinData(symbol: string): Promise<CoinPerCoinData> {
   const result: CoinPerCoinData = {
     symbol,
-    funding_rate_history: [],
-    oi_weighted_funding_history: [],
-    oi_history: [],
-    long_short_global:       { long: null, short: null, ratio: null },
-    long_short_top_accounts: { long: null, short: null, ratio: null },
-    long_short_top_positions: { long: null, short: null, ratio: null },
     liq_history: [],
     taker_history: [],
     basis: null,
@@ -190,77 +175,13 @@ export async function fetchPerCoinData(symbol: string): Promise<CoinPerCoinData>
 
   const pair = `${symbol}USDT`; // e.g. BTCUSDT — required by pair-level endpoints
 
+  // NOTE: Funding rate, OI history, and long/short ratios are now sourced from the
+  // binance-fetcher service (Singapore) which writes to binance_funding_1h and
+  // binance_derivatives_15m collections at 1h and 15m intervals respectively.
+  // CoinGlass per-coin calls are now limited to liquidations, taker volume, and basis.
+
   const endpoints: Array<{ path: string; handler: (data: any) => void }> = [
-    // Funding rate OHLC history (pair-level, Binance)
-    // Hobby: min interval 4h. Response: [{ time, open, high, low, close }]
-    {
-      path: `/api/futures/funding-rate/history?exchange=Binance&symbol=${pair}&interval=4h&limit=1`,
-      handler: (d) => { result.funding_rate_history = d || []; },
-    },
-
-    // OI-weighted funding rate OHLC (coin-level, all exchanges)
-    // Hobby: min interval 4h. Response: [{ time, open, high, low, close }]
-    {
-      path: `/api/futures/funding-rate/oi-weight-history?symbol=${symbol}&interval=4h&limit=1`,
-      handler: (d) => { result.oi_weighted_funding_history = d || []; },
-    },
-
-    // Aggregated OI OHLC history at 4h (coin-level, all exchanges)
-    // Hobby: min interval 4h. limit=7 → 28h, enough to compute 4h and 24h pct change.
-    {
-      path: `/api/futures/open-interest/aggregated-history?symbol=${symbol}&interval=4h&limit=7&unit=usd`,
-      handler: (d) => { result.oi_history = d || []; },
-    },
-
-    // Global long/short account ratio (pair-level, Binance)
-    // Hobby: min interval 4h. Response: [{ time, global_account_long_percent, global_account_short_percent, global_account_long_short_ratio }]
-    {
-      path: `/api/futures/global-long-short-account-ratio/history?exchange=Binance&symbol=${pair}&interval=4h&limit=1`,
-      handler: (d) => {
-        const latest = Array.isArray(d) ? d[0] : d;
-        if (latest) {
-          result.long_short_global = {
-            long:  latest.global_account_long_percent  ?? null,
-            short: latest.global_account_short_percent ?? null,
-            ratio: latest.global_account_long_short_ratio ?? null,
-          };
-        }
-      },
-    },
-
-    // Top trader account long/short ratio (pair-level, Binance)
-    // Hobby: min interval 4h. Response: [{ time, top_account_long_percent, top_account_short_percent, top_account_long_short_ratio }]
-    {
-      path: `/api/futures/top-long-short-account-ratio/history?exchange=Binance&symbol=${pair}&interval=4h&limit=1`,
-      handler: (d) => {
-        const latest = Array.isArray(d) ? d[0] : d;
-        if (latest) {
-          result.long_short_top_accounts = {
-            long:  latest.top_account_long_percent  ?? null,
-            short: latest.top_account_short_percent ?? null,
-            ratio: latest.top_account_long_short_ratio ?? null,
-          };
-        }
-      },
-    },
-
-    // Top trader position long/short ratio (pair-level, Binance)
-    // Hobby: min interval 4h. Response: [{ time, top_position_long_percent, top_position_short_percent, top_position_long_short_ratio }]
-    {
-      path: `/api/futures/top-long-short-position-ratio/history?exchange=Binance&symbol=${pair}&interval=4h&limit=1`,
-      handler: (d) => {
-        const latest = Array.isArray(d) ? d[0] : d;
-        if (latest) {
-          result.long_short_top_positions = {
-            long:  latest.top_position_long_percent  ?? null,
-            short: latest.top_position_short_percent ?? null,
-            ratio: latest.top_position_long_short_ratio ?? null,
-          };
-        }
-      },
-    },
-
-    // Aggregated liquidation history (coin-level, multi-exchange)
+    // Aggregated liquidation history (coin-level, multi-exchange: Binance + OKX + Bybit)
     // Hobby: min interval 4h. limit=6 → 24h window for h24 sum.
     {
       path: `/api/futures/liquidation/aggregated-history?exchange_list=Binance,OKX,Bybit&symbol=${symbol}&interval=4h&limit=6`,

@@ -7,24 +7,6 @@ export interface CoinAggregateData {
 export declare function fetchAggregateData(trackedCoins: string[]): Promise<Map<string, CoinAggregateData>>;
 export interface CoinPerCoinData {
     symbol: string;
-    funding_rate_history: any[];
-    oi_weighted_funding_history: any[];
-    oi_history: any[];
-    long_short_global: {
-        long: number | null;
-        short: number | null;
-        ratio: number | null;
-    };
-    long_short_top_accounts: {
-        long: number | null;
-        short: number | null;
-        ratio: number | null;
-    };
-    long_short_top_positions: {
-        long: number | null;
-        short: number | null;
-        ratio: number | null;
-    };
     liq_history: any[];
     taker_history: any[];
     basis: number | null;

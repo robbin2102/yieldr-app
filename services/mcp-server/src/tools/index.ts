@@ -22,6 +22,8 @@ import { getHLPortfolioTool } from './live-api/get-hl-portfolio.js';
 import { getMarketSnapshotTool } from './market/get-market-snapshot.js';
 import { fetchLiveIndicatorTool } from './market/fetch-live-indicator.js';
 import { getMacroSnapshotTool } from './market/get-macro-snapshot.js';
+import { getFundingRateHistoryTool } from './market/get-funding-rate-history.js';
+import { getDerivativesHistoryTool } from './market/get-derivatives-history.js';
 
 // Export individual tools
 export { getTopPMTradersTool } from './top-traders/index.js';
@@ -35,7 +37,7 @@ export {
   getPMClosedPositionsTool,
   getHLPortfolioTool,
 } from './live-api/index.js';
-export { getMarketSnapshotTool, fetchLiveIndicatorTool, getMacroSnapshotTool } from './market/index.js';
+export { getMarketSnapshotTool, fetchLiveIndicatorTool, getMacroSnapshotTool, getFundingRateHistoryTool, getDerivativesHistoryTool } from './market/index.js';
 
 // Tool registry for MCP server
 export const tools = [
@@ -58,6 +60,9 @@ export const tools = [
   fetchLiveIndicatorTool,
   // Market intelligence - daily macro (ETF flows, Fear/Greed, Coinbase premium)
   getMacroSnapshotTool,
+  // Binance derivatives history (1h funding rates, 15m OI + L/S ratios)
+  getFundingRateHistoryTool,
+  getDerivativesHistoryTool,
 ];
 
 // Tool map for quick lookup

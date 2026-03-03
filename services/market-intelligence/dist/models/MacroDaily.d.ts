@@ -1,4 +1,4 @@
-import { Document } from 'mongoose';
+import mongoose, { Document } from 'mongoose';
 export interface IMacroDaily extends Document {
     date: Date;
     btc_etf: {
@@ -30,5 +30,9 @@ export interface IMacroDaily extends Document {
         change_24h_usd: number | null;
     };
 }
-declare const _default: any;
+declare const _default: mongoose.Model<any, {}, {}, {}, any, any> | mongoose.Model<IMacroDaily, {}, {}, {}, mongoose.Document<unknown, {}, IMacroDaily, {}, {}> & IMacroDaily & Required<{
+    _id: mongoose.Types.ObjectId;
+}> & {
+    __v: number;
+}, any>;
 export default _default;

@@ -1,4 +1,4 @@
-import { Document } from 'mongoose';
+import mongoose, { Document } from 'mongoose';
 export interface IMarketStructureHistory extends Document {
     symbol: string;
     updated_at: Date;
@@ -20,5 +20,9 @@ export interface IMarketStructureHistory extends Document {
     last_lh: number | null;
     last_ll: number | null;
 }
-declare const _default: any;
+declare const _default: mongoose.Model<any, {}, {}, {}, any, any> | mongoose.Model<IMarketStructureHistory, {}, {}, {}, mongoose.Document<unknown, {}, IMarketStructureHistory, {}, {}> & IMarketStructureHistory & Required<{
+    _id: mongoose.Types.ObjectId;
+}> & {
+    __v: number;
+}, any>;
 export default _default;
