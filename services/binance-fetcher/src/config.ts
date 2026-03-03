@@ -11,7 +11,7 @@ function required(name: string): string {
 }
 
 export const config = {
-  port: parseInt(process.env.PORT || '3001'),
+  port: parseInt(process.env.PORT || '3000'),
   get mongodbUri() { return required('MONGODB_URI'); },
 
   binance: {
