@@ -63,9 +63,14 @@ function buildEtfFlows(
   const latest = Array.isArray(flowsData) ? flowsData[0] : flowsData;
   const totalFlow: number | null = latest?.flow_usd ?? null;
 
-  // Parse data_date from the API entry's own timestamp so we can detect stale data
+  // Parse data_date from the API entry's own timestamp so we can detect stale data.
+  // CoinGlass returns timestamps in milliseconds; detect by magnitude to avoid double-converting.
   const rawTs = latest?.timestamp ?? latest?.time ?? null;
-  const dataDate: Date | null = rawTs != null ? new Date(typeof rawTs === 'number' ? rawTs * 1000 : rawTs) : null;
+  const dataDate: Date | null = rawTs != null ? new Date(
+    typeof rawTs === 'number'
+      ? (rawTs > 1e12 ? rawTs : rawTs * 1000)  // already ms if > year 2001 in seconds
+      : rawTs
+  ) : null;
 
   // /api/etf/bitcoin/net-assets/history returns array (descending — newest first)
   // Each entry: { net_assets_usd, change_usd, timestamp, price_usd }
