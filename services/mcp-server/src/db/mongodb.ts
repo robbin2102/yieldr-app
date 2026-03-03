@@ -71,4 +71,8 @@ export const COLLECTIONS = {
   CHART_PATTERNS: 'chart_patterns',
   MACRO_DAILY: 'macro_daily',
   TRACKED_COINS: 'tracked_coins',
+
+  // Binance fetcher collections (written by Singapore binance-fetcher service)
+  BINANCE_FUNDING_1H: 'binance_funding_1h',
+  BINANCE_DERIVATIVES_15M: 'binance_derivatives_15m',
 } as const;
