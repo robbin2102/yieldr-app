@@ -14,3 +14,5 @@ export interface BinanceCandleData {
  * from the Coinbase Advanced Trade public REST API.
  */
 export declare function fetchBinanceCandle(symbol: string): Promise<BinanceCandleData>;
+/** Returns the set of symbols skipped this session due to missing Binance spot pair. */
+export declare function getNoSpotSymbols(): ReadonlySet<string>;
