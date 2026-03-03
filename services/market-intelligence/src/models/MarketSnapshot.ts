@@ -10,10 +10,7 @@ export interface IMarketSnapshot extends Document {
   derivatives: Record<string, unknown>;
   computed: {
     ma_crossovers: unknown[];
-    divergences: unknown[];
     market_structure: Record<string, unknown>;
-    fvg: unknown[];
-    order_blocks: unknown[];
     alerts: unknown[];
   };
   chart_patterns: unknown[];
@@ -59,8 +56,7 @@ const MarketSnapshotSchema = new Schema<any>({
   candlestick_patterns: [{ pattern: String, value: Number, timeframe: { type: String, default: '1h' }, _id: false }],
   derivatives: {
     open_interest: { total_usd: Number, change_4h_pct: Number, change_24h_pct: Number },
-    funding_rate:  { current: Number, predicted: Number, oi_weighted: Number, vol_weighted: Number, annualized: Number },
-    funding_arbitrage: [{ long_exchange: String, short_exchange: String, spread: Number, _id: false }],
+    funding_rate:  { current: Number, annualized: Number },
     long_short_ratio: {
       global_accounts: { long: Number, short: Number, ratio: Number },
       top_accounts:    { long: Number, short: Number, ratio: Number },
@@ -77,10 +73,7 @@ const MarketSnapshotSchema = new Schema<any>({
   },
   computed: {
     ma_crossovers:   { type: [Schema.Types.Mixed], default: [] },
-    divergences:     { type: [Schema.Types.Mixed], default: [] },
     market_structure: { type: Schema.Types.Mixed,  default: {} },
-    fvg:             { type: [Schema.Types.Mixed], default: [] },
-    order_blocks:    { type: [Schema.Types.Mixed], default: [] },
     alerts: [{
       type: { type: String },
       severity: { type: String, enum: ['high', 'medium', 'low'] },
@@ -104,5 +97,5 @@ MarketSnapshotSchema.index({ 'derivatives.funding_rate.current': 1 });
 MarketSnapshotSchema.index({ 'computed.alerts.severity': 1, timestamp: -1 });
 MarketSnapshotSchema.index({ tier: 1, timestamp: -1 });
 
-export default mongoose.models.MarketSnapshot ||
+export default (mongoose.models.MarketSnapshot as mongoose.Model<IMarketSnapshot>) ||
   mongoose.model<IMarketSnapshot>('MarketSnapshot', MarketSnapshotSchema);

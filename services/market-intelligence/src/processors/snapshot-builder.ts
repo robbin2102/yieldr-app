@@ -216,13 +216,9 @@ function buildDerivatives(
       change_24h_pct: oiChange24h,
     },
     funding_rate: {
-      current:      fundingCurrent,
-      predicted:    null,
-      oi_weighted:  null,   // removed: was from Hobby-locked CoinGlass endpoint
-      vol_weighted: null,
-      annualized:   fundingAnnualized,
+      current:    fundingCurrent,
+      annualized: fundingAnnualized,
     },
-    funding_arbitrage: [],
     long_short_ratio: {
       global_accounts: lsGlobal,
       top_accounts:    lsTopAcct,
@@ -255,19 +251,15 @@ function buildDerivatives(
 
 /**
  * Derives market_structure, ma_crossovers, and alerts from current snapshot data.
- * Note: divergences, fvg, order_blocks require multi-candle history (future work).
  */
 function computeSnapshotFields(
   indicators: any,
   derivatives: any,
   closePrice: number | null,
 ): {
-  ma_crossovers:   unknown[];
-  divergences:     unknown[];
+  ma_crossovers:    unknown[];
   market_structure: Record<string, unknown>;
-  fvg:             unknown[];
-  order_blocks:    unknown[];
-  alerts:          unknown[];
+  alerts:           unknown[];
 } {
   const ema8   = indicators?.ema_8   ?? null;
   const ema21  = indicators?.ema_21  ?? null;
@@ -381,10 +373,7 @@ function computeSnapshotFields(
 
   return {
     ma_crossovers,
-    divergences:     [],   // requires multi-candle history
     market_structure,
-    fvg:             [],   // requires multi-candle history
-    order_blocks:    [],   // requires multi-candle history
     alerts,
   };
 }

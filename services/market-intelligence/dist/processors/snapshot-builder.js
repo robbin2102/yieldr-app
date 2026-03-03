@@ -169,12 +169,8 @@ function buildDerivatives(aggregate, perCoin, coinbasePremium, symbol, binanceFu
         },
         funding_rate: {
             current: fundingCurrent,
-            predicted: null,
-            oi_weighted: null, // removed: was from Hobby-locked CoinGlass endpoint
-            vol_weighted: null,
             annualized: fundingAnnualized,
         },
-        funding_arbitrage: [],
         long_short_ratio: {
             global_accounts: lsGlobal,
             top_accounts: lsTopAcct,
@@ -205,7 +201,6 @@ function buildDerivatives(aggregate, perCoin, coinbasePremium, symbol, binanceFu
 // ─── Computed Fields ───────────────────────────────────────────────────────────
 /**
  * Derives market_structure, ma_crossovers, and alerts from current snapshot data.
- * Note: divergences, fvg, order_blocks require multi-candle history (future work).
  */
 function computeSnapshotFields(indicators, derivatives, closePrice) {
     const ema8 = indicators?.ema_8 ?? null;
@@ -320,10 +315,7 @@ function computeSnapshotFields(indicators, derivatives, closePrice) {
     }
     return {
         ma_crossovers,
-        divergences: [], // requires multi-candle history
         market_structure,
-        fvg: [], // requires multi-candle history
-        order_blocks: [], // requires multi-candle history
         alerts,
     };
 }

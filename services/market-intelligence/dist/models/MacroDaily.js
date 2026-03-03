@@ -38,12 +38,14 @@ const ETFFlowsSchema = new mongoose_1.Schema({
     total_flow_usd: { type: Number, default: null },
     net_assets_usd: { type: Number, default: null },
     flows_by_ticker: [{ ticker: String, flow_usd: Number, _id: false }],
+    // data_date: the date of the ETF record returned by the API — used to detect stale data
+    data_date: { type: Date, default: null },
 }, { _id: false });
 const MacroDailySchema = new mongoose_1.Schema({
     date: { type: Date, required: true },
-    btc_etf: { type: ETFFlowsSchema, default: () => ({ total_flow_usd: null, net_assets_usd: null, flows_by_ticker: [] }) },
-    eth_etf: { type: ETFFlowsSchema, default: () => ({ total_flow_usd: null, net_assets_usd: null, flows_by_ticker: [] }) },
-    coinbase_premium: { btc: { type: Number, default: null }, eth: { type: Number, default: null } },
+    btc_etf: { type: ETFFlowsSchema, default: () => ({ total_flow_usd: null, net_assets_usd: null, flows_by_ticker: [], data_date: null }) },
+    eth_etf: { type: ETFFlowsSchema, default: () => ({ total_flow_usd: null, net_assets_usd: null, flows_by_ticker: [], data_date: null }) },
+    coinbase_premium: { btc: { type: Number, default: null } },
     fear_greed: { value: { type: Number, default: null }, classification: { type: String, default: null } },
     stablecoin_mcap: { total_usd: { type: Number, default: null }, change_24h_usd: { type: Number, default: null } },
 }, { collection: 'macro_daily', timestamps: false });

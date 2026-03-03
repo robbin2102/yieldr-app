@@ -58,8 +58,6 @@ async function main() {
       console.log(`     💸 Funding:`);
       console.log(`        current     = ${fmt(fr.current,    100, 6, '%')}   (raw: ${fr.current ?? 'n/a'})`);
       console.log(`        annualized  = ${fmt(fr.annualized, 100, 2, '%')}`);
-      console.log(`        oi_weighted = ${fmt(fr.oi_weighted,100, 6, '%')}`);
-      console.log(`        vol_weighted= ${fmt(fr.vol_weighted,100, 6, '%')}`);
 
       // OI
       const oiB = oi.total_usd !== undefined ? `$${(oi.total_usd / 1e9).toFixed(3)}B` : 'n/a';
