@@ -45,9 +45,22 @@ async function main() {
       return;
     }
 
+    // Validate input against the tool's Zod schema before executing
+    const parsed = tool.inputSchema.safeParse(args);
+    if (!parsed.success) {
+      logger.warn(`Tool ${toolName} — invalid input:`, { received: args, errors: parsed.error.format() });
+      res.status(400).json({
+        error: 'Invalid tool input',
+        received: args,
+        details: parsed.error.format(),
+      });
+      return;
+    }
+
     try {
-      logger.info(`Executing tool: ${toolName}`, args);
-      const result = await tool.execute(args);
+      logger.info(`Executing tool: ${toolName}`, parsed.data);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const result = await tool.execute(parsed.data as any);
       res.json(result);
     } catch (error: unknown) {
       logger.error(`Tool ${toolName} failed:`, error);
