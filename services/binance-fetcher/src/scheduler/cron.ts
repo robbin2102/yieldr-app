@@ -5,7 +5,7 @@ import { mongoose } from '../db';
 import FundingRate1h from '../models/FundingRate1h';
 import Derivatives15m from '../models/Derivatives15m';
 import {
-  fetchFundingRateKlines,
+  fetchFundingRates,
   fetchOIHistory,
   fetchGlobalLSRatio,
   fetchTopAccountLSRatio,
@@ -74,10 +74,10 @@ export async function runFundingRateCycle(coins?: string[]): Promise<void> {
         { sort: { timestamp: -1 } }
       );
       const startTime = latest ? latest.timestamp.getTime() + 1 : undefined;
-      // If no data, fetch limit=200 (covers ~8 days at 1h intervals)
-      const limit = startTime ? 10 : 200;
+      // If no data, fetch limit=1000 (covers ~333 days of 8h settlements)
+      const limit = startTime ? 5 : 1000;
 
-      const records = await fetchFundingRateKlines(pair, startTime, limit);
+      const records = await fetchFundingRates(pair, startTime, limit);
       if (records.length === 0) {
         skipped++;
         await sleep(config.binance.requestDelayMs);
@@ -211,9 +211,9 @@ export async function runBackfill(): Promise<void> {
     const pair = toPair(symbol);
 
     try {
-      // Funding: 1h candles. backfillDays * 24 records. Fetch in 1 call (limit 1500 max).
-      const fundingLimit = config.backfillDays * 24 + 5;
-      const fundingRecords = await fetchFundingRateKlines(pair, startTime, fundingLimit);
+      // Funding: 8h settlements. backfillDays * 3 records. Fetch in 1 call (limit 1000 max).
+      const fundingLimit = config.backfillDays * 3 + 5;
+      const fundingRecords = await fetchFundingRates(pair, startTime, fundingLimit);
       if (fundingRecords.length > 0) {
         const ops = fundingRecords.map(r => ({
           updateOne: {

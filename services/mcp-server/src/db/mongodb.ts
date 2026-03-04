@@ -73,6 +73,6 @@ export const COLLECTIONS = {
   TRACKED_COINS: 'tracked_coins',
 
   // Binance fetcher collections (written by Singapore binance-fetcher service)
-  BINANCE_FUNDING_1H: 'binance_funding_1h',
+  BINANCE_FUNDING_8H: 'binance_funding_8h',
   BINANCE_DERIVATIVES_15M: 'binance_derivatives_15m',
 } as const;
