@@ -1,4 +1,5 @@
 export { getMarketSnapshotTool } from './get-market-snapshot.js';
+export { getCoinPriceTool } from './get-coin-price.js';
 export { fetchLiveIndicatorTool } from './fetch-live-indicator.js';
 export { getMacroSnapshotTool } from './get-macro-snapshot.js';
 export { getFundingRateHistoryTool } from './get-funding-rate-history.js';

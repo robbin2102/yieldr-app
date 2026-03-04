@@ -36,16 +36,13 @@ const FALLBACK_COIN_PRIORITY = [
  */
 async function refreshTrackedCoins() {
     logger_1.logger.info('Tracker', 'Refreshing tracked coins list...');
-    // Step 1: TAAPI symbols
     const taapiSymbols = await fetchTaapiSymbols();
     logger_1.logger.info('Tracker', `TAAPI binancefutures symbols: ${taapiSymbols.size}`);
-    // Step 2: CoinGlass markets
     const cgCoins = await fetchCoinGlassMarkets();
     logger_1.logger.info('Tracker', `CoinGlass coins: ${cgCoins.length}`);
     let all;
     let excluded = [];
     if (cgCoins.length > 0) {
-        // Step 3: Intersect with TAAPI symbols and sort by OI
         const intersected = cgCoins.filter(item => {
             const sym = item.symbol.toUpperCase();
             return taapiSymbols.has(sym) && !EXCLUDE_SYMBOLS.has(sym);
@@ -57,8 +54,6 @@ async function refreshTrackedCoins() {
         all = intersected.slice(0, config_1.config.totalTrackedCoins).map(item => item.symbol.toUpperCase());
     }
     else {
-        // CoinGlass coins-markets unavailable (plan restriction) — use fallback priority list
-        // filtered to symbols TAAPI supports on binancefutures
         logger_1.logger.warn('Tracker', 'CoinGlass markets unavailable — using hardcoded fallback coin list');
         all = FALLBACK_COIN_PRIORITY
             .filter(sym => taapiSymbols.has(sym) && !EXCLUDE_SYMBOLS.has(sym))
@@ -67,7 +62,6 @@ async function refreshTrackedCoins() {
     }
     const full = all.slice(0, config_1.config.fullDerivativesTier);
     const lite = all.slice(config_1.config.fullDerivativesTier);
-    // Step 5: Save to DB
     await models_1.TrackedCoins.findOneAndUpdate({}, {
         $set: {
             updated_at: new Date(),
@@ -110,7 +104,6 @@ async function fetchTaapiSymbols() {
         if (!res.ok)
             throw new Error(`TAAPI exchange-symbols ${res.status}`);
         const symbols = await res.json();
-        // Convert "BTC/USDT" → "BTC"
         const baseSymbols = new Set();
         for (const sym of symbols) {
             const [base] = sym.split('/');
