@@ -243,6 +243,78 @@ const toolDefinitions: Anthropic.Tool[] = [
     },
     cache_control: { type: 'ephemeral' as const },
   },
+  {
+    name: 'get_market_snapshot',
+    description: 'Get latest technical indicators + derivatives data for a tracked coin from MongoDB. Returns price OHLCV, EMA/SMA (8/21/50/200), RSI, MACD, ADX, Bollinger Bands, Ichimoku, Supertrend, funding rate, open interest, long/short ratios, CVD, liquidations, taker buy/sell, and computed signals. Data refreshes every 1H. Use fields param to limit response size.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        symbol: { type: 'string', description: 'Coin symbol, e.g. BTC, ETH, SOL' },
+        fields: {
+          type: 'string',
+          enum: ['price', 'indicators', 'derivatives', 'computed', 'candlestick_patterns', 'all'],
+          description: 'Which fields to return. Default: all. Use specific fields to limit response size.',
+        },
+      },
+      required: ['symbol'],
+    },
+  },
+  {
+    name: 'fetch_live_indicator',
+    description: 'Fetch real-time indicator values from TAAPI for any coin. Use when the MongoDB snapshot is stale (data_age_minutes > 60) or user asks for current/live values. Fetches all 18 core indicators by default (EMA 8/21/50/200, SMA 50/200, RSI, MACD, StochRSI, ADX, BBands, ATR, VWAP, OBV, CMF, Ichimoku, Supertrend, Pivots), or specific ones if provided.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        symbol: { type: 'string', description: 'Coin symbol without /USDT, e.g. BTC, ETH, SOL' },
+        indicators: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Specific indicators, e.g. ["rsi", "macd", "ema_21"]. For EMAs/SMAs use format "ema_8", "sma_50". Omit to fetch all 18 core indicators.',
+        },
+        timeframe: { type: 'string', description: 'Candle timeframe: 1m, 5m, 15m, 1h, 4h, 1d. Default: 1h' },
+      },
+      required: ['symbol'],
+    },
+  },
+  {
+    name: 'get_macro_snapshot',
+    description: 'Get daily macro data: BTC + ETH ETF flows (total + by ticker), ETF net assets, Coinbase premium index (BTC + ETH), Fear & Greed index (0-100 + classification), and stablecoin market cap. Updated daily at 10:00 UTC. Use for macro context when analyzing any coin setup or market conditions.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        days: { type: 'number', description: 'Number of days to return (default: 1, max: 30)' },
+      },
+    },
+  },
+  {
+    name: 'get_funding_rate_history',
+    description: 'Get hourly funding rate history for a coin from Binance Futures (up to 30 days). Returns full time-series plus computed stats: current rate, annualized %, 24h avg, 7d avg, min/max over period, and trend direction (rising/flat/falling). Use when analyzing funding dynamics, carry trade setups, or spotting extreme funding that signals mean reversion risk. Symbol is just the coin name (BTC, ETH, SOL) — no USDT suffix.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        symbol: { type: 'string', description: 'Coin symbol, e.g. BTC, ETH, SOL (no USDT suffix)' },
+        hours: { type: 'number', description: 'Lookback window in hours. Default: 24. Max: 720 (30 days).' },
+      },
+      required: ['symbol'],
+    },
+  },
+  {
+    name: 'get_derivatives_history',
+    description: 'Get 15-minute open interest + long/short ratio history for a coin from Binance Futures (up to 7 days). Returns OI in USDT with 4h and 24h % change, plus three L/S ratio views: global retail accounts, top trader accounts, and top trader positions. Each L/S view includes current long/short %, ratio, average over period, and bias label (longs_dominant / shorts_dominant / balanced). Use when analyzing positioning, OI trends, or sentiment divergence between retail and smart money. Symbol is just the coin name (BTC, ETH, SOL) — no USDT suffix.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        symbol: { type: 'string', description: 'Coin symbol, e.g. BTC, ETH, SOL (no USDT suffix)' },
+        hours: { type: 'number', description: 'Lookback window in hours. Default: 24. Max: 168 (7 days).' },
+        include: {
+          type: 'array',
+          items: { type: 'string', enum: ['oi', 'ls_global', 'ls_top_accounts', 'ls_top_positions'] },
+          description: 'Which fields to include. Omit for all. Use ["oi"] for OI-only, ["ls_global","ls_top_accounts"] for L/S only.',
+        },
+      },
+      required: ['symbol'],
+    },
+  },
 ];
 
 // Claude native web search tool
@@ -276,6 +348,16 @@ function getToolStatusLabel(name: string, input: any): string {
       return `Checking positions for ${input.walletAddresses?.length || 0} wallets...`;
     case 'get_hl_portfolio':
       return `Loading portfolio for ${input.walletAddress?.slice(0, 10)}...`;
+    case 'get_market_snapshot':
+      return `Fetching ${input.symbol?.toUpperCase()} market snapshot...`;
+    case 'fetch_live_indicator':
+      return `Fetching live ${input.indicators?.join(', ') || 'indicators'} for ${input.symbol?.toUpperCase()}...`;
+    case 'get_macro_snapshot':
+      return `Loading macro data (ETF flows, Fear & Greed, Coinbase premium)...`;
+    case 'get_funding_rate_history':
+      return `Fetching ${input.hours || 24}h funding rate history for ${input.symbol?.toUpperCase()}...`;
+    case 'get_derivatives_history':
+      return `Fetching ${input.hours || 24}h OI + L/S data for ${input.symbol?.toUpperCase()}...`;
     case 'web_search':
       return `Searching the web...`;
     default:
@@ -639,6 +721,198 @@ async function executeTool(name: string, input: any): Promise<string> {
           openPositions: (data.assetPositions || []).length,
         });
       }
+      case 'get_market_snapshot': {
+        await connectDB();
+        const db = mongoose.connection.db!;
+        const { symbol, fields = 'all' } = input;
+        const projection: Record<string, 1> = {
+          symbol: 1, timestamp: 1, interval: 1, tier: 1,
+          fetched_on_demand: 1, on_demand_expires_at: 1, fetch_duration_ms: 1, errors: 1,
+        };
+        if (fields === 'all' || fields === 'price') projection.price = 1;
+        if (fields === 'all' || fields === 'indicators') projection.indicators = 1;
+        if (fields === 'all' || fields === 'derivatives') projection.derivatives = 1;
+        if (fields === 'all' || fields === 'computed') projection.computed = 1;
+        if (fields === 'all' || fields === 'candlestick_patterns') projection.candlestick_patterns = 1;
+        const snap = await db.collection('market_snapshots').findOne(
+          { symbol: symbol.toUpperCase() },
+          { sort: { timestamp: -1 }, projection }
+        );
+        if (!snap) {
+          return JSON.stringify({ found: false, symbol: symbol.toUpperCase(), message: `No snapshot found for ${symbol}. Cron may not have run yet.` });
+        }
+        const ageMs = Date.now() - new Date(snap.timestamp).getTime();
+        const activePatterns = (snap.candlestick_patterns as any[] | undefined)?.filter((p: any) => p.value !== 0) ?? [];
+        return JSON.stringify({
+          found: true, symbol: snap.symbol, timestamp: snap.timestamp,
+          data_age_minutes: Math.round(ageMs / 60000), tier: snap.tier,
+          ...(snap.price && { price: snap.price }),
+          ...(snap.indicators && { indicators: snap.indicators }),
+          ...(snap.derivatives && { derivatives: snap.derivatives }),
+          ...(snap.computed && { computed: snap.computed }),
+          ...(activePatterns.length && { candlestick_patterns: activePatterns }),
+        });
+      }
+      case 'fetch_live_indicator': {
+        const apiKey = process.env.TAAPI_API_KEY;
+        if (!apiKey) throw new Error('TAAPI_API_KEY not configured');
+        const { symbol, indicators, timeframe = '1h' } = input;
+        const CORE: Record<string, any>[] = [
+          { indicator: 'ema', period: 8 }, { indicator: 'ema', period: 21 },
+          { indicator: 'ema', period: 50 }, { indicator: 'ema', period: 200 },
+          { indicator: 'sma', period: 50 }, { indicator: 'sma', period: 200 },
+          { indicator: 'rsi' }, { indicator: 'macd' }, { indicator: 'stochrsi' },
+          { indicator: 'adx' }, { indicator: 'bbands' }, { indicator: 'atr', period: 14 },
+          { indicator: 'vwap' }, { indicator: 'obv' }, { indicator: 'cmf' },
+          { indicator: 'ichimoku' }, { indicator: 'supertrend' }, { indicator: 'pivot_points' },
+        ];
+        const parseInd = (ind: string) => {
+          const m = ind.match(/^([a-z]+)_(\d+)$/);
+          return m ? { indicator: m[1], period: parseInt(m[2]) } : { indicator: ind };
+        };
+        const indicatorList = indicators?.length ? indicators.map(parseInd) : CORE;
+        const results: Record<string, any> = {};
+        for (let i = 0; i < indicatorList.length; i += 20) {
+          const chunk = indicatorList.slice(i, i + 20);
+          const res = await fetch('https://api.taapi.io/bulk', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              secret: apiKey,
+              construct: { exchange: 'binancefutures', symbol: `${symbol.toUpperCase()}/USDT`, interval: timeframe, indicators: chunk },
+            }),
+          });
+          if (!res.ok) throw new Error(`TAAPI error ${res.status}: ${await res.text()}`);
+          const data = await res.json() as { data?: any[] };
+          for (const item of (data.data || [])) {
+            const key = item.indicator + (item.period != null ? `_${item.period}` : '');
+            results[key] = item.result ?? item.errors ?? null;
+          }
+        }
+        return JSON.stringify({ symbol: symbol.toUpperCase(), timeframe, fetched_at: new Date().toISOString(), source: 'TAAPI real-time', indicators: results });
+      }
+      case 'get_macro_snapshot': {
+        await connectDB();
+        const db = mongoose.connection.db!;
+        const limit = Math.min(input.days || 1, 30);
+        const docs = await db.collection('macro_daily').find({}).sort({ date: -1 }).limit(limit).toArray();
+        if (!docs.length) return JSON.stringify({ found: false, message: 'No macro data yet. Daily cron runs at 10:00 UTC.' });
+        const ageHours = Math.round((Date.now() - new Date(docs[0].date).getTime()) / 3600000);
+        return JSON.stringify({
+          found: true, data_age_hours: ageHours, days_returned: docs.length,
+          macro: docs.map(d => ({
+            date: d.date, fear_greed: d.fear_greed,
+            btc_etf: { total_flow_usd: d.btc_etf?.total_flow_usd, net_assets_usd: d.btc_etf?.net_assets_usd, top_flows: (d.btc_etf?.flows_by_ticker ?? []).slice(0, 5) },
+            eth_etf: { total_flow_usd: d.eth_etf?.total_flow_usd, net_assets_usd: d.eth_etf?.net_assets_usd, top_flows: (d.eth_etf?.flows_by_ticker ?? []).slice(0, 5) },
+            coinbase_premium: d.coinbase_premium,
+            stablecoin_mcap: d.stablecoin_mcap,
+          })),
+        });
+      }
+      case 'get_funding_rate_history': {
+        await connectDB();
+        const db = mongoose.connection.db!;
+        const { symbol, hours = 24 } = input;
+        const since = new Date(Date.now() - hours * 60 * 60 * 1000);
+        const records = await db.collection('binance_funding_1h')
+          .find(
+            { symbol: symbol.toUpperCase(), timestamp: { $gte: since } },
+            { sort: { timestamp: 1 }, projection: { _id: 0, timestamp: 1, funding_rate: 1, annualized_rate: 1 } }
+          )
+          .toArray();
+        if (records.length === 0) {
+          return JSON.stringify({ found: false, symbol: symbol.toUpperCase(), message: `No funding rate history for ${symbol.toUpperCase()} in the last ${hours}h. Symbol may not trade on Binance Futures.` });
+        }
+        const rates = records.map((r: any) => r.funding_rate);
+        const latest = records[records.length - 1] as any;
+        const computeAvg = (nums: number[]) => nums.length ? nums.reduce((s, n) => s + n, 0) / nums.length : null;
+        const third = Math.floor(rates.length / 3);
+        const avgFirst = computeAvg(rates.slice(0, third));
+        const avgLast  = computeAvg(rates.slice(-third));
+        const trend = avgFirst && avgLast
+          ? (avgLast > avgFirst * 1.1 ? 'rising' : avgLast < avgFirst * 0.9 ? 'falling' : 'flat')
+          : 'flat';
+        return JSON.stringify({
+          found: true, symbol: symbol.toUpperCase(), hours_requested: hours, records_found: records.length,
+          history: records,
+          stats: {
+            current: latest.funding_rate,
+            current_annualized_pct: latest.annualized_rate,
+            avg_24h: computeAvg(records.slice(-24).map((r: any) => r.funding_rate)),
+            avg_period: computeAvg(rates),
+            avg_7d: rates.length >= 168 ? computeAvg(records.slice(-168).map((r: any) => r.funding_rate)) : computeAvg(rates),
+            min_period: Math.min(...rates),
+            max_period: Math.max(...rates),
+            trend,
+          },
+        });
+      }
+      case 'get_derivatives_history': {
+        await connectDB();
+        const db = mongoose.connection.db!;
+        const { symbol, hours = 24, include = ['oi', 'ls_global', 'ls_top_accounts', 'ls_top_positions'] } = input;
+        const since = new Date(Date.now() - hours * 60 * 60 * 1000);
+        const includeSet = new Set(include as string[]);
+        const projection: Record<string, 1 | 0> = { _id: 0, timestamp: 1 };
+        if (includeSet.has('oi'))               projection.open_interest_usdt = 1;
+        if (includeSet.has('ls_global'))        projection.long_short_global = 1;
+        if (includeSet.has('ls_top_accounts'))  projection.long_short_top_accounts = 1;
+        if (includeSet.has('ls_top_positions')) projection.long_short_top_positions = 1;
+        const records = await db.collection('binance_derivatives_15m')
+          .find(
+            { symbol: symbol.toUpperCase(), timestamp: { $gte: since } },
+            { sort: { timestamp: 1 }, projection }
+          )
+          .toArray();
+        if (records.length === 0) {
+          return JSON.stringify({ found: false, symbol: symbol.toUpperCase(), message: `No derivatives history for ${symbol.toUpperCase()} in the last ${hours}h.` });
+        }
+        const latest = records[records.length - 1] as any;
+        const lsStats = (field: string) => {
+          const vals = records.map((r: any) => r[field]).filter((v: any) => v?.long_pct != null);
+          if (!vals.length) return null;
+          const lv = vals[vals.length - 1] as any;
+          return {
+            current: { long_pct: lv.long_pct, short_pct: lv.short_pct, ratio: lv.ratio },
+            avg_long_pct:  vals.reduce((s: number, v: any) => s + v.long_pct, 0) / vals.length,
+            avg_short_pct: vals.reduce((s: number, v: any) => s + v.short_pct, 0) / vals.length,
+            bias: lv.long_pct > 55 ? 'longs_dominant' : lv.short_pct > 55 ? 'shorts_dominant' : 'balanced',
+          };
+        };
+        let oiStats = null;
+        if (includeSet.has('oi')) {
+          const oiVals = records.map((r: any) => r.open_interest_usdt).filter((v: any) => v != null) as number[];
+          if (oiVals.length) {
+            const prev4h  = records[Math.max(0, records.length - 17)] as any;
+            const prev24h = records[Math.max(0, records.length - 97)] as any;
+            const cur = latest.open_interest_usdt ?? null;
+            oiStats = {
+              current_usdt: cur,
+              change_4h_pct:  cur && prev4h?.open_interest_usdt ? ((cur - prev4h.open_interest_usdt) / prev4h.open_interest_usdt * 100) : null,
+              change_24h_pct: cur && prev24h?.open_interest_usdt ? ((cur - prev24h.open_interest_usdt) / prev24h.open_interest_usdt * 100) : null,
+              min_usdt: Math.min(...oiVals), max_usdt: Math.max(...oiVals),
+            };
+          }
+        }
+        return JSON.stringify({
+          found: true, symbol: symbol.toUpperCase(), hours_requested: hours,
+          records_found: records.length, interval: '15m',
+          history: records,
+          latest: {
+            timestamp: latest.timestamp,
+            open_interest_usdt: latest.open_interest_usdt ?? null,
+            long_short_global: latest.long_short_global ?? null,
+            long_short_top_accounts: latest.long_short_top_accounts ?? null,
+            long_short_top_positions: latest.long_short_top_positions ?? null,
+          },
+          stats: {
+            ...(oiStats ? { open_interest: oiStats } : {}),
+            ...(includeSet.has('ls_global')        ? { long_short_global: lsStats('long_short_global') } : {}),
+            ...(includeSet.has('ls_top_accounts')  ? { long_short_top_accounts: lsStats('long_short_top_accounts') } : {}),
+            ...(includeSet.has('ls_top_positions') ? { long_short_top_positions: lsStats('long_short_top_positions') } : {}),
+          },
+        });
+      }
       default:
         return JSON.stringify({ error: `Unknown tool: ${name}` });
     }
@@ -674,6 +948,11 @@ You have access to powerful data tools. USE THEM proactively:
 • get_hl_trade_history — Get recent trades/fills for a Hyperliquid wallet
 • get_pm_closed_positions — Get resolved Polymarket positions
 • get_hl_portfolio — Get Hyperliquid portfolio overview and account value
+• get_market_snapshot — Latest TAAPI + CoinGlass snapshot for any coin (technicals + derivatives)
+• fetch_live_indicator — Real-time TAAPI indicators when snapshot is stale
+• get_macro_snapshot — Daily macro: ETF flows, Fear & Greed, Coinbase premium
+• get_funding_rate_history — Hourly Binance funding rate history (up to 30 days) with trend stats
+• get_derivatives_history — 15m OI + long/short ratio history from Binance (up to 7 days)
 • web_search — Search the web for market news, macro events (native Claude tool)
 
 ---
@@ -907,7 +1186,58 @@ If a tool call fails or returns an error:
    • Briefly note that the specific trader appears to have no active positions currently
    • Immediately fetch top traders for the relevant asset using get_top_perp_traders or get_top_pm_traders
    • Present those top traders' positions instead, so the user still gets actionable data
-   • Example: "0x7fda... appears flat right now. Here's what the top BTC traders are doing instead: [data]"`;
+   • Example: "0x7fda... appears flat right now. Here's what the top BTC traders are doing instead: [data]"
+
+---
+
+## 📈 Market Intelligence Tools
+
+You have access to live market data for 89 tracked coins on Binance Futures, refreshed continuously.
+
+### Snapshot tools (1h refresh)
+• get_market_snapshot — Latest TAAPI + CoinGlass indicators for any coin: price, EMA/SMA, RSI, MACD, ADX, BBands, Ichimoku, Supertrend, Pivots, funding rate, OI, long/short ratios, CVD, liquidations, taker buy/sell, computed signals, active candlestick patterns
+• fetch_live_indicator — Real-time TAAPI call when snapshot is stale (data_age_minutes > 60) or user explicitly asks for current/live values
+• get_macro_snapshot — Daily macro: BTC + ETH ETF flows, net assets, Coinbase premium (BTC + ETH), Fear & Greed index, stablecoin market cap
+
+### Binance history tools (direct from Binance Futures, updated every 1h/15m)
+• get_funding_rate_history — Hourly funding rate time-series for any coin (default 24h, max 30 days). Returns: current rate, annualized %, 24h avg, 7d avg, min/max, trend direction (rising/flat/falling). Symbol = coin name only, e.g. BTC not BTCUSDT.
+• get_derivatives_history — 15-minute OI + long/short ratio history (default 24h, max 7 days). Returns: OI in USDT with 4h/24h % change, global retail L/S, top trader account L/S, top trader position L/S — each with current values, period averages, and bias label. Symbol = coin name only, e.g. BTC not BTCUSDT.
+
+### When to call each
+• User asks about a coin's setup, technicals, or indicators → call get_market_snapshot first
+• User asks "right now" / "current" / "live" data → use fetch_live_indicator
+• User asks about ETF flows, macro, Fear & Greed, Coinbase premium → call get_macro_snapshot
+• get_market_snapshot shows data_age_minutes > 60 → follow up with fetch_live_indicator for fresh values
+• User asks about funding rate trend, carry trade, funding history, annualized rate → call get_funding_rate_history
+• User asks about open interest trend, OI change, positioning, long/short ratios over time → call get_derivatives_history
+• Doing a full coin analysis or trade setup → call get_market_snapshot AND get_derivatives_history together for complete picture
+• NEVER fabricate indicator values (RSI, funding rate, EMA, OI, etc.). Always call the tool first.
+
+### Key signals to highlight when analyzing a coin
+• RSI > 70 or < 30 → overbought / oversold
+• |funding_rate.current| > 0.0003 (annualized > 100%) → extreme funding, mean reversion risk for longs
+• Funding trend = "rising" + price near resistance → longs overextended
+• Funding trend = "falling" or negative → shorts paying, potential short squeeze setup
+• OI rising + price falling → bearish divergence (smart money adding shorts into rally)
+• OI falling + price rising → shorts being squeezed out (rally may be sustainable)
+• Top trader L/S diverges from global L/S → smart money vs retail divergence signal
+• top_accounts long_pct > 60% while global long_pct < 50% → smart money bullish vs retail neutral
+• EMA 8 > 21 > 50 > 200 → bullish MA ribbon alignment
+• Fear & Greed < 25 → extreme fear (contrarian buy signal); > 75 → extreme greed
+• Positive Coinbase premium → US spot buyers leading (bullish for BTC/ETH)
+
+### Response format for derivatives/funding data
+When presenting funding or OI data, always include:
+• Current value + annualized % (for funding)
+• Trend direction over the lookback window
+• 1-2 sentence interpretation of what the positioning means for trade direction
+• If smart money (top traders) diverges from retail, call it out explicitly
+
+Use fields/include params to keep responses lean:
+• fields="derivatives" → funding, OI, long/short ratios only (on get_market_snapshot)
+• fields="indicators" → technicals only
+• include=["oi"] → OI only (on get_derivatives_history)
+• include=["ls_top_accounts","ls_top_positions"] → smart money L/S only`;
 
 // Build dynamic user context (NOT cached — changes per session)
 function buildDynamicUserContext(context: {
