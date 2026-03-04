@@ -21,46 +21,48 @@ export interface BinanceCandleData {
 // Populated at runtime on first 400 (invalid symbol) response; resets on restart.
 const noSpotSymbols = new Set<string>();
 
-// Alternative Binance spot hostnames to try when primary returns 451 (geo-restriction).
-// On each 451, we cycle to the next base URL and log once.
-const BINANCE_FALLBACK_BASES = [
+// All Binance spot hostnames in priority order. Configured primary is tried first,
+// then fallbacks in sequence. Once a working host is found it's reused for the session.
+const ALL_SPOT_BASES = [
+  config.binance.spotBaseUrl,
   'https://api1.binance.com',
   'https://api2.binance.com',
   'https://api3.binance.com',
   'https://api4.binance.com',
 ];
 
-let currentBase = config.binance.spotBaseUrl;
+// Index into ALL_SPOT_BASES of the currently working host; persists across calls.
+let baseIndex = 0;
 let geo451Logged = false;
 
 async function binanceGet(path: string): Promise<any> {
-  const res = await fetch(`${currentBase}${path}`);
+  // Try from current working base; on 451 rotate through all remaining options.
+  for (let attempt = 0; attempt < ALL_SPOT_BASES.length; attempt++) {
+    const idx = (baseIndex + attempt) % ALL_SPOT_BASES.length;
+    const base = ALL_SPOT_BASES[idx];
+    const res = await fetch(`${base}${path}`);
 
-  if (res.status === 400) {
-    throw new Error(`Binance 400: ${path}`);
-  }
+    if (res.status === 400) throw new Error(`Binance 400: ${path}`);
 
-  // 451 = geo-restriction. Try rotating to an alternative Binance hostname.
-  if (res.status === 451) {
-    const triedBase = currentBase;
-    const fallback = BINANCE_FALLBACK_BASES.find(b => b !== currentBase);
-    if (fallback) {
-      currentBase = fallback;
+    if (res.status === 451) {
       if (!geo451Logged) {
         geo451Logged = true;
-        logger.warn('Binance', `451 geo-restriction on ${triedBase} — switching to ${fallback}. Set BINANCE_SPOT_BASE_URL env var to configure.`);
+        logger.warn('Binance', `451 geo-restriction on ${base} — rotating endpoints. Set BINANCE_SPOT_BASE_URL to override.`);
       }
-      // Retry once with the new base
-      const retry = await fetch(`${currentBase}${path}`);
-      if (!retry.ok) throw new Error(`Binance ${retry.status}: ${path}`);
-      return retry.json();
+      continue; // try next host
     }
-    // All alternates exhausted — throw with clear message
-    throw new Error(`Binance 451: ${path}`);
+
+    if (!res.ok) throw new Error(`Binance ${res.status}: ${path}`);
+
+    // Success — lock in this host index for future calls
+    if (attempt > 0) {
+      baseIndex = idx;
+      logger.info('Binance', `Using ${base} after 451 on primary (index locked to ${idx})`);
+    }
+    return res.json();
   }
 
-  if (!res.ok) throw new Error(`Binance ${res.status}: ${path}`);
-  return res.json();
+  throw new Error(`Binance 451: ${path} — all endpoints geo-restricted`);
 }
 
 const NULL_RESULT: BinanceCandleData = {
@@ -95,12 +97,7 @@ export async function fetchBinanceCandle(symbol: string): Promise<BinanceCandleD
       noSpotSymbols.add(symbol);
       logger.warn('Binance', `${symbol} has no spot pair on Binance — skipping price fetch for this session`);
     } else if (err.message.includes('451')) {
-      // Geo-restriction with no working fallback — suppress per-symbol noise, already logged once above
-      noSpotSymbols.add(symbol);
-      if (!geo451Logged) {
-        geo451Logged = true;
-        logger.warn('Binance', `451 geo-restriction on all Binance spot endpoints. Set BINANCE_SPOT_BASE_URL=https://api.binance.us for US-hosted deployments.`);
-      }
+      // All endpoints exhausted — already logged once in binanceGet, suppress per-symbol noise
     } else {
       logger.warn('Binance', `${symbol} 1h candle failed: ${err.message}`);
     }
