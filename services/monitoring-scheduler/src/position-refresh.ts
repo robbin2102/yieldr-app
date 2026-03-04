@@ -21,46 +21,41 @@ import { upsertUserPositions, getActiveMonitoringUserIds } from './db/positions'
 async function refreshHyperliquidPositions(userIds: string[]): Promise<void> {
   if (userIds.length === 0) return;
 
-  try {
-    // Batch all wallets in a single call (max 10 per batch)
-    for (let i = 0; i < userIds.length; i += 10) {
-      const batch = userIds.slice(i, i + 10);
-      const result = await callMCPTool('get_hl_live_positions_batch', {
-        walletAddresses: batch,
-        limit: 10,
+  for (const userId of userIds) {
+    try {
+      const result = await callMCPTool('get_hl_live_positions', {
+        walletAddress: userId,
       });
 
-      for (const walletData of result?.wallets ?? []) {
-        if (!walletData.wallet || walletData.error) continue;
+      if (!result || result.totalPositions === 0) continue;
 
-        const positions = (walletData.positions ?? []).map((p: any) => ({
-          asset: p.coin,
-          direction: p.side,
-          size: p.size,
-          pnl: p.unrealizedPnl,
-          platform: 'hyperliquid',
-          entryPrice: p.entryPrice,
-          currentPrice: p.currentPrice,
-          leverage: p.leverage,
-          liquidationPrice: p.liquidationPrice,
-          marginUsed: p.marginUsed,
-          roi: p.roi,
-        }));
+      const positions = (result.positions ?? []).map((p: any) => ({
+        asset: p.coin,
+        direction: p.side,
+        size: p.size,
+        pnl: p.unrealizedPnl,
+        platform: 'hyperliquid',
+        entryPrice: p.entryPrice,
+        currentPrice: p.currentPrice,
+        leverage: p.leverage,
+        liquidationPrice: p.liquidationPrice,
+        marginUsed: p.marginUsed,
+        roi: p.roi,
+      }));
 
-        await upsertUserPositions({
-          userId: walletData.wallet.toLowerCase(),
-          platform: 'hyperliquid',
-          positions,
-          accountValue: walletData.accountValue,
-          lastUpdated: new Date(),
-        });
-      }
+      await upsertUserPositions({
+        userId: userId.toLowerCase(),
+        platform: 'hyperliquid',
+        positions,
+        accountValue: result.summary?.accountValue,
+        lastUpdated: new Date(),
+      });
+    } catch (err: any) {
+      logger.debug('PositionRefresh', `HL refresh failed for ${userId}: ${err.message}`);
     }
-
-    logger.debug('PositionRefresh', `HL: refreshed ${userIds.length} wallets`);
-  } catch (err: any) {
-    logger.warn('PositionRefresh', `HL refresh failed: ${err.message}`);
   }
+
+  logger.debug('PositionRefresh', `HL: refreshed ${userIds.length} wallets`);
 }
 
 // ─── Polymarket ───────────────────────────────────────────────────────────────
