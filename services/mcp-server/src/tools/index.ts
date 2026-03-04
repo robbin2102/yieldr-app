@@ -25,6 +25,7 @@ import { getMacroSnapshotTool } from './market/get-macro-snapshot.js';
 import { getFundingRateHistoryTool } from './market/get-funding-rate-history.js';
 import { getFundingRateCurrentTool } from './market/get-funding-rate-current.js';
 import { getDerivativesHistoryTool } from './market/get-derivatives-history.js';
+import { getCoinPriceTool } from './market/get-coin-price.js';
 
 // Export individual tools
 export { getTopPMTradersTool } from './top-traders/index.js';
@@ -38,7 +39,7 @@ export {
   getPMClosedPositionsTool,
   getHLPortfolioTool,
 } from './live-api/index.js';
-export { getMarketSnapshotTool, fetchLiveIndicatorTool, getMacroSnapshotTool, getFundingRateHistoryTool, getFundingRateCurrentTool, getDerivativesHistoryTool } from './market/index.js';
+export { getMarketSnapshotTool, fetchLiveIndicatorTool, getCoinPriceTool, getMacroSnapshotTool, getFundingRateHistoryTool, getFundingRateCurrentTool, getDerivativesHistoryTool } from './market/index.js';
 
 // Tool registry for MCP server
 export const tools = [
@@ -59,6 +60,7 @@ export const tools = [
   getMarketSnapshotTool,
   // Market intelligence - live TAAPI fetch
   fetchLiveIndicatorTool,
+  getCoinPriceTool,
   // Market intelligence - daily macro (ETF flows, Fear/Greed, Coinbase premium)
   getMacroSnapshotTool,
   // Binance funding rates — historical (8h settled) and current/predicted (1h premium index)

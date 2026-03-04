@@ -11,7 +11,6 @@ const logger_1 = require("../utils/logger");
 const tracker_1 = require("../coins/tracker");
 const taapi_1 = require("../fetchers/taapi");
 const coinglass_1 = require("../fetchers/coinglass");
-const ohlcv_1 = require("../fetchers/ohlcv");
 const snapshot_builder_1 = require("../processors/snapshot-builder");
 const macro_builder_1 = require("../processors/macro-builder");
 exports.isRunning = false;
@@ -102,19 +101,17 @@ function startCronJobs() {
     node_cron_1.default.schedule('0 * * * *', async () => {
         await runHourlyCycle();
     });
-    // OHLCV 15m cycle — :03, :18, :33, :48 (staggered 3 min after hour to avoid :00 congestion)
-    // Runs independently of the hourly cycle; writes to ohlcv_15m collection.
-    node_cron_1.default.schedule('3,18,33,48 * * * *', async () => {
-        logger_1.logger.info('Cron', 'Running 15m OHLCV cycle');
-        try {
-            const { all } = await (0, tracker_1.loadTrackedCoins)();
-            if (all.length > 0)
-                await (0, ohlcv_1.fetchAndStoreOhlcv)(all);
-        }
-        catch (err) {
-            logger_1.logger.error('Cron', `OHLCV cycle failed: ${err.message}`);
-        }
-    });
+    // OHLCV 15m cron — disabled for now; OHLCV fetch moved to on-demand agent tooling.
+    // Re-enable by uncommenting when batch pre-fetch is needed again.
+    // cron.schedule('3,18,33,48 * * * *', async () => {
+    //   logger.info('Cron', 'Running 15m OHLCV cycle');
+    //   try {
+    //     const { all } = await loadTrackedCoins();
+    //     if (all.length > 0) await fetchAndStoreOhlcv(all);
+    //   } catch (err: any) {
+    //     logger.error('Cron', `OHLCV cycle failed: ${err.message}`);
+    //   }
+    // });
     // Daily macro — 10:00 UTC every day
     node_cron_1.default.schedule('0 10 * * *', async () => {
         logger_1.logger.info('Cron', 'Running daily macro fetch');
@@ -125,7 +122,7 @@ function startCronJobs() {
         logger_1.logger.info('Cron', 'Running weekly coin list refresh');
         await (0, tracker_1.refreshTrackedCoins)();
     });
-    logger_1.logger.info('Cron', 'Cron jobs started: hourly (0 * * * *), OHLCV-15m (3,18,33,48 * * * *), daily macro (0 10 * * *), weekly refresh (0 0 * * 0)');
+    logger_1.logger.info('Cron', 'Cron jobs started: hourly (0 * * * *), daily macro (0 10 * * *), weekly refresh (0 0 * * 0)');
 }
 function roundToHour(date) {
     const d = new Date(date);
