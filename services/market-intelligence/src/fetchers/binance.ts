@@ -2,9 +2,8 @@
  * Fetches OHLCV candle data from Binance public REST API (no key required).
  * Used for: price.open/high/low/close/volume + daily OHLC for pivot point computation.
  */
+import { config } from '../config';
 import { logger } from '../utils/logger';
-
-const BASE = 'https://api.binance.com';
 
 export interface BinanceCandleData {
   open:        number | null;
@@ -22,8 +21,44 @@ export interface BinanceCandleData {
 // Populated at runtime on first 400 (invalid symbol) response; resets on restart.
 const noSpotSymbols = new Set<string>();
 
+// Alternative Binance spot hostnames to try when primary returns 451 (geo-restriction).
+// On each 451, we cycle to the next base URL and log once.
+const BINANCE_FALLBACK_BASES = [
+  'https://api1.binance.com',
+  'https://api2.binance.com',
+  'https://api3.binance.com',
+  'https://api4.binance.com',
+];
+
+let currentBase = config.binance.spotBaseUrl;
+let geo451Logged = false;
+
 async function binanceGet(path: string): Promise<any> {
-  const res = await fetch(`${BASE}${path}`);
+  const res = await fetch(`${currentBase}${path}`);
+
+  if (res.status === 400) {
+    throw new Error(`Binance 400: ${path}`);
+  }
+
+  // 451 = geo-restriction. Try rotating to an alternative Binance hostname.
+  if (res.status === 451) {
+    const triedBase = currentBase;
+    const fallback = BINANCE_FALLBACK_BASES.find(b => b !== currentBase);
+    if (fallback) {
+      currentBase = fallback;
+      if (!geo451Logged) {
+        geo451Logged = true;
+        logger.warn('Binance', `451 geo-restriction on ${triedBase} — switching to ${fallback}. Set BINANCE_SPOT_BASE_URL env var to configure.`);
+      }
+      // Retry once with the new base
+      const retry = await fetch(`${currentBase}${path}`);
+      if (!retry.ok) throw new Error(`Binance ${retry.status}: ${path}`);
+      return retry.json();
+    }
+    // All alternates exhausted — throw with clear message
+    throw new Error(`Binance 451: ${path}`);
+  }
+
   if (!res.ok) throw new Error(`Binance ${res.status}: ${path}`);
   return res.json();
 }
@@ -59,6 +94,13 @@ export async function fetchBinanceCandle(symbol: string): Promise<BinanceCandleD
     if (err.message.includes('400')) {
       noSpotSymbols.add(symbol);
       logger.warn('Binance', `${symbol} has no spot pair on Binance — skipping price fetch for this session`);
+    } else if (err.message.includes('451')) {
+      // Geo-restriction with no working fallback — suppress per-symbol noise, already logged once above
+      noSpotSymbols.add(symbol);
+      if (!geo451Logged) {
+        geo451Logged = true;
+        logger.warn('Binance', `451 geo-restriction on all Binance spot endpoints. Set BINANCE_SPOT_BASE_URL=https://api.binance.us for US-hosted deployments.`);
+      }
     } else {
       logger.warn('Binance', `${symbol} 1h candle failed: ${err.message}`);
     }
@@ -87,4 +129,3 @@ export async function fetchBinanceCandle(symbol: string): Promise<BinanceCandleD
 export function getNoSpotSymbols(): ReadonlySet<string> {
   return noSpotSymbols;
 }
-
