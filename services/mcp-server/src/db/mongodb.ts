@@ -75,4 +75,10 @@ export const COLLECTIONS = {
   // Binance fetcher collections (written by Singapore binance-fetcher service)
   BINANCE_FUNDING_1H: 'binance_funding_1h',
   BINANCE_DERIVATIVES_15M: 'binance_derivatives_15m',
+
+  // Monitoring collections
+  MONITORING_TASKS: 'monitoring_tasks',
+  MONITORING_ALERTS: 'monitoring_alerts',
+  MONITORING_TASK_LOGS: 'monitoring_task_logs',
+  USER_POSITIONS: 'user_positions',
 } as const;

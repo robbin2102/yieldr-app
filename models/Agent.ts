@@ -24,11 +24,17 @@ export interface IFollowedTrader {
 }
 
 export interface IAgent extends Document {
+  agentId: string;           // url-safe slug, e.g. "alpha-hunter", auto-generated from name
   name: string;
   ownerWallet: string;
   markets: ('perps' | 'predictions' | 'liquidity')[];
   goals?: ('invest' | 'improve' | 'fund')[];
   status: 'creating' | 'active' | 'paused';
+
+  // Monitoring stats (incremented by scheduler)
+  alertsSent: number;
+  insightsGenerated: number;
+  lastActiveAt?: Date;
 
   // Portfolio summary (positions live in positions collection)
   portfolioSummary: {
@@ -66,6 +72,13 @@ const FollowedTraderSchema = new Schema({
 }, { _id: false });
 
 const AgentSchema = new Schema<IAgent>({
+  agentId: {
+    type: String,
+    unique: true,
+    sparse: true,   // allow existing docs without agentId
+    lowercase: true,
+    trim: true,
+  },
   name: {
     type: String,
     required: true,
@@ -106,6 +119,9 @@ const AgentSchema = new Schema<IAgent>({
     isNative: Boolean,
   }],
   cachedTokensTotalUsd: { type: Number, default: 0 },
+  alertsSent: { type: Number, default: 0 },
+  insightsGenerated: { type: Number, default: 0 },
+  lastActiveAt: { type: Date },
   createdAt: {
     type: Date,
     default: Date.now,
@@ -121,9 +137,18 @@ AgentSchema.index({ ownerWallet: 1 });
 AgentSchema.index({ status: 1 });
 AgentSchema.index({ createdAt: -1 });
 
-// Update timestamp on save
+// Auto-generate agentId slug from name on first save
 AgentSchema.pre('save', function(next) {
   this.updatedAt = new Date();
+  if (!this.agentId && this.name) {
+    this.agentId = this.name
+      .toLowerCase()
+      .trim()
+      .replace(/[^a-z0-9\s-]/g, '')
+      .replace(/\s+/g, '-')
+      .replace(/-+/g, '-')
+      .slice(0, 40);
+  }
   next();
 });
 
