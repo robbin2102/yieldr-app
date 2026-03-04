@@ -11,7 +11,7 @@ function required(name: string): string {
 }
 
 export const config = {
-  port: parseInt(process.env.PORT || '3002'),
+  port: parseInt(process.env.MONITORING_SCHEDULER_PORT || process.env.PORT || '3002'),
   get mongodbUri() { return required('MONGODB_URI'); },
   get mcpServerUrl() { return required('MCP_SERVER_URL'); },
   get anthropicApiKey() { return required('ANTHROPIC_API_KEY'); },
