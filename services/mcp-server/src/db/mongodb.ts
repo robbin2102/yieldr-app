@@ -76,4 +76,10 @@ export const COLLECTIONS = {
   BINANCE_FUNDING_8H: 'binance_funding_8h',
   BINANCE_PREMIUM_INDEX_1H: 'binance_premium_index_1h',
   BINANCE_DERIVATIVES_15M: 'binance_derivatives_15m',
+
+  // Monitoring collections
+  MONITORING_TASKS: 'monitoring_tasks',
+  MONITORING_ALERTS: 'monitoring_alerts',
+  MONITORING_TASK_LOGS: 'monitoring_task_logs',
+  USER_POSITIONS: 'user_positions',
 } as const;
