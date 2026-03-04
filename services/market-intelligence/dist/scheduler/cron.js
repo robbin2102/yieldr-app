@@ -11,16 +11,16 @@ const logger_1 = require("../utils/logger");
 const tracker_1 = require("../coins/tracker");
 const taapi_1 = require("../fetchers/taapi");
 const coinglass_1 = require("../fetchers/coinglass");
-const binance_1 = require("../fetchers/binance");
+const ohlcv_1 = require("../fetchers/ohlcv");
 const snapshot_builder_1 = require("../processors/snapshot-builder");
 const macro_builder_1 = require("../processors/macro-builder");
 exports.isRunning = false;
 /**
  * Main hourly cycle:
  * Phase 1 — CoinGlass aggregate (5 calls, ~10s)
- * Phase 2 — TAAPI indicators for all 100 coins (~3 min)
+ * Phase 2 — TAAPI indicators for all coins (~9 min)
  * Phase 3 — CoinGlass per-coin for top 20 (~7 min)
- * Phase 4 — Build and upsert snapshots (includes Binance OHLCV per coin)
+ * Phase 4 — Build and upsert snapshots (reads OHLCV from ohlcv_15m collection)
  */
 async function runHourlyCycle() {
     if (exports.isRunning) {
@@ -32,17 +32,16 @@ async function runHourlyCycle() {
     const timestamp = roundToHour(new Date());
     logger_1.logger.info('Cron', `═══ HOURLY CYCLE START — ${timestamp.toISOString()} ═══`);
     try {
-        // Load tracked coins
         const { all: allCoins, full: fullCoins } = await (0, tracker_1.loadTrackedCoins)();
         if (allCoins.length === 0) {
             logger_1.logger.warn('Cron', 'No tracked coins — skipping cycle');
             return;
         }
         logger_1.logger.info('Cron', `Coins: ${allCoins.length} total, ${fullCoins.length} full-tier`);
-        // Phase 1: CoinGlass aggregate (all 100 coins)
+        // Phase 1: CoinGlass aggregate (all coins)
         logger_1.logger.info('Cron', '─── Phase 1: CoinGlass aggregate ───');
         const aggregateMap = await (0, coinglass_1.fetchAggregateData)(allCoins);
-        // Phase 2: TAAPI indicators (all 100 coins)
+        // Phase 2: TAAPI indicators (all coins)
         logger_1.logger.info('Cron', '─── Phase 2: TAAPI indicators ───');
         const taapiMap = await (0, taapi_1.fetchAllCoins)(allCoins);
         // Phase 3: CoinGlass per-coin (top 20 only)
@@ -53,9 +52,9 @@ async function runHourlyCycle() {
             perCoinMap.set(coin, data);
             logger_1.logger.debug('Cron', `Per-coin ${coin}: ${data.errors.length} errors`);
         }
-        // Coinbase premium (BTC + ETH)
         const premium = await (0, coinglass_1.fetchCoinbasePremium)();
         // Phase 4: Build and upsert snapshots
+        // OHLCV price data is read from ohlcv_15m collection (written by ohlcv cron at :03/:18/:33/:48)
         logger_1.logger.info('Cron', '─── Phase 4: Building snapshots ───');
         let saved = 0;
         let failed = 0;
@@ -69,17 +68,11 @@ async function runHourlyCycle() {
             };
             const perCoin = perCoinMap.get(coin);
             const tier = perCoin ? 'full' : 'lite';
-            // Fetch Binance OHLCV for price data (used for closePrice and liquidation bucketing)
-            let binance;
             try {
-                binance = await (0, binance_1.fetchBinanceCandle)(coin);
-                logger_1.logger.debug('Cron', `Binance ${coin}: C=${binance.close}`);
-            }
-            catch (err) {
-                logger_1.logger.warn('Cron', `Binance ${coin} failed: ${err.message}`);
-            }
-            try {
-                await (0, snapshot_builder_1.buildAndSaveSnapshot)({ symbol: coin, timestamp, tier, taapi, aggregate, perCoin, coinbasePremium: premium, binance });
+                await (0, snapshot_builder_1.buildAndSaveSnapshot)({
+                    symbol: coin, timestamp, tier, taapi, aggregate, perCoin,
+                    coinbasePremium: premium,
+                });
                 saved++;
             }
             catch (err) {
@@ -87,13 +80,13 @@ async function runHourlyCycle() {
                 failed++;
             }
         }
-        const cycleDurationMs = Date.now() - cycleStart;
-        const cycleDurationMin = (cycleDurationMs / 60000).toFixed(1);
+        const durationMs = Date.now() - cycleStart;
+        const durationMin = (durationMs / 60000).toFixed(1);
         logger_1.logger.info('Cron', `═══ CYCLE COMPLETE ═══`);
-        logger_1.logger.info('Cron', `  Duration: ${cycleDurationMin} min | Saved: ${saved} | Failed: ${failed}`);
+        logger_1.logger.info('Cron', `  Duration: ${durationMin} min | Saved: ${saved} | Failed: ${failed}`);
         logger_1.logger.info('Cron', `  Coins: ${allCoins.length} total, ${fullCoins.length} full, ${allCoins.length - fullCoins.length} lite`);
-        if (cycleDurationMs > 30 * 60 * 1000) {
-            logger_1.logger.warn('Cron', `⚠ Cycle took ${cycleDurationMin} min — exceeds 30 min warning threshold`);
+        if (durationMs > 30 * 60 * 1000) {
+            logger_1.logger.warn('Cron', `⚠ Cycle took ${durationMin} min — exceeds 30 min warning threshold`);
         }
     }
     catch (err) {
@@ -105,11 +98,24 @@ async function runHourlyCycle() {
 }
 /** Start all cron jobs */
 function startCronJobs() {
-    // Main hourly cycle — run at minute 0 of every hour
+    // Main hourly cycle — minute 0 of every hour
     node_cron_1.default.schedule('0 * * * *', async () => {
         await runHourlyCycle();
     });
-    // Daily macro — 10:00 UTC every day (after US market close data settles)
+    // OHLCV 15m cycle — :03, :18, :33, :48 (staggered 3 min after hour to avoid :00 congestion)
+    // Runs independently of the hourly cycle; writes to ohlcv_15m collection.
+    node_cron_1.default.schedule('3,18,33,48 * * * *', async () => {
+        logger_1.logger.info('Cron', 'Running 15m OHLCV cycle');
+        try {
+            const { all } = await (0, tracker_1.loadTrackedCoins)();
+            if (all.length > 0)
+                await (0, ohlcv_1.fetchAndStoreOhlcv)(all);
+        }
+        catch (err) {
+            logger_1.logger.error('Cron', `OHLCV cycle failed: ${err.message}`);
+        }
+    });
+    // Daily macro — 10:00 UTC every day
     node_cron_1.default.schedule('0 10 * * *', async () => {
         logger_1.logger.info('Cron', 'Running daily macro fetch');
         await (0, macro_builder_1.buildAndSaveMacroDaily)();
@@ -119,7 +125,7 @@ function startCronJobs() {
         logger_1.logger.info('Cron', 'Running weekly coin list refresh');
         await (0, tracker_1.refreshTrackedCoins)();
     });
-    logger_1.logger.info('Cron', 'Cron jobs started: hourly (0 * * * *), daily macro (0 10 * * *), weekly refresh (0 0 * * 0)');
+    logger_1.logger.info('Cron', 'Cron jobs started: hourly (0 * * * *), OHLCV-15m (3,18,33,48 * * * *), daily macro (0 10 * * *), weekly refresh (0 0 * * 0)');
 }
 function roundToHour(date) {
     const d = new Date(date);

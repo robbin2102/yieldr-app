@@ -1,18 +1,4 @@
 "use strict";
-/**
- * Yieldr Market Intelligence Service
- *
- * Ingests TAAPI + CoinGlass data every hour and stores snapshots in MongoDB.
- * Runs as a standalone Railway service.
- *
- * Environment Variables:
- *   MONGODB_URI           — MongoDB connection string
- *   TAAPI_API_KEY         — TAAPI.io Pro API key
- *   COINGLASS_API_KEY     — CoinGlass Hobby API key
- *   TAAPI_RATE_DELAY_MS   — Delay between TAAPI requests (default: 600)
- *   COINGLASS_RATE_DELAY_MS — Delay between CoinGlass requests (default: 2200)
- *   PORT                  — HTTP health check port (default: 3000)
- */
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
     var desc = Object.getOwnPropertyDescriptor(m, k);
@@ -50,6 +36,20 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+/**
+ * Yieldr Market Intelligence Service
+ *
+ * Ingests TAAPI + CoinGlass data every hour and stores snapshots in MongoDB.
+ * Runs as a standalone Railway service.
+ *
+ * Environment Variables:
+ *   MONGODB_URI             — MongoDB connection string
+ *   TAAPI_API_KEY           — TAAPI.io Pro API key
+ *   COINGLASS_API_KEY       — CoinGlass Hobby API key
+ *   TAAPI_RATE_DELAY_MS     — Delay between TAAPI requests (default: 600)
+ *   COINGLASS_RATE_DELAY_MS — Delay between CoinGlass requests (default: 2200)
+ *   PORT                    — HTTP health check port (default: 3000)
+ */
 const dotenv = __importStar(require("dotenv"));
 dotenv.config();
 const express_1 = __importDefault(require("express"));
@@ -60,11 +60,9 @@ const tracker_1 = require("./coins/tracker");
 const macro_builder_1 = require("./processors/macro-builder");
 const config_1 = require("./config");
 const MarketSnapshot_1 = __importDefault(require("./models/MarketSnapshot"));
-// Track service start time and last cycle
 let lastCycleAt = null;
 let lastCycleErrors = 0;
 let totalCycles = 0;
-const PORT = config_1.config.port;
 async function main() {
     console.log('');
     console.log('██████████████████████████████████████████████████████████████████');
@@ -106,8 +104,8 @@ async function main() {
             res.status(500).json({ error: err.message });
         }
     });
-    app.listen(PORT, () => {
-        logger_1.logger.info('Server', `Health server listening on port ${PORT}`);
+    app.listen(config_1.config.port, () => {
+        logger_1.logger.info('Server', `Health server listening on port ${config_1.config.port}`);
     });
     // Connect to MongoDB (after server is up so healthcheck doesn't time out)
     await (0, db_1.connectDB)();
@@ -127,7 +125,6 @@ async function main() {
     (0, cron_1.startCronJobs)();
     logger_1.logger.info('Startup', 'All cron jobs scheduled. Service is running.');
 }
-// Graceful shutdown
 async function shutdown(signal) {
     logger_1.logger.info('Shutdown', `Received ${signal}, shutting down gracefully...`);
     await (0, db_1.disconnectDB)();

@@ -5,13 +5,17 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.buildAndSaveSnapshot = buildAndSaveSnapshot;
 const logger_1 = require("../utils/logger");
+const ohlcv_1 = require("../fetchers/ohlcv");
 const binance_db_1 = require("../fetchers/binance-db");
 const MarketSnapshot_1 = __importDefault(require("../models/MarketSnapshot"));
 const LiquidationLevels_1 = __importDefault(require("../models/LiquidationLevels"));
 const liquidation_bucketer_1 = require("./liquidation-bucketer");
 async function buildAndSaveSnapshot(args) {
-    const { symbol, timestamp, tier, taapi, aggregate, perCoin, coinbasePremium, binance } = args;
+    const { symbol, timestamp, tier, taapi, aggregate, perCoin, coinbasePremium } = args;
     const start = Date.now();
+    // OHLCV: read latest 15m candle from ohlcv_15m collection (written by ohlcv cron at :03/:18/:33/:48)
+    // Binance /api/v3/klines is no longer called — replaced by TAAPI candle via ohlcv fetcher.
+    const ohlcv = await (0, ohlcv_1.getLatestOhlcv)(symbol);
     // Load Binance derivatives data (written by binance-fetcher service, Singapore)
     // These replace the CoinGlass per-coin endpoints for funding rate, OI, and L/S ratios.
     const [binanceFunding, binanceDerivatives] = await Promise.all([
@@ -19,17 +23,17 @@ async function buildAndSaveSnapshot(args) {
         (0, binance_db_1.getLatestBinanceDerivatives)(symbol),
     ]);
     const indicators = taapi.indicators;
-    // Price: Binance OHLCV only — no fallback to VWAP (that would corrupt computed fields)
-    const closePrice = binance?.close ?? null;
+    // Price: from ohlcv_15m collection — no fallback to VWAP (that would corrupt computed fields)
+    const closePrice = ohlcv.close;
     const price = {
-        open: binance?.open ?? null,
-        high: binance?.high ?? null,
-        low: binance?.low ?? null,
+        open: ohlcv.open,
+        high: ohlcv.high,
+        low: ohlcv.low,
         close: closePrice,
-        volume: binance?.volume ?? null,
+        volume: ohlcv.volume,
     };
-    // Pivot points: prefer TAAPI result, fall back to computing from Binance daily candle
-    const pivotPoints = computePivotPoints(indicators?.pivot_points, binance);
+    // Pivot points: prefer TAAPI result, fall back to computing from 24h OHLCV high/low
+    const pivotPoints = computePivotPoints(indicators?.pivot_points, ohlcv);
     const derivatives = buildDerivatives(aggregate, perCoin, coinbasePremium, symbol, binanceFunding, binanceDerivatives);
     const indicatorsDoc = {
         ema_8: indicators?.ema_8 ?? null,
@@ -92,19 +96,19 @@ async function buildAndSaveSnapshot(args) {
 // ─── Pivot Points ──────────────────────────────────────────────────────────────
 /**
  * Returns TAAPI pivot points if populated, otherwise computes classic floor-trader
- * pivots from the previous day's Binance OHLC.
+ * pivots from the 24h high/low/close derived from the ohlcv_15m collection.
  *  PP = (H+L+C)/3
  *  R1 = 2*PP-L,  R2 = PP+(H-L),  R3 = H+2*(PP-L)
  *  S1 = 2*PP-H,  S2 = PP-(H-L),  S3 = L-2*(H-PP)
  */
-function computePivotPoints(taapiPivots, binance) {
+function computePivotPoints(taapiPivots, ohlcv) {
     // Use TAAPI if it returned real values
     if (taapiPivots?.pp != null)
         return taapiPivots;
-    // Fall back to Binance daily OHLC
-    const H = binance?.daily_high ?? null;
-    const L = binance?.daily_low ?? null;
-    const C = binance?.daily_close ?? null;
+    // Fall back to 24h high/low from ohlcv_15m
+    const H = ohlcv.daily_high ?? null;
+    const L = ohlcv.daily_low ?? null;
+    const C = ohlcv.daily_close ?? null;
     if (H == null || L == null || C == null) {
         return { pp: null, r1: null, r2: null, r3: null, s1: null, s2: null, s3: null };
     }

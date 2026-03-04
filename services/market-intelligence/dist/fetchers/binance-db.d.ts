@@ -1,5 +1,5 @@
 /**
- * Queries the binance_funding_1h and binance_derivatives_15m collections
+ * Queries the binance_funding_8h and binance_derivatives_15m collections
  * written by the binance-fetcher service (Singapore Railway deployment).
  * Uses the raw mongoose connection to avoid registering duplicate Mongoose models.
  */
@@ -32,7 +32,7 @@ export interface BinanceDerivativesData {
     timestamp: Date | null;
 }
 /**
- * Returns the latest funding rate record for a symbol from binance_funding_1h.
+ * Returns the latest funding rate record for a symbol from binance_funding_8h.
  * Returns null if the collection is empty or symbol not found.
  */
 export declare function getLatestBinanceFunding(symbol: string): Promise<BinanceFundingData | null>;

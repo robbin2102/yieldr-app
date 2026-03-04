@@ -9,7 +9,7 @@ dotenv.config({ path: '../../.env.local' });
 import { connectDB, disconnectDB } from '../db';
 import { fetchAllCoins } from '../fetchers/taapi';
 import { fetchAggregateData, fetchPerCoinData, fetchCoinbasePremium } from '../fetchers/coinglass';
-import { fetchBinanceCandle } from '../fetchers/binance';
+
 import { buildAndSaveSnapshot } from '../processors/snapshot-builder';
 import { logger } from '../utils/logger';
 
@@ -226,13 +226,12 @@ async function main(): Promise<void> {
       const perCoin = await fetchPerCoinData(symbol);
 
       logger.info('Script', `[${symbol}] Fetching Binance OHLCV...`);
-      const binance = await fetchBinanceCandle(symbol);
 
       const taapi     = taapiMap.get(symbol)   ?? { indicators: {}, candlestick_patterns: [], errors: [] };
       const aggregate = aggregateMap.get(symbol)!;
 
       logger.info('Script', `[${symbol}] Building and saving snapshot...`);
-      const { _id, snapshot } = await buildAndSaveSnapshot({ symbol, timestamp, tier: 'full', taapi, aggregate, perCoin, coinbasePremium: premium, binance });
+      const { _id, snapshot } = await buildAndSaveSnapshot({ symbol, timestamp, tier: 'full', taapi, aggregate, perCoin, coinbasePremium: premium });
 
       printCoinSnapshot(_id, snapshot);
 
