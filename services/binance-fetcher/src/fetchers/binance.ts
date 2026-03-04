@@ -63,6 +63,44 @@ export async function fetchFundingRates(
   });
 }
 
+// ─── Premium Index Klines (premiumIndexKlines) ────────────────────────────────
+// 1h candles of the premium index. The `close` value approximates the predicted
+// funding rate at the next 8h settlement. Used to show "current / predicted" rate.
+
+export interface PremiumIndexKlineRecord {
+  open_time:     Date;
+  close_time:    Date;
+  open_premium:  number;
+  high_premium:  number;
+  low_premium:   number;
+  premium_index: number;   // close = current predicted funding rate
+}
+
+export async function fetchPremiumIndexKlines(
+  pair: string,
+  startTime?: number,
+  limit = 1000,
+): Promise<PremiumIndexKlineRecord[]> {
+  const params = new URLSearchParams({
+    symbol:   pair,
+    interval: '1h',
+    limit:    String(Math.min(limit, 1500)),
+    ...(startTime ? { startTime: String(startTime) } : {}),
+  });
+
+  const data = await binanceGet(`/fapi/v1/premiumIndexKlines?${params}`);
+  if (!data || !Array.isArray(data)) return [];
+
+  return data.map((d: any[]) => ({
+    open_time:     new Date(d[0]),
+    open_premium:  parseFloat(d[1]),
+    high_premium:  parseFloat(d[2]),
+    low_premium:   parseFloat(d[3]),
+    premium_index: parseFloat(d[4]),   // close
+    close_time:    new Date(d[6]),
+  }));
+}
+
 // ─── Open Interest (openInterestHist) ─────────────────────────────────────────
 
 export interface OIRecord {
