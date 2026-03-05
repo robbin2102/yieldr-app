@@ -1,6 +1,7 @@
 [build]
 builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile"
+watchPaths = ["services/market-intelligence/**"]
 
 [deploy]
 startCommand = "node dist/index.js"

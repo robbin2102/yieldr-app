@@ -1,6 +1,7 @@
 [build]
 builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile"
+watchPaths = ["services/monitoring-scheduler/**"]
 
 [deploy]
 startCommand = "node dist/index.js"

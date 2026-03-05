@@ -1,6 +1,7 @@
 [build]
 builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile"
+watchPaths = ["services/polymarket-indexer/**"]
 
 [deploy]
 numReplicas = 1
