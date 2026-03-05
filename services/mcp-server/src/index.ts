@@ -37,7 +37,17 @@ async function main() {
   // Execute tool endpoint (for HTTP-based MCP or direct API calls)
   app.post('/tools/:toolName', async (req, res) => {
     const { toolName } = req.params;
-    const args = req.body;
+    const rawBody = req.body;
+
+    // Unwrap legacy { params: { ... } } format sent by older scheduler versions
+    const args = (
+      rawBody !== null &&
+      typeof rawBody === 'object' &&
+      Object.keys(rawBody).length === 1 &&
+      'params' in rawBody &&
+      rawBody.params !== null &&
+      typeof rawBody.params === 'object'
+    ) ? rawBody.params : rawBody;
 
     const tool = toolMap.get(toolName);
     if (!tool) {
