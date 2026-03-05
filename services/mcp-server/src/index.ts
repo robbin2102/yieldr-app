@@ -37,7 +37,17 @@ async function main() {
   // Execute tool endpoint (for HTTP-based MCP or direct API calls)
   app.post('/tools/:toolName', async (req, res) => {
     const { toolName } = req.params;
-    const args = req.body;
+    const rawBody = req.body;
+
+    // Unwrap legacy { params: { ... } } format sent by older scheduler versions
+    const args = (
+      rawBody !== null &&
+      typeof rawBody === 'object' &&
+      Object.keys(rawBody).length === 1 &&
+      'params' in rawBody &&
+      rawBody.params !== null &&
+      typeof rawBody.params === 'object'
+    ) ? rawBody.params : rawBody;
 
     const tool = toolMap.get(toolName);
     if (!tool) {
@@ -45,9 +55,22 @@ async function main() {
       return;
     }
 
+    // Validate input against the tool's Zod schema before executing
+    const parsed = tool.inputSchema.safeParse(args);
+    if (!parsed.success) {
+      logger.warn(`Tool ${toolName} — invalid input:`, { received: args, errors: parsed.error.format() });
+      res.status(400).json({
+        error: 'Invalid tool input',
+        received: args,
+        details: parsed.error.format(),
+      });
+      return;
+    }
+
     try {
-      logger.info(`Executing tool: ${toolName}`, args);
-      const result = await tool.execute(args);
+      logger.info(`Executing tool: ${toolName}`, parsed.data);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const result = await tool.execute(parsed.data as any);
       res.json(result);
     } catch (error: unknown) {
       logger.error(`Tool ${toolName} failed:`, error);

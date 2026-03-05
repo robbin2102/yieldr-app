@@ -19,7 +19,7 @@ export async function callMCPTool(toolName: string, params: Record<string, any>)
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ params }),
+      body: JSON.stringify(params),
       signal: controller.signal,
     });
 
