@@ -1,6 +1,5 @@
 import { TaapiCoinData } from '../fetchers/taapi';
 import { CoinAggregateData, CoinPerCoinData } from '../fetchers/coinglass';
-import { BinanceCandleData } from '../fetchers/binance';
 interface BuildSnapshotArgs {
     symbol: string;
     timestamp: Date;
@@ -12,7 +11,6 @@ interface BuildSnapshotArgs {
         btc: number | null;
         eth: number | null;
     };
-    binance?: BinanceCandleData;
 }
 export declare function buildAndSaveSnapshot(args: BuildSnapshotArgs): Promise<{
     _id: string;
