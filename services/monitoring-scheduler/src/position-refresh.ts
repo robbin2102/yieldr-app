@@ -16,12 +16,22 @@ import { upsertUserPositions, getActiveMonitoringUserIds } from './db/positions'
  * Skips platforms a user has no data for — no-op, no error.
  */
 
+// userId in monitoring_tasks is always the wallet address (0x...).
+// Skip any non-address values (e.g. test data) to avoid invalid-address errors.
+function isWalletAddress(value: string): boolean {
+  return /^0x[0-9a-fA-F]{40}$/.test(value);
+}
+
 // ─── Hyperliquid ──────────────────────────────────────────────────────────────
 
 async function refreshHyperliquidPositions(userIds: string[]): Promise<void> {
   if (userIds.length === 0) return;
 
   for (const userId of userIds) {
+    if (!isWalletAddress(userId)) {
+      logger.debug('PositionRefresh', `Skipping HL refresh for non-address userId: ${userId}`);
+      continue;
+    }
     try {
       const result = await callMCPTool('get_hl_live_positions', {
         walletAddress: userId,
@@ -62,6 +72,10 @@ async function refreshHyperliquidPositions(userIds: string[]): Promise<void> {
 
 async function refreshPolymarketPositions(userIds: string[]): Promise<void> {
   for (const userId of userIds) {
+    if (!isWalletAddress(userId)) {
+      logger.debug('PositionRefresh', `Skipping PM refresh for non-address userId: ${userId}`);
+      continue;
+    }
     try {
       const result = await callMCPTool('get_pm_live_positions', {
         walletAddress: userId,
@@ -102,6 +116,10 @@ async function refreshPolymarketPositions(userIds: string[]): Promise<void> {
 
 async function refreshAvantisPositions(userIds: string[]): Promise<void> {
   for (const userId of userIds) {
+    if (!isWalletAddress(userId)) {
+      logger.debug('PositionRefresh', `Skipping Avantis refresh for non-address userId: ${userId}`);
+      continue;
+    }
     try {
       const result = await callMCPTool('get_avantis_live_positions', {
         walletAddress: userId,
