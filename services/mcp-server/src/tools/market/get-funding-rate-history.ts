@@ -59,8 +59,8 @@ export async function executeGetFundingRateHistory(input: GetFundingRateHistoryI
   const third = Math.floor(rates.length / 3);
   const avgFirst = computeAvg(rates.slice(0, third));
   const avgLast  = computeAvg(rates.slice(-third));
-  const trend = avgLast > avgFirst * 1.1 ? 'rising'
-    : avgLast < avgFirst * 0.9 ? 'falling'
+  const trend = (avgLast !== null && avgFirst !== null)
+    ? (avgLast > avgFirst * 1.1 ? 'rising' : avgLast < avgFirst * 0.9 ? 'falling' : 'flat')
     : 'flat';
 
   return {
