@@ -68,10 +68,13 @@ export async function executeGetFundingRateHistory(input: GetFundingRateHistoryI
     symbol: symbol.toUpperCase(),
     hours_requested: hours,
     records_found: records.length,
+    // NOTE: Binance settles funding 3×/day (every 8h: 00:00, 08:00, 16:00 UTC).
+    // latest_predicted_rate is the premiumIndexKlines 1h close — the live predicted
+    // rate for the next settlement, NOT a settled/confirmed funding rate.
     history: records,
     stats: {
-      current:       latest.funding_rate,
-      current_annualized_pct: latest.annualized_rate,
+      latest_predicted_rate:            latest.funding_rate,
+      latest_predicted_annualized_pct:  latest.annualized_rate,
       avg_24h:       avg24h,
       avg_period:    computeAvg(rates),
       avg_7d:        avg7d,
@@ -90,9 +93,9 @@ function computeAvg(nums: number[]): number | null {
 export const getFundingRateHistoryTool = {
   name: 'get_funding_rate_history',
   description:
-    'Get hourly funding rate history for a coin from Binance Futures (8h granularity (settled), up to 30 days). ' +
-    'Returns a time-series of funding rates plus stats: current rate, 24h avg, 7d avg, min/max, trend direction. ' +
-    'Data is sourced from the binance-fetcher service (Singapore) writing to binance_funding_8h collection.',
+    'Get hourly funding rate history for a coin from Binance Futures (1h granularity, up to 30 days). ' +
+    'Returns a time-series of funding rates plus stats: latest_predicted_rate (live premium index close — NOT a settled rate; Binance settles every 8h), 24h avg, 7d avg, min/max, trend direction. ' +
+    'Data is sourced from the binance-fetcher service (Singapore) writing to binance_funding_1h collection.',
   inputSchema: getFundingRateHistorySchema,
   execute: executeGetFundingRateHistory,
 };

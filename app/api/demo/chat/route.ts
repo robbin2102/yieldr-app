@@ -315,6 +315,38 @@ const toolDefinitions: Anthropic.Tool[] = [
       required: ['symbol'],
     },
   },
+  {
+    name: 'manage_monitoring',
+    description: 'Create, list, update, pause, resume, or delete persistent monitoring tasks that run on a schedule. Each task calls MCP tools each cycle, extracts key fields, and uses an LLM evaluator to decide whether to alert. Use when a user asks to monitor market data, funding rates, RSI/indicators, trader activity, or position changes. ALWAYS call the relevant data tool(s) first to verify the exact field paths before creating a monitor.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        action: {
+          type: 'string' as const,
+          enum: ['create', 'list', 'get', 'update', 'pause', 'resume', 'delete'],
+          description: 'Operation to perform',
+        },
+        taskId: { type: 'string', description: 'Required for get/update/pause/resume/delete' },
+        task: { type: 'string', description: 'Short title, e.g. "ETH RSI oversold monitor"' },
+        monitorInstruction: { type: 'string', description: 'Detailed natural-language instruction for the evaluator LLM — what to watch, thresholds, severity. Be specific with numbers. The evaluator only sees the extracted fields + last 5 cycles + user positions.' },
+        tools: {
+          type: 'array' as const,
+          description: 'Tools to call each cycle (max 5). extractFields are dot-path strings into the tool response (e.g. "stats.avg_24h"). Keep minimal — each field adds to per-cycle token cost. Use [*] wildcard for arrays.',
+          items: {
+            type: 'object' as const,
+            properties: {
+              toolName: { type: 'string' },
+              toolParams: { type: 'object' },
+              extractFields: { type: 'array', items: { type: 'string' } },
+            },
+          },
+        },
+        intervalSeconds: { type: 'number', description: 'Check interval in seconds. Minimum 3600 (1 hour).' },
+        updates: { type: 'object', description: 'For action=update: fields to change (task, monitorInstruction, tools, intervalSeconds, status)' },
+      },
+      required: ['action'],
+    },
+  },
 ];
 
 // Claude native web search tool
@@ -358,6 +390,18 @@ function getToolStatusLabel(name: string, input: any): string {
       return `Fetching ${input.hours || 24}h funding rate history for ${input.symbol?.toUpperCase()}...`;
     case 'get_derivatives_history':
       return `Fetching ${input.hours || 24}h OI + L/S data for ${input.symbol?.toUpperCase()}...`;
+    case 'manage_monitoring': {
+      const actionLabels: Record<string, string> = {
+        create: 'Creating monitoring task...',
+        list:   'Loading your monitors...',
+        get:    'Loading monitor details...',
+        update: 'Updating monitor...',
+        pause:  'Pausing monitor...',
+        resume: 'Resuming monitor...',
+        delete: 'Deleting monitor...',
+      };
+      return actionLabels[input.action] || 'Managing monitor...';
+    }
     case 'web_search':
       return `Searching the web...`;
     default:
@@ -367,7 +411,7 @@ function getToolStatusLabel(name: string, input: any): string {
 
 // ─── Tool Execution ────────────────────────────────────────────────────────
 
-async function executeTool(name: string, input: any): Promise<string> {
+async function executeTool(name: string, input: any, wallet?: string): Promise<string> {
   console.log(`[chat] Executing tool: ${name}`, JSON.stringify(input).slice(0, 200));
   try {
     switch (name) {
@@ -913,6 +957,150 @@ async function executeTool(name: string, input: any): Promise<string> {
           },
         });
       }
+      case 'manage_monitoring': {
+        if (!wallet) return JSON.stringify({ error: 'No wallet in session — cannot manage monitors' });
+        await connectDB();
+        const db2 = mongoose.connection.db!;
+        const tasksCol = db2.collection('monitoring_tasks');
+        const { action, taskId, task, monitorInstruction, tools: monTools, intervalSeconds, updates } = input;
+
+        if (action === 'list') {
+          const docs = await tasksCol
+            .find({ userId: wallet.toLowerCase() }, { projection: { cycleHistory: 0 } })
+            .sort({ createdAt: -1 })
+            .toArray();
+          return JSON.stringify({
+            count: docs.length,
+            tasks: docs.map(d => ({
+              taskId: d._id.toString(),
+              agentId: d.agentId,
+              agentName: d.agentName,
+              task: d.task,
+              status: d.status,
+              intervalSeconds: d.intervalSeconds,
+              nextRunAt: d.nextRunAt,
+              lastRunAt: d.lastRunAt,
+              cycleCount: d.cycleCount,
+              alertCount: d.alertCount,
+              lastError: d.lastError,
+            })),
+          });
+        }
+
+        if (action === 'get') {
+          if (!taskId) return JSON.stringify({ error: 'taskId required for get' });
+          const { ObjectId } = await import('mongodb');
+          const doc = await tasksCol.findOne({ _id: new ObjectId(taskId), userId: wallet.toLowerCase() });
+          if (!doc) return JSON.stringify({ error: 'Task not found' });
+          return JSON.stringify({ ...doc, _id: doc._id.toString(), taskId: doc._id.toString() });
+        }
+
+        if (action === 'pause') {
+          if (!taskId) return JSON.stringify({ error: 'taskId required for pause' });
+          const { ObjectId } = await import('mongodb');
+          await tasksCol.updateOne(
+            { _id: new ObjectId(taskId), userId: wallet.toLowerCase() },
+            { $set: { status: 'paused', updatedAt: new Date() } }
+          );
+          return JSON.stringify({ ok: true, taskId, status: 'paused' });
+        }
+
+        if (action === 'resume') {
+          if (!taskId) return JSON.stringify({ error: 'taskId required for resume' });
+          const { ObjectId } = await import('mongodb');
+          const doc = await tasksCol.findOne({ _id: new ObjectId(taskId), userId: wallet.toLowerCase() });
+          if (!doc) return JSON.stringify({ error: 'Task not found' });
+          const nextRunAt = new Date(Date.now() + (doc.intervalSeconds || 3600) * 1000);
+          await tasksCol.updateOne(
+            { _id: new ObjectId(taskId) },
+            { $set: { status: 'active', nextRunAt, updatedAt: new Date() } }
+          );
+          return JSON.stringify({ ok: true, taskId, status: 'active', nextRunAt });
+        }
+
+        if (action === 'delete') {
+          if (!taskId) return JSON.stringify({ error: 'taskId required for delete' });
+          const { ObjectId } = await import('mongodb');
+          await tasksCol.deleteOne({ _id: new ObjectId(taskId), userId: wallet.toLowerCase() });
+          return JSON.stringify({ ok: true, taskId, deleted: true });
+        }
+
+        if (action === 'update') {
+          if (!taskId) return JSON.stringify({ error: 'taskId required for update' });
+          const { ObjectId } = await import('mongodb');
+          const allowed = ['task', 'monitorInstruction', 'tools', 'intervalSeconds', 'status'];
+          const patch: Record<string, any> = { updatedAt: new Date() };
+          for (const k of allowed) {
+            if (updates?.[k] !== undefined) patch[k] = updates[k];
+          }
+          if (patch.intervalSeconds) {
+            patch.nextRunAt = new Date(Date.now() + patch.intervalSeconds * 1000);
+          }
+          await tasksCol.updateOne({ _id: new ObjectId(taskId), userId: wallet.toLowerCase() }, { $set: patch });
+          return JSON.stringify({ ok: true, taskId, updated: Object.keys(patch) });
+        }
+
+        if (action === 'create') {
+          if (!task || !monitorInstruction || !monTools || !intervalSeconds) {
+            return JSON.stringify({ error: 'task, monitorInstruction, tools, and intervalSeconds are required for create' });
+          }
+          if (intervalSeconds < 3600) {
+            return JSON.stringify({ error: 'intervalSeconds must be at least 3600 (1 hour)' });
+          }
+          if (monTools.length > 5) {
+            return JSON.stringify({ error: 'Maximum 5 tools per monitor' });
+          }
+
+          // Check active monitor limit
+          const activeCount = await tasksCol.countDocuments({ userId: wallet.toLowerCase(), status: 'active' });
+          if (activeCount >= 10) {
+            return JSON.stringify({ error: 'Maximum 10 active monitors reached. Pause or delete an existing monitor first.' });
+          }
+
+          // Look up agent for agentId and agentName
+          const agent = await Agent.findOne({ ownerWallet: wallet.toLowerCase() });
+          const agentId = agent?.agentId || `agent-${wallet.slice(2, 8).toLowerCase()}`;
+          const agentName = agent?.name || 'Yieldr Agent';
+
+          const now = new Date();
+          const doc = {
+            userId:             wallet.toLowerCase(),
+            agentId,
+            agentName,
+            task,
+            monitorInstruction,
+            tools:              monTools,
+            intervalSeconds,
+            status:             'active' as const,
+            nextRunAt:          new Date(Date.now() + intervalSeconds * 1000),
+            lastRunAt:          null,
+            lastAlertAt:        null,
+            alertCount:         0,
+            cycleCount:         0,
+            errorCount:         0,
+            lastError:          null,
+            cycleHistory:       [],
+            createdAt:          now,
+            updatedAt:          now,
+          };
+
+          const result = await tasksCol.insertOne(doc);
+          return JSON.stringify({
+            ok: true,
+            taskId: result.insertedId.toString(),
+            agentId,
+            agentName,
+            task,
+            status: 'active',
+            nextRunAt: doc.nextRunAt,
+            intervalSeconds,
+            message: `Monitor created. First cycle runs in ${Math.round(intervalSeconds / 60)} minutes. First cycle records baseline only — alerts start from cycle 2.`,
+          });
+        }
+
+        return JSON.stringify({ error: `Unknown action: ${action}` });
+      }
+
       default:
         return JSON.stringify({ error: `Unknown tool: ${name}` });
     }
@@ -1118,19 +1306,86 @@ If you catch yourself about to use any of these, rephrase immediately.
 
 ---
 
+## 🔔 Monitoring
+
+You can create persistent monitoring tasks that run on a schedule. When a user asks to monitor something, follow this flow:
+
+### Step 1: Understand What to Monitor
+Ask clarifying questions. Don't assume. Examples:
+• "Which indicator matters most — RSI, funding rate, OI change, or something else?"
+• "What threshold should trigger the alert?"
+• "How often should I check — every hour, every 4 hours?"
+
+### Step 2: Call the Relevant Tool(s) to See the Data
+ALWAYS call the relevant tool(s) first to verify exact field paths before structuring the task.
+This lets you confirm dot-paths for extractFields and show the user current values.
+
+### Step 3: Structure the Task
+Based on the conversation and tool response, build:
+• task: short title
+• monitorInstruction: specific, number-anchored instruction for the evaluator. Be explicit about thresholds and severity. The evaluator ONLY sees the extracted fields + last 5 cycles + user positions.
+• tools: which tools to call each cycle (max 5), with toolName, toolParams, and extractFields (dot-paths, keep minimal)
+• intervalSeconds: minimum 3600
+
+### Step 4: Confirm with the User
+Show: what's monitored, which fields, what triggers alerts, interval, current values.
+
+### Step 5: Create
+Call manage_monitoring with action "create" after user confirms.
+
+### Correct Field Paths by Tool
+
+**get_funding_rate_history** (symbol, hours):
+• stats.latest_predicted_rate — current predicted rate (premiumIndexKlines 1h close, NOT a settled rate)
+• stats.latest_predicted_annualized_pct — annualized version
+• stats.avg_24h — 24h average
+• stats.avg_7d — 7d average
+• stats.trend — "rising" | "flat" | "falling"
+• stats.min_period, stats.max_period
+
+**get_derivatives_history** (symbol, hours, include?):
+• stats.open_interest.current_usdt / change_4h_pct / change_24h_pct
+• stats.long_short_global.current.long_pct / .short_pct / .ratio / avg_long_pct / bias
+• stats.long_short_top_accounts.* (same structure)
+• stats.long_short_top_positions.* (same structure)
+• latest.open_interest_usdt / long_short_global / long_short_top_accounts / long_short_top_positions
+
+**get_market_snapshot** (symbol, fields: "indicators"|"derivatives"|"all"):
+• indicators.rsi_14 / macd / bbands / ema_8 / ema_21 / adx / stoch_rsi / atr_14
+• derivatives.funding_rate.current / annualized
+• derivatives.open_interest.total_usd / change_4h_pct / change_24h_pct
+• derivatives.long_short_ratio.global_accounts / top_accounts / top_positions
+• computed.trend_score / momentum_score / volatility_regime
+
+**get_top_perp_traders** (protocol, sortBy, limit):
+• traders[*].wallet / pnl.month / winRate / openPositions / accountValue
+
+**get_hl_live_positions_batch** (walletAddresses: [], limit):
+• wallets[*].wallet / wallets[*].positions[*].coin / .side / .size / .unrealizedPnl / .leverage
+• Note: set walletAddresses: [] for tool chaining — scheduler fills it from the previous tool's output
+
+### Constraints
+• Minimum interval: 3600 seconds (1 hour)
+• Max 5 tools per task
+• Max 10 active monitors per user
+• Keep extractFields minimal — each field adds per-cycle token cost
+• First cycle always records baseline, never alerts
+
+### When You Can't Monitor Something
+If the user asks for news, web data, or non-indexed data: be honest ("I don't have a tool for that yet"), suggest the closest achievable monitor, and explain we'll update tooling soon.
+
+---
+
 ## 🚧 Features NOT Available in Demo — NEVER OFFER
 
 These features do NOT exist yet. NEVER offer or suggest them:
-• Monitoring alerts / price alerts
 • Telegram or Discord notifications
 • Automated trading or trade execution
 • Portfolio rebalancing
-• Setting up alerts for trader activity
 • SMS or email notifications
-• Watchlists with notifications
 • Any form of automated action
 
-If a user asks about these, say: "That's coming in V1! For now, I can show you live data and analysis whenever you ask."
+If a user asks about these, say: "That's coming in V1! For now, I can monitor market conditions and alert you in the chat."
 
 ---
 
@@ -1212,6 +1467,7 @@ You have access to live market data for 89 tracked coins on Binance Futures, ref
 • User asks about open interest trend, OI change, positioning, long/short ratios over time → call get_derivatives_history
 • Doing a full coin analysis or trade setup → call get_market_snapshot AND get_derivatives_history together for complete picture
 • NEVER fabricate indicator values (RSI, funding rate, EMA, OI, etc.). Always call the tool first.
+• User wants to monitor something persistently → follow the Monitoring flow (see above), call data tools first, then manage_monitoring
 
 ### Key signals to highlight when analyzing a coin
 • RSI > 70 or < 30 → overbought / oversold
@@ -1512,7 +1768,7 @@ export async function POST(request: NextRequest) {
                   // Track tool call
                   allToolCalls.push({ name: currentToolName });
                   // Execute the tool
-                  const toolResult = await executeTool(currentToolName, parsedInput);
+                  const toolResult = await executeTool(currentToolName, parsedInput, walletLower);
                   console.log(`[TOKENS] Tool result for "${currentToolName}": ${estimateTokens(toolResult)} est. tokens (${toolResult.length} chars)`);
                   toolResults.push({
                     role: 'user',
