@@ -83,7 +83,7 @@ No alert: {"alert":false,"summary":"<10-15 word status>"}`;
 export async function callEvaluator(prompt: string): Promise<EvaluationResult> {
   try {
     const response = await anthropic.messages.create({
-      model: 'claude-sonnet-4-5-20250514',
+      model: 'claude-haiku-4-5-20251001',
       max_tokens: 200,
       messages: [{ role: 'user', content: prompt }],
     });
