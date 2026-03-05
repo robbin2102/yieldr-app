@@ -1,6 +1,6 @@
 /**
  * get_funding_rate_history Tool
- * Query hourly funding rate history for a coin from the binance_funding_1h collection
+ * Query 8h settled funding rate history for a coin from the binance_funding_8h collection
  * (populated by the binance-fetcher Singapore service).
  */
 
@@ -24,7 +24,7 @@ export type GetFundingRateHistoryInput = z.infer<typeof getFundingRateHistorySch
 export async function executeGetFundingRateHistory(input: GetFundingRateHistoryInput) {
   const { symbol, hours = 24 } = input;
   const db = await getDB();
-  const col = db.collection(COLLECTIONS.BINANCE_FUNDING_1H);
+  const col = db.collection(COLLECTIONS.BINANCE_FUNDING_8H);
 
   const since = new Date(Date.now() - hours * 60 * 60 * 1000);
 
@@ -47,9 +47,9 @@ export async function executeGetFundingRateHistory(input: GetFundingRateHistoryI
   const latest = records[records.length - 1];
 
   // Compute stats
-  const avg24h = computeAvg(records.slice(-24).map(r => r.funding_rate));
-  const avg7d  = rates.length >= 168
-    ? computeAvg(records.slice(-168).map(r => r.funding_rate))
+  const avg24h = computeAvg(records.slice(-3).map(r => r.funding_rate));  // 3 settlements in 24h
+  const avg7d  = rates.length >= 21
+    ? computeAvg(records.slice(-21).map(r => r.funding_rate))  // 21 settlements in 7d
     : computeAvg(rates);
 
   const min = Math.min(...rates);

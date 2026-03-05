@@ -1,7 +1,7 @@
 import { logger } from '../utils/logger';
 import { TaapiCoinData } from '../fetchers/taapi';
 import { CoinAggregateData, CoinPerCoinData } from '../fetchers/coinglass';
-import { BinanceCandleData } from '../fetchers/binance';
+import { OhlcvData, getLatestOhlcv } from '../fetchers/ohlcv';
 import { getLatestBinanceFunding, getLatestBinanceDerivatives } from '../fetchers/binance-db';
 import MarketSnapshot from '../models/MarketSnapshot';
 import LiquidationLevels from '../models/LiquidationLevels';
@@ -15,12 +15,15 @@ interface BuildSnapshotArgs {
   aggregate: CoinAggregateData;
   perCoin?: CoinPerCoinData;
   coinbasePremium?: { btc: number | null; eth: number | null };
-  binance?: BinanceCandleData;
 }
 
 export async function buildAndSaveSnapshot(args: BuildSnapshotArgs): Promise<{ _id: string; snapshot: Record<string, unknown> }> {
-  const { symbol, timestamp, tier, taapi, aggregate, perCoin, coinbasePremium, binance } = args;
+  const { symbol, timestamp, tier, taapi, aggregate, perCoin, coinbasePremium } = args;
   const start = Date.now();
+
+  // OHLCV: read latest 15m candle from ohlcv_15m collection (written by ohlcv cron at :03/:18/:33/:48)
+  // Binance /api/v3/klines is no longer called — replaced by TAAPI candle via ohlcv fetcher.
+  const ohlcv = await getLatestOhlcv(symbol);
 
   // Load Binance derivatives data (written by binance-fetcher service, Singapore)
   // These replace the CoinGlass per-coin endpoints for funding rate, OI, and L/S ratios.
@@ -31,19 +34,19 @@ export async function buildAndSaveSnapshot(args: BuildSnapshotArgs): Promise<{ _
 
   const indicators = taapi.indicators as any;
 
-  // Price: Binance OHLCV only — no fallback to VWAP (that would corrupt computed fields)
-  const closePrice: number | null = binance?.close ?? null;
+  // Price: from ohlcv_15m collection — no fallback to VWAP (that would corrupt computed fields)
+  const closePrice: number | null = ohlcv.close;
 
   const price = {
-    open:   binance?.open   ?? null,
-    high:   binance?.high   ?? null,
-    low:    binance?.low    ?? null,
+    open:   ohlcv.open,
+    high:   ohlcv.high,
+    low:    ohlcv.low,
     close:  closePrice,
-    volume: binance?.volume ?? null,
+    volume: ohlcv.volume,
   };
 
-  // Pivot points: prefer TAAPI result, fall back to computing from Binance daily candle
-  const pivotPoints = computePivotPoints(indicators?.pivot_points, binance);
+  // Pivot points: prefer TAAPI result, fall back to computing from 24h OHLCV high/low
+  const pivotPoints = computePivotPoints(indicators?.pivot_points, ohlcv);
 
   const derivatives = buildDerivatives(aggregate, perCoin, coinbasePremium, symbol, binanceFunding, binanceDerivatives);
 
@@ -118,22 +121,22 @@ export async function buildAndSaveSnapshot(args: BuildSnapshotArgs): Promise<{ _
 
 /**
  * Returns TAAPI pivot points if populated, otherwise computes classic floor-trader
- * pivots from the previous day's Binance OHLC.
+ * pivots from the 24h high/low/close derived from the ohlcv_15m collection.
  *  PP = (H+L+C)/3
  *  R1 = 2*PP-L,  R2 = PP+(H-L),  R3 = H+2*(PP-L)
  *  S1 = 2*PP-H,  S2 = PP-(H-L),  S3 = L-2*(H-PP)
  */
 function computePivotPoints(
   taapiPivots: any,
-  binance: BinanceCandleData | undefined,
+  ohlcv: OhlcvData,
 ): Record<string, number | null> {
   // Use TAAPI if it returned real values
   if (taapiPivots?.pp != null) return taapiPivots;
 
-  // Fall back to Binance daily OHLC
-  const H = binance?.daily_high  ?? null;
-  const L = binance?.daily_low   ?? null;
-  const C = binance?.daily_close ?? null;
+  // Fall back to 24h high/low from ohlcv_15m
+  const H = ohlcv.daily_high  ?? null;
+  const L = ohlcv.daily_low   ?? null;
+  const C = ohlcv.daily_close ?? null;
 
   if (H == null || L == null || C == null) {
     return { pp: null, r1: null, r2: null, r3: null, s1: null, s2: null, s3: null };
@@ -216,13 +219,9 @@ function buildDerivatives(
       change_24h_pct: oiChange24h,
     },
     funding_rate: {
-      current:      fundingCurrent,
-      predicted:    null,
-      oi_weighted:  null,   // removed: was from Hobby-locked CoinGlass endpoint
-      vol_weighted: null,
-      annualized:   fundingAnnualized,
+      current:    fundingCurrent,
+      annualized: fundingAnnualized,
     },
-    funding_arbitrage: [],
     long_short_ratio: {
       global_accounts: lsGlobal,
       top_accounts:    lsTopAcct,
@@ -255,19 +254,15 @@ function buildDerivatives(
 
 /**
  * Derives market_structure, ma_crossovers, and alerts from current snapshot data.
- * Note: divergences, fvg, order_blocks require multi-candle history (future work).
  */
 function computeSnapshotFields(
   indicators: any,
   derivatives: any,
   closePrice: number | null,
 ): {
-  ma_crossovers:   unknown[];
-  divergences:     unknown[];
+  ma_crossovers:    unknown[];
   market_structure: Record<string, unknown>;
-  fvg:             unknown[];
-  order_blocks:    unknown[];
-  alerts:          unknown[];
+  alerts:           unknown[];
 } {
   const ema8   = indicators?.ema_8   ?? null;
   const ema21  = indicators?.ema_21  ?? null;
@@ -381,10 +376,7 @@ function computeSnapshotFields(
 
   return {
     ma_crossovers,
-    divergences:     [],   // requires multi-candle history
     market_structure,
-    fvg:             [],   // requires multi-candle history
-    order_blocks:    [],   // requires multi-candle history
     alerts,
   };
 }

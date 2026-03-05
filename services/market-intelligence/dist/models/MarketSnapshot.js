@@ -69,8 +69,7 @@ const MarketSnapshotSchema = new mongoose_1.Schema({
     candlestick_patterns: [{ pattern: String, value: Number, timeframe: { type: String, default: '1h' }, _id: false }],
     derivatives: {
         open_interest: { total_usd: Number, change_4h_pct: Number, change_24h_pct: Number },
-        funding_rate: { current: Number, predicted: Number, oi_weighted: Number, vol_weighted: Number, annualized: Number },
-        funding_arbitrage: [{ long_exchange: String, short_exchange: String, spread: Number, _id: false }],
+        funding_rate: { current: Number, annualized: Number },
         long_short_ratio: {
             global_accounts: { long: Number, short: Number, ratio: Number },
             top_accounts: { long: Number, short: Number, ratio: Number },
@@ -87,10 +86,7 @@ const MarketSnapshotSchema = new mongoose_1.Schema({
     },
     computed: {
         ma_crossovers: { type: [mongoose_1.Schema.Types.Mixed], default: [] },
-        divergences: { type: [mongoose_1.Schema.Types.Mixed], default: [] },
         market_structure: { type: mongoose_1.Schema.Types.Mixed, default: {} },
-        fvg: { type: [mongoose_1.Schema.Types.Mixed], default: [] },
-        order_blocks: { type: [mongoose_1.Schema.Types.Mixed], default: [] },
         alerts: [{
                 type: { type: String },
                 severity: { type: String, enum: ['high', 'medium', 'low'] },
