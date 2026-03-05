@@ -20,7 +20,7 @@ const MonitoringTaskLogSchema = new Schema<IMonitoringTaskLog>({
   alertId: { type: Schema.Types.ObjectId, ref: 'MonitoringAlert' },
   summary: { type: String, default: '' },
   error: { type: String },
-}, { _id: true });
+}, { _id: true, collection: 'monitoring_task_logs' });
 
 MonitoringTaskLogSchema.index({ taskId: 1, timestamp: -1 });
 MonitoringTaskLogSchema.index({ agentId: 1, timestamp: -1 });

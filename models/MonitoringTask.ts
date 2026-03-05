@@ -76,7 +76,7 @@ const MonitoringTaskSchema = new Schema<IMonitoringTask>({
   cycleHistory: { type: [CycleEntrySchema], default: [] },
 
   expiresAt: { type: Date },
-}, { timestamps: true });
+}, { timestamps: true, collection: 'monitoring_tasks' });
 
 MonitoringTaskSchema.index({ userId: 1, status: 1 });
 MonitoringTaskSchema.index({ status: 1, nextRunAt: 1 });
