@@ -98,7 +98,7 @@ export default function ChatPage() {
 
   const [agentName, setAgentName] = useState('AlphaHunter');
   const [panelCollapsed, setPanelCollapsed] = useState(false);
-  const [activeTab, setActiveTab] = useState<'positions' | 'tokens' | 'trades' | 'markets'>('positions');
+  const [activeTab, setActiveTab] = useState<'positions' | 'tokens'>('positions');
 
   // Credits state
   const [creditsUsed, setCreditsUsed] = useState(0);
@@ -114,6 +114,14 @@ export default function ChatPage() {
   const [tokens, setTokens] = useState<TokenBalance[]>([]);
   const [tokensLoading, setTokensLoading] = useState(false);
   const [tokensTotalUsd, setTokensTotalUsd] = useState(0);
+
+  // Monitoring state
+  const [agentId, setAgentId] = useState<string | null>(null);
+  const [agentTasks, setAgentTasks] = useState<any[]>([]);
+  const [agentAlerts, setAgentAlerts] = useState<any[]>([]);
+  const [agentLogs, setAgentLogs] = useState<any[]>([]);
+  const [expandedMonitors, setExpandedMonitors] = useState<Set<number>>(new Set([0]));
+  const [tickTime, setTickTime] = useState(new Date());
 
   // Chat
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -257,17 +265,28 @@ export default function ChatPage() {
       })
       .catch(() => {});
 
-    // Fetch agent (for followed traders + cached tokens)
+    // Fetch agent (for followed traders + cached tokens + monitoring)
     setTokensLoading(true);
     fetch(`/api/demo/agents?wallet=${wallet}`)
       .then(r => r.json())
-      .then(data => {
+      .then(async data => {
         if (data.success && data.agent) {
           setFollowedTraders(data.agent.followedTraders || []);
           if (data.agent.name) setAgentName(data.agent.name);
           // Use cached tokens from agent (fetched once during onboarding)
           setTokens(data.agent.cachedTokenBalances || []);
           setTokensTotalUsd(data.agent.cachedTokensTotalUsd || 0);
+          // Fetch agent detail with tasks, logs, alerts
+          const aid = data.agent.agentId;
+          if (aid) {
+            setAgentId(aid);
+            try {
+              const detail = await fetch(`/api/demo/agents/${aid}`).then(r => r.json());
+              if (detail.tasks) setAgentTasks(detail.tasks);
+              if (detail.alerts) setAgentAlerts(detail.alerts);
+              if (detail.logs) setAgentLogs(detail.logs);
+            } catch {}
+          }
         }
       })
       .catch(() => {})
@@ -451,6 +470,12 @@ export default function ChatPage() {
     return () => clearInterval(interval);
   }, [isStreaming]);
 
+  // Tick every second for countdown timers
+  useEffect(() => {
+    const interval = setInterval(() => setTickTime(new Date()), 1000);
+    return () => clearInterval(interval);
+  }, []);
+
   const handleSend = useCallback(async () => {
     const text = inputValue.trim();
     if (!text || isStreaming || creditsExceeded) return;
@@ -553,6 +578,36 @@ export default function ChatPage() {
 
   const displayTraders = pickDisplayTraders(followedTraders);
 
+  // Monitoring helpers
+  function getPositionMonitors(pair: string) {
+    const coin = (pair || '').split('/')[0].toUpperCase();
+    if (!coin) return agentTasks;
+    return agentTasks.filter(t =>
+      (t.task || '').toUpperCase().includes(coin) ||
+      (t.monitorInstruction || '').toUpperCase().includes(coin)
+    );
+  }
+
+  function formatTimeLeft(nextRunAt: string | null): string {
+    if (!nextRunAt) return '--';
+    const diff = new Date(nextRunAt).getTime() - tickTime.getTime();
+    if (diff <= 0) return 'running...';
+    const h = Math.floor(diff / 3600000);
+    const m = Math.floor((diff % 3600000) / 60000);
+    const s = Math.floor((diff % 60000) / 1000);
+    if (h > 0) return `${h}h ${m}m`;
+    if (m > 0) return `${m}m ${s}s`;
+    return `${s}s`;
+  }
+
+  function getLastLog(taskId: string) {
+    return agentLogs.find(l => l.taskId === taskId) || null;
+  }
+
+  function getTaskAlerts(taskId: string) {
+    return agentAlerts.filter(a => a.taskId === taskId);
+  }
+
   // YLDR tokenomics: $9M FDV, 210M supply => price = 9000000/210000000 = ~$0.04286 per YLDR
   const yldrPrice = 9000000 / 210000000;
   const yldrTokens = Math.floor(yldrInput / yldrPrice);
@@ -622,6 +677,16 @@ export default function ChatPage() {
               borderRadius: 4,
               background: 'rgba(0, 200, 5, 0.08)',
             }}>Home</a>
+            <a href="/demo/agents" style={{
+              color: '#6E6E6E',
+              textDecoration: 'none',
+              fontWeight: 500,
+              fontSize: '0.8rem',
+              padding: '0.4rem 0.6rem',
+              borderRadius: 4,
+              background: 'transparent',
+              transition: 'color 0.15s',
+            }}>Agents</a>
           </div>
         </div>
         <button
@@ -707,17 +772,14 @@ export default function ChatPage() {
               </>
             )}
           </div>
-          <a
-            href="https://yieldr.org"
-            target="_blank"
-            rel="noopener noreferrer"
+          <button
+            onClick={() => setShowModal(true)}
             style={{
               fontSize: '0.65rem', fontWeight: 600,
               padding: '0.35rem 0.5rem',
               background: '#00C805', border: 'none', borderRadius: 4,
               color: '#000', cursor: 'pointer',
-              textDecoration: 'none',
-            }}>+ Get YLDR</a>
+            }}>+ Get YLDR</button>
         </div>
       </div>
 
@@ -725,7 +787,7 @@ export default function ChatPage() {
       <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
         {/* LEFT PANEL */}
         <div style={{
-          width: panelCollapsed ? 0 : 300,
+          width: panelCollapsed ? 0 : 320,
           background: '#0A0A0A',
           borderRight: '1px solid #1E1E1E',
           display: 'flex',
@@ -781,9 +843,9 @@ export default function ChatPage() {
             padding: '0 0.5rem',
           }}>
             <div style={{ display: 'flex', flex: 1 }}>
-              {(['positions', 'tokens', 'trades', 'markets'] as const).map(tab => (
+              {(['positions', 'tokens'] as const).map(tab => (
                 <button key={tab} onClick={() => setActiveTab(tab)} style={{
-                  padding: '0.5rem',
+                  padding: '0.5rem 0.75rem',
                   fontSize: '0.7rem',
                   fontWeight: 500,
                   color: activeTab === tab ? '#00C805' : '#6E6E6E',
@@ -877,6 +939,134 @@ export default function ChatPage() {
                               {isPositive ? '+' : ''}{roi.toFixed(1)}%
                             </span>
                           </div>
+
+                          {/* MONITORING PANEL */}
+                          {(() => {
+                            const monitors = getPositionMonitors(pos.pair || '');
+                            const isExpanded = expandedMonitors.has(i);
+                            if (monitors.length === 0) return null;
+                            return (
+                              <div style={{ marginTop: '0.4rem', borderTop: '1px solid #1E1E1E', paddingTop: '0.35rem' }}>
+                                {/* Header row - clickable to expand/collapse */}
+                                <div
+                                  onClick={() => {
+                                    setExpandedMonitors(prev => {
+                                      const next = new Set(prev);
+                                      if (next.has(i)) next.delete(i); else next.add(i);
+                                      return next;
+                                    });
+                                  }}
+                                  style={{
+                                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                                    cursor: 'pointer',
+                                  }}
+                                >
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                                    <span style={{ color: '#00C805', fontSize: '0.55rem' }}>●</span>
+                                    <span style={{ fontSize: '0.55rem', fontWeight: 700, color: '#00C805', letterSpacing: '0.04em', textTransform: 'uppercase' }}>
+                                      Monitoring
+                                    </span>
+                                    <span style={{
+                                      fontSize: '0.45rem', fontWeight: 700,
+                                      padding: '0.1rem 0.25rem',
+                                      background: 'rgba(0, 200, 5, 0.15)',
+                                      color: '#00C805', borderRadius: 2,
+                                    }}>{monitors.length}</span>
+                                  </div>
+                                  <span style={{ fontSize: '0.55rem', color: '#6E6E6E' }}>{isExpanded ? '▲' : '▼'}</span>
+                                </div>
+
+                                {/* Expanded tasks */}
+                                {isExpanded && monitors.map((task: any) => {
+                                  const lastLog = getLastLog(task.id);
+                                  const taskAlerts = getTaskAlerts(task.id);
+                                  const latestAlert = taskAlerts[0] || null;
+                                  const severityColor = latestAlert?.severity === 'critical' ? '#FF4757' : latestAlert?.severity === 'warning' ? '#FFD000' : '#0088FF';
+
+                                  return (
+                                    <div key={task.id} style={{
+                                      marginTop: '0.35rem',
+                                      background: '#0A0A0A',
+                                      border: '1px solid #1E1E1E',
+                                      borderLeft: `2px solid ${latestAlert ? severityColor : '#00C805'}`,
+                                      borderRadius: 4,
+                                      padding: '0.4rem 0.45rem',
+                                    }}>
+                                      {/* Task name + status */}
+                                      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '0.3rem', marginBottom: '0.25rem' }}>
+                                        <span style={{ fontSize: '0.6rem', fontWeight: 600, color: '#E0E0E0', lineHeight: 1.3, flex: 1 }}>
+                                          {task.task}
+                                        </span>
+                                        <span style={{
+                                          fontSize: '0.45rem', fontWeight: 700, flexShrink: 0,
+                                          padding: '0.1rem 0.25rem', borderRadius: 2,
+                                          background: task.status === 'active' ? 'rgba(0, 200, 5, 0.15)' : '#1A1A1A',
+                                          color: task.status === 'active' ? '#00C805' : '#6E6E6E',
+                                          textTransform: 'uppercase',
+                                        }}>{task.status}</span>
+                                      </div>
+
+                                      {/* Timer row */}
+                                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.2rem' }}>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                                          <span style={{ fontSize: '0.5rem', color: '#6E6E6E' }}>Next cycle</span>
+                                          <span style={{
+                                            fontFamily: "'JetBrains Mono', monospace",
+                                            fontSize: '0.55rem', fontWeight: 700, color: '#FFD000',
+                                          }}>{formatTimeLeft(task.nextRunAt)}</span>
+                                        </div>
+                                        <span style={{ fontSize: '0.5rem', color: '#6E6E6E', fontFamily: "'JetBrains Mono', monospace" }}>
+                                          {task.cycleCount} cycles · {task.alertCount} alerts
+                                        </span>
+                                      </div>
+
+                                      {/* Last log summary */}
+                                      {lastLog ? (
+                                        <div style={{
+                                          fontSize: '0.55rem', color: '#9E9E9E',
+                                          lineHeight: 1.4,
+                                          background: '#111111', borderRadius: 3,
+                                          padding: '0.25rem 0.3rem',
+                                          marginBottom: latestAlert ? '0.25rem' : 0,
+                                          overflow: 'hidden',
+                                          display: '-webkit-box',
+                                          WebkitLineClamp: 2,
+                                          WebkitBoxOrient: 'vertical' as any,
+                                        }}>
+                                          {lastLog.summary}
+                                        </div>
+                                      ) : (
+                                        <div style={{ fontSize: '0.5rem', color: '#6E6E6E', fontStyle: 'italic' }}>
+                                          Awaiting first cycle...
+                                        </div>
+                                      )}
+
+                                      {/* Latest alert */}
+                                      {latestAlert && (
+                                        <div style={{
+                                          marginTop: '0.25rem',
+                                          padding: '0.25rem 0.3rem',
+                                          background: `rgba(${latestAlert.severity === 'critical' ? '255,71,87' : latestAlert.severity === 'warning' ? '255,208,0' : '0,136,255'}, 0.08)`,
+                                          border: `1px solid ${severityColor}33`,
+                                          borderRadius: 3,
+                                        }}>
+                                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', marginBottom: '0.1rem' }}>
+                                            <span style={{ fontSize: '0.45rem', fontWeight: 700, color: severityColor, textTransform: 'uppercase' }}>
+                                              {latestAlert.severity}
+                                            </span>
+                                            <span style={{ fontSize: '0.5rem', fontWeight: 600, color: '#E0E0E0' }}>{latestAlert.title}</span>
+                                          </div>
+                                          <div style={{ fontSize: '0.5rem', color: '#9E9E9E', lineHeight: 1.3 }}>
+                                            {latestAlert.message?.slice(0, 100)}{latestAlert.message?.length > 100 ? '...' : ''}
+                                          </div>
+                                        </div>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            );
+                          })()}
                         </div>
                       );
                     })}
@@ -945,336 +1135,117 @@ export default function ChatPage() {
                   </div>
                 </div>
 
-                {/* Agent Following Section */}
-                <div style={{
-                  padding: '0.4rem 0.75rem',
-                  background: '#111111',
-                  borderTop: '1px solid #1E1E1E',
-                  borderBottom: '1px solid #1E1E1E',
-                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                }}>
-                  <span style={{
-                    fontSize: '0.6rem', fontWeight: 600, color: '#6E6E6E',
-                    textTransform: 'uppercase', letterSpacing: '0.05em',
-                  }}>Agent Following</span>
-                  <span style={{ fontSize: '0.6rem', color: '#6E6E6E' }}>
-                    {displayTraders.length}
-                  </span>
-                </div>
-                <div style={{ padding: '0.5rem' }}>
-                  {displayTraders.length === 0 ? (
-                    <div style={{ fontSize: '0.7rem', color: '#6E6E6E', textAlign: 'center', padding: '0.5rem 0' }}>
-                      No traders followed yet
-                    </div>
-                  ) : displayTraders.map((trader, i) => {
-                    const wrDisplay = trader.winRate <= 1 ? (trader.winRate * 100).toFixed(0) : trader.winRate.toFixed(0);
-                    return (
-                      <div
-                        key={i}
-                        style={{
-                          background: '#111111',
-                          border: `1px solid ${hoveredTrader === trader.wallet ? '#00C805' : '#1E1E1E'}`,
-                          borderRadius: 4,
-                          padding: '0.4rem 0.5rem',
-                          marginBottom: '0.3rem',
-                          display: 'flex', alignItems: 'center', gap: '0.4rem',
-                          cursor: 'pointer',
-                          position: 'relative',
-                        }}
-                        onMouseEnter={(e) => {
-                          const rect = e.currentTarget.getBoundingClientRect();
-                          setTooltipPos({ top: rect.top, left: rect.right + 8 });
-                          setHoveredTrader(trader.wallet);
-                        }}
-                        onMouseLeave={() => setHoveredTrader(null)}
-                      >
-                        <img
-                          src={`https://i.pravatar.cc/150?img=${AVATAR_IMGS[i % AVATAR_IMGS.length]}`}
-                          alt=""
-                          style={{
-                            width: 24, height: 24, borderRadius: '50%',
-                            border: '2px solid #00C805',
-                          }}
-                        />
-                        <div style={{ flex: 1 }}>
-                          <div style={{ fontWeight: 600, fontSize: '0.75rem' }}>
-                            {trader.username || `${trader.wallet.slice(0, 8)}...`}
-                          </div>
-                          <div style={{ fontSize: '0.55rem', color: '#6E6E6E' }}>
-                            {trader.platform.charAt(0).toUpperCase() + trader.platform.slice(1)} · {wrDisplay}% win
-                          </div>
-                        </div>
-                        <span style={{
-                          fontFamily: "'JetBrains Mono', monospace",
-                          fontSize: '0.7rem', color: '#00C805', fontWeight: 600,
-                        }}>
-                          +${trader.pnl30d >= 1000000
-                            ? `${(trader.pnl30d / 1000000).toFixed(1)}M`
-                            : trader.pnl30d >= 1000
-                            ? `${(trader.pnl30d / 1000).toFixed(1)}K`
-                            : trader.pnl30d.toFixed(0)}
-                        </span>
-
-                        {/* Hover tooltip */}
-                        {hoveredTrader === trader.wallet && (
-                          <div style={{
-                            position: 'fixed',
-                            left: tooltipPos.left,
-                            top: tooltipPos.top,
-                            width: 200,
-                            background: '#111111',
-                            border: '1px solid #00C805',
-                            borderRadius: 6,
-                            padding: '0.6rem',
-                            zIndex: 1000,
-                            boxShadow: '0 8px 24px rgba(0,0,0,0.6)',
-                          }}>
-                            <div style={{ fontSize: '0.8rem', fontWeight: 700, marginBottom: '0.4rem' }}>
-                              {trader.username || `${trader.wallet.slice(0, 10)}...`}
-                            </div>
-                            <div style={{ fontSize: '0.6rem', color: '#6E6E6E', marginBottom: trader.matchReason ? '0.25rem' : '0.5rem', textTransform: 'capitalize' }}>
-                              {trader.platform}
-                            </div>
-                            {trader.matchReason && (
-                              <div style={{ fontSize: '0.55rem', color: '#00C805', marginBottom: '0.5rem', fontStyle: 'italic' }}>
-                                {trader.matchReason}
-                              </div>
-                            )}
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-                              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.65rem' }}>
-                                <span style={{ color: '#6E6E6E' }}>30d PnL</span>
-                                <span style={{ fontFamily: "'JetBrains Mono', monospace", color: '#00C805', fontWeight: 600 }}>
-                                  +${trader.pnl30d.toLocaleString(undefined, { maximumFractionDigits: 0 })}
-                                </span>
-                              </div>
-                              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.65rem' }}>
-                                <span style={{ color: '#6E6E6E' }}>Win Rate</span>
-                                <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 600 }}>
-                                  {wrDisplay}%
-                                </span>
-                              </div>
-                              {trader.roi30d !== undefined && (
-                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.65rem' }}>
-                                  <span style={{ color: '#6E6E6E' }}>30d ROI</span>
-                                  <span style={{ fontFamily: "'JetBrains Mono', monospace", color: '#00C805', fontWeight: 600 }}>
-                                    {trader.roi30d.toFixed(1)}%
-                                  </span>
-                                </div>
-                              )}
-                              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.65rem' }}>
-                                <span style={{ color: '#6E6E6E' }}>Positions</span>
-                                <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 600 }}>
-                                  {trader.totalPositions}
-                                </span>
-                              </div>
-                              {trader.totalAUM !== undefined && trader.totalAUM > 0 && (
-                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.65rem' }}>
-                                  <span style={{ color: '#6E6E6E' }}>AUM</span>
-                                  <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 600 }}>
-                                    ${trader.totalAUM.toLocaleString(undefined, { maximumFractionDigits: 0 })}
-                                  </span>
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-
-                {/* AGENT TRAINING SECTION */}
-                <div style={{
-                  padding: '0.4rem 0.75rem',
-                  background: '#111111',
-                  borderTop: '1px solid #1E1E1E',
-                  borderBottom: '1px solid #1E1E1E',
-                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                }}>
-                  <span style={{
-                    fontSize: '0.6rem', fontWeight: 600, color: '#6E6E6E',
-                    textTransform: 'uppercase', letterSpacing: '0.05em',
-                  }}>Agent Training</span>
-                </div>
-                <div style={{ padding: '0.5rem' }}>
+                {/* AGENT FOLLOWING — compact */}
+                <div style={{ borderTop: '1px solid #1E1E1E' }}>
                   <div style={{
+                    padding: '0.4rem 0.75rem',
                     background: '#111111',
-                    border: '1px solid #1E1E1E',
-                    borderRadius: 6,
-                    padding: '0.6rem',
+                    borderBottom: '1px solid #1E1E1E',
+                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                   }}>
-                    {/* Training Fuel */}
-                    <div style={{
-                      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                      marginBottom: '0.6rem', paddingBottom: '0.6rem',
-                      borderBottom: '1px solid #1E1E1E',
-                    }}>
-                      <div style={{
-                        display: 'flex', alignItems: 'center', gap: '0.35rem',
-                        fontFamily: "'JetBrains Mono', monospace", fontSize: '0.75rem',
-                      }}>
-                        <span style={{ color: '#00C805' }}>{'⚡'}</span>
-                        <span style={{ color: '#9E9E9E', fontSize: '0.65rem' }}>Training Fuel:</span>
-                        <span style={{ fontWeight: 700 }}>100K YLDR</span>
-                      </div>
-                      <a
-                        href="https://yieldr.org"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        style={{
-                          fontSize: '0.6rem', fontWeight: 600,
-                          padding: '0.3rem 0.5rem',
-                          background: 'rgba(0, 200, 5, 0.15)',
-                          border: '1px solid rgba(0, 200, 5, 0.3)',
-                          borderRadius: 4,
-                          color: '#00C805',
-                          cursor: 'pointer',
-                          textDecoration: 'none',
-                        }}
-                      >Train Agent</a>
-                    </div>
-
-                    {/* Current Phase */}
-                    <div style={{ marginBottom: '0.6rem' }}>
-                      <div style={{
-                        fontSize: '0.55rem', textTransform: 'uppercase', letterSpacing: '0.05em',
-                        color: '#6E6E6E', marginBottom: '0.2rem',
-                      }}>Current Phase</div>
-                      <div style={{ fontSize: '0.65rem', fontWeight: 700, color: '#FFD000', marginBottom: '0.15rem', letterSpacing: '0.05em' }}>
-                        DATA MONITORING
-                      </div>
-                      <div style={{ fontSize: '0.65rem', color: '#9E9E9E' }}>
-                        Monitoring traders and collecting trade data
-                      </div>
-                    </div>
-
-                    {/* Agent Activity - all 0 except YLDR */}
-                    <div style={{
-                      background: '#0A0A0A', borderRadius: 4, padding: '0.5rem',
-                      marginBottom: '0.6rem',
-                    }}>
-                      {[
-                        ['Trades analyzed', '0'],
-                        ['Insights generated', '0'],
-                        ['Trader alignments', '0'],
-                        ['YLDR consumed', '0'],
-                      ].map(([label, value]) => (
-                        <div key={label} style={{
-                          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                          fontSize: '0.65rem', padding: '0.2rem 0',
-                        }}>
-                          <span style={{ color: '#6E6E6E' }}>{label}</span>
-                          <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 600 }}>{value}</span>
+                    <span style={{ fontSize: '0.6rem', fontWeight: 600, color: '#6E6E6E', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                      Following
+                    </span>
+                    <span style={{ fontSize: '0.6rem', color: '#6E6E6E', fontFamily: "'JetBrains Mono', monospace" }}>
+                      {displayTraders.length} traders
+                    </span>
+                  </div>
+                  <div style={{ padding: '0.4rem 0.5rem', display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                    {displayTraders.length === 0 ? (
+                      <div style={{ fontSize: '0.7rem', color: '#6E6E6E', textAlign: 'center', padding: '0.5rem 0' }}>No traders followed yet</div>
+                    ) : displayTraders.map((trader, i) => {
+                      const wrDisplay = trader.winRate <= 1 ? (trader.winRate * 100).toFixed(0) : trader.winRate.toFixed(0);
+                      return (
+                        <div
+                          key={i}
+                          style={{
+                            display: 'flex', alignItems: 'center', gap: '0.4rem',
+                            padding: '0.3rem 0.4rem',
+                            background: '#111111',
+                            border: `1px solid ${hoveredTrader === trader.wallet ? '#00C805' : '#1E1E1E'}`,
+                            borderRadius: 4, cursor: 'pointer', position: 'relative',
+                          }}
+                          onMouseEnter={(e) => {
+                            const rect = e.currentTarget.getBoundingClientRect();
+                            setTooltipPos({ top: rect.top, left: rect.right + 8 });
+                            setHoveredTrader(trader.wallet);
+                          }}
+                          onMouseLeave={() => setHoveredTrader(null)}
+                        >
+                          <img
+                            src={`https://i.pravatar.cc/150?img=${AVATAR_IMGS[i % AVATAR_IMGS.length]}`}
+                            alt=""
+                            style={{ width: 20, height: 20, borderRadius: '50%', border: '1px solid #00C805', flexShrink: 0 }}
+                          />
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontWeight: 600, fontSize: '0.7rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                              {trader.username || `${trader.wallet.slice(0, 8)}...`}
+                            </div>
+                            <div style={{ fontSize: '0.5rem', color: '#6E6E6E' }}>
+                              {trader.platform} · {wrDisplay}% win
+                            </div>
+                          </div>
+                          <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: '0.65rem', color: '#00C805', fontWeight: 600, flexShrink: 0 }}>
+                            +${trader.pnl30d >= 1000000 ? `${(trader.pnl30d / 1000000).toFixed(1)}M` : trader.pnl30d >= 1000 ? `${(trader.pnl30d / 1000).toFixed(1)}K` : trader.pnl30d.toFixed(0)}
+                          </span>
+                          {/* Hover tooltip */}
+                          {hoveredTrader === trader.wallet && (
+                            <div style={{
+                              position: 'fixed', left: tooltipPos.left, top: tooltipPos.top,
+                              width: 200, background: '#111111', border: '1px solid #00C805',
+                              borderRadius: 6, padding: '0.6rem', zIndex: 1000,
+                              boxShadow: '0 8px 24px rgba(0,0,0,0.6)',
+                            }}>
+                              <div style={{ fontSize: '0.8rem', fontWeight: 700, marginBottom: '0.25rem' }}>
+                                {trader.username || `${trader.wallet.slice(0, 10)}...`}
+                              </div>
+                              <div style={{ fontSize: '0.55rem', color: '#6E6E6E', marginBottom: '0.4rem', textTransform: 'capitalize' }}>{trader.platform}</div>
+                              {trader.matchReason && <div style={{ fontSize: '0.55rem', color: '#00C805', marginBottom: '0.4rem', fontStyle: 'italic' }}>{trader.matchReason}</div>}
+                              {[
+                                ['30d PnL', `+$${trader.pnl30d.toLocaleString(undefined, { maximumFractionDigits: 0 })}`, '#00C805'],
+                                ['Win Rate', `${wrDisplay}%`, '#FFFFFF'],
+                                ...(trader.roi30d !== undefined ? [['30d ROI', `${trader.roi30d.toFixed(1)}%`, '#00C805']] : []),
+                                ['Positions', `${trader.totalPositions}`, '#FFFFFF'],
+                              ].map(([label, value, color]) => (
+                                <div key={label} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.6rem', padding: '0.1rem 0' }}>
+                                  <span style={{ color: '#6E6E6E' }}>{label}</span>
+                                  <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 600, color }}>{value}</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
                         </div>
-                      ))}
-                    </div>
+                      );
+                    })}
+                  </div>
+                </div>
 
-                    {/* Training Threshold */}
-                    <div style={{
-                      background: '#0A0A0A', borderRadius: 4, padding: '0.5rem',
-                      marginBottom: '0.6rem',
-                    }}>
-                      <div style={{
-                        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                        fontSize: '0.6rem', marginBottom: '0.35rem',
-                      }}>
-                        <span style={{ color: '#6E6E6E' }}>Training Starts At</span>
-                        <span style={{ fontFamily: "'JetBrains Mono', monospace", color: '#FFD000', fontWeight: 600 }}>1,000 trades</span>
+                {/* AGENT TRAINING — compact strip */}
+                <div style={{ borderTop: '1px solid #1E1E1E', padding: '0.5rem' }}>
+                  <div style={{
+                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                    padding: '0.4rem 0.5rem',
+                    background: '#111111', border: '1px solid #1E1E1E', borderRadius: 5,
+                  }}>
+                    <div>
+                      <div style={{ fontSize: '0.55rem', fontWeight: 700, color: '#FFD000', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                        Data Monitoring Phase
                       </div>
-                      <div style={{
-                        height: 6, background: '#000', borderRadius: 3, overflow: 'hidden',
-                        marginBottom: '0.25rem',
-                      }}>
-                        <div style={{
-                          height: '100%', width: '0%',
-                          background: 'linear-gradient(90deg, #FFD000 0%, #00C805 100%)',
-                          borderRadius: 3,
-                        }} />
-                      </div>
-                      <div style={{ fontSize: '0.55rem', color: '#6E6E6E', textAlign: 'right' }}>
-                        1,000 more trades needed
+                      <div style={{ fontSize: '0.5rem', color: '#6E6E6E', marginTop: '0.1rem' }}>
+                        ⚡ 100K YLDR fuel · 0/1,000 trades
                       </div>
                     </div>
-
-                    {/* What Training Unlocks */}
-                    <div style={{ marginBottom: '0.6rem' }}>
-                      <div style={{ fontSize: '0.6rem', fontWeight: 600, color: '#9E9E9E', marginBottom: '0.35rem' }}>
-                        What Training Unlocks
-                      </div>
-                      {[
-                        'Personalized entry/exit signals',
-                        'Pattern recognition from your traders',
-                        'Position sizing & risk management advice',
-                        'Auto-execution (coming soon)',
-                      ].map((text, i) => (
-                        <div key={i} style={{
-                          display: 'flex', alignItems: 'flex-start', gap: '0.35rem',
-                          fontSize: '0.65rem', color: '#6E6E6E', padding: '0.15rem 0',
-                        }}>
-                          <span style={{ color: '#6E6E6E', flexShrink: 0 }}>{'○'}</span>
-                          <span>{text}</span>
-                        </div>
-                      ))}
-                    </div>
-
-                    {/* Expected ROI */}
-                    <div style={{
-                      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                      padding: '0.5rem',
-                      background: 'rgba(0, 200, 5, 0.08)',
-                      border: '1px solid rgba(0, 200, 5, 0.15)',
-                      borderRadius: 4,
-                      marginBottom: '0.6rem',
-                    }}>
-                      <div>
-                        <div style={{ fontSize: '0.65rem', color: '#9E9E9E', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-                          {'📈'} Expected Agent ROI
-                        </div>
-                        <div style={{ fontSize: '0.55rem', color: '#6E6E6E' }}>
-                          Based on avg of {displayTraders.length} followed traders
-                        </div>
-                      </div>
-                      <div style={{
-                        fontFamily: "'JetBrains Mono', monospace",
-                        fontSize: '0.85rem', fontWeight: 700, color: '#00C805',
-                      }}>+0%</div>
-                    </div>
-
-                    {/* Train Agent CTA */}
-                    <a
-                      href="https://yieldr.org"
-                      target="_blank"
-                      rel="noopener noreferrer"
+                    <button
+                      onClick={() => setShowModal(true)}
                       style={{
-                        display: 'block',
-                        width: '100%', padding: '0.6rem',
-                        background: '#00C805', border: 'none', borderRadius: 4,
-                        color: '#000', fontSize: '0.75rem', fontWeight: 700,
-                        cursor: 'pointer',
-                        textAlign: 'center',
-                        textDecoration: 'none',
-                        boxSizing: 'border-box',
+                        fontSize: '0.55rem', fontWeight: 700,
+                        padding: '0.3rem 0.45rem',
+                        background: 'rgba(0, 200, 5, 0.12)',
+                        border: '1px solid rgba(0, 200, 5, 0.3)',
+                        borderRadius: 4, color: '#00C805', cursor: 'pointer',
+                        flexShrink: 0,
                       }}
-                    >Train Agent</a>
-
-                    {/* V1 label + docs */}
-                    <div style={{
-                      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                      marginTop: '0.5rem', paddingTop: '0.5rem',
-                      borderTop: '1px solid #1E1E1E',
-                    }}>
-                      <span style={{
-                        fontSize: '0.5rem', fontWeight: 700, padding: '0.15rem 0.35rem',
-                        background: 'rgba(0, 136, 255, 0.15)', color: '#0088FF', borderRadius: 3,
-                        letterSpacing: '0.03em',
-                      }}>COMING IN V1</span>
-                      <a
-                        href="https://yieldr.org/docs"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        style={{ fontSize: '0.55rem', color: '#00C805', textDecoration: 'none' }}
-                      >Read docs &rarr;</a>
-                    </div>
+                    >Train Agent</button>
                   </div>
                 </div>
               </>
@@ -1410,23 +1381,6 @@ export default function ChatPage() {
               </div>
             )}
 
-            {/* TRADES TAB (placeholder) */}
-            {activeTab === 'trades' && (
-              <div style={{ padding: '1rem 0.5rem', textAlign: 'center' }}>
-                <div style={{ fontSize: '0.75rem', color: '#6E6E6E' }}>
-                  Trade activity feed coming soon
-                </div>
-              </div>
-            )}
-
-            {/* MARKETS TAB (placeholder) */}
-            {activeTab === 'markets' && (
-              <div style={{ padding: '1rem 0.5rem', textAlign: 'center' }}>
-                <div style={{ fontSize: '0.75rem', color: '#6E6E6E' }}>
-                  Market data feed coming soon
-                </div>
-              </div>
-            )}
           </div>
         </div>
 
