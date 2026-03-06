@@ -393,16 +393,23 @@ export default function ChatPage() {
   const tickerMessages: string[] = (() => {
     if (!hasTasks) return IDLE_MESSAGES;
     if (!hasActiveTasks) return PENDING_MESSAGES;
-    // Active: rotate per-task per-tool scan messages
     const msgs: string[] = [];
     for (const task of activeTasks) {
-      for (const pill of task.signalPills) {
-        msgs.push(`Scanning ${task.assetSymbol} — checking ${pill.label.toLowerCase()}...`);
+      if (task.signalPills.length > 0) {
+        for (const pill of task.signalPills) {
+          msgs.push(`Scanning ${task.assetSymbol} — checking ${pill.label.toLowerCase()}...`);
+        }
+      } else if (task.assetSymbol) {
+        const mins = Math.round(task.intervalSeconds / 60);
+        msgs.push(`Monitoring ${task.assetSymbol} every ${mins}m — cycle ${task.cycleCount}...`);
+        msgs.push(`Agent watching ${task.assetSymbol} — next scan in ${task.nextRunAt ? Math.max(0, Math.round((new Date(task.nextRunAt).getTime() - Date.now()) / 60000)) + 'm' : '—'}`);
+      } else {
+        msgs.push(`Monitor active — cycle ${task.cycleCount}...`);
       }
     }
     msgs.push('Computing signal scores across all positions...');
     msgs.push('Cross-referencing top trader positions...');
-    return msgs.length > 0 ? msgs : PENDING_MESSAGES;
+    return msgs;
   })();
 
   useEffect(() => {
@@ -802,27 +809,34 @@ export default function ChatPage() {
 
           {/* Monitoring indicator tags */}
           {hasActiveTasks && (() => {
-            const allPills: { label: string; color: string; asset: string }[] = [];
+            const allPills: { label: string; asset: string }[] = [];
             const seen = new Set<string>();
             for (const task of activeTasks) {
-              for (const pill of task.signalPills) {
-                const key = `${task.assetSymbol}:${pill.label}`;
+              if (task.signalPills.length > 0) {
+                for (const pill of task.signalPills) {
+                  const key = `${task.assetSymbol}:${pill.label}`;
+                  if (!seen.has(key)) { seen.add(key); allPills.push({ label: pill.label, asset: task.assetSymbol }); }
+                }
+              } else {
+                // Fallback: show asset + interval from task title
+                const key = `${task.assetSymbol}:task`;
                 if (!seen.has(key)) {
                   seen.add(key);
-                  allPills.push({ label: pill.label, color: pill.color, asset: task.assetSymbol });
+                  const mins = Math.round(task.intervalSeconds / 60);
+                  allPills.push({ label: `${task.assetSymbol} Monitor · ${mins}m`, asset: '' });
                 }
               }
             }
-            return allPills.length > 0 ? (
+            return (
               <div className={s.monitorTagsStrip}>
                 {allPills.map((p, i) => (
                   <span key={i} className={s.monitorTag}>
                     <span className={s.monitorTagDot}></span>
-                    {p.asset} {p.label}
+                    {p.asset ? `${p.asset} ${p.label}` : p.label}
                   </span>
                 ))}
               </div>
-            ) : null;
+            );
           })()}
 
           <div className={s.lpanelScroll}>

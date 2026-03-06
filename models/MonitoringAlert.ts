@@ -26,7 +26,7 @@ const MonitoringAlertSchema = new Schema<IMonitoringAlert>({
   data: { type: Schema.Types.Mixed, default: {} },
   cycleNumber: { type: Number, required: true },
   read: { type: Boolean, default: false },
-}, { timestamps: { createdAt: true, updatedAt: false } });
+}, { timestamps: { createdAt: true, updatedAt: false }, collection: 'monitoring_alerts' });
 
 MonitoringAlertSchema.index({ userId: 1, read: 1, createdAt: -1 });
 MonitoringAlertSchema.index({ agentId: 1, createdAt: -1 });
