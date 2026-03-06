@@ -691,8 +691,8 @@ export default function ChatPage() {
             onClick={() => setActiveNavTab('terminal')}
           >Terminal</button>
           <button
-            className={`${s.navTab} ${activeNavTab === 'agents' ? s.active : ''}`}
-            onClick={() => setActiveNavTab('agents')}
+            className={s.navTab}
+            onClick={() => router.push('/agents')}
           >Agents</button>
           <button className={`${s.navTab} ${s.disabled}`} title="Coming soon">Traders</button>
           <button className={`${s.navTab} ${s.disabled}`} title="Coming soon">Funds</button>
@@ -812,15 +812,6 @@ export default function ChatPage() {
                           </div>
                         </div>
 
-                        {/* Signal pills — only shown when monitoring task exists */}
-                        {pills.length > 0 && (
-                          <div className={s.sigStrip}>
-                            {pills.map((pill, pi) => (
-                              <span key={pi} className={`${s.sigPill} ${s[pill.color]}`}>{pill.label}</span>
-                            ))}
-                          </div>
-                        )}
-
                         {/* Expanded signal detail */}
                         <div className={`${s.signalBlock} ${isExpanded ? s.open : ''}`}>
                           {lastAlert ? (
@@ -932,14 +923,6 @@ export default function ChatPage() {
                             <div className={s.psVal}>{formatUsd(pos.currentValue)}</div>
                           </div>
                         </div>
-
-                        {pills.length > 0 && (
-                          <div className={s.sigStrip}>
-                            {pills.map((pill, pi) => (
-                              <span key={pi} className={`${s.sigPill} ${s[pill.color]}`}>{pill.label}</span>
-                            ))}
-                          </div>
-                        )}
 
                         <div className={`${s.signalBlock} ${isExpanded ? s.open : ''}`}>
                           {lastAlert ? (
@@ -1367,14 +1350,6 @@ export default function ChatPage() {
         </div>
       )}
 
-      {/* ═══ AGENTS PAGE ═══ */}
-      {activeNavTab === 'agents' && (
-        <div className={s.agentsPage}>
-          <div className={s.agentsPageTitle}>Agent Explorer</div>
-          <div className={s.agentsPageSub}>Create and manage your AI trading agents — coming soon.</div>
-          <button className={s.agentsBack} onClick={() => setActiveNavTab('terminal')}>← Back to Terminal</button>
-        </div>
-      )}
     </div>
   );
 }
