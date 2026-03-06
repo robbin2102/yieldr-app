@@ -8,7 +8,9 @@ export interface IMonitoringAlert extends Document {
   title: string;
   message: string;
   severity: 'info' | 'warning' | 'critical';
+  isSignal: boolean;
   data: Record<string, any>;
+  indicators?: Array<{ name: string; value: string; dot: string; note: string }>;
   cycleNumber: number;
   read: boolean;
 
@@ -23,7 +25,9 @@ const MonitoringAlertSchema = new Schema<IMonitoringAlert>({
   title: { type: String, required: true },
   message: { type: String, required: true },
   severity: { type: String, enum: ['info', 'warning', 'critical'], default: 'info' },
+  isSignal: { type: Boolean, default: false },
   data: { type: Schema.Types.Mixed, default: {} },
+  indicators: { type: Schema.Types.Mixed, default: [] },
   cycleNumber: { type: Number, required: true },
   read: { type: Boolean, default: false },
 }, { timestamps: { createdAt: true, updatedAt: false }, collection: 'monitoring_alerts' });

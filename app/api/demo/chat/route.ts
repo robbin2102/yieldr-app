@@ -288,7 +288,7 @@ const toolDefinitions: Anthropic.Tool[] = [
   },
   {
     name: 'get_funding_rate_history',
-    description: 'Get hourly funding rate history for a coin from Binance Futures (up to 30 days). Returns full time-series plus computed stats: current rate, annualized %, 24h avg, 7d avg, min/max over period, and trend direction (rising/flat/falling). Use when analyzing funding dynamics, carry trade setups, or spotting extreme funding that signals mean reversion risk. Symbol is just the coin name (BTC, ETH, SOL) — no USDT suffix.',
+    description: 'Get settled 8h funding rate history for a coin from Binance Futures (up to 30 days). NOTE: requires the binance-fetcher service to have data — if it returns found:false, fall back to get_market_snapshot which always has funding rate in derivatives.funding_rate. Prefer get_market_snapshot for most funding rate queries. Only use this tool when the user specifically needs a multi-day funding rate time-series or trend analysis.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -1136,10 +1136,10 @@ You have access to powerful data tools. USE THEM proactively:
 • get_hl_trade_history — Get recent trades/fills for a Hyperliquid wallet
 • get_pm_closed_positions — Get resolved Polymarket positions
 • get_hl_portfolio — Get Hyperliquid portfolio overview and account value
-• get_market_snapshot — Latest TAAPI + CoinGlass snapshot for any coin (technicals + derivatives)
+• get_market_snapshot — Latest TAAPI + CoinGlass snapshot for any coin (technicals + derivatives incl. funding rate, OI, L/S ratios) — PRIMARY tool for all market data including funding rates
 • fetch_live_indicator — Real-time TAAPI indicators when snapshot is stale
 • get_macro_snapshot — Daily macro: ETF flows, Fear & Greed, Coinbase premium
-• get_funding_rate_history — Hourly Binance funding rate history (up to 30 days) with trend stats
+• get_funding_rate_history — Settled 8h Binance funding rate time-series (use only for multi-day trend history; may return no data if binance-fetcher is down — always fall back to get_market_snapshot)
 • get_derivatives_history — 15m OI + long/short ratio history from Binance (up to 7 days)
 • web_search — Search the web for market news, macro events (native Claude tool)
 
@@ -1335,27 +1335,23 @@ Call manage_monitoring with action "create" after user confirms.
 
 ### Correct Field Paths by Tool
 
-**get_funding_rate_history** (symbol, hours):
-• stats.latest_predicted_rate — current predicted rate (premiumIndexKlines 1h close, NOT a settled rate)
-• stats.latest_predicted_annualized_pct — annualized version
-• stats.avg_24h — 24h average
-• stats.avg_7d — 7d average
-• stats.trend — "rising" | "flat" | "falling"
-• stats.min_period, stats.max_period
+**get_market_snapshot** (symbol, fields: "indicators"|"derivatives"|"all") — USE THIS for funding rate, OI, and all standard monitoring tasks:
+• indicators.rsi_14 / macd / bbands / ema_8 / ema_21 / ema_50 / adx / stoch_rsi / atr_14
+• derivatives.funding_rate.current / annualized — ← USE THIS for funding rate queries
+• derivatives.open_interest.total_usd / change_4h_pct / change_24h_pct
+• derivatives.long_short_ratio.global_accounts / top_accounts / top_positions
+• computed.trend_score / momentum_score / volatility_regime
 
-**get_derivatives_history** (symbol, hours, include?):
+**get_derivatives_history** (symbol, hours, include?) — use when user needs OI/L/S trend over hours/days:
 • stats.open_interest.current_usdt / change_4h_pct / change_24h_pct
 • stats.long_short_global.current.long_pct / .short_pct / .ratio / avg_long_pct / bias
 • stats.long_short_top_accounts.* (same structure)
 • stats.long_short_top_positions.* (same structure)
 • latest.open_interest_usdt / long_short_global / long_short_top_accounts / long_short_top_positions
 
-**get_market_snapshot** (symbol, fields: "indicators"|"derivatives"|"all"):
-• indicators.rsi_14 / macd / bbands / ema_8 / ema_21 / adx / stoch_rsi / atr_14
-• derivatives.funding_rate.current / annualized
-• derivatives.open_interest.total_usd / change_4h_pct / change_24h_pct
-• derivatives.long_short_ratio.global_accounts / top_accounts / top_positions
-• computed.trend_score / momentum_score / volatility_regime
+**get_funding_rate_history** (symbol, hours) — SECONDARY: only for multi-day funding history; may return found:false if binance-fetcher has no data — fall back to get_market_snapshot:
+• stats.latest_predicted_rate / stats.latest_predicted_annualized_pct
+• stats.avg_24h / stats.avg_7d / stats.trend / stats.min_period / stats.max_period
 
 **get_top_perp_traders** (protocol, sortBy, limit):
 • traders[*].wallet / pnl.month / winRate / openPositions / accountValue
@@ -1449,24 +1445,26 @@ If a tool call fails or returns an error:
 
 You have access to live market data for 89 tracked coins on Binance Futures, refreshed continuously.
 
-### Snapshot tools (1h refresh)
-• get_market_snapshot — Latest TAAPI + CoinGlass indicators for any coin: price, EMA/SMA, RSI, MACD, ADX, BBands, Ichimoku, Supertrend, Pivots, funding rate, OI, long/short ratios, CVD, liquidations, taker buy/sell, computed signals, active candlestick patterns
+### Snapshot tools (1h refresh) — PRIMARY data source
+• get_market_snapshot — Latest TAAPI + CoinGlass indicators for any coin: price, EMA/SMA (8/21/50/200), RSI, MACD, ADX, BBands, Ichimoku, Supertrend, Pivots, **funding rate, OI, long/short ratios**, CVD, liquidations, taker buy/sell, computed signals, active candlestick patterns. Use this for all funding rate and OI queries by default.
 • fetch_live_indicator — Real-time TAAPI call when snapshot is stale (data_age_minutes > 60) or user explicitly asks for current/live values
 • get_macro_snapshot — Daily macro: BTC + ETH ETF flows, net assets, Coinbase premium (BTC + ETH), Fear & Greed index, stablecoin market cap
 
-### Binance history tools (direct from Binance Futures, updated every 1h/15m)
-• get_funding_rate_history — Hourly funding rate time-series for any coin (default 24h, max 30 days). Returns: current rate, annualized %, 24h avg, 7d avg, min/max, trend direction (rising/flat/falling). Symbol = coin name only, e.g. BTC not BTCUSDT.
-• get_derivatives_history — 15-minute OI + long/short ratio history (default 24h, max 7 days). Returns: OI in USDT with 4h/24h % change, global retail L/S, top trader account L/S, top trader position L/S — each with current values, period averages, and bias label. Symbol = coin name only, e.g. BTC not BTCUSDT.
+### Binance history tools (requires binance-fetcher service — may have no data)
+• get_funding_rate_history — Multi-day settled funding rate time-series only. If it returns found:false, use get_market_snapshot instead (derivatives.funding_rate). Symbol = coin name only, e.g. BTC not BTCUSDT.
+• get_derivatives_history — 15-minute OI + long/short ratio history (default 24h, max 7 days). Returns: OI in USDT with 4h/24h % change, global retail L/S, top trader account L/S, top trader position L/S. Symbol = coin name only.
 
 ### When to call each
-• User asks about a coin's setup, technicals, or indicators → call get_market_snapshot first
+• User asks about a coin's setup, technicals, indicators, funding rate, or OI → call get_market_snapshot first (it has all of this)
 • User asks "right now" / "current" / "live" data → use fetch_live_indicator
 • User asks about ETF flows, macro, Fear & Greed, Coinbase premium → call get_macro_snapshot
 • get_market_snapshot shows data_age_minutes > 60 → follow up with fetch_live_indicator for fresh values
-• User asks about funding rate trend, carry trade, funding history, annualized rate → call get_funding_rate_history
-• User asks about open interest trend, OI change, positioning, long/short ratios over time → call get_derivatives_history
+• User asks about funding rate trend, carry trade, funding history, annualized rate → call get_market_snapshot (derivatives.funding_rate) — NOT get_funding_rate_history unless they need 7d+ historical trend
+• User asks about OI trend over hours/days → call get_derivatives_history for the time-series
 • Doing a full coin analysis or trade setup → call get_market_snapshot AND get_derivatives_history together for complete picture
+• Creating a monitoring task for funding rate, RSI, OI → use get_market_snapshot as the task tool (it's reliable; get_funding_rate_history requires binance-fetcher which may have gaps)
 • NEVER fabricate indicator values (RSI, funding rate, EMA, OI, etc.). Always call the tool first.
+• If get_funding_rate_history returns found:false → immediately call get_market_snapshot instead, note the fallback to the user
 • User wants to monitor something persistently → follow the Monitoring flow (see above), call data tools first, then manage_monitoring
 
 ### Key signals to highlight when analyzing a coin

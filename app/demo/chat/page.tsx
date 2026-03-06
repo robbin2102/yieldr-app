@@ -175,19 +175,6 @@ function pickDisplayTraders(traders: FollowedTrader[]): FollowedTrader[] {
 }
 
 // Activity ticker messages
-const IDLE_MESSAGES = [
-  'Agent is waiting — ask me to monitor any signal on your positions',
-  "Try: 'Monitor ETH funding rate every hour'",
-  'Set up monitoring to activate position scanning...',
-  "Try: 'Alert me if SOL OI rises more than 10%'",
-  'Ask your analyst to start watching your positions',
-];
-
-const PENDING_MESSAGES = [
-  'Setting up monitoring — first scan starting soon...',
-  'Monitoring configured — awaiting first cycle...',
-  'Agent preparing initial data baseline...',
-];
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
@@ -231,8 +218,6 @@ export default function ChatPage() {
   const [unreadAlerts, setUnreadAlerts] = useState(0);
 
   // Ticker state
-  const [tickerMsgIdx, setTickerMsgIdx] = useState(0);
-  const [tickerDotState, setTickerDotState] = useState<'idle' | 'scanning' | 'processing' | 'alert'>('idle');
 
   // Chat
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -389,48 +374,6 @@ export default function ChatPage() {
   const hasTasks = monitoringTasks.length > 0;
   const hasActiveTasks = activeTasks.length > 0;
 
-  // Build ticker messages
-  const tickerMessages: string[] = (() => {
-    if (!hasTasks) return IDLE_MESSAGES;
-    if (!hasActiveTasks) return PENDING_MESSAGES;
-    const msgs: string[] = [];
-    for (const task of activeTasks) {
-      if (task.signalPills.length > 0) {
-        for (const pill of task.signalPills) {
-          msgs.push(`Scanning ${task.assetSymbol} — checking ${pill.label.toLowerCase()}...`);
-        }
-      } else if (task.assetSymbol) {
-        const mins = Math.round(task.intervalSeconds / 60);
-        msgs.push(`Monitoring ${task.assetSymbol} every ${mins}m — cycle ${task.cycleCount}...`);
-        msgs.push(`Agent watching ${task.assetSymbol} — next scan in ${task.nextRunAt ? Math.max(0, Math.round((new Date(task.nextRunAt).getTime() - Date.now()) / 60000)) + 'm' : '—'}`);
-      } else {
-        msgs.push(`Monitor active — cycle ${task.cycleCount}...`);
-      }
-    }
-    msgs.push('Computing signal scores across all positions...');
-    msgs.push('Cross-referencing top trader positions...');
-    return msgs;
-  })();
-
-  useEffect(() => {
-    const iv = setInterval(() => {
-      setTickerMsgIdx(i => (i + 1) % tickerMessages.length);
-    }, 3500);
-    return () => clearInterval(iv);
-  }, [tickerMessages.length]);
-
-  // Ticker dot state
-  useEffect(() => {
-    if (unreadAlerts > 0) {
-      setTickerDotState('alert');
-    } else if (!hasTasks) {
-      setTickerDotState('idle');
-    } else if (!hasActiveTasks) {
-      setTickerDotState('processing');
-    } else {
-      setTickerDotState('scanning');
-    }
-  }, [unreadAlerts, hasTasks, hasActiveTasks]);
 
   // ── Get signal pills for a position
   const getPillsForPosition = useCallback((pair: string): SignalPill[] => {
@@ -748,8 +691,8 @@ export default function ChatPage() {
             onClick={() => setActiveNavTab('terminal')}
           >Terminal</button>
           <button
-            className={`${s.navTab} ${activeNavTab === 'agents' ? s.active : ''}`}
-            onClick={() => setActiveNavTab('agents')}
+            className={s.navTab}
+            onClick={() => router.push('/agents')}
           >Agents</button>
           <button className={`${s.navTab} ${s.disabled}`} title="Coming soon">Traders</button>
           <button className={`${s.navTab} ${s.disabled}`} title="Coming soon">Funds</button>
@@ -797,50 +740,6 @@ export default function ChatPage() {
             >Tokens</button>
           </div>
 
-          {/* Activity Ticker */}
-          <div className={s.activityTicker}>
-            <span className={`${s.atDot} ${s[tickerDotState]}`}></span>
-            <span className={`${s.atText} ${!hasTasks ? s.idleMode : tickerDotState === 'alert' ? s.alertMode : ''}`}>
-              {tickerMessages[tickerMsgIdx % tickerMessages.length]}
-            </span>
-            {hasActiveTasks && (
-              <span className={s.atCycle}>
-                Cycle {activeTasks.length > 0 ? Math.min(...activeTasks.map(t => t.cycleCount)) : 0}
-              </span>
-            )}
-          </div>
-
-          {/* Monitoring indicator tags */}
-          {hasActiveTasks && (() => {
-            const allPills: { label: string; asset: string }[] = [];
-            const seen = new Set<string>();
-            for (const task of activeTasks) {
-              if (task.signalPills.length > 0) {
-                for (const pill of task.signalPills) {
-                  const key = `${task.assetSymbol}:${pill.label}`;
-                  if (!seen.has(key)) { seen.add(key); allPills.push({ label: pill.label, asset: task.assetSymbol }); }
-                }
-              } else {
-                // Fallback: show asset + interval from task title
-                const key = `${task.assetSymbol}:task`;
-                if (!seen.has(key)) {
-                  seen.add(key);
-                  const mins = Math.round(task.intervalSeconds / 60);
-                  allPills.push({ label: `${task.assetSymbol} Monitor · ${mins}m`, asset: '' });
-                }
-              }
-            }
-            return (
-              <div className={s.monitorTagsStrip}>
-                {allPills.map((p, i) => (
-                  <span key={i} className={s.monitorTag}>
-                    <span className={s.monitorTagDot}></span>
-                    {p.asset ? `${p.asset} ${p.label}` : p.label}
-                  </span>
-                ))}
-              </div>
-            );
-          })()}
 
           <div className={s.lpanelScroll}>
 
@@ -912,15 +811,6 @@ export default function ChatPage() {
                             <div className={s.psVal}>{formatUsd(pos.margin)}</div>
                           </div>
                         </div>
-
-                        {/* Signal pills — only shown when monitoring task exists */}
-                        {pills.length > 0 && (
-                          <div className={s.sigStrip}>
-                            {pills.map((pill, pi) => (
-                              <span key={pi} className={`${s.sigPill} ${s[pill.color]}`}>{pill.label}</span>
-                            ))}
-                          </div>
-                        )}
 
                         {/* Expanded signal detail */}
                         <div className={`${s.signalBlock} ${isExpanded ? s.open : ''}`}>
@@ -1033,14 +923,6 @@ export default function ChatPage() {
                             <div className={s.psVal}>{formatUsd(pos.currentValue)}</div>
                           </div>
                         </div>
-
-                        {pills.length > 0 && (
-                          <div className={s.sigStrip}>
-                            {pills.map((pill, pi) => (
-                              <span key={pi} className={`${s.sigPill} ${s[pill.color]}`}>{pill.label}</span>
-                            ))}
-                          </div>
-                        )}
 
                         <div className={`${s.signalBlock} ${isExpanded ? s.open : ''}`}>
                           {lastAlert ? (
@@ -1468,14 +1350,6 @@ export default function ChatPage() {
         </div>
       )}
 
-      {/* ═══ AGENTS PAGE ═══ */}
-      {activeNavTab === 'agents' && (
-        <div className={s.agentsPage}>
-          <div className={s.agentsPageTitle}>Agent Explorer</div>
-          <div className={s.agentsPageSub}>Create and manage your AI trading agents — coming soon.</div>
-          <button className={s.agentsBack} onClick={() => setActiveNavTab('terminal')}>← Back to Terminal</button>
-        </div>
-      )}
     </div>
   );
 }

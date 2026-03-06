@@ -47,19 +47,28 @@ export async function GET(req: NextRequest) {
     let taskSymbolMap: Record<string, string> = {};
 
     if (taskIds.length > 0) {
-      const tasks = await MonitoringTask.find(
-        { _id: { $in: taskIds.map(id => new mongoose.Types.ObjectId(id)) } },
-        { tools: 1 }
-      ).lean();
+      try {
+        const validObjectIds = taskIds
+          .filter(id => id && id.length === 24)
+          .map(id => new mongoose.Types.ObjectId(id));
 
-      for (const t of tasks as any[]) {
-        let symbol = '';
-        for (const tool of t.tools || []) {
-          const sym = extractAssetSymbol(tool.toolParams || {});
-          if (sym) { symbol = sym; break; }
+        if (validObjectIds.length > 0) {
+          const tasks = await MonitoringTask.find(
+            { _id: { $in: validObjectIds } },
+            { tools: 1 }
+          ).lean();
+
+          for (const t of tasks as any[]) {
+            let symbol = '';
+            for (const tool of t.tools || []) {
+              const sym = extractAssetSymbol(tool.toolParams || {});
+              if (sym) { symbol = sym; break; }
+            }
+            taskSymbolMap[String(t._id)] = symbol;
+          }
         }
-        // Fallback via task title not available here — tool params should cover it
-        taskSymbolMap[String(t._id)] = symbol;
+      } catch (err: any) {
+        console.warn('[alerts] taskId join failed (non-fatal):', err.message);
       }
     }
 
@@ -71,13 +80,14 @@ export async function GET(req: NextRequest) {
       title: a.title,
       message: a.message,
       severity: a.severity,
+      isSignal: a.isSignal ?? false,
       cycleNumber: a.cycleNumber,
       read: a.read,
       assetSymbol: taskSymbolMap[String(a.taskId)] || '',
       createdAt: a.createdAt,
     }));
 
-    return NextResponse.json({ alerts: result, unreadCount });
+    return NextResponse.json({ alerts: result, unreadCount, total: alerts.length });
   } catch (err: any) {
     console.error('[alerts] GET error:', err.message);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
