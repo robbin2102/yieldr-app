@@ -104,17 +104,16 @@ export function startCronJobs(): void {
     await runHourlyCycle();
   });
 
-  // OHLCV 15m cron — disabled for now; OHLCV fetch moved to on-demand agent tooling.
-  // Re-enable by uncommenting when batch pre-fetch is needed again.
-  // cron.schedule('3,18,33,48 * * * *', async () => {
-  //   logger.info('Cron', 'Running 15m OHLCV cycle');
-  //   try {
-  //     const { all } = await loadTrackedCoins();
-  //     if (all.length > 0) await fetchAndStoreOhlcv(all);
-  //   } catch (err: any) {
-  //     logger.error('Cron', `OHLCV cycle failed: ${err.message}`);
-  //   }
-  // });
+  // OHLCV 15m cron — provides price data (open/high/low/close/volume) for snapshot builder
+  cron.schedule('3,18,33,48 * * * *', async () => {
+    logger.info('Cron', 'Running 15m OHLCV cycle');
+    try {
+      const { all } = await loadTrackedCoins();
+      if (all.length > 0) await fetchAndStoreOhlcv(all);
+    } catch (err: any) {
+      logger.error('Cron', `OHLCV cycle failed: ${err.message}`);
+    }
+  });
 
   // Daily macro — 10:00 UTC every day
   cron.schedule('0 10 * * *', async () => {
@@ -128,7 +127,7 @@ export function startCronJobs(): void {
     await refreshTrackedCoins();
   });
 
-  logger.info('Cron', 'Cron jobs started: hourly (0 * * * *), daily macro (0 10 * * *), weekly refresh (0 0 * * 0)');
+  logger.info('Cron', 'Cron jobs started: hourly (0 * * * *), OHLCV 15m (3,18,33,48 * * * *), daily macro (0 10 * * *), weekly refresh (0 0 * * 0)');
 }
 
 function roundToHour(date: Date): Date {
