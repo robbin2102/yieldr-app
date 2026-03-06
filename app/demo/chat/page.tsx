@@ -379,7 +379,7 @@ export default function ChatPage() {
     const iv = setInterval(() => {
       fetchMonitoring(effectiveWallet);
       fetchAlerts(effectiveWallet);
-    }, 10000);
+    }, 30000);
     return () => clearInterval(iv);
   }, [mounted, effectiveWallet, fetchMonitoring, fetchAlerts]);
 
@@ -799,6 +799,31 @@ export default function ChatPage() {
               </span>
             )}
           </div>
+
+          {/* Monitoring indicator tags */}
+          {hasActiveTasks && (() => {
+            const allPills: { label: string; color: string; asset: string }[] = [];
+            const seen = new Set<string>();
+            for (const task of activeTasks) {
+              for (const pill of task.signalPills) {
+                const key = `${task.assetSymbol}:${pill.label}`;
+                if (!seen.has(key)) {
+                  seen.add(key);
+                  allPills.push({ label: pill.label, color: pill.color, asset: task.assetSymbol });
+                }
+              }
+            }
+            return allPills.length > 0 ? (
+              <div className={s.monitorTagsStrip}>
+                {allPills.map((p, i) => (
+                  <span key={i} className={s.monitorTag}>
+                    <span className={s.monitorTagDot}></span>
+                    {p.asset} {p.label}
+                  </span>
+                ))}
+              </div>
+            ) : null;
+          })()}
 
           <div className={s.lpanelScroll}>
 
@@ -1366,17 +1391,41 @@ export default function ChatPage() {
                   'AI chat credits for trading insights & analysis',
                   'Train agent to unlock personalized signals',
                   'Deflationary 🔥 — YLDR is burned on every AI action. Fixed supply of 210M.',
-                  'Early access to Execute (auto-trading)',
-                  'Potential 10–100× if listed on major exchange',
+                  'Early access to Trading Agents',
                 ].map((item, i) => (
                   <div key={i} className={s.whyItem}><span className={s.whyCheck}>✓</span><span>{item}</span></div>
                 ))}
               </div>
 
-              <div className={s.modalDisclaimer}>
-                Only users can mint. No team/VC allocation until listing. Max Supply: 210,000,000 YLDR.
+              <div className={s.roiBlock}>
+                <div className={s.roiTitle}>ROI Scenarios at TGE ({yldrInput > 0 ? `$${yldrInput.toLocaleString()} USDC` : '—'})</div>
+                <div className={s.roiScenarios}>
+                  {[
+                    { fdv: '$150M', multiple: 150 / 9 },
+                    { fdv: '$300M', multiple: 300 / 9 },
+                    { fdv: '$500M', multiple: 500 / 9 },
+                  ].map(({ fdv, multiple }) => {
+                    const roi = yldrInput > 0 ? yldrInput * multiple : 0;
+                    return (
+                      <div key={fdv} className={s.roiScenario}>
+                        <div className={s.roiFdv}>{fdv} FDV</div>
+                        <div className={s.roiValue}>{yldrInput > 0 ? `$${Math.round(roi).toLocaleString()}` : '—'}</div>
+                        <div className={s.roiMultiple}>{multiple.toFixed(1)}×</div>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
-              <button className={s.modalCta} disabled>Buy YLDR — Coming Soon</button>
+
+              <div className={s.modalDisclaimer}>
+                Only users can mint. No team/VC allocation until listing. Max Supply: 210,000,000 YLDR. Tokens distributed at TGE.{' '}
+                <a href="https://docs.yieldr.app" target="_blank" rel="noopener noreferrer">Read docs</a> to learn more about product &amp; tokenomics.
+              </div>
+              <button className={s.modalCta} disabled>Buy YLDR</button>
+              <div className={s.modalTrustLinks}>
+                Treasury: <a href="https://basescan.org/address/0xB56Ca15" target="_blank" rel="noopener noreferrer">0xB56C...a15C</a> multisig |{' '}
+                <a href="https://basescan.org/address/0xB56Ca15" target="_blank" rel="noopener noreferrer">View on Basescan</a>
+              </div>
             </div>
           </div>
         </div>

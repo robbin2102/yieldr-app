@@ -341,7 +341,7 @@ const toolDefinitions: Anthropic.Tool[] = [
             },
           },
         },
-        intervalSeconds: { type: 'number', description: 'Check interval in seconds. Minimum 3600 (1 hour).' },
+        intervalSeconds: { type: 'number', description: 'Check interval in seconds. Minimum 300 (5 minutes).' },
         updates: { type: 'object', description: 'For action=update: fields to change (task, monitorInstruction, tools, intervalSeconds, status)' },
       },
       required: ['action'],
@@ -1044,8 +1044,8 @@ async function executeTool(name: string, input: any, wallet?: string): Promise<s
           if (!task || !monitorInstruction || !monTools || !intervalSeconds) {
             return JSON.stringify({ error: 'task, monitorInstruction, tools, and intervalSeconds are required for create' });
           }
-          if (intervalSeconds < 3600) {
-            return JSON.stringify({ error: 'intervalSeconds must be at least 3600 (1 hour)' });
+          if (intervalSeconds < 300) {
+            return JSON.stringify({ error: 'intervalSeconds must be at least 300 (5 minutes)' });
           }
           if (monTools.length > 5) {
             return JSON.stringify({ error: 'Maximum 5 tools per monitor' });
@@ -1325,7 +1325,7 @@ Based on the conversation and tool response, build:
 • task: short title
 • monitorInstruction: specific, number-anchored instruction for the evaluator. Be explicit about thresholds and severity. The evaluator ONLY sees the extracted fields + last 5 cycles + user positions.
 • tools: which tools to call each cycle (max 5), with toolName, toolParams, and extractFields (dot-paths, keep minimal)
-• intervalSeconds: minimum 3600
+• intervalSeconds: minimum 300
 
 ### Step 4: Confirm with the User
 Show: what's monitored, which fields, what triggers alerts, interval, current values.
@@ -1365,7 +1365,7 @@ Call manage_monitoring with action "create" after user confirms.
 • Note: set walletAddresses: [] for tool chaining — scheduler fills it from the previous tool's output
 
 ### Constraints
-• Minimum interval: 3600 seconds (1 hour)
+• Minimum interval: 300 seconds (5 minutes)
 • Max 5 tools per task
 • Max 10 active monitors per user
 • Keep extractFields minimal — each field adds per-cycle token cost
