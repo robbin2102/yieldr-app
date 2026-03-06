@@ -814,7 +814,7 @@ export default function ChatPage() {
             </span>
             {hasActiveTasks && (
               <span className={s.atCycle}>
-                Cycle {shortestTask?.cycleCount ?? 0}
+                Cycle {activeTasks.length > 0 ? Math.min(...activeTasks.map(t => t.cycleCount)) : 0}
               </span>
             )}
           </div>
