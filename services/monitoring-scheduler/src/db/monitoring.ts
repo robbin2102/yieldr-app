@@ -13,7 +13,9 @@ export interface CycleEntry {
   timestamp: Date;
   data: Record<string, any>;
   alerted: boolean;
+  signaled: boolean;
   summary: string;
+  indicators?: Array<{ name: string; value: string; dot: string; note: string }>;
 }
 
 export interface MonitoringTask {
@@ -47,7 +49,9 @@ export interface MonitoringAlert {
   title: string;
   message: string;
   severity: 'info' | 'warning' | 'critical';
+  isSignal: boolean;
   data: Record<string, any>;
+  indicators?: Array<{ name: string; value: string; dot: string; note: string }>;
   cycleNumber: number;
   read: boolean;
   createdAt: Date;

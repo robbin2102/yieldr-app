@@ -78,8 +78,8 @@ export async function processTask(task: WithId<MonitoringTask>): Promise<void> {
       : (evaluation.summary ?? 'No alert'),
   };
 
-  // Step 6: Create alert + update agent stats if triggered
-  if (evaluation.alert) {
+  // Step 6: Create alert/signal record + update agent stats
+  if (evaluation.alert || evaluation.signal) {
     const newCycleCount = (task.cycleCount || 0) + 1;
 
     const alert = await createAlert({
@@ -89,6 +89,8 @@ export async function processTask(task: WithId<MonitoringTask>): Promise<void> {
       title: evaluation.title!,
       message: evaluation.message!,
       severity: evaluation.severity ?? 'info',
+      isSignal: evaluation.signal,
+      indicators: evaluation.indicators,
       data: strippedData,
       cycleNumber: newCycleCount,
       read: false,
@@ -97,18 +99,23 @@ export async function processTask(task: WithId<MonitoringTask>): Promise<void> {
 
     logEntry.alertId = alert._id as ObjectId;
 
-    await markTaskAlert(taskId, {
-      lastAlertAt: new Date(),
-      alertCount: (task.alertCount || 0) + 1,
-    });
+    if (evaluation.alert) {
+      await markTaskAlert(taskId, {
+        lastAlertAt: new Date(),
+        alertCount: (task.alertCount || 0) + 1,
+      });
+    }
 
-    // Increment agent's alertsSent + insightsGenerated counters
+    // Increment agent counters: alertsSent for alerts, insightsGenerated for signals
     try {
       const db = await getDB();
       await db.collection(COLLECTIONS.AGENTS).updateOne(
         { agentId: task.agentId },
         {
-          $inc: { alertsSent: 1, insightsGenerated: 1 },
+          $inc: {
+            alertsSent: evaluation.alert ? 1 : 0,
+            insightsGenerated: 1,
+          },
           $set: { lastActiveAt: new Date() },
         }
       );
@@ -124,9 +131,11 @@ export async function processTask(task: WithId<MonitoringTask>): Promise<void> {
     timestamp: new Date(),
     data: strippedData,
     alerted: evaluation.alert,
+    signaled: evaluation.signal,
     summary: evaluation.alert
       ? (evaluation.title ?? 'Alert')
       : (evaluation.summary ?? 'No alert'),
+    indicators: evaluation.indicators,
   };
 
   const updatedHistory: CycleEntry[] = [
