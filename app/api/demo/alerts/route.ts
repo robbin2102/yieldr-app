@@ -36,7 +36,7 @@ export async function GET(req: NextRequest) {
 
     const alerts = await MonitoringAlert.find(
       { userId: wallet },
-      { title: 1, message: 1, severity: 1, data: 1, cycleNumber: 1, read: 1, taskId: 1, createdAt: 1 }
+      { title: 1, message: 1, severity: 1, data: 1, cycleNumber: 1, read: 1, taskId: 1, agentId: 1, isSignal: 1, createdAt: 1 }
     )
       .sort({ createdAt: -1 })
       .limit(20)
@@ -77,6 +77,7 @@ export async function GET(req: NextRequest) {
     const result = (alerts as any[]).map(a => ({
       id: String(a._id),
       taskId: String(a.taskId),
+      agentId: a.agentId ?? null,
       title: a.title,
       message: a.message,
       severity: a.severity,
