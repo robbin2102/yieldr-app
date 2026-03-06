@@ -11,7 +11,7 @@ import {
 } from './db/monitoring';
 import { getUserPositions } from './db/positions';
 import { callToolsAndExtract } from './tool-caller';
-import { buildEvaluatorPrompt, callEvaluator } from './evaluator';
+import { buildEvaluatorPrompt, callEvaluator, EvaluationResult } from './evaluator';
 import { logger } from './utils/logger';
 
 /**
@@ -56,8 +56,8 @@ export async function processTask(task: WithId<MonitoringTask>): Promise<void> {
   const userPositions = await getUserPositions(task.userId).catch(() => []);
 
   // Step 4: Evaluate
-  const evaluation = cooldownActive
-    ? { alert: false as const, summary: 'Cooldown active — evaluator skipped' }
+  const evaluation: EvaluationResult = cooldownActive
+    ? { alert: false, signal: false, summary: 'Cooldown active — evaluator skipped' }
     : await callEvaluator(buildEvaluatorPrompt(task, strippedData, userPositions));
 
   logger.info(
