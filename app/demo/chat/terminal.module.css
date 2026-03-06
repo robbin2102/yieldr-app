@@ -690,8 +690,15 @@
   font-family: var(--font-sans);
   transition: all 0.15s;
 }
-.monitorCancelBtn:hover { background: var(--red); color: #fff; }
+.monitorCancelBtn:hover { background: var(--red); color: #fff; border-color: var(--red); }
 .monitorCancelBtn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.monitorCountdownRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 0 2px;
+}
 .countdownStrip {
   padding: 7px 12px;
   background: var(--bg2);
@@ -703,6 +710,7 @@
 }
 .cdLabel { font-size: 0.52rem; color: var(--t3); text-transform: uppercase; letter-spacing: 0.08em; font-weight: 600; }
 .cdTimer { font-family: var(--font-mono); font-size: 0.72rem; font-weight: 700; color: var(--green); letter-spacing: 0.04em; }
+.cdTimer.overdue { color: var(--yellow); }
 .cdBar { flex: 1; height: 2px; background: var(--bg4); border-radius: 1px; overflow: hidden; }
 .cdFill { height: 100%; background: var(--green); border-radius: 1px; transition: width 1s linear; }
 .cdCycle { font-size: 0.5rem; color: var(--t3); font-family: var(--font-mono); }

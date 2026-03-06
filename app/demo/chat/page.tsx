@@ -205,7 +205,7 @@ export default function ChatPage() {
   const [agentName, setAgentName] = useState('Analyst');
 
   // UI state
-  const [activeLeftTab, setActiveLeftTab] = useState<'positions' | 'alerts' | 'monitors' | 'tokens'>('positions');
+  const [activeLeftTab, setActiveLeftTab] = useState<'positions' | 'alerts' | 'tokens'>('positions');
   const [expandedCards, setExpandedCards] = useState<Set<string>>(new Set());
   const [activeNavTab, setActiveNavTab] = useState<'terminal' | 'agents'>('terminal');
   const [showYldrModal, setShowYldrModal] = useState(false);
@@ -476,27 +476,30 @@ export default function ChatPage() {
     return unread.severity === 'critical' ? 'crit' : 'warn';
   }, [monitoringTasks, monitoringAlerts]);
 
-  // ── Countdown for Alerts tab (shortest interval active task)
-  const shortestTask = activeTasks.sort((a, b) => a.intervalSeconds - b.intervalSeconds)[0];
-  const nextScanAt = shortestTask?.nextRunAt || null;
-  const [countdownStr, setCountdownStr] = useState('—');
-  const [countdownPct, setCountdownPct] = useState(0);
+  // ── Per-task countdowns for Alerts tab
+  const [taskCountdowns, setTaskCountdowns] = useState<Record<string, { str: string; pct: number }>>({});
 
   useEffect(() => {
-    if (!nextScanAt || !shortestTask) { setCountdownStr('—'); setCountdownPct(0); return; }
-    const update = () => {
+    const compute = () => {
       const now = Date.now();
-      const next = new Date(nextScanAt).getTime();
-      const diff = Math.max(0, next - now);
-      const totalMs = shortestTask.intervalSeconds * 1000;
-      const elapsed = totalMs - diff;
-      setCountdownStr(formatCountdown(nextScanAt, shortestTask.cycleCount));
-      setCountdownPct(Math.min(100, (elapsed / totalMs) * 100));
+      const next: Record<string, { str: string; pct: number }> = {};
+      for (const task of activeTasks) {
+        const totalMs = task.intervalSeconds * 1000;
+        const nextMs = task.nextRunAt ? new Date(task.nextRunAt).getTime() : now;
+        const diff = Math.max(0, nextMs - now);
+        const elapsed = totalMs - diff;
+        next[task.id] = {
+          str: formatCountdown(task.nextRunAt, task.cycleCount),
+          pct: Math.min(100, Math.max(0, (elapsed / totalMs) * 100)),
+        };
+      }
+      setTaskCountdowns(next);
     };
-    update();
-    const iv = setInterval(update, 1000);
+    compute();
+    const iv = setInterval(compute, 1000);
     return () => clearInterval(iv);
-  }, [nextScanAt, shortestTask]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTasks.map(t => t.id + t.nextRunAt + t.cycleCount).join(',')]);
 
   // ── Chat sessions
   const loadChatSessions = useCallback(async () => {
@@ -711,7 +714,7 @@ export default function ChatPage() {
     } catch {}
   }, [effectiveWallet]);
 
-  const switchLeftTab = async (tab: 'positions' | 'alerts' | 'monitors' | 'tokens') => {
+  const switchLeftTab = async (tab: 'positions' | 'alerts' | 'tokens') => {
     setActiveLeftTab(tab);
     if (tab === 'alerts' && unreadAlerts > 0 && effectiveWallet) {
       setUnreadAlerts(0);
@@ -796,13 +799,6 @@ export default function ChatPage() {
             >
               Alerts
               {unreadAlerts > 0 && <span className={s.tabBadge}>{unreadAlerts > 9 ? '9+' : unreadAlerts}</span>}
-            </button>
-            <button
-              className={`${s.lpanelTab} ${activeLeftTab === 'monitors' ? s.active : ''}`}
-              onClick={() => switchLeftTab('monitors')}
-            >
-              Monitors
-              {monitoringTasks.length > 0 && <span className={s.tabBadge}>{monitoringTasks.length}</span>}
             </button>
             <button
               className={`${s.lpanelTab} ${activeLeftTab === 'tokens' ? s.active : ''}`}
@@ -1093,29 +1089,54 @@ export default function ChatPage() {
             {/* ══ ALERTS TAB ══ */}
             {activeLeftTab === 'alerts' && (
               <>
-                {/* Countdown strip */}
-                {shortestTask ? (
-                  <div className={s.countdownStrip}>
-                    <span className={s.cdLabel}>Next scan</span>
-                    <span className={s.cdTimer}>{countdownStr}</span>
-                    <div className={s.cdBar}>
-                      <div className={s.cdFill} style={{ width: `${countdownPct}%` }}></div>
-                    </div>
-                    <span className={s.cdCycle}>Cycle #{shortestTask.cycleCount}</span>
-                  </div>
-                ) : (
+                {/* Per-task monitor countdown strips */}
+                {activeTasks.length === 0 ? (
                   <div className={s.countdownStrip}>
                     <span className={s.cdLabel}>No monitors active</span>
                   </div>
+                ) : (
+                  activeTasks.map(task => {
+                    const cd = taskCountdowns[task.id] || { str: '—', pct: 0 };
+                    const mins = Math.round(task.intervalSeconds / 60);
+                    const intervalLabel = mins >= 60 ? `${Math.round(mins / 60)}h` : `${mins}m`;
+                    const isOverdue = cd.str === 'Starting...' || cd.str === 'Running...';
+                    return (
+                      <div key={task.id} className={s.monitorItem}>
+                        <div className={s.monitorItemHdr}>
+                          <span className={`${s.monitorStatusDot} ${s[task.status]}`}></span>
+                          <span className={s.monitorTitle}>{task.taskTitle}</span>
+                          <button
+                            className={s.monitorCancelBtn}
+                            onClick={() => deleteMonitoringTask(task.id)}
+                            style={{ marginLeft: 'auto', flexShrink: 0 }}
+                          >✕</button>
+                        </div>
+                        <div className={s.monitorMeta}>
+                          <span className={s.monitorMetaItem}>⏱ {intervalLabel}</span>
+                          <span className={s.monitorMetaItem}>↻ Cycle {task.cycleCount}</span>
+                          <span className={s.monitorMetaItem}>🔔 {task.alertCount}</span>
+                          {task.lastRunAt && <span className={s.monitorMetaItem}>· {timeAgo(task.lastRunAt)}</span>}
+                        </div>
+                        <div className={s.monitorCountdownRow}>
+                          <span className={s.cdLabel}>Next scan</span>
+                          <span className={`${s.cdTimer} ${isOverdue ? s.overdue : ''}`}>{cd.str}</span>
+                          <div className={s.cdBar}>
+                            <div className={s.cdFill} style={{ width: `${cd.pct}%` }}></div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })
                 )}
 
+                {/* Alerts list */}
                 {monitoringAlerts.length === 0 ? (
                   <div className={s.emptyState}>
                     <div className={s.emptyIcon}>🔔</div>
                     <div className={s.emptyTitle}>No alerts yet</div>
                     <div className={s.emptyText}>
                       {hasTasks
-                        ? 'Agent is running its first scan — alerts will appear here when signals trigger.'
+                        ? 'First scan pending — alerts appear here each cycle when signals trigger.'
                         : 'Set up monitoring to start receiving alerts on your positions.'}
                     </div>
                   </div>
@@ -1127,66 +1148,13 @@ export default function ChatPage() {
                     >
                       <div className={s.alertTop}>
                         <div className={s.alertDot}></div>
-                        {alert.assetSymbol && (
-                          <span className={s.alertAsset}>{alert.assetSymbol}</span>
-                        )}
+                        {alert.assetSymbol && <span className={s.alertAsset}>{alert.assetSymbol}</span>}
                         <span className={s.alertTitle}>{alert.title}</span>
                         <span className={s.alertTime}>{timeAgo(alert.createdAt)}</span>
                       </div>
                       <div className={s.alertBody}>{alert.message}</div>
                     </div>
                   ))
-                )}
-              </>
-            )}
-
-            {/* ══ MONITORS TAB ══ */}
-            {activeLeftTab === 'monitors' && (
-              <>
-                {monitoringTasks.length === 0 ? (
-                  <div className={s.emptyState}>
-                    <div className={s.emptyIcon}>🔍</div>
-                    <div className={s.emptyTitle}>No monitors running</div>
-                    <div className={s.emptyText}>Ask your analyst to start monitoring a signal — e.g. "monitor BTC funding rate every 5 minutes"</div>
-                  </div>
-                ) : (
-                  monitoringTasks.map(task => {
-                    const isOverdue = task.nextRunAt ? new Date(task.nextRunAt).getTime() < Date.now() : false;
-                    const mins = Math.round(task.intervalSeconds / 60);
-                    const intervalLabel = mins >= 60 ? `${mins / 60}h` : `${mins}m`;
-                    return (
-                      <div key={task.id} className={s.monitorItem}>
-                        <div className={s.monitorItemHdr}>
-                          <span className={`${s.monitorStatusDot} ${s[task.status]}`}></span>
-                          <span className={s.monitorTitle}>{task.taskTitle}</span>
-                        </div>
-                        <div className={s.monitorMeta}>
-                          <span className={s.monitorMetaItem}>⏱ {intervalLabel} interval</span>
-                          <span className={s.monitorMetaItem}>↻ {task.cycleCount} cycles</span>
-                          <span className={s.monitorMetaItem}>🔔 {task.alertCount} alerts</span>
-                        </div>
-                        <div className={s.monitorMeta} style={{ marginBottom: 6 }}>
-                          <span>Next scan: </span>
-                          <span className={`${s.monitorCountdown} ${isOverdue ? s.overdue : ''}`}>
-                            {isOverdue
-                              ? (task.cycleCount === 0 ? 'Starting...' : 'Running...')
-                              : formatCountdown(task.nextRunAt)}
-                          </span>
-                          {task.lastRunAt && (
-                            <span style={{ marginLeft: 8 }}>· Last: {timeAgo(task.lastRunAt)}</span>
-                          )}
-                        </div>
-                        <div className={s.monitorActions}>
-                          <button
-                            className={s.monitorCancelBtn}
-                            onClick={() => deleteMonitoringTask(task.id)}
-                          >
-                            Cancel Monitor
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  })
                 )}
               </>
             )}
