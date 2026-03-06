@@ -151,7 +151,7 @@ function timeAgo(iso: string): string {
 function formatCountdown(nextRunAt: string | null, cycleCount = 0): string {
   if (!nextRunAt) return '—';
   const diff = new Date(nextRunAt).getTime() - Date.now();
-  if (diff <= 0) return cycleCount === 0 ? 'Starting...' : 'Running...';
+  if (diff <= 0) return cycleCount === 0 ? 'Pending...' : 'Running...';
   const totalS = Math.floor(diff / 1000);
   const m = Math.floor(totalS / 60);
   const sec = totalS % 60;
@@ -705,15 +705,6 @@ export default function ChatPage() {
   };
 
   // ── Switch left tab + mark-as-read when switching to alerts
-  // ── Delete monitoring task
-  const deleteMonitoringTask = useCallback(async (taskId: string) => {
-    if (!effectiveWallet) return;
-    try {
-      await fetch(`/api/demo/monitoring-tasks?wallet=${effectiveWallet}&id=${taskId}`, { method: 'DELETE' });
-      setMonitoringTasks(prev => prev.filter(t => t.id !== taskId));
-    } catch {}
-  }, [effectiveWallet]);
-
   const switchLeftTab = async (tab: 'positions' | 'alerts' | 'tokens') => {
     setActiveLeftTab(tab);
     if (tab === 'alerts' && unreadAlerts > 0 && effectiveWallet) {
@@ -1099,17 +1090,12 @@ export default function ChatPage() {
                     const cd = taskCountdowns[task.id] || { str: '—', pct: 0 };
                     const mins = Math.round(task.intervalSeconds / 60);
                     const intervalLabel = mins >= 60 ? `${Math.round(mins / 60)}h` : `${mins}m`;
-                    const isOverdue = cd.str === 'Starting...' || cd.str === 'Running...';
+                    const isOverdue = cd.str === 'Pending...' || cd.str === 'Running...';
                     return (
                       <div key={task.id} className={s.monitorItem}>
                         <div className={s.monitorItemHdr}>
                           <span className={`${s.monitorStatusDot} ${s[task.status]}`}></span>
                           <span className={s.monitorTitle}>{task.taskTitle}</span>
-                          <button
-                            className={s.monitorCancelBtn}
-                            onClick={() => deleteMonitoringTask(task.id)}
-                            style={{ marginLeft: 'auto', flexShrink: 0 }}
-                          >✕</button>
                         </div>
                         <div className={s.monitorMeta}>
                           <span className={s.monitorMetaItem}>⏱ {intervalLabel}</span>
@@ -1118,7 +1104,7 @@ export default function ChatPage() {
                           {task.lastRunAt && <span className={s.monitorMetaItem}>· {timeAgo(task.lastRunAt)}</span>}
                         </div>
                         <div className={s.monitorCountdownRow}>
-                          <span className={s.cdLabel}>Next scan</span>
+                          <span className={s.cdLabel}>{task.cycleCount === 0 ? 'First scan' : 'Next scan'}</span>
                           <span className={`${s.cdTimer} ${isOverdue ? s.overdue : ''}`}>{cd.str}</span>
                           <div className={s.cdBar}>
                             <div className={s.cdFill} style={{ width: `${cd.pct}%` }}></div>
@@ -1135,9 +1121,11 @@ export default function ChatPage() {
                     <div className={s.emptyIcon}>🔔</div>
                     <div className={s.emptyTitle}>No alerts yet</div>
                     <div className={s.emptyText}>
-                      {hasTasks
-                        ? 'First scan pending — alerts appear here each cycle when signals trigger.'
-                        : 'Set up monitoring to start receiving alerts on your positions.'}
+                      {!hasTasks
+                        ? 'Set up monitoring to start receiving alerts on your positions.'
+                        : activeTasks.some(t => t.cycleCount > 0)
+                          ? 'Monitoring active — alerts fire when signal conditions are met.'
+                          : 'First scan pending — alerts appear here once the scanner runs.'}
                     </div>
                   </div>
                 ) : (
