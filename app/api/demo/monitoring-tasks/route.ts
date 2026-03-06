@@ -178,6 +178,7 @@ export async function GET(req: NextRequest) {
         lastRunAt: 1,
         alertCount: 1,
         cycleCount: 1,
+        agentId: 1,
         createdAt: 1,
       }
     )
@@ -201,6 +202,7 @@ export async function GET(req: NextRequest) {
 
       return {
         id: String(t._id),
+        agentId: t.agentId ?? null,
         taskTitle: t.task,
         assetSymbol,
         status: t.status,
