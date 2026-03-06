@@ -1,7 +1,6 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { useAccount } from 'wagmi';
 import { useRouter } from 'next/navigation';
 import s from './agents.module.css';
 
@@ -159,8 +158,8 @@ function AgentCard({ card, onClick }: { card: AgentCard; onClick: () => void }) 
 }
 
 export default function AgentsPage() {
-  const { address, isConnected } = useAccount();
   const router = useRouter();
+  const [address, setAddress] = useState<string | null>(null);
   const [agents, setAgents] = useState<AgentCard[]>([]);
   const [tasks, setTasks] = useState<AgentTask[]>([]);
   const [latestSignals, setLatestSignals] = useState<AgentSignal[]>([]);
@@ -168,9 +167,14 @@ export default function AgentsPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (!isConnected || !address) return;
+    const wallet = localStorage.getItem('yieldr_auth_wallet');
+    setAddress(wallet);
+  }, []);
+
+  useEffect(() => {
+    if (!address) return;
     fetchData();
-  }, [isConnected, address]);
+  }, [address]);
 
   async function fetchData() {
     if (!address) return;
@@ -285,7 +289,7 @@ export default function AgentsPage() {
         <div className={s.gridEmpty}>
           <div className={s.gridEmptyText}>Loading agents...</div>
         </div>
-      ) : !isConnected ? (
+      ) : !address ? (
         <div className={s.gridEmpty}>
           <div className={s.gridEmptyIcon}>🔌</div>
           <div className={s.gridEmptyText}>Connect your wallet to view your agents</div>

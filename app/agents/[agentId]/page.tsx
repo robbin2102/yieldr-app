@@ -1,7 +1,6 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { useAccount } from 'wagmi';
 import { useRouter, useParams } from 'next/navigation';
 import s from './agent.module.css';
 
@@ -114,8 +113,12 @@ function severityLabel(severity: string, isSignal: boolean): string {
 }
 
 export default function AgentDetailPage() {
-  const { address } = useAccount();
   const router = useRouter();
+  const [address, setAddress] = useState<string | null>(null);
+
+  useEffect(() => {
+    setAddress(localStorage.getItem('yieldr_auth_wallet'));
+  }, []);
   const params = useParams();
   const agentId = params?.agentId as string;
 
