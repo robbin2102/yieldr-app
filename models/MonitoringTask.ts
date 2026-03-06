@@ -62,7 +62,7 @@ const MonitoringTaskSchema = new Schema<IMonitoringTask>({
   monitorInstruction: { type: String, required: true },
 
   tools: { type: [ToolConfigSchema], required: true },
-  intervalSeconds: { type: Number, required: true, min: 3600 },
+  intervalSeconds: { type: Number, required: true, min: 300 },
   status: { type: String, enum: ['active', 'paused', 'error'], default: 'active' },
 
   nextRunAt: { type: Date, required: true },
@@ -76,7 +76,7 @@ const MonitoringTaskSchema = new Schema<IMonitoringTask>({
   cycleHistory: { type: [CycleEntrySchema], default: [] },
 
   expiresAt: { type: Date },
-}, { timestamps: true });
+}, { timestamps: true, collection: 'monitoring_tasks' });
 
 MonitoringTaskSchema.index({ userId: 1, status: 1 });
 MonitoringTaskSchema.index({ status: 1, nextRunAt: 1 });

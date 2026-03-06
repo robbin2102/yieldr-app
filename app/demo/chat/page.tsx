@@ -5,6 +5,9 @@ import { useAccount, useDisconnect } from 'wagmi';
 import { useRouter } from 'next/navigation';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import s from './terminal.module.css';
+
+// ─── Interfaces ───────────────────────────────────────────────────────────────
 
 interface PerpPosition {
   pair?: string;
@@ -61,30 +64,132 @@ interface TokenBalance {
   isNative: boolean;
 }
 
-const AVATAR_IMGS = [1, 11, 12, 14, 15];
+interface SignalPill {
+  label: string;
+  color: string; // g | y | r | b | p
+}
 
-// Filter traders: pick best per platform with realistic win rates (70-95%)
+interface MonitoringTaskUI {
+  id: string;
+  taskTitle: string;
+  assetSymbol: string; // normalized, uppercase e.g. "ETH"
+  status: 'active' | 'paused' | 'error';
+  intervalSeconds: number;
+  cycleCount: number;
+  alertCount: number;
+  nextRunAt: string | null;
+  lastRunAt: string | null;
+  signalPills: SignalPill[];
+}
+
+interface MonitoringAlertUI {
+  id: string;
+  taskId: string;
+  title: string;
+  message: string;
+  severity: 'info' | 'warning' | 'critical';
+  cycleNumber: number;
+  read: boolean;
+  assetSymbol: string;
+  createdAt: string;
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+// Normalise a position pair to a bare symbol: "ETH-USD" → "ETH"
+function normaliseSymbol(raw: string): string {
+  return (raw || '')
+    .toUpperCase()
+    .replace(/[-/](USD[CT]?|PERP|USDT?)$/i, '')
+    .replace(/[^A-Z0-9]/g, '');
+}
+
+const FREE_CREDITS_LIMIT = 500000;
+const YLDR_PRICE = 9_000_000 / 210_000_000; // ~$0.04286
+
+function formatCreditsDisplay(used: number) {
+  const usedK = used >= 1000 ? `${(used / 1000).toFixed(1)}k` : used.toString();
+  return usedK;
+}
+
+function formatPnl(v: number | undefined): string {
+  if (v == null) return '—';
+  const abs = Math.abs(v);
+  const sign = v >= 0 ? '+' : '-';
+  if (abs >= 1000) return `${sign}$${(abs / 1000).toFixed(1)}K`;
+  return `${sign}$${abs.toFixed(0)}`;
+}
+
+function formatPct(v: number | undefined): string {
+  if (v == null) return '—';
+  return `${v >= 0 ? '+' : ''}${v.toFixed(1)}%`;
+}
+
+function formatPrice(v: number | undefined): string {
+  if (v == null) return '—';
+  if (v >= 1000) return `$${v.toLocaleString('en-US', { maximumFractionDigits: 0 })}`;
+  if (v >= 1) return `$${v.toFixed(3)}`;
+  return `$${v.toFixed(4)}`;
+}
+
+function formatUsd(v: number | null | undefined): string {
+  if (v == null) return '$0';
+  if (v >= 1000) return `$${(v / 1000).toFixed(1)}K`;
+  return `$${v.toFixed(0)}`;
+}
+
+function timeAgo(iso: string): string {
+  const diff = Date.now() - new Date(iso).getTime();
+  const m = Math.floor(diff / 60000);
+  if (m < 1) return 'now';
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  return `${Math.floor(h / 24)}d ago`;
+}
+
+function formatCountdown(nextRunAt: string | null, cycleCount = 0): string {
+  if (!nextRunAt) return '—';
+  const diff = new Date(nextRunAt).getTime() - Date.now();
+  if (diff <= 0) return cycleCount === 0 ? 'Pending...' : 'Running...';
+  const totalS = Math.floor(diff / 1000);
+  const m = Math.floor(totalS / 60);
+  const sec = totalS % 60;
+  return `${m}:${String(sec).padStart(2, '0')}`;
+}
+
+// Filter traders: pick best per platform with realistic win rates
 function pickDisplayTraders(traders: FollowedTrader[]): FollowedTrader[] {
   const validWinRate = (t: FollowedTrader) => {
     const wr = t.winRate <= 1 ? t.winRate * 100 : t.winRate;
     return wr >= 70 && wr <= 95;
   };
   const byPnl = (a: FollowedTrader, b: FollowedTrader) => b.pnl30d - a.pnl30d;
-
   const hl = traders.filter(t => t.platform === 'hyperliquid' && validWinRate(t)).sort(byPnl);
   const av = traders.filter(t => t.platform === 'avantis' && validWinRate(t)).sort(byPnl);
   const pm = traders.filter(t => t.platform === 'polymarket' && validWinRate(t)).sort(byPnl);
-
-  // Fallback: if no valid win rate traders, just pick highest pnl per platform
   const hlPick = hl[0] || traders.filter(t => t.platform === 'hyperliquid').sort(byPnl)[0];
   const avPick = av[0] || traders.filter(t => t.platform === 'avantis').sort(byPnl)[0];
   const pmPick = pm[0] || traders.filter(t => t.platform === 'polymarket').sort(byPnl)[0];
-
   return [hlPick, avPick, pmPick].filter(Boolean);
 }
 
-// Free credits limit (500k tokens)
-const FREE_CREDITS_LIMIT = 500000;
+// Activity ticker messages
+const IDLE_MESSAGES = [
+  'Agent is waiting — ask me to monitor any signal on your positions',
+  "Try: 'Monitor ETH funding rate every hour'",
+  'Set up monitoring to activate position scanning...',
+  "Try: 'Alert me if SOL OI rises more than 10%'",
+  'Ask your analyst to start watching your positions',
+];
+
+const PENDING_MESSAGES = [
+  'Setting up monitoring — first scan starting soon...',
+  'Monitoring configured — awaiting first cycle...',
+  'Agent preparing initial data baseline...',
+];
+
+// ─── Component ────────────────────────────────────────────────────────────────
 
 export default function ChatPage() {
   const [mounted, setMounted] = useState(false);
@@ -92,218 +197,333 @@ export default function ChatPage() {
   const { address, isConnected, isReconnecting } = useAccount();
   const { disconnect } = useDisconnect();
 
-  // Auth state - check localStorage first, then verify with wagmi
+  // Auth
   const [authChecking, setAuthChecking] = useState(true);
   const [authenticatedWallet, setAuthenticatedWallet] = useState<string | null>(null);
 
-  const [agentName, setAgentName] = useState('AlphaHunter');
-  const [panelCollapsed, setPanelCollapsed] = useState(false);
-  const [activeTab, setActiveTab] = useState<'positions' | 'tokens' | 'trades' | 'markets'>('positions');
+  // Agent info
+  const [agentName, setAgentName] = useState('Analyst');
 
-  // Credits state
+  // UI state
+  const [activeLeftTab, setActiveLeftTab] = useState<'positions' | 'alerts' | 'tokens'>('positions');
+  const [expandedCards, setExpandedCards] = useState<Set<string>>(new Set());
+  const [activeNavTab, setActiveNavTab] = useState<'terminal' | 'agents'>('terminal');
+  const [showYldrModal, setShowYldrModal] = useState(false);
+  const [yldrInput, setYldrInput] = useState(100);
+  const [showHistory, setShowHistory] = useState(false);
+  const [mobPanelHidden, setMobPanelHidden] = useState(false);
+
+  // Credits
   const [creditsUsed, setCreditsUsed] = useState(0);
   const [creditsLoading, setCreditsLoading] = useState(true);
   const creditsExceeded = creditsUsed >= FREE_CREDITS_LIMIT;
 
-  // Data
+  // Position data
   const [perpPositions, setPerpPositions] = useState<PerpPosition[]>([]);
   const [pmPositions, setPmPositions] = useState<PMPosition[]>([]);
   const [followedTraders, setFollowedTraders] = useState<FollowedTrader[]>([]);
-  const [hoveredTrader, setHoveredTrader] = useState<string | null>(null);
-  const [tooltipPos, setTooltipPos] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
   const [tokens, setTokens] = useState<TokenBalance[]>([]);
-  const [tokensLoading, setTokensLoading] = useState(false);
   const [tokensTotalUsd, setTokensTotalUsd] = useState(0);
+
+  // Monitoring
+  const [monitoringTasks, setMonitoringTasks] = useState<MonitoringTaskUI[]>([]);
+  const [monitoringAlerts, setMonitoringAlerts] = useState<MonitoringAlertUI[]>([]);
+  const [unreadAlerts, setUnreadAlerts] = useState(0);
+
+  // Ticker state
+  const [tickerMsgIdx, setTickerMsgIdx] = useState(0);
+  const [tickerDotState, setTickerDotState] = useState<'idle' | 'scanning' | 'processing' | 'alert'>('idle');
 
   // Chat
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputValue, setInputValue] = useState('');
+  const [isStreaming, setIsStreaming] = useState(false);
+  const [toolStatus, setToolStatus] = useState<string | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  // Chat sessions
+  // Sessions
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [chatSessions, setChatSessions] = useState<{ id: string; title: string; updatedAt: string }[]>([]);
-  const [showHistory, setShowHistory] = useState(false);
 
-  // Modal
-  const [showModal, setShowModal] = useState(false);
-  const [yldrInput, setYldrInput] = useState(100);
+  const initialAnalysisTriggered = useRef(false);
 
+  // ── Mount
   useEffect(() => { setMounted(true); }, []);
 
-  // Auth check - use localStorage + wagmi for persistent login
+  // ── Auth check
   useEffect(() => {
     if (!mounted) return;
-
-    // Check localStorage for previously authenticated wallet
     const storedWallet = localStorage.getItem('yieldr_auth_wallet');
     const agentCreated = localStorage.getItem('agentCreated');
-
     if (storedWallet) {
       setAuthenticatedWallet(storedWallet.toLowerCase());
     } else if (agentCreated) {
-      // Fallback: extract wallet from agentCreated data
       try {
-        const data = JSON.parse(agentCreated);
-        if (data.wallet) {
-          localStorage.setItem('yieldr_auth_wallet', data.wallet.toLowerCase());
-          setAuthenticatedWallet(data.wallet.toLowerCase());
+        const d = JSON.parse(agentCreated);
+        if (d.wallet) {
+          localStorage.setItem('yieldr_auth_wallet', d.wallet.toLowerCase());
+          setAuthenticatedWallet(d.wallet.toLowerCase());
         }
       } catch {}
     }
-
-    // Wait a bit for wagmi to potentially reconnect
-    const timer = setTimeout(() => {
-      setAuthChecking(false);
-    }, 1500);
-
-    return () => clearTimeout(timer);
+    const t = setTimeout(() => setAuthChecking(false), 1500);
+    return () => clearTimeout(t);
   }, [mounted]);
 
-  // Sync wagmi connection with auth state
   useEffect(() => {
     if (!mounted || authChecking) return;
-
-    // If wagmi connected, update auth state
     if (isConnected && address) {
       localStorage.setItem('yieldr_auth_wallet', address.toLowerCase());
       setAuthenticatedWallet(address.toLowerCase());
     }
-
-    // Only redirect if both wagmi and localStorage auth fail
     if (!isConnected && !isReconnecting && !authenticatedWallet) {
       router.push('/demo');
     }
   }, [mounted, authChecking, isConnected, isReconnecting, address, authenticatedWallet, router]);
 
-  // Load agent name
+  // ── Agent name
   useEffect(() => {
     if (!mounted) return;
-    const created = localStorage.getItem('agentCreated');
-    if (created) {
-      try {
-        const d = JSON.parse(created);
-        if (d.name) setAgentName(d.name);
-      } catch {}
+    const d = localStorage.getItem('agentCreated');
+    if (d) {
+      try { const p = JSON.parse(d); if (p.name) setAgentName(p.name); } catch {}
     }
   }, [mounted]);
 
-  // Fetch credits/usage
+  const effectiveWallet = address || authenticatedWallet;
+  const shortWallet = effectiveWallet
+    ? `${effectiveWallet.slice(0, 6)}...${effectiveWallet.slice(-4)}`
+    : '';
+
+  // ── Credits
   const fetchCredits = useCallback(async (wallet: string) => {
     try {
       const res = await fetch(`/api/usage/${wallet}`);
       if (res.ok) {
         const data = await res.json();
         if (data.success && data.data) {
-          const totalTokens = (data.data.lifetime?.totalInputTokens || 0) + (data.data.lifetime?.totalOutputTokens || 0);
-          setCreditsUsed(totalTokens);
+          const total = (data.data.lifetime?.totalInputTokens || 0) + (data.data.lifetime?.totalOutputTokens || 0);
+          setCreditsUsed(total);
         }
       }
-    } catch (err) {
-      console.error('[chat] Failed to fetch credits:', err);
-    } finally {
-      setCreditsLoading(false);
-    }
+    } catch {}
+    finally { setCreditsLoading(false); }
   }, []);
 
-  // Load credits on mount
   useEffect(() => {
-    const wallet = address || authenticatedWallet;
-    if (mounted && wallet) {
-      fetchCredits(wallet);
-    }
-  }, [mounted, address, authenticatedWallet, fetchCredits]);
+    if (mounted && effectiveWallet) fetchCredits(effectiveWallet);
+  }, [mounted, effectiveWallet, fetchCredits]);
 
-  // Handle logout/disconnect
-  const handleLogout = useCallback(() => {
-    localStorage.removeItem('yieldr_auth_wallet');
-    localStorage.removeItem('agentCreated');
-    localStorage.removeItem('agentSetup');
-    disconnect();
-    router.push('/demo');
-  }, [disconnect, router]);
-
-  // Fetch data
+  // ── Positions + agent data
   useEffect(() => {
-    const wallet = address || authenticatedWallet;
-    if (!mounted || !wallet) return;
+    if (!mounted || !effectiveWallet) return;
 
-    // Fetch perp positions from positions API
-    fetch(`/api/positions?address=${wallet}`)
+    fetch(`/api/positions?address=${effectiveWallet}`)
       .then(r => r.json())
-      .then(data => {
-        if (data.success && data.data) {
-          setPerpPositions(data.data.perpPositions || []);
-        }
-      })
+      .then(d => { if (d.success && d.data) setPerpPositions(d.data.perpPositions || []); })
       .catch(() => {});
 
-    // Fetch PM positions separately
-    fetch(`/api/polymarket-positions?address=${wallet}`)
+    fetch(`/api/polymarket-positions?address=${effectiveWallet}`)
       .then(r => r.json())
-      .then(data => {
-        if (data.success && data.data) {
-          setPmPositions((data.data.positions || []).map((p: any) => ({
-            market: p.title,
-            outcome: p.outcome,
-            size: p.size,
-            avgPrice: p.avgPrice,
-            currentPrice: p.currentPrice,
-            currentValue: p.currentValue,
-            pnl: p.pnl,
-            pnlPercent: p.pnlPercent,
+      .then(d => {
+        if (d.success && d.data) {
+          setPmPositions((d.data.positions || []).map((p: any) => ({
+            market: p.title, outcome: p.outcome, size: p.size,
+            avgPrice: p.avgPrice, currentPrice: p.currentPrice,
+            currentValue: p.currentValue, pnl: p.pnl, pnlPercent: p.pnlPercent,
           })));
         }
       })
       .catch(() => {});
 
-    // Fetch agent (for followed traders + cached tokens)
-    setTokensLoading(true);
-    fetch(`/api/demo/agents?wallet=${wallet}`)
+    fetch(`/api/demo/agents?wallet=${effectiveWallet}`)
       .then(r => r.json())
-      .then(data => {
-        if (data.success && data.agent) {
-          setFollowedTraders(data.agent.followedTraders || []);
-          if (data.agent.name) setAgentName(data.agent.name);
-          // Use cached tokens from agent (fetched once during onboarding)
-          setTokens(data.agent.cachedTokenBalances || []);
-          setTokensTotalUsd(data.agent.cachedTokensTotalUsd || 0);
+      .then(d => {
+        if (d.success && d.agent) {
+          setFollowedTraders(d.agent.followedTraders || []);
+          if (d.agent.name) setAgentName(d.agent.name);
+          setTokens(d.agent.cachedTokenBalances || []);
+          setTokensTotalUsd(d.agent.cachedTokensTotalUsd || 0);
         }
       })
-      .catch(() => {})
-      .finally(() => setTokensLoading(false));
-  }, [mounted, address, authenticatedWallet]);
+      .catch(() => {});
+  }, [mounted, effectiveWallet]);
 
-  // Load chat sessions list
-  const loadChatSessions = useCallback(async () => {
-    const wallet = address || authenticatedWallet;
-    if (!wallet) return;
+  // ── Monitoring polling (10s)
+  const fetchMonitoring = useCallback(async (wallet: string) => {
     try {
-      const res = await fetch(`/api/demo/chat-sessions?wallet=${wallet}`);
-      const data = await res.json();
-      if (data.success) {
-        setChatSessions(data.sessions.map((s: any) => ({
-          id: s.id,
-          title: s.title,
-          updatedAt: s.updatedAt,
-        })));
+      const res = await fetch(`/api/demo/monitoring-tasks?wallet=${wallet}`);
+      if (res.ok) {
+        const d = await res.json();
+        setMonitoringTasks(d.tasks || []);
       }
     } catch {}
-  }, [address, authenticatedWallet]);
+  }, []);
+
+  const fetchAlerts = useCallback(async (wallet: string) => {
+    try {
+      const res = await fetch(`/api/demo/alerts?wallet=${wallet}`);
+      if (res.ok) {
+        const d = await res.json();
+        setMonitoringAlerts(d.alerts || []);
+        setUnreadAlerts(d.unreadCount || 0);
+      }
+    } catch {}
+  }, []);
 
   useEffect(() => {
-    const wallet = address || authenticatedWallet;
-    if (mounted && wallet) loadChatSessions();
-  }, [mounted, address, authenticatedWallet, loadChatSessions]);
+    if (!mounted || !effectiveWallet) return;
+    fetchMonitoring(effectiveWallet);
+    fetchAlerts(effectiveWallet);
+    const iv = setInterval(() => {
+      fetchMonitoring(effectiveWallet);
+      fetchAlerts(effectiveWallet);
+    }, 30000);
+    return () => clearInterval(iv);
+  }, [mounted, effectiveWallet, fetchMonitoring, fetchAlerts]);
 
-  // Load a specific chat session
+  // ── Ticker rotation
+  const activeTasks = monitoringTasks.filter(t => t.status === 'active');
+  const pendingTasks = monitoringTasks.filter(t => t.cycleCount === 0);
+  const hasTasks = monitoringTasks.length > 0;
+  const hasActiveTasks = activeTasks.length > 0;
+
+  // Build ticker messages
+  const tickerMessages: string[] = (() => {
+    if (!hasTasks) return IDLE_MESSAGES;
+    if (!hasActiveTasks) return PENDING_MESSAGES;
+    const msgs: string[] = [];
+    for (const task of activeTasks) {
+      if (task.signalPills.length > 0) {
+        for (const pill of task.signalPills) {
+          msgs.push(`Scanning ${task.assetSymbol} — checking ${pill.label.toLowerCase()}...`);
+        }
+      } else if (task.assetSymbol) {
+        const mins = Math.round(task.intervalSeconds / 60);
+        msgs.push(`Monitoring ${task.assetSymbol} every ${mins}m — cycle ${task.cycleCount}...`);
+        msgs.push(`Agent watching ${task.assetSymbol} — next scan in ${task.nextRunAt ? Math.max(0, Math.round((new Date(task.nextRunAt).getTime() - Date.now()) / 60000)) + 'm' : '—'}`);
+      } else {
+        msgs.push(`Monitor active — cycle ${task.cycleCount}...`);
+      }
+    }
+    msgs.push('Computing signal scores across all positions...');
+    msgs.push('Cross-referencing top trader positions...');
+    return msgs;
+  })();
+
+  useEffect(() => {
+    const iv = setInterval(() => {
+      setTickerMsgIdx(i => (i + 1) % tickerMessages.length);
+    }, 3500);
+    return () => clearInterval(iv);
+  }, [tickerMessages.length]);
+
+  // Ticker dot state
+  useEffect(() => {
+    if (unreadAlerts > 0) {
+      setTickerDotState('alert');
+    } else if (!hasTasks) {
+      setTickerDotState('idle');
+    } else if (!hasActiveTasks) {
+      setTickerDotState('processing');
+    } else {
+      setTickerDotState('scanning');
+    }
+  }, [unreadAlerts, hasTasks, hasActiveTasks]);
+
+  // ── Get signal pills for a position
+  const getPillsForPosition = useCallback((pair: string): SignalPill[] => {
+    const sym = normaliseSymbol(pair);
+    const pills: SignalPill[] = [];
+    const seen = new Set<string>();
+    for (const task of monitoringTasks) {
+      if (normaliseSymbol(task.assetSymbol) === sym) {
+        for (const pill of task.signalPills) {
+          if (!seen.has(pill.label)) {
+            seen.add(pill.label);
+            pills.push(pill);
+          }
+        }
+      }
+    }
+    return pills;
+  }, [monitoringTasks]);
+
+  // ── Get last alert for a position (for expanded card)
+  const getLastAlertForPosition = useCallback((pair: string): MonitoringAlertUI | null => {
+    const sym = normaliseSymbol(pair);
+    // Find taskIds that match this position
+    const matchingTaskIds = new Set(
+      monitoringTasks
+        .filter(t => normaliseSymbol(t.assetSymbol) === sym)
+        .map(t => t.id)
+    );
+    const match = monitoringAlerts.find(a => matchingTaskIds.has(a.taskId));
+    return match || null;
+  }, [monitoringTasks, monitoringAlerts]);
+
+  // ── Has unread alert for position
+  const hasUnreadAlertForPosition = useCallback((pair: string): 'warn' | 'crit' | null => {
+    const sym = normaliseSymbol(pair);
+    const matchingTaskIds = new Set(
+      monitoringTasks
+        .filter(t => normaliseSymbol(t.assetSymbol) === sym)
+        .map(t => t.id)
+    );
+    const unread = monitoringAlerts.find(a => matchingTaskIds.has(a.taskId) && !a.read);
+    if (!unread) return null;
+    return unread.severity === 'critical' ? 'crit' : 'warn';
+  }, [monitoringTasks, monitoringAlerts]);
+
+  // ── Per-task countdowns for Alerts tab
+  const [taskCountdowns, setTaskCountdowns] = useState<Record<string, { str: string; pct: number }>>({});
+
+  useEffect(() => {
+    const compute = () => {
+      const now = Date.now();
+      const next: Record<string, { str: string; pct: number }> = {};
+      for (const task of activeTasks) {
+        const totalMs = task.intervalSeconds * 1000;
+        const nextMs = task.nextRunAt ? new Date(task.nextRunAt).getTime() : now;
+        const diff = Math.max(0, nextMs - now);
+        const elapsed = totalMs - diff;
+        next[task.id] = {
+          str: formatCountdown(task.nextRunAt, task.cycleCount),
+          pct: Math.min(100, Math.max(0, (elapsed / totalMs) * 100)),
+        };
+      }
+      setTaskCountdowns(next);
+    };
+    compute();
+    const iv = setInterval(compute, 1000);
+    return () => clearInterval(iv);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTasks.map(t => t.id + t.nextRunAt + t.cycleCount).join(',')]);
+
+  // ── Chat sessions
+  const loadChatSessions = useCallback(async () => {
+    if (!effectiveWallet) return;
+    try {
+      const res = await fetch(`/api/demo/chat-sessions?wallet=${effectiveWallet}`);
+      const d = await res.json();
+      if (d.success) {
+        setChatSessions(d.sessions.map((s: any) => ({ id: s.id, title: s.title, updatedAt: s.updatedAt })));
+      }
+    } catch {}
+  }, [effectiveWallet]);
+
+  useEffect(() => {
+    if (mounted && effectiveWallet) loadChatSessions();
+  }, [mounted, effectiveWallet, loadChatSessions]);
+
   const loadSession = useCallback(async (id: string) => {
     try {
       const res = await fetch(`/api/demo/chat-sessions/${id}`);
-      const data = await res.json();
-      if (data.success && data.session) {
+      const d = await res.json();
+      if (d.success && d.session) {
         setSessionId(id);
-        setMessages(data.session.messages.map((m: any, i: number) => ({
+        setMessages(d.session.messages.map((m: any, i: number) => ({
           id: `${id}-${i}`,
           role: m.role,
           content: m.content,
@@ -314,169 +534,97 @@ export default function ChatPage() {
     } catch {}
   }, []);
 
-  // Start a new chat
   const startNewChat = useCallback(() => {
     setSessionId(null);
     setMessages([]);
     setShowHistory(false);
   }, []);
 
-  // Track whether initial analysis has been triggered
-  const initialAnalysisTriggered = useRef(false);
-
-  // Initial agent message - calls the LLM to generate portfolio analysis
+  // ── Initial analysis
   useEffect(() => {
-    const wallet = address || authenticatedWallet;
-    if (!mounted || messages.length > 0 || !wallet || initialAnalysisTriggered.current) return;
+    if (!mounted || messages.length > 0 || !effectiveWallet || initialAnalysisTriggered.current) return;
     initialAnalysisTriggered.current = true;
-
     const now = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
     const agentMsgId = 'initial-analysis';
 
-    // Show an empty agent message that will be filled by streaming
-    setMessages([{
-      id: agentMsgId,
-      role: 'agent',
-      content: '',
-      time: now,
-    }]);
+    setMessages([{ id: agentMsgId, role: 'agent', content: '', time: now }]);
     setIsStreaming(true);
-
-    console.log('[chat-page] Triggering initial-analysis...');
 
     (async () => {
       try {
         const res = await fetch('/api/demo/chat/initial-analysis', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ wallet }),
+          body: JSON.stringify({ wallet: effectiveWallet }),
         });
 
         if (!res.ok) {
-          // If the API fails, try parsing as JSON for a static response
-          const errData = await res.json().catch(() => ({ error: 'Unknown error' }));
-          setMessages([{
-            id: agentMsgId,
-            role: 'agent',
-            content: `Welcome! I'm ${agentName}, your AI trading agent. I'm ready to help you analyze markets, track positions, and learn from top traders.\n\nAsk me anything about your positions or strategies.`,
-            time: now,
-          }]);
+          setMessages([{ id: agentMsgId, role: 'agent', content: `Welcome! I'm ${agentName}, your AI trading analyst. I'm ready to analyse markets, track positions, and build monitoring tasks.\n\nAsk me anything.`, time: now }]);
           setIsStreaming(false);
-          console.log('[chat-page] initial-analysis failed:', errData.error);
           return;
         }
 
         const contentType = res.headers.get('content-type') || '';
-
-        // Handle static response (no positions)
         if (contentType.includes('application/json')) {
           const data = await res.json();
-          setMessages([{
-            id: agentMsgId,
-            role: 'agent',
-            content: data.content || `Welcome! I'm ${agentName}, your AI trading agent.`,
-            time: now,
-          }]);
-          setIsStreaming(false);
-          console.log('[chat-page] initial-analysis: static response (no positions)');
-          return;
-        }
-
-        // Handle streaming response
-        if (!res.body) {
+          setMessages([{ id: agentMsgId, role: 'agent', content: data.content || `Welcome! I'm ${agentName}.`, time: now }]);
           setIsStreaming(false);
           return;
         }
 
+        if (!res.body) { setIsStreaming(false); return; }
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
         let buffer = '';
-
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
-
           buffer += decoder.decode(value, { stream: true });
           const lines = buffer.split('\n');
           buffer = lines.pop() || '';
-
           for (const line of lines) {
             if (!line.trim()) continue;
             try {
               const parsed = JSON.parse(line);
               if (parsed.type === 'text') {
-                setMessages(prev => prev.map(m =>
-                  m.id === agentMsgId ? { ...m, content: m.content + parsed.text } : m
-                ));
+                setMessages(prev => prev.map(m => m.id === agentMsgId ? { ...m, content: m.content + parsed.text } : m));
               } else if (parsed.type === 'session') {
                 setSessionId(parsed.sessionId);
                 loadChatSessions();
-                console.log('[chat-page] initial-analysis session created:', parsed.sessionId);
-              } else if (parsed.type === 'error') {
-                console.error('[chat-page] initial-analysis stream error:', parsed.error);
               }
             } catch {}
           }
         }
-
-        console.log('[chat-page] initial-analysis streaming complete');
-      } catch (err: any) {
-        console.error('[chat-page] initial-analysis fetch error:', err.message);
-        setMessages([{
-          id: agentMsgId,
-          role: 'agent',
-          content: `Welcome! I'm ${agentName}, your AI trading agent. I encountered an issue loading your analysis, but I'm ready to help.\n\nAsk me anything about your positions or strategies.`,
-          time: now,
-        }]);
+      } catch {
+        setMessages([{ id: agentMsgId, role: 'agent', content: `Welcome! I'm ${agentName}, your AI trading analyst. Ask me about your positions or set up monitoring.`, time: now }]);
       }
       setIsStreaming(false);
-      // Refresh credits after initial analysis
-      if (wallet) fetchCredits(wallet);
+      if (effectiveWallet) fetchCredits(effectiveWallet);
     })();
-  }, [mounted, address, authenticatedWallet, agentName, messages.length, loadChatSessions, fetchCredits]);
+  }, [mounted, effectiveWallet, agentName, messages.length, loadChatSessions, fetchCredits]);
 
-  const [isStreaming, setIsStreaming] = useState(false);
-  const [toolStatus, setToolStatus] = useState<string | null>(null);
-
-  // Auto-scroll chat — scroll on new messages, tool status, and continuously during streaming
-  useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, toolStatus]);
-
+  // ── Auto-scroll
+  useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, toolStatus]);
   useEffect(() => {
     if (!isStreaming) return;
-    const interval = setInterval(() => {
-      chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }, 300);
-    return () => clearInterval(interval);
+    const iv = setInterval(() => { chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, 300);
+    return () => clearInterval(iv);
   }, [isStreaming]);
 
+  // ── Send message
   const handleSend = useCallback(async () => {
     const text = inputValue.trim();
-    if (!text || isStreaming || creditsExceeded) return;
+    if (!text || isStreaming || creditsExceeded || !effectiveWallet) return;
     setInputValue('');
-
-    const wallet = address || authenticatedWallet;
-    if (!wallet) return;
+    if (textareaRef.current) textareaRef.current.style.height = 'auto';
 
     const now = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
-    const userMsg: ChatMessage = {
-      id: Date.now().toString(),
-      role: 'user',
-      content: text,
-      time: now,
-    };
+    const userMsg: ChatMessage = { id: Date.now().toString(), role: 'user', content: text, time: now };
     const agentMsgId = (Date.now() + 1).toString();
 
-    setMessages(prev => [...prev, userMsg, {
-      id: agentMsgId,
-      role: 'agent',
-      content: '',
-      time: now,
-    }]);
+    setMessages(prev => [...prev, userMsg, { id: agentMsgId, role: 'agent', content: '', time: now }]);
     setIsStreaming(true);
 
-    // Build conversation history for API (exclude the empty agent msg)
     const apiMessages = [...messages, userMsg]
       .filter(m => m.content.trim())
       .map(m => ({ role: m.role, content: m.content }));
@@ -485,14 +633,12 @@ export default function ChatPage() {
       const res = await fetch('/api/demo/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: apiMessages, wallet, sessionId }),
+        body: JSON.stringify({ messages: apiMessages, wallet: effectiveWallet, sessionId }),
       });
 
       if (!res.ok || !res.body) {
         const errData = await res.json().catch(() => ({ error: 'Unknown error' }));
-        setMessages(prev => prev.map(m =>
-          m.id === agentMsgId ? { ...m, content: `Error: ${errData.error || 'Failed to get response'}` } : m
-        ));
+        setMessages(prev => prev.map(m => m.id === agentMsgId ? { ...m, content: `Error: ${errData.error || 'Failed to get response'}` } : m));
         setIsStreaming(false);
         return;
       }
@@ -500,1458 +646,834 @@ export default function ChatPage() {
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
-
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split('\n');
         buffer = lines.pop() || '';
-
         for (const line of lines) {
           if (!line.trim()) continue;
           try {
             const parsed = JSON.parse(line);
             if (parsed.type === 'text') {
-              setToolStatus(null); // Clear tool status when text starts
-              setMessages(prev => prev.map(m =>
-                m.id === agentMsgId ? { ...m, content: m.content + parsed.text } : m
-              ));
+              setToolStatus(null);
+              setMessages(prev => prev.map(m => m.id === agentMsgId ? { ...m, content: m.content + parsed.text } : m));
             } else if (parsed.type === 'tool_status') {
               setToolStatus(parsed.status);
             } else if (parsed.type === 'session') {
               setSessionId(parsed.sessionId);
               loadChatSessions();
             } else if (parsed.type === 'error') {
-              setMessages(prev => prev.map(m =>
-                m.id === agentMsgId ? { ...m, content: m.content || `Error: ${parsed.error}` } : m
-              ));
+              setMessages(prev => prev.map(m => m.id === agentMsgId ? { ...m, content: m.content || `Error: ${parsed.error}` } : m));
             }
           } catch {}
         }
       }
     } catch (err: any) {
-      setMessages(prev => prev.map(m =>
-        m.id === agentMsgId ? { ...m, content: `Connection error: ${err.message}` } : m
-      ));
+      setMessages(prev => prev.map(m => m.id === agentMsgId ? { ...m, content: `Connection error: ${err.message}` } : m));
     }
 
     setIsStreaming(false);
     setToolStatus(null);
-    // Refresh credits after each message
-    if (wallet) fetchCredits(wallet);
-  }, [inputValue, isStreaming, creditsExceeded, messages, address, authenticatedWallet, sessionId, loadChatSessions, fetchCredits]);
+    if (effectiveWallet) fetchCredits(effectiveWallet);
+    // Re-poll monitoring after each message (a task may have been created)
+    if (effectiveWallet) {
+      setTimeout(() => {
+        fetchMonitoring(effectiveWallet);
+        fetchAlerts(effectiveWallet);
+      }, 2000);
+    }
+  }, [inputValue, isStreaming, creditsExceeded, messages, effectiveWallet, sessionId, loadChatSessions, fetchCredits, fetchMonitoring, fetchAlerts]);
 
-  // Use either wagmi address or stored authenticated wallet
-  const effectiveWallet = address || authenticatedWallet;
-  const shortWallet = effectiveWallet ? `${effectiveWallet.slice(0, 6)}...${effectiveWallet.slice(-4)}` : '';
-  const agentInitials = agentName.slice(0, 2).toUpperCase();
+  // ── Logout
+  const handleLogout = useCallback(() => {
+    localStorage.removeItem('yieldr_auth_wallet');
+    localStorage.removeItem('agentCreated');
+    localStorage.removeItem('agentSetup');
+    disconnect();
+    router.push('/demo');
+  }, [disconnect, router]);
 
-  const perpTotal = perpPositions.reduce((s, p) => s + (p.margin || p.positionSize || 0), 0);
-  const pmTotal = pmPositions.reduce((s, p) => s + (p.currentValue || 0), 0);
-
-  const displayTraders = pickDisplayTraders(followedTraders);
-
-  // YLDR tokenomics: $9M FDV, 210M supply => price = 9000000/210000000 = ~$0.04286 per YLDR
-  const yldrPrice = 9000000 / 210000000;
-  const yldrTokens = Math.floor(yldrInput / yldrPrice);
-  const tradeCapacity = Math.floor(yldrTokens / 1000);
-
-  // Format credits display (e.g., 32.1k/300k)
-  const formatCredits = (used: number) => {
-    const usedK = used >= 1000 ? `${(used / 1000).toFixed(1)}k` : used.toString();
-    const limitK = `${FREE_CREDITS_LIMIT / 1000}k`;
-    return `${usedK}/${limitK}`;
+  // ── Toggle card expansion
+  const toggleCard = (key: string) => {
+    setExpandedCards(prev => {
+      const next = new Set(prev);
+      next.has(key) ? next.delete(key) : next.add(key);
+      return next;
+    });
   };
 
-  const creditsPercent = Math.min((creditsUsed / FREE_CREDITS_LIMIT) * 100, 100);
+  // ── Switch left tab + mark-as-read when switching to alerts
+  const switchLeftTab = async (tab: 'positions' | 'alerts' | 'tokens') => {
+    setActiveLeftTab(tab);
+    if (tab === 'alerts' && unreadAlerts > 0 && effectiveWallet) {
+      setUnreadAlerts(0);
+      try {
+        await fetch(`/api/demo/alerts?wallet=${effectiveWallet}`, { method: 'PATCH' });
+        setMonitoringAlerts(prev => prev.map(a => ({ ...a, read: true })));
+      } catch {}
+    }
+  };
 
+  const agentInitials = agentName.slice(0, 2).toUpperCase();
+  const displayTraders = pickDisplayTraders(followedTraders);
+  const yldrTokens = Math.floor(yldrInput / YLDR_PRICE);
+  const creditsFormatted = formatCreditsDisplay(creditsUsed);
+  const monitoringCount = perpPositions.length + pmPositions.length;
+
+  // ── Loading screen
   if (!mounted) return null;
-
-  // Show loading state while checking auth
   if (authChecking || isReconnecting) {
     return (
-      <div style={{
-        height: '100vh',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        background: '#000',
-        fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, sans-serif",
-      }}>
+      <div style={{ height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#000' }}>
         <div style={{ textAlign: 'center' }}>
-          <div style={{
-            width: 48, height: 48, margin: '0 auto 1rem',
-            border: '3px solid #1E1E1E',
-            borderTop: '3px solid #00C805',
-            borderRadius: '50%',
-            animation: 'spin 1s linear infinite',
-          }} />
-          <div style={{ color: '#9E9E9E', fontSize: '0.9rem' }}>Reconnecting wallet...</div>
-          <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
+          <div style={{ width: 40, height: 40, margin: '0 auto 12px', border: '2px solid #1A1A1A', borderTop: '2px solid #00C805', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
+          <div style={{ color: '#4A4A4A', fontSize: '0.7rem', fontFamily: 'monospace' }}>Reconnecting wallet...</div>
+          <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
         </div>
       </div>
     );
   }
 
+  // ── Render ─────────────────────────────────────────────────────────────────
   return (
-    <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', overflow: 'hidden', fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, sans-serif" }}>
-      {/* TOP NAV */}
-      <nav style={{
-        background: '#0A0A0A',
-        borderBottom: '1px solid #1E1E1E',
-        padding: '0 1rem',
-        height: 48,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        flexShrink: 0,
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '1.5rem' }}>
-          <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: '0.95rem', fontWeight: 700, color: '#00C805' }}>
-            YIELDR
-          </span>
-          <div style={{ display: 'flex', gap: '0.25rem' }}>
-            <a href="/demo/chat" style={{
-              color: '#00C805',
-              textDecoration: 'none',
-              fontWeight: 500,
-              fontSize: '0.8rem',
-              padding: '0.4rem 0.6rem',
-              borderRadius: 4,
-              background: 'rgba(0, 200, 5, 0.08)',
-            }}>Home</a>
-          </div>
+    <div className={s.root}>
+      {/* ═══ TOP NAV ═══ */}
+      <nav className={s.topnav}>
+        <span className={s.logo}>YIELDR</span>
+        <div className={s.navTabs}>
+          <button
+            className={`${s.navTab} ${activeNavTab === 'terminal' ? s.active : ''}`}
+            onClick={() => setActiveNavTab('terminal')}
+          >Terminal</button>
+          <button
+            className={`${s.navTab} ${activeNavTab === 'agents' ? s.active : ''}`}
+            onClick={() => setActiveNavTab('agents')}
+          >Agents</button>
+          <button className={`${s.navTab} ${s.disabled}`} title="Coming soon">Traders</button>
+          <button className={`${s.navTab} ${s.disabled}`} title="Coming soon">Funds</button>
         </div>
-        <button
-          onClick={handleLogout}
-          title="Disconnect wallet"
-          style={{
-            fontFamily: "'JetBrains Mono', monospace",
-            fontSize: '0.75rem',
-            color: '#9E9E9E',
-            background: '#111111',
-            padding: '0.35rem 0.6rem',
-            borderRadius: 4,
-            border: '1px solid #1E1E1E',
-            cursor: 'pointer',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.4rem',
-          }}>
-          <span>{shortWallet}</span>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
-            <polyline points="16 17 21 12 16 7" />
-            <line x1="21" y1="12" x2="9" y2="12" />
-          </svg>
-        </button>
+        <div className={s.topnavRight}>
+          <div className={s.tokenDisplay} onClick={() => setShowYldrModal(true)} title="AI credits used">
+            <span className={s.tokenIcon}>⚡</span>
+            <span className={s.tokenVal}>{creditsFormatted}</span>
+            <span className={s.tokenSep}>/</span>
+            <span className={s.tokenMax}>500k</span>
+          </div>
+          <button className={s.getYldr} onClick={() => setShowYldrModal(true)}>+ Get YLDR</button>
+          <div className={s.walletPill} onClick={handleLogout} title="Click to disconnect" style={{ cursor: 'pointer' }}>
+            {shortWallet}
+          </div>
+          <button className={s.mobToggle} onClick={() => setMobPanelHidden(p => !p)}>☰</button>
+        </div>
       </nav>
 
-      {/* AGENT HEADER */}
-      <div style={{
-        background: '#111111',
-        borderBottom: '1px solid #1E1E1E',
-        padding: '0.5rem 1rem',
-        display: 'flex',
-        alignItems: 'center',
-        gap: '0.75rem',
-        flexShrink: 0,
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-          <div style={{
-            width: 28, height: 28,
-            background: 'linear-gradient(135deg, #00C805 0%, #0088FF 100%)',
-            borderRadius: 6,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            fontSize: '0.8rem',
-          }}>{'🤖'}</div>
-          <span style={{ fontWeight: 600, fontSize: '0.95rem' }}>{agentName}</span>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginLeft: 'auto' }}>
-          {/* Credits Display */}
-          <div
-            title={`AI Credits: ${creditsUsed.toLocaleString()} / ${FREE_CREDITS_LIMIT.toLocaleString()} tokens used`}
-            style={{
-              display: 'flex', alignItems: 'center', gap: '0.4rem',
-              fontFamily: "'JetBrains Mono', monospace",
-              fontSize: '0.7rem',
-              padding: '0.35rem 0.6rem',
-              background: '#0A0A0A',
-              border: `1px solid ${creditsExceeded ? '#FF4757' : '#1E1E1E'}`,
-              borderRadius: 4,
-            }}>
-            <span style={{ color: creditsExceeded ? '#FF4757' : '#00C805' }}>{'⚡'}</span>
-            {creditsLoading ? (
-              <span style={{ color: '#6E6E6E' }}>...</span>
-            ) : (
-              <>
-                <span style={{ fontWeight: 600, color: creditsExceeded ? '#FF4757' : '#FFFFFF' }}>
-                  {formatCredits(creditsUsed)}
-                </span>
-                <div style={{
-                  width: 40,
-                  height: 4,
-                  background: '#1E1E1E',
-                  borderRadius: 2,
-                  overflow: 'hidden',
-                }}>
-                  <div style={{
-                    width: `${creditsPercent}%`,
-                    height: '100%',
-                    background: creditsExceeded ? '#FF4757' : creditsPercent > 80 ? '#FFD000' : '#00C805',
-                    borderRadius: 2,
-                  }} />
-                </div>
-              </>
-            )}
-          </div>
-          <a
-            href="https://yieldr.org"
-            target="_blank"
-            rel="noopener noreferrer"
-            style={{
-              fontSize: '0.65rem', fontWeight: 600,
-              padding: '0.35rem 0.5rem',
-              background: '#00C805', border: 'none', borderRadius: 4,
-              color: '#000', cursor: 'pointer',
-              textDecoration: 'none',
-            }}>+ Get YLDR</a>
-        </div>
-      </div>
+      {/* ═══ APP BODY ═══ */}
+      <div className={s.appBody}>
 
-      {/* MAIN BODY */}
-      <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
-        {/* LEFT PANEL */}
-        <div style={{
-          width: panelCollapsed ? 0 : 300,
-          background: '#0A0A0A',
-          borderRight: '1px solid #1E1E1E',
-          display: 'flex',
-          flexDirection: 'column',
-          overflow: 'hidden',
-          transition: 'width 0.2s ease',
-          flexShrink: 0,
-        }}>
-          {/* Panel Header */}
-          <div style={{
-            padding: '0.5rem 0.75rem',
-            borderBottom: '1px solid #1E1E1E',
-            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-            background: '#111111',
-            flexShrink: 0,
-          }}>
-            <span style={{
-              fontSize: '0.65rem', fontWeight: 600,
-              color: '#9E9E9E',
-              textTransform: 'uppercase',
-              letterSpacing: '0.05em',
-              display: 'flex', alignItems: 'center', gap: '0.4rem',
-            }}>
-              <span style={{ color: '#00C805' }}>{'📊'}</span> Agent Monitoring
-            </span>
-            <span style={{
-              fontFamily: "'JetBrains Mono', monospace",
-              fontSize: '0.7rem', fontWeight: 700, color: '#FFFFFF',
-            }}>
-              ${(perpTotal + pmTotal).toLocaleString(undefined, { maximumFractionDigits: 0 })} pos
-            </span>
+        {/* ═══ LEFT PANEL ═══ */}
+        <div className={`${s.leftPanel} ${mobPanelHidden ? s.mobHidden : ''}`}>
+          <div className={s.panelHeader}>
+            <span className={`${s.liveDot} ${hasActiveTasks ? '' : s.idle}`}></span>
+            <span className={s.panelTitle}>Agent Monitoring</span>
+          </div>
+
+          <div className={s.lpanelTabs}>
             <button
-              onClick={() => setPanelCollapsed(true)}
-              style={{
-                width: 22, height: 22,
-                background: '#0A0A0A',
-                border: '1px solid #1E1E1E',
-                borderRadius: 4,
-                color: '#6E6E6E',
-                cursor: 'pointer',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                fontSize: '0.65rem',
-              }}
-            >{'◀'}</button>
+              className={`${s.lpanelTab} ${activeLeftTab === 'positions' ? s.active : ''}`}
+              onClick={() => switchLeftTab('positions')}
+            >Positions</button>
+            <button
+              className={`${s.lpanelTab} ${activeLeftTab === 'alerts' ? s.active : ''}`}
+              onClick={() => switchLeftTab('alerts')}
+            >
+              Alerts
+              {unreadAlerts > 0 && <span className={s.tabBadge}>{unreadAlerts > 9 ? '9+' : unreadAlerts}</span>}
+            </button>
+            <button
+              className={`${s.lpanelTab} ${activeLeftTab === 'tokens' ? s.active : ''}`}
+              onClick={() => switchLeftTab('tokens')}
+            >Tokens</button>
           </div>
 
-          {/* Tabs: Positions | Tokens | Trades | Markets */}
-          <div style={{
-            display: 'flex', alignItems: 'center',
-            borderBottom: '1px solid #1E1E1E',
-            background: '#0A0A0A',
-            flexShrink: 0,
-            padding: '0 0.5rem',
-          }}>
-            <div style={{ display: 'flex', flex: 1 }}>
-              {(['positions', 'tokens', 'trades', 'markets'] as const).map(tab => (
-                <button key={tab} onClick={() => setActiveTab(tab)} style={{
-                  padding: '0.5rem',
-                  fontSize: '0.7rem',
-                  fontWeight: 500,
-                  color: activeTab === tab ? '#00C805' : '#6E6E6E',
-                  background: 'transparent',
-                  border: 'none',
-                  borderBottom: `2px solid ${activeTab === tab ? '#00C805' : 'transparent'}`,
-                  cursor: 'pointer',
-                  textTransform: 'capitalize',
-                }}>{tab}</button>
-              ))}
-            </div>
-          </div>
-
-          {/* Scrollable content */}
-          <div style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden' }}>
-            {/* POSITIONS TAB */}
-            {activeTab === 'positions' && (
-              <>
-                {/* Perpetuals Section */}
-                <div style={{ borderBottom: '1px solid #1E1E1E' }}>
-                  <div style={{
-                    fontSize: '0.6rem', textTransform: 'uppercase', letterSpacing: '0.05em',
-                    color: '#6E6E6E', padding: '0.5rem',
-                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                    background: '#111111',
-                  }}>
-                    <span>Perpetuals</span>
-                    <span style={{ fontFamily: "'JetBrains Mono', monospace", color: '#9E9E9E' }}>
-                      ${perpTotal.toLocaleString(undefined, { maximumFractionDigits: 0 })}
-                    </span>
-                  </div>
-                  <div style={{ maxHeight: 240, overflowY: 'auto', padding: '0.5rem' }}>
-                    {perpPositions.length === 0 ? (
-                      <div style={{ fontSize: '0.75rem', color: '#6E6E6E', textAlign: 'center', padding: '1rem 0' }}>
-                        No perp positions found
-                      </div>
-                    ) : perpPositions.map((pos, i) => {
-                      const pnl = pos.pnl || 0;
-                      const roi = pos.roi || 0;
-                      const isPositive = pnl >= 0;
-                      const borderColor = pnl > 0 ? '#00C805' : pnl < -10 ? '#FF4757' : pnl < 0 ? '#FFD000' : '#1E1E1E';
-                      return (
-                        <div key={i} style={{
-                          background: '#111111',
-                          border: '1px solid #1E1E1E',
-                          borderLeft: `3px solid ${borderColor}`,
-                          borderRadius: 5,
-                          padding: '0.5rem',
-                          marginBottom: '0.3rem',
-                        }}>
-                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                              <span style={{ fontWeight: 600, fontSize: '0.8rem' }}>
-                                {(pos.pair || '').replace('/USD', '')}
-                              </span>
-                              <span style={{
-                                fontSize: '0.55rem',
-                                padding: '0.1rem 0.25rem',
-                                borderRadius: 2,
-                                fontWeight: 600,
-                                background: pos.direction === 'LONG' ? 'rgba(0, 200, 5, 0.15)' : 'rgba(255, 71, 87, 0.15)',
-                                color: pos.direction === 'LONG' ? '#00C805' : '#FF4757',
-                              }}>
-                                {pos.direction} {pos.leverage}x
-                              </span>
-                              <span style={{
-                                fontSize: '0.55rem', color: '#6E6E6E',
-                                padding: '0.1rem 0.25rem',
-                                background: '#1A1A1A', borderRadius: 2,
-                              }}>{pos.platform}</span>
-                            </div>
-                            <span style={{
-                              fontFamily: "'JetBrains Mono', monospace",
-                              fontSize: '0.75rem', fontWeight: 600,
-                              color: isPositive ? '#00C805' : '#FF4757',
-                            }}>
-                              {isPositive ? '+' : ''}${Math.abs(pnl).toFixed(0)}
-                            </span>
-                          </div>
-                          <div style={{
-                            display: 'flex', gap: '0.5rem',
-                            fontSize: '0.6rem', color: '#6E6E6E', marginTop: '0.25rem',
-                          }}>
-                            <span>Size <span style={{ fontFamily: "'JetBrains Mono', monospace", color: '#9E9E9E' }}>
-                              ${(pos.positionSize || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}
-                            </span></span>
-                            <span>Entry <span style={{ fontFamily: "'JetBrains Mono', monospace", color: '#9E9E9E' }}>
-                              ${(pos.entryPrice || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}
-                            </span></span>
-                            <span style={{ fontFamily: "'JetBrains Mono', monospace", color: isPositive ? '#00C805' : '#FF4757' }}>
-                              {isPositive ? '+' : ''}{roi.toFixed(1)}%
-                            </span>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                {/* Prediction Markets Section */}
-                <div style={{ borderBottom: '1px solid #1E1E1E' }}>
-                  <div style={{
-                    fontSize: '0.6rem', textTransform: 'uppercase', letterSpacing: '0.05em',
-                    color: '#6E6E6E', padding: '0.5rem',
-                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                    background: '#111111',
-                  }}>
-                    <span>Prediction Markets</span>
-                    <span style={{ fontFamily: "'JetBrains Mono', monospace", color: '#9E9E9E' }}>
-                      ${pmTotal.toLocaleString(undefined, { maximumFractionDigits: 0 })}
-                    </span>
-                  </div>
-                  <div style={{ maxHeight: 200, overflowY: 'auto', padding: '0.5rem' }}>
-                    {pmPositions.length === 0 ? (
-                      <div style={{ fontSize: '0.75rem', color: '#6E6E6E', textAlign: 'center', padding: '1rem 0' }}>
-                        No prediction market positions
-                      </div>
-                    ) : pmPositions.map((pos, i) => {
-                      const pnl = pos.pnl || 0;
-                      const isPositive = pnl >= 0;
-                      return (
-                        <div key={i} style={{
-                          background: '#111111',
-                          border: '1px solid #1E1E1E',
-                          borderLeft: `3px solid ${isPositive ? '#00C805' : '#FF4757'}`,
-                          borderRadius: 5,
-                          padding: '0.5rem',
-                          marginBottom: '0.3rem',
-                        }}>
-                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                            <div style={{ flex: 1, minWidth: 0 }}>
-                              <div style={{ fontWeight: 600, fontSize: '0.75rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                                {pos.market}
-                              </div>
-                              <div style={{ fontSize: '0.55rem', color: '#6E6E6E', marginTop: '0.15rem' }}>
-                                {pos.outcome} @ {((pos.avgPrice || 0) * 100).toFixed(0)}c
-                              </div>
-                            </div>
-                            <div style={{ textAlign: 'right', flexShrink: 0, marginLeft: '0.5rem' }}>
-                              <div style={{
-                                fontFamily: "'JetBrains Mono', monospace",
-                                fontSize: '0.75rem', fontWeight: 600,
-                                color: isPositive ? '#00C805' : '#FF4757',
-                              }}>
-                                {isPositive ? '+' : ''}${Math.abs(pnl).toFixed(2)}
-                              </div>
-                              <div style={{
-                                fontFamily: "'JetBrains Mono', monospace",
-                                fontSize: '0.55rem',
-                                color: isPositive ? '#00C805' : '#FF4757',
-                              }}>
-                                {isPositive ? '+' : ''}{(pos.pnlPercent || 0).toFixed(1)}%
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                {/* Agent Following Section */}
-                <div style={{
-                  padding: '0.4rem 0.75rem',
-                  background: '#111111',
-                  borderTop: '1px solid #1E1E1E',
-                  borderBottom: '1px solid #1E1E1E',
-                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                }}>
-                  <span style={{
-                    fontSize: '0.6rem', fontWeight: 600, color: '#6E6E6E',
-                    textTransform: 'uppercase', letterSpacing: '0.05em',
-                  }}>Agent Following</span>
-                  <span style={{ fontSize: '0.6rem', color: '#6E6E6E' }}>
-                    {displayTraders.length}
-                  </span>
-                </div>
-                <div style={{ padding: '0.5rem' }}>
-                  {displayTraders.length === 0 ? (
-                    <div style={{ fontSize: '0.7rem', color: '#6E6E6E', textAlign: 'center', padding: '0.5rem 0' }}>
-                      No traders followed yet
-                    </div>
-                  ) : displayTraders.map((trader, i) => {
-                    const wrDisplay = trader.winRate <= 1 ? (trader.winRate * 100).toFixed(0) : trader.winRate.toFixed(0);
-                    return (
-                      <div
-                        key={i}
-                        style={{
-                          background: '#111111',
-                          border: `1px solid ${hoveredTrader === trader.wallet ? '#00C805' : '#1E1E1E'}`,
-                          borderRadius: 4,
-                          padding: '0.4rem 0.5rem',
-                          marginBottom: '0.3rem',
-                          display: 'flex', alignItems: 'center', gap: '0.4rem',
-                          cursor: 'pointer',
-                          position: 'relative',
-                        }}
-                        onMouseEnter={(e) => {
-                          const rect = e.currentTarget.getBoundingClientRect();
-                          setTooltipPos({ top: rect.top, left: rect.right + 8 });
-                          setHoveredTrader(trader.wallet);
-                        }}
-                        onMouseLeave={() => setHoveredTrader(null)}
-                      >
-                        <img
-                          src={`https://i.pravatar.cc/150?img=${AVATAR_IMGS[i % AVATAR_IMGS.length]}`}
-                          alt=""
-                          style={{
-                            width: 24, height: 24, borderRadius: '50%',
-                            border: '2px solid #00C805',
-                          }}
-                        />
-                        <div style={{ flex: 1 }}>
-                          <div style={{ fontWeight: 600, fontSize: '0.75rem' }}>
-                            {trader.username || `${trader.wallet.slice(0, 8)}...`}
-                          </div>
-                          <div style={{ fontSize: '0.55rem', color: '#6E6E6E' }}>
-                            {trader.platform.charAt(0).toUpperCase() + trader.platform.slice(1)} · {wrDisplay}% win
-                          </div>
-                        </div>
-                        <span style={{
-                          fontFamily: "'JetBrains Mono', monospace",
-                          fontSize: '0.7rem', color: '#00C805', fontWeight: 600,
-                        }}>
-                          +${trader.pnl30d >= 1000000
-                            ? `${(trader.pnl30d / 1000000).toFixed(1)}M`
-                            : trader.pnl30d >= 1000
-                            ? `${(trader.pnl30d / 1000).toFixed(1)}K`
-                            : trader.pnl30d.toFixed(0)}
-                        </span>
-
-                        {/* Hover tooltip */}
-                        {hoveredTrader === trader.wallet && (
-                          <div style={{
-                            position: 'fixed',
-                            left: tooltipPos.left,
-                            top: tooltipPos.top,
-                            width: 200,
-                            background: '#111111',
-                            border: '1px solid #00C805',
-                            borderRadius: 6,
-                            padding: '0.6rem',
-                            zIndex: 1000,
-                            boxShadow: '0 8px 24px rgba(0,0,0,0.6)',
-                          }}>
-                            <div style={{ fontSize: '0.8rem', fontWeight: 700, marginBottom: '0.4rem' }}>
-                              {trader.username || `${trader.wallet.slice(0, 10)}...`}
-                            </div>
-                            <div style={{ fontSize: '0.6rem', color: '#6E6E6E', marginBottom: trader.matchReason ? '0.25rem' : '0.5rem', textTransform: 'capitalize' }}>
-                              {trader.platform}
-                            </div>
-                            {trader.matchReason && (
-                              <div style={{ fontSize: '0.55rem', color: '#00C805', marginBottom: '0.5rem', fontStyle: 'italic' }}>
-                                {trader.matchReason}
-                              </div>
-                            )}
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-                              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.65rem' }}>
-                                <span style={{ color: '#6E6E6E' }}>30d PnL</span>
-                                <span style={{ fontFamily: "'JetBrains Mono', monospace", color: '#00C805', fontWeight: 600 }}>
-                                  +${trader.pnl30d.toLocaleString(undefined, { maximumFractionDigits: 0 })}
-                                </span>
-                              </div>
-                              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.65rem' }}>
-                                <span style={{ color: '#6E6E6E' }}>Win Rate</span>
-                                <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 600 }}>
-                                  {wrDisplay}%
-                                </span>
-                              </div>
-                              {trader.roi30d !== undefined && (
-                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.65rem' }}>
-                                  <span style={{ color: '#6E6E6E' }}>30d ROI</span>
-                                  <span style={{ fontFamily: "'JetBrains Mono', monospace", color: '#00C805', fontWeight: 600 }}>
-                                    {trader.roi30d.toFixed(1)}%
-                                  </span>
-                                </div>
-                              )}
-                              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.65rem' }}>
-                                <span style={{ color: '#6E6E6E' }}>Positions</span>
-                                <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 600 }}>
-                                  {trader.totalPositions}
-                                </span>
-                              </div>
-                              {trader.totalAUM !== undefined && trader.totalAUM > 0 && (
-                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.65rem' }}>
-                                  <span style={{ color: '#6E6E6E' }}>AUM</span>
-                                  <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 600 }}>
-                                    ${trader.totalAUM.toLocaleString(undefined, { maximumFractionDigits: 0 })}
-                                  </span>
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-
-                {/* AGENT TRAINING SECTION */}
-                <div style={{
-                  padding: '0.4rem 0.75rem',
-                  background: '#111111',
-                  borderTop: '1px solid #1E1E1E',
-                  borderBottom: '1px solid #1E1E1E',
-                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                }}>
-                  <span style={{
-                    fontSize: '0.6rem', fontWeight: 600, color: '#6E6E6E',
-                    textTransform: 'uppercase', letterSpacing: '0.05em',
-                  }}>Agent Training</span>
-                </div>
-                <div style={{ padding: '0.5rem' }}>
-                  <div style={{
-                    background: '#111111',
-                    border: '1px solid #1E1E1E',
-                    borderRadius: 6,
-                    padding: '0.6rem',
-                  }}>
-                    {/* Training Fuel */}
-                    <div style={{
-                      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                      marginBottom: '0.6rem', paddingBottom: '0.6rem',
-                      borderBottom: '1px solid #1E1E1E',
-                    }}>
-                      <div style={{
-                        display: 'flex', alignItems: 'center', gap: '0.35rem',
-                        fontFamily: "'JetBrains Mono', monospace", fontSize: '0.75rem',
-                      }}>
-                        <span style={{ color: '#00C805' }}>{'⚡'}</span>
-                        <span style={{ color: '#9E9E9E', fontSize: '0.65rem' }}>Training Fuel:</span>
-                        <span style={{ fontWeight: 700 }}>100K YLDR</span>
-                      </div>
-                      <a
-                        href="https://yieldr.org"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        style={{
-                          fontSize: '0.6rem', fontWeight: 600,
-                          padding: '0.3rem 0.5rem',
-                          background: 'rgba(0, 200, 5, 0.15)',
-                          border: '1px solid rgba(0, 200, 5, 0.3)',
-                          borderRadius: 4,
-                          color: '#00C805',
-                          cursor: 'pointer',
-                          textDecoration: 'none',
-                        }}
-                      >Train Agent</a>
-                    </div>
-
-                    {/* Current Phase */}
-                    <div style={{ marginBottom: '0.6rem' }}>
-                      <div style={{
-                        fontSize: '0.55rem', textTransform: 'uppercase', letterSpacing: '0.05em',
-                        color: '#6E6E6E', marginBottom: '0.2rem',
-                      }}>Current Phase</div>
-                      <div style={{ fontSize: '0.65rem', fontWeight: 700, color: '#FFD000', marginBottom: '0.15rem', letterSpacing: '0.05em' }}>
-                        DATA MONITORING
-                      </div>
-                      <div style={{ fontSize: '0.65rem', color: '#9E9E9E' }}>
-                        Monitoring traders and collecting trade data
-                      </div>
-                    </div>
-
-                    {/* Agent Activity - all 0 except YLDR */}
-                    <div style={{
-                      background: '#0A0A0A', borderRadius: 4, padding: '0.5rem',
-                      marginBottom: '0.6rem',
-                    }}>
-                      {[
-                        ['Trades analyzed', '0'],
-                        ['Insights generated', '0'],
-                        ['Trader alignments', '0'],
-                        ['YLDR consumed', '0'],
-                      ].map(([label, value]) => (
-                        <div key={label} style={{
-                          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                          fontSize: '0.65rem', padding: '0.2rem 0',
-                        }}>
-                          <span style={{ color: '#6E6E6E' }}>{label}</span>
-                          <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 600 }}>{value}</span>
-                        </div>
-                      ))}
-                    </div>
-
-                    {/* Training Threshold */}
-                    <div style={{
-                      background: '#0A0A0A', borderRadius: 4, padding: '0.5rem',
-                      marginBottom: '0.6rem',
-                    }}>
-                      <div style={{
-                        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                        fontSize: '0.6rem', marginBottom: '0.35rem',
-                      }}>
-                        <span style={{ color: '#6E6E6E' }}>Training Starts At</span>
-                        <span style={{ fontFamily: "'JetBrains Mono', monospace", color: '#FFD000', fontWeight: 600 }}>1,000 trades</span>
-                      </div>
-                      <div style={{
-                        height: 6, background: '#000', borderRadius: 3, overflow: 'hidden',
-                        marginBottom: '0.25rem',
-                      }}>
-                        <div style={{
-                          height: '100%', width: '0%',
-                          background: 'linear-gradient(90deg, #FFD000 0%, #00C805 100%)',
-                          borderRadius: 3,
-                        }} />
-                      </div>
-                      <div style={{ fontSize: '0.55rem', color: '#6E6E6E', textAlign: 'right' }}>
-                        1,000 more trades needed
-                      </div>
-                    </div>
-
-                    {/* What Training Unlocks */}
-                    <div style={{ marginBottom: '0.6rem' }}>
-                      <div style={{ fontSize: '0.6rem', fontWeight: 600, color: '#9E9E9E', marginBottom: '0.35rem' }}>
-                        What Training Unlocks
-                      </div>
-                      {[
-                        'Personalized entry/exit signals',
-                        'Pattern recognition from your traders',
-                        'Position sizing & risk management advice',
-                        'Auto-execution (coming soon)',
-                      ].map((text, i) => (
-                        <div key={i} style={{
-                          display: 'flex', alignItems: 'flex-start', gap: '0.35rem',
-                          fontSize: '0.65rem', color: '#6E6E6E', padding: '0.15rem 0',
-                        }}>
-                          <span style={{ color: '#6E6E6E', flexShrink: 0 }}>{'○'}</span>
-                          <span>{text}</span>
-                        </div>
-                      ))}
-                    </div>
-
-                    {/* Expected ROI */}
-                    <div style={{
-                      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                      padding: '0.5rem',
-                      background: 'rgba(0, 200, 5, 0.08)',
-                      border: '1px solid rgba(0, 200, 5, 0.15)',
-                      borderRadius: 4,
-                      marginBottom: '0.6rem',
-                    }}>
-                      <div>
-                        <div style={{ fontSize: '0.65rem', color: '#9E9E9E', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-                          {'📈'} Expected Agent ROI
-                        </div>
-                        <div style={{ fontSize: '0.55rem', color: '#6E6E6E' }}>
-                          Based on avg of {displayTraders.length} followed traders
-                        </div>
-                      </div>
-                      <div style={{
-                        fontFamily: "'JetBrains Mono', monospace",
-                        fontSize: '0.85rem', fontWeight: 700, color: '#00C805',
-                      }}>+0%</div>
-                    </div>
-
-                    {/* Train Agent CTA */}
-                    <a
-                      href="https://yieldr.org"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      style={{
-                        display: 'block',
-                        width: '100%', padding: '0.6rem',
-                        background: '#00C805', border: 'none', borderRadius: 4,
-                        color: '#000', fontSize: '0.75rem', fontWeight: 700,
-                        cursor: 'pointer',
-                        textAlign: 'center',
-                        textDecoration: 'none',
-                        boxSizing: 'border-box',
-                      }}
-                    >Train Agent</a>
-
-                    {/* V1 label + docs */}
-                    <div style={{
-                      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                      marginTop: '0.5rem', paddingTop: '0.5rem',
-                      borderTop: '1px solid #1E1E1E',
-                    }}>
-                      <span style={{
-                        fontSize: '0.5rem', fontWeight: 700, padding: '0.15rem 0.35rem',
-                        background: 'rgba(0, 136, 255, 0.15)', color: '#0088FF', borderRadius: 3,
-                        letterSpacing: '0.03em',
-                      }}>COMING IN V1</span>
-                      <a
-                        href="https://yieldr.org/docs"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        style={{ fontSize: '0.55rem', color: '#00C805', textDecoration: 'none' }}
-                      >Read docs &rarr;</a>
-                    </div>
-                  </div>
-                </div>
-              </>
+          {/* Activity Ticker */}
+          <div className={s.activityTicker}>
+            <span className={`${s.atDot} ${s[tickerDotState]}`}></span>
+            <span className={`${s.atText} ${!hasTasks ? s.idleMode : tickerDotState === 'alert' ? s.alertMode : ''}`}>
+              {tickerMessages[tickerMsgIdx % tickerMessages.length]}
+            </span>
+            {hasActiveTasks && (
+              <span className={s.atCycle}>
+                Cycle {activeTasks.length > 0 ? Math.min(...activeTasks.map(t => t.cycleCount)) : 0}
+              </span>
             )}
+          </div>
 
-            {/* TOKENS TAB */}
-            {activeTab === 'tokens' && (
-              <div>
-                {/* Header */}
-                <div style={{
-                  fontSize: '0.6rem', textTransform: 'uppercase', letterSpacing: '0.05em',
-                  color: '#6E6E6E', padding: '0.5rem',
-                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                  background: '#111111', borderBottom: '1px solid #1E1E1E',
-                }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                    <span>Tokens</span>
-                    <span style={{
-                      fontFamily: "'JetBrains Mono', monospace",
-                      fontSize: '0.55rem', color: '#6E6E6E',
-                      background: '#1A1A1A', padding: '0.1rem 0.25rem', borderRadius: 2,
-                    }}>{shortWallet}</span>
-                  </div>
-                  <span style={{ fontFamily: "'JetBrains Mono', monospace", color: '#9E9E9E' }}>
-                    {tokensTotalUsd > 0 ? `$${tokensTotalUsd.toLocaleString(undefined, { maximumFractionDigits: 2 })}` : '--'}
+          {/* Monitoring indicator tags */}
+          {hasActiveTasks && (() => {
+            const allPills: { label: string; asset: string }[] = [];
+            const seen = new Set<string>();
+            for (const task of activeTasks) {
+              if (task.signalPills.length > 0) {
+                for (const pill of task.signalPills) {
+                  const key = `${task.assetSymbol}:${pill.label}`;
+                  if (!seen.has(key)) { seen.add(key); allPills.push({ label: pill.label, asset: task.assetSymbol }); }
+                }
+              } else {
+                // Fallback: show asset + interval from task title
+                const key = `${task.assetSymbol}:task`;
+                if (!seen.has(key)) {
+                  seen.add(key);
+                  const mins = Math.round(task.intervalSeconds / 60);
+                  allPills.push({ label: `${task.assetSymbol} Monitor · ${mins}m`, asset: '' });
+                }
+              }
+            }
+            return (
+              <div className={s.monitorTagsStrip}>
+                {allPills.map((p, i) => (
+                  <span key={i} className={s.monitorTag}>
+                    <span className={s.monitorTagDot}></span>
+                    {p.asset ? `${p.asset} ${p.label}` : p.label}
                   </span>
+                ))}
+              </div>
+            );
+          })()}
+
+          <div className={s.lpanelScroll}>
+
+            {/* ══ POSITIONS TAB ══ */}
+            {activeLeftTab === 'positions' && (
+              <>
+                {/* Perpetuals */}
+                <div className={s.sectionDivider}>
+                  <span className={`${s.sdDot} ${s.perp}`}></span>
+                  Perpetuals
+                  <span className={s.sdCount}>{perpPositions.length} open</span>
                 </div>
 
-                {/* Chain badges */}
-                <div style={{
-                  padding: '0.4rem 0.5rem',
-                  display: 'flex', flexWrap: 'wrap', gap: '0.25rem',
-                  borderBottom: '1px solid #1E1E1E',
-                }}>
-                  {['Ethereum', 'Base', 'Arbitrum', 'Optimism', 'Polygon'].map(chain => {
-                    const hasTokens = tokens.some(t => t.chain === chain);
+                {perpPositions.length === 0 ? (
+                  <div className={s.emptyState}>
+                    <div className={s.emptyIcon}>📊</div>
+                    <div className={s.emptyTitle}>No perpetual positions found</div>
+                    <div className={s.emptyText}>
+                      Connect a wallet with open Hyperliquid or Avantis positions to see them here.
+                    </div>
+                  </div>
+                ) : (
+                  perpPositions.map((pos, i) => {
+                    const key = `perp-${i}`;
+                    const isExpanded = expandedCards.has(key);
+                    const pair = pos.pair || '—';
+                    const symbol = normaliseSymbol(pair);
+                    const pills = getPillsForPosition(pair);
+                    const alertDotType = hasUnreadAlertForPosition(pair);
+                    const lastAlert = getLastAlertForPosition(pair);
+                    const isLong = (pos.direction || '').toUpperCase().includes('LONG');
+                    const pnlPos = (pos.pnl || 0) >= 0;
+
                     return (
-                      <span key={chain} style={{
-                        fontSize: '0.5rem', padding: '0.15rem 0.3rem',
-                        background: hasTokens ? 'rgba(0, 200, 5, 0.1)' : '#1A1A1A',
-                        border: `1px solid ${hasTokens ? 'rgba(0, 200, 5, 0.3)' : '#1E1E1E'}`,
-                        borderRadius: 3,
-                        color: hasTokens ? '#00C805' : '#6E6E6E',
-                        fontWeight: 500,
-                      }}>{chain}</span>
-                    );
-                  })}
-                </div>
+                      <div key={key} className={s.posCard} id={`card-${symbol}`}>
+                        <div className={s.posHeader} onClick={() => toggleCard(key)}>
+                          <div className={s.posAssetWrap}>
+                            <span className={s.posAsset}>{symbol}</span>
+                            <span className={`${s.posTag} ${isLong ? s.long : s.short}`}>
+                              {isLong ? 'LONG' : 'SHORT'}{pos.leverage ? ` ${pos.leverage}×` : ''}
+                            </span>
+                            <span className={s.posVenue}>{pos.platform || '—'}</span>
+                            {alertDotType && (
+                              <span className={`${s.posAlertDot} ${s.visible} ${s[alertDotType]}`}></span>
+                            )}
+                          </div>
+                          <div className={s.posPnlWrap}>
+                            <div className={`${s.posPnl} ${pnlPos ? s.g : s.r}`}>{formatPnl(pos.pnl)}</div>
+                            <div className={`${s.posPnlSub} ${pnlPos ? s.g : s.r}`}>{formatPct(pos.roi)}</div>
+                          </div>
+                          <span className={`${s.chevron} ${isExpanded ? s.open : ''}`}>▾</span>
+                        </div>
 
-                {/* Token list */}
-                <div style={{ padding: '0.5rem' }}>
-                  {tokensLoading ? (
-                    <div style={{ fontSize: '0.75rem', color: '#6E6E6E', textAlign: 'center', padding: '1.5rem 0' }}>
-                      Scanning chains...
-                    </div>
-                  ) : tokens.length === 0 ? (
-                    <div style={{ fontSize: '0.75rem', color: '#6E6E6E', textAlign: 'center', padding: '1.5rem 0' }}>
-                      No tokens found across chains
-                    </div>
-                  ) : tokens.map((token, i) => (
-                    <div key={i} style={{
-                      background: '#111111',
-                      border: '1px solid #1E1E1E',
-                      borderRadius: 5,
-                      padding: '0.45rem 0.5rem',
-                      marginBottom: '0.3rem',
-                      display: 'flex', alignItems: 'center', gap: '0.4rem',
-                    }}>
-                      {/* Token icon */}
-                      <div style={{
-                        width: 24, height: 24, borderRadius: '50%',
-                        background: token.isNative ? 'linear-gradient(135deg, #627EEA 0%, #3B5998 100%)' : '#1A1A1A',
-                        display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        fontSize: '0.6rem', fontWeight: 700, color: '#9E9E9E',
-                        overflow: 'hidden', flexShrink: 0,
-                      }}>
-                        {token.logo ? (
-                          <img src={token.logo} alt="" style={{ width: '100%', height: '100%' }} />
-                        ) : (
-                          token.symbol.slice(0, 2)
+                        <div className={`${s.posStats} ${s.perpStats}`}>
+                          <div className={s.psItem}>
+                            <div className={s.psLbl}>Entry</div>
+                            <div className={s.psVal}>{formatPrice(pos.entryPrice)}</div>
+                          </div>
+                          <div className={s.psItem}>
+                            <div className={s.psLbl}>Mark</div>
+                            <div className={s.psVal}>{formatPrice(pos.currentPrice)}</div>
+                          </div>
+                          <div className={s.psItem}>
+                            <div className={s.psLbl}>Size</div>
+                            <div className={s.psVal}>{formatUsd(pos.positionSize || pos.margin)}</div>
+                          </div>
+                          <div className={s.psItem}>
+                            <div className={s.psLbl}>Margin</div>
+                            <div className={s.psVal}>{formatUsd(pos.margin)}</div>
+                          </div>
+                        </div>
+
+                        {/* Signal pills — only shown when monitoring task exists */}
+                        {pills.length > 0 && (
+                          <div className={s.sigStrip}>
+                            {pills.map((pill, pi) => (
+                              <span key={pi} className={`${s.sigPill} ${s[pill.color]}`}>{pill.label}</span>
+                            ))}
+                          </div>
                         )}
-                      </div>
 
-                      {/* Token info */}
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-                          <span style={{ fontWeight: 600, fontSize: '0.75rem' }}>{token.symbol}</span>
-                          <span style={{
-                            fontSize: '0.45rem', color: '#6E6E6E',
-                            background: '#1A1A1A', padding: '0.1rem 0.2rem', borderRadius: 2,
-                          }}>{token.chain}</span>
-                          {token.isNative && (
-                            <span style={{
-                              fontSize: '0.4rem', color: '#0088FF',
-                              background: 'rgba(0, 136, 255, 0.1)', padding: '0.1rem 0.2rem', borderRadius: 2,
-                            }}>NATIVE</span>
+                        {/* Expanded signal detail */}
+                        <div className={`${s.signalBlock} ${isExpanded ? s.open : ''}`}>
+                          {lastAlert ? (
+                            <div className={s.signalItem}>
+                              <span className={`${s.sigDot} ${lastAlert.severity === 'critical' ? s.r : lastAlert.severity === 'warning' ? s.y : s.g}`}></span>
+                              <div className={s.sigBody}>
+                                <div className={s.sigTop}>
+                                  <span className={s.sigName}>{lastAlert.title}</span>
+                                </div>
+                                <div className={s.sigNote}>{lastAlert.message}</div>
+                              </div>
+                              <span className={s.sigTime}>{timeAgo(lastAlert.createdAt)}</span>
+                            </div>
+                          ) : pills.length > 0 ? (
+                            <div className={s.signalItem}>
+                              <span className={`${s.sigDot} ${s.b}`}></span>
+                              <div className={s.sigBody}>
+                                <div className={s.sigTop}><span className={s.sigName}>Monitoring active</span></div>
+                                <div className={s.sigNote}>First scan pending — agent will alert you when signals trigger.</div>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className={s.signalItem}>
+                              <span className={`${s.sigDot} ${s.n}`}></span>
+                              <div className={s.sigBody}>
+                                <div className={s.sigTop}><span className={s.sigName}>No monitoring set up</span></div>
+                                <div className={s.sigNote}>Ask the analyst to monitor signals for {symbol} — e.g. funding rate, OI, or RSI.</div>
+                              </div>
+                            </div>
                           )}
                         </div>
-                        <div style={{
-                          fontSize: '0.55rem', color: '#6E6E6E',
-                          fontFamily: "'JetBrains Mono', monospace",
-                        }}>
-                          {token.balance < 0.001
-                            ? token.balance.toExponential(2)
-                            : token.balance < 1
-                            ? token.balance.toFixed(4)
-                            : token.balance.toLocaleString(undefined, { maximumFractionDigits: 2 })}
-                        </div>
                       </div>
+                    );
+                  })
+                )}
 
-                      {/* USD value */}
-                      <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                        <div style={{
-                          fontFamily: "'JetBrains Mono', monospace",
-                          fontSize: '0.75rem', fontWeight: 600,
-                        }}>
-                          {token.usdValue !== null
-                            ? `$${token.usdValue < 0.01 ? token.usdValue.toFixed(4) : token.usdValue.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
-                            : '--'}
+                {/* Predictions */}
+                <div className={s.sectionDivider}>
+                  <span className={`${s.sdDot} ${s.poly}`}></span>
+                  Predictions
+                  <span className={s.sdCount}>{pmPositions.length} open</span>
+                </div>
+
+                {pmPositions.length === 0 ? (
+                  <div className={s.emptyState}>
+                    <div className={s.emptyIcon}>🎯</div>
+                    <div className={s.emptyTitle}>No prediction market positions</div>
+                    <div className={s.emptyText}>
+                      Connect a wallet with open Polymarket positions to see them here.
+                    </div>
+                  </div>
+                ) : (
+                  pmPositions.map((pos, i) => {
+                    const key = `pm-${i}`;
+                    const isExpanded = expandedCards.has(key);
+                    const market = pos.market || 'Unknown Market';
+                    const symbol = market.slice(0, 20);
+                    const isYes = (pos.outcome || '').toUpperCase() === 'YES';
+                    const pnlPos = (pos.pnl || 0) >= 0;
+                    const pills = getPillsForPosition(market);
+                    const alertDotType = hasUnreadAlertForPosition(market);
+                    const lastAlert = getLastAlertForPosition(market);
+                    const yesOdds = pos.currentPrice ? Math.round(pos.currentPrice * 100) : 50;
+
+                    return (
+                      <div key={key} className={`${s.posCard} ${s.polyCard}`}>
+                        <div className={s.posHeader} onClick={() => toggleCard(key)}>
+                          <div className={s.posAssetWrap}>
+                            <span className={s.polyVenueDot}></span>
+                            <span className={`${s.posAsset} ${s.poly}`}>{symbol}</span>
+                            <span className={`${s.posTag} ${isYes ? s.yes : s.no}`}>{pos.outcome || '—'}</span>
+                            {alertDotType && (
+                              <span className={`${s.posAlertDot} ${s.visible} ${s[alertDotType]}`}></span>
+                            )}
+                          </div>
+                          <div className={s.posPnlWrap}>
+                            <div className={`${s.posPnl} ${pnlPos ? s.g : s.r}`}>{formatPnl(pos.pnl)}</div>
+                            <div className={`${s.posPnlSub} ${s.n}`}>{pos.size ? `${pos.size.toFixed(0)} shares` : '—'}</div>
+                          </div>
+                          <span className={`${s.chevron} ${isExpanded ? s.open : ''}`}>▾</span>
                         </div>
-                        {token.usdPrice !== null && (
-                          <div style={{
-                            fontSize: '0.5rem', color: '#6E6E6E',
-                            fontFamily: "'JetBrains Mono', monospace",
-                          }}>
-                            @${token.usdPrice < 0.01 ? token.usdPrice.toFixed(6) : token.usdPrice.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+
+                        <div className={s.polyQuestion}>{market}</div>
+
+                        <div className={s.polyOddsRow}>
+                          <div className={s.polyOddsBarWrap}>
+                            <div className={s.polyOddsBarYes} style={{ width: `${yesOdds}%` }}></div>
+                            <div className={s.polyOddsBarNo} style={{ width: `${100 - yesOdds}%` }}></div>
+                          </div>
+                          <div className={s.polyOddsLabels}>
+                            <span className={s.polyYesLbl}>YES {yesOdds}¢</span>
+                            <span className={s.polyNoLbl}>NO {100 - yesOdds}¢</span>
+                          </div>
+                        </div>
+
+                        <div className={`${s.posStats} ${s.polyStats}`}>
+                          <div className={s.psItem}>
+                            <div className={s.psLbl}>Avg Entry</div>
+                            <div className={s.psVal}>{pos.avgPrice ? `${Math.round(pos.avgPrice * 100)}¢` : '—'}</div>
+                          </div>
+                          <div className={s.psItem}>
+                            <div className={s.psLbl}>Current</div>
+                            <div className={`${s.psVal} ${pnlPos ? s.g : s.r}`}>
+                              {pos.currentPrice ? `${Math.round(pos.currentPrice * 100)}¢` : '—'}
+                            </div>
+                          </div>
+                          <div className={s.psItem}>
+                            <div className={s.psLbl}>Value</div>
+                            <div className={s.psVal}>{formatUsd(pos.currentValue)}</div>
+                          </div>
+                        </div>
+
+                        {pills.length > 0 && (
+                          <div className={s.sigStrip}>
+                            {pills.map((pill, pi) => (
+                              <span key={pi} className={`${s.sigPill} ${s[pill.color]}`}>{pill.label}</span>
+                            ))}
                           </div>
                         )}
+
+                        <div className={`${s.signalBlock} ${isExpanded ? s.open : ''}`}>
+                          {lastAlert ? (
+                            <div className={s.signalItem}>
+                              <span className={`${s.sigDot} ${lastAlert.severity === 'critical' ? s.r : lastAlert.severity === 'warning' ? s.y : s.g}`}></span>
+                              <div className={s.sigBody}>
+                                <div className={s.sigTop}><span className={s.sigName}>{lastAlert.title}</span></div>
+                                <div className={s.sigNote}>{lastAlert.message}</div>
+                              </div>
+                              <span className={s.sigTime}>{timeAgo(lastAlert.createdAt)}</span>
+                            </div>
+                          ) : pills.length > 0 ? (
+                            <div className={s.signalItem}>
+                              <span className={`${s.sigDot} ${s.b}`}></span>
+                              <div className={s.sigBody}>
+                                <div className={s.sigTop}><span className={s.sigName}>Monitoring active</span></div>
+                                <div className={s.sigNote}>First scan pending — agent will alert you when signals trigger.</div>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className={s.signalItem}>
+                              <span className={`${s.sigDot} ${s.n}`}></span>
+                              <div className={s.sigBody}>
+                                <div className={s.sigTop}><span className={s.sigName}>No monitoring set up</span></div>
+                                <div className={s.sigNote}>Ask the analyst to monitor this market — odds drift, volume spikes, or whale activity.</div>
+                              </div>
+                            </div>
+                          )}
+                        </div>
                       </div>
+                    );
+                  })
+                )}
+              </>
+            )}
+
+            {/* ══ ALERTS TAB ══ */}
+            {activeLeftTab === 'alerts' && (
+              <>
+                {/* Per-task monitor countdown strips */}
+                {activeTasks.length === 0 ? (
+                  <div className={s.countdownStrip}>
+                    <span className={s.cdLabel}>No monitors active</span>
+                  </div>
+                ) : (
+                  activeTasks.map(task => {
+                    const cd = taskCountdowns[task.id] || { str: '—', pct: 0 };
+                    const mins = Math.round(task.intervalSeconds / 60);
+                    const intervalLabel = mins >= 60 ? `${Math.round(mins / 60)}h` : `${mins}m`;
+                    const isOverdue = cd.str === 'Pending...' || cd.str === 'Running...';
+                    return (
+                      <div key={task.id} className={s.monitorItem}>
+                        <div className={s.monitorItemHdr}>
+                          <span className={`${s.monitorStatusDot} ${s[task.status]}`}></span>
+                          <span className={s.monitorTitle}>{task.taskTitle}</span>
+                        </div>
+                        <div className={s.monitorMeta}>
+                          <span className={s.monitorMetaItem}>⏱ {intervalLabel}</span>
+                          <span className={s.monitorMetaItem}>↻ Cycle {task.cycleCount}</span>
+                          <span className={s.monitorMetaItem}>🔔 {task.alertCount}</span>
+                          {task.lastRunAt && <span className={s.monitorMetaItem}>· {timeAgo(task.lastRunAt)}</span>}
+                        </div>
+                        <div className={s.monitorCountdownRow}>
+                          <span className={s.cdLabel}>{task.cycleCount === 0 ? 'First scan' : 'Next scan'}</span>
+                          <span className={`${s.cdTimer} ${isOverdue ? s.overdue : ''}`}>{cd.str}</span>
+                          <div className={s.cdBar}>
+                            <div className={s.cdFill} style={{ width: `${cd.pct}%` }}></div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+
+                {/* Alerts list */}
+                {monitoringAlerts.length === 0 ? (
+                  <div className={s.emptyState}>
+                    <div className={s.emptyIcon}>🔔</div>
+                    <div className={s.emptyTitle}>No alerts yet</div>
+                    <div className={s.emptyText}>
+                      {!hasTasks
+                        ? 'Set up monitoring to start receiving alerts on your positions.'
+                        : activeTasks.some(t => t.cycleCount > 0)
+                          ? 'Monitoring active — alerts fire when signal conditions are met.'
+                          : 'First scan pending — alerts appear here once the scanner runs.'}
                     </div>
-                  ))}
-                </div>
-              </div>
+                  </div>
+                ) : (
+                  monitoringAlerts.map(alert => (
+                    <div
+                      key={alert.id}
+                      className={`${s.alertItem} ${alert.severity === 'critical' ? s.crit : alert.severity === 'warning' ? s.warn : s.info}`}
+                    >
+                      <div className={s.alertTop}>
+                        <div className={s.alertDot}></div>
+                        {alert.assetSymbol && <span className={s.alertAsset}>{alert.assetSymbol}</span>}
+                        <span className={s.alertTitle}>{alert.title}</span>
+                        <span className={s.alertTime}>{timeAgo(alert.createdAt)}</span>
+                      </div>
+                      <div className={s.alertBody}>{alert.message}</div>
+                    </div>
+                  ))
+                )}
+              </>
             )}
 
-            {/* TRADES TAB (placeholder) */}
-            {activeTab === 'trades' && (
-              <div style={{ padding: '1rem 0.5rem', textAlign: 'center' }}>
-                <div style={{ fontSize: '0.75rem', color: '#6E6E6E' }}>
-                  Trade activity feed coming soon
+            {/* ══ TOKENS TAB ══ */}
+            {activeLeftTab === 'tokens' && (
+              <>
+                <div className={s.sectionDivider}>
+                  <span className={`${s.sdDot} ${s.perp}`}></span>
+                  Wallet Holdings
+                  <span className={s.sdCount}>Scanned on connect</span>
                 </div>
-              </div>
+
+                {tokens.length === 0 ? (
+                  <div className={s.emptyState}>
+                    <div className={s.emptyIcon}>💼</div>
+                    <div className={s.emptyTitle}>No tokens found</div>
+                    <div className={s.emptyText}>Token balances are scanned when you first connect your wallet.</div>
+                  </div>
+                ) : (
+                  tokens.map((tok, i) => {
+                    const chgPct = tok.usdPrice && tok.usdValue && tok.balance
+                      ? null // no 24h change data in cached tokens
+                      : null;
+                    return (
+                      <div key={i} className={s.tokenRow}>
+                        <div className={s.tokIcon}>
+                          {tok.logo
+                            ? <img src={tok.logo} alt={tok.symbol} style={{ width: 28, height: 28, borderRadius: '50%' }} />
+                            : tok.symbol.slice(0, 2)
+                          }
+                        </div>
+                        <div className={s.tokInfo}>
+                          <div className={s.tokName}>{tok.name || tok.symbol}</div>
+                          <div className={s.tokBal}>{tok.balance.toLocaleString('en-US', { maximumFractionDigits: 4 })} {tok.symbol}</div>
+                        </div>
+                        <div className={s.tokRight}>
+                          <div className={s.tokUsd}>{formatUsd(tok.usdValue)}</div>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+
+                {tokensTotalUsd > 0 && (
+                  <div className={s.tokTotal}>
+                    <span className={s.tokTotalLbl}>Total Portfolio</span>
+                    <span className={s.tokTotalVal}>{formatUsd(tokensTotalUsd)}</span>
+                  </div>
+                )}
+              </>
             )}
 
-            {/* MARKETS TAB (placeholder) */}
-            {activeTab === 'markets' && (
-              <div style={{ padding: '1rem 0.5rem', textAlign: 'center' }}>
-                <div style={{ fontSize: '0.75rem', color: '#6E6E6E' }}>
-                  Market data feed coming soon
+          </div>{/* /lpanelScroll */}
+
+          {/* ══ AGENT FOLLOWING ══ */}
+          <div className={s.followingWrap}>
+            <div className={s.followingHdr}>
+              <span className={s.fhLabel}>
+                <span className={`${s.liveDot} ${s.sm}`}></span>
+                Agent Following
+              </span>
+              <span className={s.fhCount}>{displayTraders.length}</span>
+            </div>
+            <div className={s.followingList}>
+              {displayTraders.length === 0 ? (
+                <div style={{ padding: '10px 12px' }}>
+                  <div className={s.emptyTitle} style={{ fontSize: '0.6rem' }}>No traders followed yet</div>
                 </div>
+              ) : (
+                displayTraders.map((trader, i) => {
+                  const initials = (trader.username || trader.wallet || '').slice(0, 2).toUpperCase() || '??';
+                  const pnlStr = trader.pnl30d >= 1000000
+                    ? `+$${(trader.pnl30d / 1000000).toFixed(1)}M`
+                    : trader.pnl30d >= 1000
+                    ? `+$${(trader.pnl30d / 1000).toFixed(1)}K`
+                    : `+$${trader.pnl30d.toFixed(0)}`;
+                  const winRate = trader.winRate <= 1 ? (trader.winRate * 100).toFixed(0) : trader.winRate.toFixed(0);
+                  const platform = trader.platform === 'hyperliquid' ? 'Hyperliquid' : trader.platform === 'avantis' ? 'Avantis' : 'Polymarket';
+
+                  return (
+                    <div key={i} className={s.fc}>
+                      <div className={s.fcAv}>{initials}</div>
+                      <div className={s.fcInfo}>
+                        {trader.username
+                          ? <div className={s.fcId}>{trader.username}</div>
+                          : <div className={s.fcId}>{`${trader.wallet.slice(0, 6)}...${trader.wallet.slice(-2)}`}</div>
+                        }
+                        <div className={s.fcMeta}>{platform} · <span className="win">{winRate}% win</span></div>
+                      </div>
+                      <div className={s.fcPnl}>{pnlStr}</div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+            <button className={s.followMoreBtn}>+ Follow more traders</button>
+          </div>
+        </div>{/* /leftPanel */}
+
+        {/* ═══ RIGHT PANEL — CHAT ═══ */}
+        <div className={s.rightPanel}>
+          {/* Chat header */}
+          <div className={s.chatHdr} style={{ position: 'relative' }}>
+            <div className={s.chatAgentIc}>{agentInitials}</div>
+            <div>
+              <div className={s.chatAgentNm}>{agentName}</div>
+            </div>
+            <div className={s.chatAgentSt}>
+              <span className={`${s.liveDot} ${s.sm}`}></span>
+              {hasActiveTasks
+                ? `Monitoring ${activeTasks.length} task${activeTasks.length !== 1 ? 's' : ''}`
+                : `${perpPositions.length + pmPositions.length} position${perpPositions.length + pmPositions.length !== 1 ? 's' : ''} loaded`
+              }
+            </div>
+            <div className={s.chatBtns}>
+              <button className={s.chatBtn} onClick={() => setShowHistory(p => !p)}>History</button>
+              <button className={s.chatBtn} onClick={startNewChat}>New Chat</button>
+            </div>
+
+            {/* History dropdown */}
+            {showHistory && (
+              <div className={s.historySidebar}>
+                <div className={s.historyHdr}>
+                  <span className={s.historyTitle}>Chat History</span>
+                  <button className={s.historyClose} onClick={() => setShowHistory(false)}>✕</button>
+                </div>
+                <div className={s.historyList}>
+                  {chatSessions.length === 0 ? (
+                    <div style={{ padding: '12px', color: '#4A4A4A', fontSize: '0.62rem' }}>No sessions yet</div>
+                  ) : (
+                    chatSessions.map(sess => (
+                      <div key={sess.id} className={s.historyItem} onClick={() => loadSession(sess.id)}>
+                        <div className={s.historyItemTitle}>{sess.title || 'Untitled session'}</div>
+                        <div className={s.historyItemTime}>{new Date(sess.updatedAt).toLocaleDateString()}</div>
+                      </div>
+                    ))
+                  )}
+                </div>
+                <button className={s.historyNew} onClick={startNewChat}>+ New chat</button>
               </div>
             )}
           </div>
-        </div>
 
-        {/* CHAT AREA */}
-        <div style={{
-          flex: 1,
-          display: 'flex',
-          flexDirection: 'column',
-          background: '#000000',
-          position: 'relative',
-          overflow: 'hidden',
-        }}>
-          {/* Chat History Dropdown */}
-          {showHistory && (
-            <div style={{
-              position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
-              background: 'rgba(0,0,0,0.7)', zIndex: 20,
-            }} onClick={() => setShowHistory(false)}>
-              <div
-                onClick={e => e.stopPropagation()}
-                style={{
-                  position: 'absolute', top: '0.5rem', right: '0.5rem',
-                  width: 300, maxHeight: '70vh',
-                  background: '#111111', border: '1px solid #1E1E1E',
-                  borderRadius: 8, overflow: 'hidden',
-                  display: 'flex', flexDirection: 'column',
-                }}
-              >
-                <div style={{
-                  padding: '0.6rem 0.75rem',
-                  borderBottom: '1px solid #1E1E1E',
-                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                }}>
-                  <span style={{ fontSize: '0.8rem', fontWeight: 600 }}>Chat History</span>
-                  <button onClick={startNewChat} style={{
-                    fontSize: '0.65rem', fontWeight: 600,
-                    padding: '0.25rem 0.5rem',
-                    background: '#00C805', border: 'none', borderRadius: 4,
-                    color: '#000', cursor: 'pointer',
-                  }}>+ New Chat</button>
-                </div>
-                <div style={{ flex: 1, overflowY: 'auto' }}>
-                  {chatSessions.length === 0 ? (
-                    <div style={{ padding: '1.5rem', textAlign: 'center', fontSize: '0.75rem', color: '#6E6E6E' }}>
-                      No previous chats
+          {/* Chat stream */}
+          <div className={s.chatStream}>
+            {messages.map((msg, i) => {
+              const isAgent = msg.role === 'agent';
+              const isEmpty = !msg.content.trim();
+              const isLastAgent = isAgent && i === messages.length - 1;
+
+              return (
+                <div key={msg.id} className={s.msg}>
+                  <div className={s.msgHdr}>
+                    <div className={`${s.msgAv} ${isAgent ? s.agent : s.user}`}>
+                      {isAgent ? agentInitials : (shortWallet.slice(0, 2).toUpperCase() || 'U')}
                     </div>
-                  ) : chatSessions.map(s => (
-                    <div
-                      key={s.id}
-                      onClick={() => loadSession(s.id)}
-                      style={{
-                        padding: '0.6rem 0.75rem',
-                        borderBottom: '1px solid #1E1E1E',
-                        cursor: 'pointer',
-                        background: s.id === sessionId ? 'rgba(0, 200, 5, 0.08)' : 'transparent',
-                      }}
-                    >
-                      <div style={{
-                        fontSize: '0.75rem', fontWeight: 500,
-                        whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-                      }}>{s.title}</div>
-                      <div style={{
-                        fontSize: '0.6rem', color: '#6E6E6E',
-                        fontFamily: "'JetBrains Mono', monospace",
-                        marginTop: '0.15rem',
-                      }}>
-                        {new Date(s.updatedAt).toLocaleDateString()}
+                    <span className={s.msgSender}>{isAgent ? agentName : 'You'}</span>
+                    <span className={s.msgTime}>{msg.time}</span>
+                  </div>
+
+                  {isAgent && isEmpty && isStreaming ? (
+                    <div className={s.typing}>
+                      <div className={s.typingDot}></div>
+                      <div className={s.typingDot}></div>
+                      <div className={s.typingDot}></div>
+                    </div>
+                  ) : (
+                    <div className={s.msgBody}>
+                      {isAgent ? (
+                        <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
+                      ) : (
+                        <p>{msg.content}</p>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Tool status shown under the streaming agent message */}
+                  {isAgent && isLastAgent && isStreaming && toolStatus && (
+                    <div className={s.toolStatusBubble}>
+                      <div className={s.toolStatusInner}>
+                        <div className={s.toolSpinner}></div>
+                        {toolStatus}
                       </div>
                     </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Expand button (when panel collapsed) */}
-          {panelCollapsed && (
-            <button
-              onClick={() => setPanelCollapsed(false)}
-              style={{
-                position: 'absolute', top: '0.5rem', left: '0.5rem',
-                width: 32, height: 32,
-                background: '#111111',
-                border: '1px solid #1E1E1E',
-                borderRadius: 4,
-                color: '#9E9E9E',
-                cursor: 'pointer',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                fontSize: '0.8rem', zIndex: 10,
-              }}
-            >{'▶'}</button>
-          )}
-
-          {/* Messages */}
-          <div style={{ flex: 1, overflowY: 'auto', padding: '1rem 1.5rem' }}>
-            {messages.map(msg => (
-              <div key={msg.id} style={{ marginBottom: '1rem' }}>
-                <div style={{
-                  display: 'flex', alignItems: 'center', gap: '0.4rem',
-                  marginBottom: '0.3rem',
-                }}>
-                  <div style={{
-                    width: 24, height: 24, borderRadius: 5,
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    fontSize: '0.7rem', fontWeight: 600,
-                    ...(msg.role === 'agent' ? {
-                      background: 'linear-gradient(135deg, #00C805 0%, #0088FF 100%)',
-                      color: '#000',
-                    } : {
-                      background: '#1A1A1A',
-                      color: '#9E9E9E',
-                    }),
-                  }}>
-                    {msg.role === 'agent' ? agentInitials : 'U'}
-                  </div>
-                  <span style={{ fontWeight: 600, fontSize: '0.85rem' }}>
-                    {msg.role === 'agent' ? agentName : 'You'}
-                  </span>
-                  <span style={{
-                    fontFamily: "'JetBrains Mono', monospace",
-                    fontSize: '0.6rem', color: '#6E6E6E', marginLeft: 'auto',
-                  }}>{msg.time}</span>
-                </div>
-                <div style={{
-                  paddingLeft: '1.75rem',
-                  fontSize: '0.9rem',
-                  lineHeight: 1.6,
-                  color: '#9E9E9E',
-                  ...(msg.role === 'user' ? { whiteSpace: 'pre-wrap' } : {}),
-                }}>
-                  {msg.role === 'agent' ? (
-                    <ReactMarkdown
-                      remarkPlugins={[remarkGfm]}
-                      components={{
-                        h2: ({ children }) => (
-                          <h2 style={{ fontSize: '1.1rem', fontWeight: 600, color: '#FFFFFF', margin: '1rem 0 0.5rem' }}>{children}</h2>
-                        ),
-                        h3: ({ children }) => (
-                          <h3 style={{ fontSize: '0.95rem', fontWeight: 600, color: '#E0E0E0', margin: '0.75rem 0 0.35rem' }}>{children}</h3>
-                        ),
-                        p: ({ children }) => (
-                          <p style={{ margin: '0.4rem 0' }}>{children}</p>
-                        ),
-                        strong: ({ children }) => (
-                          <strong style={{ color: '#FFFFFF', fontWeight: 600 }}>{children}</strong>
-                        ),
-                        ul: ({ children }) => (
-                          <ul style={{ margin: '0.3rem 0', paddingLeft: '1.25rem', listStyleType: 'disc' }}>{children}</ul>
-                        ),
-                        ol: ({ children }) => (
-                          <ol style={{ margin: '0.3rem 0', paddingLeft: '1.25rem' }}>{children}</ol>
-                        ),
-                        li: ({ children }) => (
-                          <li style={{ margin: '0.15rem 0' }}>{children}</li>
-                        ),
-                        hr: () => (
-                          <hr style={{ border: 'none', borderTop: '1px solid #2A2A2A', margin: '0.75rem 0' }} />
-                        ),
-                        table: ({ children }) => (
-                          <div style={{ overflowX: 'auto', margin: '0.5rem 0' }}>
-                            <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: '0.8rem' }}>{children}</table>
-                          </div>
-                        ),
-                        th: ({ children }) => (
-                          <th style={{ border: '1px solid #2A2A2A', padding: '0.4rem 0.6rem', background: '#111111', color: '#FFFFFF', fontWeight: 600, textAlign: 'left' }}>{children}</th>
-                        ),
-                        td: ({ children }) => (
-                          <td style={{ border: '1px solid #2A2A2A', padding: '0.4rem 0.6rem' }}>{children}</td>
-                        ),
-                        code: ({ children, className }) => {
-                          const isBlock = className?.includes('language-');
-                          return isBlock ? (
-                            <pre style={{ background: '#111111', border: '1px solid #1E1E1E', borderRadius: 4, padding: '0.6rem', overflowX: 'auto', margin: '0.5rem 0' }}>
-                              <code style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: '0.8rem' }}>{children}</code>
-                            </pre>
-                          ) : (
-                            <code style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: '0.8rem', background: '#1A1A1A', padding: '0.1rem 0.3rem', borderRadius: 3 }}>{children}</code>
-                          );
-                        },
-                        a: ({ href, children }) => (
-                          <a href={href} target="_blank" rel="noopener noreferrer" style={{ color: '#00C805', textDecoration: 'none' }}>{children}</a>
-                        ),
-                      }}
-                    >
-                      {msg.content}
-                    </ReactMarkdown>
-                  ) : (
-                    msg.content
                   )}
                 </div>
-              </div>
-            ))}
-            {/* Tool status indicator */}
-            {toolStatus && (
-              <div style={{
-                display: 'flex', alignItems: 'center', gap: '0.5rem',
-                padding: '0.5rem 0.75rem', margin: '0.25rem 0',
-                color: '#00C805', fontSize: '0.7rem',
-                fontFamily: 'monospace',
-              }}>
-                <span style={{
-                  display: 'inline-block', width: 8, height: 8,
-                  borderRadius: '50%', background: '#00C805',
-                  animation: 'pulse 1.5s ease-in-out infinite',
-                }} />
-                {toolStatus}
-                <style>{`@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }`}</style>
-              </div>
-            )}
+              );
+            })}
             <div ref={chatEndRef} />
           </div>
 
-          {/* Credits Exceeded Banner */}
+          {/* Credits exceeded banner */}
           {creditsExceeded && (
-            <div style={{
-              background: 'linear-gradient(90deg, rgba(255, 71, 87, 0.15) 0%, rgba(255, 71, 87, 0.08) 100%)',
-              borderTop: '1px solid #FF4757',
-              padding: '0.75rem 1rem',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              flexWrap: 'wrap',
-              gap: '0.5rem',
-            }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                <span style={{ fontSize: '1rem' }}>{'⚠️'}</span>
-                <div>
-                  <div style={{ fontSize: '0.8rem', fontWeight: 600, color: '#FF4757' }}>
-                    100% demo credits used
-                  </div>
-                  <div style={{ fontSize: '0.7rem', color: '#9E9E9E' }}>
-                    Buy YLDR to get more AI compute credits
-                  </div>
-                </div>
-              </div>
-              <div style={{ display: 'flex', gap: '0.5rem' }}>
-                <a
-                  href="https://yieldr.org"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  style={{
-                    fontSize: '0.7rem', fontWeight: 600,
-                    padding: '0.4rem 0.75rem',
-                    background: '#00C805', border: 'none', borderRadius: 4,
-                    color: '#000', cursor: 'pointer',
-                    textDecoration: 'none',
-                  }}
-                >Get YLDR</a>
-                <a
-                  href="https://discord.gg/jhRvvWsc"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  style={{
-                    fontSize: '0.7rem', fontWeight: 600,
-                    padding: '0.4rem 0.75rem',
-                    background: '#5865F2', border: 'none', borderRadius: 4,
-                    color: '#FFFFFF', cursor: 'pointer',
-                    textDecoration: 'none',
-                  }}
-                >Join Discord</a>
-              </div>
+            <div className={s.creditsExceededBanner}>
+              Free credits used — <button onClick={() => setShowYldrModal(true)} style={{ background: 'none', border: 'none', color: 'inherit', cursor: 'pointer', textDecoration: 'underline' }}>get YLDR tokens</button> to continue
             </div>
           )}
 
-          {/* Chat Input */}
-          <div style={{
-            borderTop: '1px solid #1E1E1E',
-            background: '#0A0A0A',
-            padding: '0.75rem 1rem',
-            flexShrink: 0,
-            opacity: creditsExceeded ? 0.5 : 1,
-            pointerEvents: creditsExceeded ? 'none' : 'auto',
-          }}>
-            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-end' }}>
-              <button
-                onClick={() => { setShowHistory(!showHistory); loadChatSessions(); }}
-                title="Chat History"
-                style={{
-                  width: 40, height: 48,
-                  background: '#111111',
-                  border: '1px solid #1E1E1E',
-                  borderRadius: 6,
-                  color: '#9E9E9E',
-                  cursor: 'pointer',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  fontSize: '1rem', flexShrink: 0,
-                  pointerEvents: 'auto',
-                }}
-              >{'☰'}</button>
+          {/* Chat input */}
+          <div className={s.chatInputWrap}>
+            <div className={s.chatInputRow}>
               <textarea
+                ref={textareaRef}
+                className={s.chatTa}
                 value={inputValue}
-                onChange={e => setInputValue(e.target.value)}
-                onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey && !creditsExceeded) { e.preventDefault(); handleSend(); } }}
-                placeholder={creditsExceeded ? "Credits exceeded - Get YLDR to continue" : "Ask about your positions, traders, or strategies..."}
+                onChange={e => {
+                  setInputValue(e.target.value);
+                  e.target.style.height = 'auto';
+                  e.target.style.height = Math.min(e.target.scrollHeight, 140) + 'px';
+                }}
+                onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
+                placeholder={creditsExceeded ? 'Credits exhausted — get YLDR to continue' : "Ask your analyst... e.g. 'monitor ETH funding rate every hour'"}
                 rows={2}
                 disabled={creditsExceeded}
-                style={{
-                  flex: 1,
-                  background: '#111111',
-                  border: `1px solid ${creditsExceeded ? '#FF4757' : '#1E1E1E'}`,
-                  borderRadius: 6,
-                  padding: '0.75rem',
-                  color: '#FFFFFF',
-                  fontSize: '0.9rem',
-                  fontFamily: "'Inter', sans-serif",
-                  resize: 'none',
-                  outline: 'none',
-                  minHeight: '48px',
-                }}
               />
-              <button onClick={handleSend} disabled={isStreaming || creditsExceeded} style={{
-                width: 40, height: 48,
-                background: isStreaming || creditsExceeded ? '#0A0A0A' : '#111111',
-                border: '1px solid #1E1E1E',
-                borderRadius: 6,
-                color: isStreaming || creditsExceeded ? '#333' : '#9E9E9E',
-                cursor: isStreaming || creditsExceeded ? 'not-allowed' : 'pointer',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                fontSize: '1rem',
-              }}>{isStreaming ? '...' : '➤'}</button>
+              <button
+                className={s.chatSendBtn}
+                onClick={handleSend}
+                disabled={isStreaming || creditsExceeded}
+              >↑</button>
+            </div>
+          </div>
+        </div>{/* /rightPanel */}
+      </div>{/* /appBody */}
+
+      {/* ═══ YLDR MODAL ═══ */}
+      {showYldrModal && (
+        <div className={s.modalOverlay} onClick={e => { if (e.target === e.currentTarget) setShowYldrModal(false); }}>
+          <div className={s.modal}>
+            <div className={s.modalHdr}>
+              <div>
+                <div className={s.modalTitle}>Get YLDR Tokens</div>
+                <div className={s.modalSub}>YLDR provides AI credits and powers your agent's training.</div>
+              </div>
+              <button className={s.modalClose} onClick={() => setShowYldrModal(false)}>✕</button>
+            </div>
+            <div className={s.modalBody}>
+              <div className={s.tierBlock}>
+                <div className={s.tierRow1}>
+                  <span className={s.tierLabel}>Tier 1</span>
+                  <span className={s.tierName}>Early Access</span>
+                  <span className={s.tierFdv}>$9M FDV</span>
+                </div>
+                <div className={s.fillBarWrap}>
+                  <div className={s.fillBarTrack}><div className={s.fillBarFill}></div></div>
+                  <div className={s.fillBarLabels}>
+                    <span className="used">35% filled</span>
+                    <span className="rem">650K YLDR left at this price</span>
+                  </div>
+                </div>
+                <div className={s.tierNext}>Next tier <strong>$14M FDV (+56%)</strong> — buy now to lock in current price</div>
+              </div>
+
+              <div className={s.amountBlock}>
+                <div className={s.amountLabel}>Amount</div>
+                <div className={s.amountInputWrap}>
+                  <input
+                    className={s.amountInput}
+                    type="number"
+                    value={yldrInput}
+                    min={1}
+                    onChange={e => setYldrInput(parseFloat(e.target.value) || 0)}
+                  />
+                  <span className={s.amountCurrency}>USDC</span>
+                </div>
+              </div>
+
+              <div className={s.receiveRow}>
+                <div>
+                  <div className={s.receiveLbl}>You Receive</div>
+                  <div className={s.receiveVal}>{yldrTokens.toLocaleString()} YLDR</div>
+                </div>
+                <div>
+                  <div className={s.receiveSubLbl}>YLDR Price</div>
+                  <div className={s.receiveSubVal}>$0.043 / YLDR</div>
+                </div>
+              </div>
+
+              <div className={s.whyBlock}>
+                <div className={s.whyTitle}>Why Buy Now</div>
+                {[
+                  'AI chat credits for trading insights & analysis',
+                  'Train agent to unlock personalized signals',
+                  'Deflationary 🔥 — YLDR is burned on every AI action. Fixed supply of 210M.',
+                  'Early access to Trading Agents',
+                ].map((item, i) => (
+                  <div key={i} className={s.whyItem}><span className={s.whyCheck}>✓</span><span>{item}</span></div>
+                ))}
+              </div>
+
+              <div className={s.roiBlock}>
+                <div className={s.roiTitle}>ROI Scenarios at TGE ({yldrInput > 0 ? `$${yldrInput.toLocaleString()} USDC` : '—'})</div>
+                <div className={s.roiScenarios}>
+                  {[
+                    { fdv: '$150M', multiple: 150 / 9 },
+                    { fdv: '$300M', multiple: 300 / 9 },
+                    { fdv: '$500M', multiple: 500 / 9 },
+                  ].map(({ fdv, multiple }) => {
+                    const roi = yldrInput > 0 ? yldrInput * multiple : 0;
+                    return (
+                      <div key={fdv} className={s.roiScenario}>
+                        <div className={s.roiFdv}>{fdv} FDV</div>
+                        <div className={s.roiValue}>{yldrInput > 0 ? `$${Math.round(roi).toLocaleString()}` : '—'}</div>
+                        <div className={s.roiMultiple}>{multiple.toFixed(1)}×</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className={s.modalDisclaimer}>
+                Only users can mint. No team/VC allocation until listing. Max Supply: 210,000,000 YLDR. Tokens distributed at TGE.{' '}
+                <a href="https://docs.yieldr.app" target="_blank" rel="noopener noreferrer">Read docs</a> to learn more about product &amp; tokenomics.
+              </div>
+              <button className={s.modalCta} disabled>Buy YLDR</button>
+              <div className={s.modalTrustLinks}>
+                Treasury: <a href="https://basescan.org/address/0xB56Ca15" target="_blank" rel="noopener noreferrer">0xB56C...a15C</a> multisig |{' '}
+                <a href="https://basescan.org/address/0xB56Ca15" target="_blank" rel="noopener noreferrer">View on Basescan</a>
+              </div>
             </div>
           </div>
         </div>
-      </div>
+      )}
 
-      {/* YLDR MODAL */}
-      {showModal && (
-        <div
-          onClick={() => setShowModal(false)}
-          style={{
-            position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
-            background: 'rgba(0, 0, 0, 0.9)',
-            backdropFilter: 'blur(8px)',
-            zIndex: 1000,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            padding: '1.5rem',
-          }}
-        >
-          <div
-            onClick={e => e.stopPropagation()}
-            style={{
-              background: '#0A0A0A',
-              border: '1px solid #00C805',
-              borderRadius: 8,
-              maxWidth: 440,
-              width: '100%',
-              maxHeight: '90vh',
-              overflowY: 'auto',
-            }}
-          >
-            {/* Modal Header */}
-            <div style={{
-              padding: '1rem',
-              borderBottom: '1px solid #1E1E1E',
-              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-            }}>
-              <h2 style={{ fontSize: '1rem', fontWeight: 700, margin: 0 }}>Get YLDR Tokens</h2>
-              <button
-                onClick={() => setShowModal(false)}
-                style={{
-                  width: 28, height: 28,
-                  background: '#111111',
-                  border: '1px solid #1E1E1E',
-                  borderRadius: 4,
-                  color: '#9E9E9E',
-                  cursor: 'pointer',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  fontSize: '1rem',
-                }}
-              >{'×'}</button>
-            </div>
-
-            {/* Modal Body */}
-            <div style={{ padding: '1rem' }}>
-              <p style={{ fontSize: '0.85rem', color: '#9E9E9E', lineHeight: 1.5, marginBottom: '1rem' }}>
-                YLDR powers your agent's training. Early buyers get the best price — it increases at each tier.
-              </p>
-
-              {/* Tier Card */}
-              <div style={{
-                background: '#111111',
-                border: '1px solid #1E1E1E',
-                borderRadius: 6,
-                padding: '0.75rem',
-                marginBottom: '1rem',
-              }}>
-                <div style={{
-                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                  marginBottom: '0.5rem',
-                }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                    <span style={{
-                      fontFamily: "'JetBrains Mono', monospace",
-                      fontSize: '0.6rem', fontWeight: 700,
-                      padding: '0.2rem 0.4rem',
-                      background: '#00C805', color: '#000', borderRadius: 3,
-                    }}>TIER 1</span>
-                    <span style={{ fontSize: '0.8rem', fontWeight: 600 }}>Early Access</span>
-                  </div>
-                  <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: '0.75rem', color: '#9E9E9E' }}>$9M FDV</span>
-                </div>
-                <div style={{ marginBottom: '0.5rem' }}>
-                  <div style={{ height: 4, background: '#000', borderRadius: 2, overflow: 'hidden', marginBottom: '0.25rem' }}>
-                    <div style={{ height: '100%', width: '35%', background: '#00C805' }} />
-                  </div>
-                  <div style={{ fontSize: '0.65rem', color: '#6E6E6E' }}>35% filled — 650K YLDR left at this price</div>
-                </div>
-                <div style={{
-                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                  paddingTop: '0.5rem', borderTop: '1px solid #1E1E1E', fontSize: '0.7rem',
-                }}>
-                  <span style={{ color: '#9E9E9E' }}>Next tier</span>
-                  <span style={{ fontFamily: "'JetBrains Mono', monospace", color: '#FFD000', fontWeight: 600 }}>$14M FDV (+56%)</span>
-                </div>
-              </div>
-
-              {/* Amount Input */}
-              <div style={{ marginBottom: '1rem' }}>
-                <label style={{ fontSize: '0.75rem', fontWeight: 600, marginBottom: '0.35rem', display: 'block' }}>Amount</label>
-                <div style={{ position: 'relative' }}>
-                  <input
-                    type="number"
-                    value={yldrInput}
-                    onChange={e => setYldrInput(Math.max(0, parseFloat(e.target.value) || 0))}
-                    min={0}
-                    style={{
-                      width: '100%',
-                      background: '#111111',
-                      border: '1px solid #1E1E1E',
-                      borderRadius: 6,
-                      padding: '0.75rem 3.5rem 0.75rem 0.75rem',
-                      fontFamily: "'JetBrains Mono', monospace",
-                      fontSize: '1.25rem', fontWeight: 600,
-                      color: '#FFFFFF',
-                      outline: 'none',
-                    }}
-                  />
-                  <span style={{
-                    position: 'absolute', right: '0.75rem', top: '50%', transform: 'translateY(-50%)',
-                    fontFamily: "'JetBrains Mono', monospace", fontSize: '0.85rem', color: '#6E6E6E',
-                  }}>USDC</span>
-                </div>
-              </div>
-
-              {/* Conversion Display */}
-              <div style={{
-                background: '#111111',
-                border: '1px solid #1E1E1E',
-                borderRadius: 6,
-                padding: '0.75rem',
-                marginBottom: '1rem',
-              }}>
-                {[
-                  ['You Receive', `${yldrTokens.toLocaleString()} YLDR`],
-                  ['Agent Training', `~${tradeCapacity.toLocaleString()} trades`],
-                  ['Max Supply', '210,000,000 YLDR'],
-                ].map(([label, value]) => (
-                  <div key={label} style={{
-                    display: 'flex', justifyContent: 'space-between',
-                    fontSize: '0.8rem', marginBottom: '0.35rem',
-                  }}>
-                    <span style={{ color: '#9E9E9E' }}>{label}</span>
-                    <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 600, color: '#00C805' }}>{value}</span>
-                  </div>
-                ))}
-              </div>
-
-              {/* Why Buy Now */}
-              <div style={{
-                background: 'rgba(0, 200, 5, 0.08)',
-                border: '1px solid rgba(0, 200, 5, 0.2)',
-                borderRadius: 6,
-                padding: '0.75rem',
-                marginBottom: '1rem',
-              }}>
-                <div style={{ fontSize: '0.7rem', fontWeight: 600, color: '#00C805', marginBottom: '0.5rem' }}>
-                  Why Buy Now
-                </div>
-                {[
-                  'AI chat credits for trading insights',
-                  'Train agent to unlock personalized signals',
-                  'Early access to Execute (auto-trading)',
-                  'Potential 10-100x if listed on major exchange',
-                ].map((text, i) => (
-                  <div key={i} style={{
-                    display: 'flex', alignItems: 'flex-start', gap: '0.4rem',
-                    fontSize: '0.75rem', marginBottom: '0.35rem', lineHeight: 1.4,
-                  }}>
-                    <span style={{ color: '#00C805', flexShrink: 0 }}>{'✓'}</span>
-                    <span>{text}</span>
-                  </div>
-                ))}
-              </div>
-
-              {/* Buy Button - Deactivated */}
-              <button
-                disabled
-                style={{
-                  width: '100%',
-                  background: '#333',
-                  color: '#666',
-                  border: 'none',
-                  padding: '0.75rem',
-                  borderRadius: 6,
-                  fontWeight: 700,
-                  fontSize: '0.9rem',
-                  cursor: 'not-allowed',
-                  opacity: 0.6,
-                }}
-              >Buy YLDR (Coming Soon)</button>
-
-              <p style={{
-                fontSize: '0.7rem', color: '#6E6E6E',
-                textAlign: 'center', marginTop: '0.75rem', lineHeight: 1.5,
-              }}>
-                Only users can mint. No team/VC allocation until listing.<br />
-                <a
-                  href="https://yieldr.org/docs"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  style={{ color: '#00C805', textDecoration: 'none' }}
-                >Learn about tokenomics &rarr;</a>
-              </p>
-            </div>
-          </div>
+      {/* ═══ AGENTS PAGE ═══ */}
+      {activeNavTab === 'agents' && (
+        <div className={s.agentsPage}>
+          <div className={s.agentsPageTitle}>Agent Explorer</div>
+          <div className={s.agentsPageSub}>Create and manage your AI trading agents — coming soon.</div>
+          <button className={s.agentsBack} onClick={() => setActiveNavTab('terminal')}>← Back to Terminal</button>
         </div>
       )}
     </div>
