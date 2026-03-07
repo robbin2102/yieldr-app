@@ -90,6 +90,50 @@ When alert (actionable/urgent):
 {"alert":true,"signal":true,"title":"<title with numbers>","message":"<2-3 sentence actionable insight>","severity":"warning|critical","indicators":[...],"summary":"..."}`;
 }
 
+// ─── Alpha Definition ──────────────────────────────────────────────────────────
+
+export interface AlphaDefinition {
+  alphaTitle: string;
+  alphaDescription: string;
+}
+
+export function buildAlphaPrompt(task: MonitoringTask): string {
+  const toolList = task.tools.map((t) => t.toolName).join(', ');
+  return `You are defining the alpha thesis for a DeFi monitoring agent.
+
+MONITOR INSTRUCTION:
+${task.monitorInstruction}
+
+DATA SOURCES (tools): ${toolList}
+
+Define the specific alpha edge this agent is hunting. Respond ONLY with valid JSON, no markdown, no backticks.
+
+{"alphaTitle":"<catchy 4-8 word title naming the specific alpha edge>","alphaDescription":"<2-3 sentences: what alpha is being hunted, what market conditions signal opportunity, and why this edge exists in this market>"}
+
+Examples of good titles: "ETH Funding Rate Squeeze Play", "SOL Breakout Momentum Scout", "ARB Short Carry Edge", "BTC Macro Cycle Top Detector", "Polymarket Whale Sentiment Arb"`;
+}
+
+export async function callAlphaDefiner(task: MonitoringTask): Promise<AlphaDefinition | null> {
+  try {
+    const response = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 300,
+      messages: [{ role: 'user', content: buildAlphaPrompt(task) }],
+    });
+
+    const raw = (response.content[0] as any)?.text?.trim() ?? '';
+    const text = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
+    const parsed = JSON.parse(text);
+    if (parsed.alphaTitle && parsed.alphaDescription) {
+      return { alphaTitle: parsed.alphaTitle, alphaDescription: parsed.alphaDescription };
+    }
+    return null;
+  } catch (err: any) {
+    logger.warn('AlphaDefiner', `Failed to define alpha for task ${task._id}: ${err.message}`);
+    return null;
+  }
+}
+
 export async function callEvaluator(prompt: string): Promise<EvaluationResult> {
   try {
     const response = await anthropic.messages.create({

@@ -11,7 +11,7 @@ import {
 } from './db/monitoring';
 import { getUserPositions } from './db/positions';
 import { callToolsAndExtract } from './tool-caller';
-import { buildEvaluatorPrompt, callEvaluator, EvaluationResult } from './evaluator';
+import { buildEvaluatorPrompt, callEvaluator, callAlphaDefiner, EvaluationResult } from './evaluator';
 import { logger } from './utils/logger';
 
 /**
@@ -149,6 +149,23 @@ export async function processTask(task: WithId<MonitoringTask>): Promise<void> {
     lastRunAt: new Date(),
     cycleCount: (task.cycleCount || 0) + 1,
   });
+
+  // Define alpha thesis on first completed cycle (or backfill for existing monitors)
+  if (!task.alphaTitle) {
+    const alpha = await callAlphaDefiner(task);
+    if (alpha) {
+      try {
+        const db = await getDB();
+        await db.collection(COLLECTIONS.MONITORING_TASKS).updateOne(
+          { _id: taskId },
+          { $set: { alphaTitle: alpha.alphaTitle, alphaDescription: alpha.alphaDescription } }
+        );
+        logger.info('Processor', `Alpha defined for task ${taskId}: "${alpha.alphaTitle}"`);
+      } catch (err: any) {
+        logger.warn('Processor', `Failed to persist alpha definition: ${err.message}`);
+      }
+    }
+  }
 
   logger.info('Processor', `Task ${taskId} complete — next run at ${new Date(Date.now() + task.intervalSeconds * 1000).toISOString()}`);
 }

@@ -171,6 +171,8 @@ export async function GET(req: NextRequest) {
       {
         task: 1,
         monitorInstruction: 1,
+        alphaTitle: 1,
+        alphaDescription: 1,
         tools: 1,
         intervalSeconds: 1,
         status: 1,
@@ -204,6 +206,8 @@ export async function GET(req: NextRequest) {
         id: String(t._id),
         agentId: t.agentId ?? null,
         taskTitle: t.task,
+        alphaTitle: t.alphaTitle ?? null,
+        alphaDescription: t.alphaDescription ?? null,
         assetSymbol,
         status: t.status,
         intervalSeconds: t.intervalSeconds,

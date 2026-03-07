@@ -7,7 +7,10 @@ import TopNav from '../components/TopNav';
 
 interface AgentTask {
   id: string;
+  agentId: string | null;
   taskTitle: string;
+  alphaTitle: string | null;
+  alphaDescription: string | null;
   assetSymbol: string;
   status: 'active' | 'paused' | 'error';
   intervalSeconds: number;
@@ -18,8 +21,19 @@ interface AgentTask {
   signalPills: { label: string; color: string }[];
 }
 
+interface AgentInfo {
+  agentId: string;
+  name: string;
+  markets: string[];
+  status: string;
+  alertsSent: number;
+  insightsGenerated: number;
+}
+
 interface AgentSignal {
   id: string;
+  taskId?: string;
+  agentId?: string;
   title: string;
   message: string;
   severity: 'info' | 'warning' | 'critical';
@@ -27,14 +41,21 @@ interface AgentSignal {
   createdAt: string;
 }
 
-interface AgentCard {
+// One card per monitoring task (alpha)
+interface AlphaCard {
+  taskId: string;
   agentId: string;
-  name: string;
+  agentName: string;
   markets: string[];
-  status: string;
-  alertsSent: number;
-  insightsGenerated: number;
-  tasks: AgentTask[];
+  alphaTitle: string | null;
+  alphaDescription: string | null;
+  taskTitle: string;
+  assetSymbol: string;
+  status: 'active' | 'paused' | 'error';
+  intervalSeconds: number;
+  cycleCount: number;
+  alertCount: number;
+  lastRunAt: string | null;
   latestSignal?: AgentSignal;
 }
 
@@ -42,12 +63,6 @@ const MARKET_ICONS: Record<string, string> = {
   perps: '⚡',
   predictions: '🎲',
   liquidity: '💧',
-};
-
-const PLATFORM_FROM_TASK: Record<string, string> = {
-  'avantis': 'Avantis',
-  'hyperliquid': 'Hyperliquid',
-  'polymarket': 'Polymarket',
 };
 
 function intervalLabel(seconds: number): string {
@@ -67,14 +82,11 @@ function timeAgo(iso: string | null): string {
   return `${Math.floor(hrs / 24)}d ago`;
 }
 
-function AgentCard({ card, onClick }: { card: AgentCard; onClick: () => void }) {
-  const primaryTask = card.tasks.find(t => t.status === 'active') ?? card.tasks[0];
-  const status = primaryTask?.status ?? 'paused';
-  const isActive = status === 'active';
-  const isError = status === 'error';
+function AlphaCardComponent({ card, onClick }: { card: AlphaCard; onClick: () => void }) {
+  const isActive = card.status === 'active';
+  const isError = card.status === 'error';
 
   const marketIcons = card.markets.map(m => MARKET_ICONS[m] ?? '🔧').join('');
-  const signalCount = card.insightsGenerated;
 
   return (
     <div
@@ -83,7 +95,7 @@ function AgentCard({ card, onClick }: { card: AgentCard; onClick: () => void }) 
     >
       <div className={`${s.cardBar} ${isActive ? s.barActive : isError ? s.barError : s.barPaused}`} />
       <div className={s.cardInner}>
-        {/* Top row */}
+        {/* Top row: status + last run */}
         <div className={s.cardTopRow}>
           <div className={`${s.statusBadge} ${isActive ? s.badgeActive : isError ? s.badgeError : s.badgePaused}`}>
             <div className={`${s.statusDot} ${isActive ? s.dotActive : isError ? s.dotError : s.dotPaused}`} />
@@ -91,19 +103,26 @@ function AgentCard({ card, onClick }: { card: AgentCard; onClick: () => void }) 
               {isActive ? 'Active' : isError ? 'Error' : 'Paused'}
             </span>
           </div>
-          <span className={s.lastRun}>{timeAgo(primaryTask?.lastRunAt ?? null)}</span>
+          <span className={s.lastRun}>{timeAgo(card.lastRunAt)}</span>
         </div>
 
-        {/* Identity */}
-        <div className={s.cardIdentity}>
+        {/* Alpha identity — PRIMARY content */}
+        <div className={s.alphaIdentity}>
           <div className={s.agentIcon} style={{ background: isActive ? 'linear-gradient(145deg,#0d1f3c,#162d52)' : 'linear-gradient(145deg,#141414,#1a1a1a)' }}>
             {marketIcons || '🤖'}
           </div>
-          <div>
-            <div className={s.cardName}>{card.name}</div>
-            <div className={s.cardMandate}>
-              {primaryTask?.taskTitle ?? 'Monitoring agent'}
+          <div className={s.alphaIdentityText}>
+            <div className={s.alphaCardTitle}>
+              {card.alphaTitle ?? card.taskTitle}
             </div>
+            {card.alphaDescription ? (
+              <div className={s.alphaCardDesc}>{card.alphaDescription}</div>
+            ) : (
+              <div className={s.alphaCardDescPending}>
+                {isActive ? 'Alpha thesis generating after first cycle...' : 'Resume to define alpha thesis'}
+              </div>
+            )}
+            <div className={s.alphaAgentLine}>by {card.agentName}</div>
           </div>
         </div>
 
@@ -114,12 +133,11 @@ function AgentCard({ card, onClick }: { card: AgentCard; onClick: () => void }) 
               {m === 'perps' ? 'Perpetuals' : m === 'predictions' ? 'Polymarket' : 'Liquidity'}
             </span>
           ))}
-          {primaryTask && (
-            <span className={s.mktTagInterval}>{intervalLabel(primaryTask.intervalSeconds)}</span>
-          )}
+          {card.assetSymbol && <span className={s.mktTag}>{card.assetSymbol}</span>}
+          <span className={s.mktTagInterval}>{intervalLabel(card.intervalSeconds)}</span>
         </div>
 
-        {/* Latest signal */}
+        {/* Latest signal strip */}
         {card.latestSignal ? (
           <div className={s.alphaStrip}>
             <div className={`${s.alphaDot} ${card.latestSignal.severity === 'critical' ? s.dotR : card.latestSignal.severity === 'warning' ? s.dotY : s.dotG}`} />
@@ -137,20 +155,20 @@ function AgentCard({ card, onClick }: { card: AgentCard; onClick: () => void }) 
         {/* Stats */}
         <div className={s.cardStats}>
           <div className={s.cs}>
-            <div className={s.csVal}>{primaryTask?.cycleCount ?? 0}</div>
+            <div className={s.csVal}>{card.cycleCount}</div>
             <div className={s.csLbl}>Cycles</div>
           </div>
           <div className={s.cs}>
-            <div className={`${s.csVal} ${card.alertsSent > 0 ? s.csValG : ''}`}>{card.alertsSent}</div>
+            <div className={`${s.csVal} ${card.alertCount > 0 ? s.csValG : ''}`}>{card.alertCount}</div>
             <div className={s.csLbl}>Alerts</div>
           </div>
           <div className={s.cs}>
-            <div className={s.csVal}>{signalCount}</div>
-            <div className={s.csLbl}>Signals</div>
+            <div className={s.csVal}>{card.assetSymbol || '—'}</div>
+            <div className={s.csLbl}>Asset</div>
           </div>
           <div className={s.cs}>
-            <div className={s.csVal}>{primaryTask?.assetSymbol || '—'}</div>
-            <div className={s.csLbl}>Asset</div>
+            <div className={s.csVal}>{card.markets[0] === 'perps' ? 'Perps' : card.markets[0] === 'predictions' ? 'Predict' : 'LP'}</div>
+            <div className={s.csLbl}>Market</div>
           </div>
         </div>
       </div>
@@ -161,9 +179,8 @@ function AgentCard({ card, onClick }: { card: AgentCard; onClick: () => void }) 
 export default function AgentsPage() {
   const router = useRouter();
   const [address, setAddress] = useState<string | null>(null);
-  const [agents, setAgents] = useState<AgentCard[]>([]);
-  const [tasks, setTasks] = useState<AgentTask[]>([]);
-  const [latestSignals, setLatestSignals] = useState<AgentSignal[]>([]);
+  const [agentInfo, setAgentInfo] = useState<AgentInfo | null>(null);
+  const [alphaCards, setAlphaCards] = useState<AlphaCard[]>([]);
   const [filter, setFilter] = useState('all');
   const [loading, setLoading] = useState(true);
 
@@ -193,36 +210,51 @@ export default function AgentsPage() {
 
       const taskList: AgentTask[] = taskData.tasks ?? [];
       const alertList: AgentSignal[] = alertData.alerts ?? [];
-      setTasks(taskList);
-      setLatestSignals(alertList);
 
-      if (agentData?.agent) {
-        // Build cards — one card per agent, with its tasks
-        const tasksByAgent: Record<string, AgentTask[]> = {};
-        for (const t of taskList) {
-          const key = (t as any).agentId ?? 'default';
-          if (!tasksByAgent[key]) tasksByAgent[key] = [];
-          tasksByAgent[key].push(t);
-        }
-
-        const latestByAgent: Record<string, AgentSignal> = {};
-        for (const a of alertList) {
-          const key = (a as any).agentId ?? 'default';
-          if (!latestByAgent[key]) latestByAgent[key] = a;
-        }
-
-        const card: AgentCard = {
-          agentId: agentData.agent.agentId,
-          name: agentData.agent.name,
-          markets: agentData.agent.markets ?? ['perps'],
-          status: agentData.agent.status,
-          alertsSent: agentData.agent.alertsSent ?? 0,
-          insightsGenerated: agentData.agent.insightsGenerated ?? 0,
-          tasks: tasksByAgent[agentData.agent.agentId] ?? taskList,
-          latestSignal: latestByAgent[agentData.agent.agentId] ?? alertList[0],
-        };
-        setAgents([card]);
+      // Build latest signal per task
+      const latestByTask: Record<string, AgentSignal> = {};
+      for (const a of alertList) {
+        const key = (a as any).taskId ?? '';
+        if (key && !latestByTask[key]) latestByTask[key] = a;
       }
+      // Fallback: latest by agent
+      const latestByAgent: Record<string, AgentSignal> = {};
+      for (const a of alertList) {
+        const key = (a as any).agentId ?? '';
+        if (key && !latestByAgent[key]) latestByAgent[key] = a;
+      }
+
+      const info: AgentInfo | null = agentData?.agent
+        ? {
+            agentId: agentData.agent.agentId,
+            name: agentData.agent.name,
+            markets: agentData.agent.markets ?? ['perps'],
+            status: agentData.agent.status,
+            alertsSent: agentData.agent.alertsSent ?? 0,
+            insightsGenerated: agentData.agent.insightsGenerated ?? 0,
+          }
+        : null;
+      setAgentInfo(info);
+
+      // Build one alpha card per task
+      const cards: AlphaCard[] = taskList.map(t => ({
+        taskId: t.id,
+        agentId: t.agentId ?? info?.agentId ?? t.id,
+        agentName: info?.name ?? 'Agent',
+        markets: info?.markets ?? ['perps'],
+        alphaTitle: t.alphaTitle,
+        alphaDescription: t.alphaDescription,
+        taskTitle: t.taskTitle,
+        assetSymbol: t.assetSymbol,
+        status: t.status,
+        intervalSeconds: t.intervalSeconds,
+        cycleCount: t.cycleCount,
+        alertCount: t.alertCount,
+        lastRunAt: t.lastRunAt,
+        latestSignal: latestByTask[t.id] ?? latestByAgent[t.agentId ?? ''],
+      }));
+
+      setAlphaCards(cards);
     } catch (e) {
       console.error('Failed to fetch agents data', e);
     } finally {
@@ -230,28 +262,14 @@ export default function AgentsPage() {
     }
   }
 
-  const filteredAgents = agents.filter(a => {
+  const filteredCards = alphaCards.filter(c => {
     if (filter === 'all') return true;
-    if (filter === 'active') return a.tasks.some(t => t.status === 'active');
-    if (filter === 'paused') return a.tasks.every(t => t.status !== 'active');
-    if (filter === 'perps') return a.markets.includes('perps');
-    if (filter === 'predictions') return a.markets.includes('predictions');
+    if (filter === 'active') return c.status === 'active';
+    if (filter === 'paused') return c.status !== 'active';
+    if (filter === 'perps') return c.markets.includes('perps');
+    if (filter === 'predictions') return c.markets.includes('predictions');
     return true;
   });
-
-  // Also show task-level cards if there are multiple tasks
-  const taskCards = tasks.map(t => ({
-    agentId: (t as any).agentId ?? t.id,
-    name: t.taskTitle,
-    markets: t.assetSymbol ? ['perps'] : ['perps'],
-    status: t.status,
-    alertsSent: t.alertCount,
-    insightsGenerated: t.alertCount,
-    tasks: [t],
-    latestSignal: latestSignals.find(s => (s as any).taskId === t.id),
-  }));
-
-  const displayCards = agents.length > 0 ? filteredAgents : taskCards;
 
   return (
     <div style={{ background: '#000', minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
@@ -282,7 +300,7 @@ export default function AgentsPage() {
             className={`${s.filterChip} ${filter === f ? s.filterActive : ''}`}
             onClick={() => setFilter(f)}
           >
-            {f === 'all' ? 'All Agents' : f.charAt(0).toUpperCase() + f.slice(1)}
+            {f === 'all' ? 'All Alpha' : f.charAt(0).toUpperCase() + f.slice(1)}
           </button>
         ))}
       </div>
@@ -297,16 +315,16 @@ export default function AgentsPage() {
           <div className={s.gridEmptyIcon}>🔌</div>
           <div className={s.gridEmptyText}>Connect your wallet to view your agents</div>
         </div>
-      ) : displayCards.length === 0 ? (
+      ) : filteredCards.length === 0 ? (
         <div className={s.gridEmpty}>
           <div className={s.gridEmptyIcon}>🤖</div>
           <div className={s.gridEmptyText}>No agents deployed yet — create your first agent to start monitoring</div>
         </div>
       ) : (
         <div className={s.agentGrid}>
-          {displayCards.map(card => (
-            <AgentCard
-              key={card.agentId}
+          {filteredCards.map(card => (
+            <AlphaCardComponent
+              key={card.taskId}
               card={card}
               onClick={() => router.push(`/agents/${card.agentId}`)}
             />

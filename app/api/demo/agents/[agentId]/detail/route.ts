@@ -31,30 +31,43 @@ export async function GET(
     const tasks = await MonitoringTask.find(
       { agentId },
       {
-        task: 1, monitorInstruction: 1, tools: 1, intervalSeconds: 1,
+        task: 1, monitorInstruction: 1, alphaTitle: 1, alphaDescription: 1,
+        tools: 1, intervalSeconds: 1,
         status: 1, nextRunAt: 1, lastRunAt: 1, alertCount: 1, cycleCount: 1,
         cycleHistory: 1, createdAt: 1,
       }
-    ).sort({ createdAt: -1 }).limit(5).lean();
+    ).sort({ createdAt: -1 }).limit(10).lean();
 
     // Primary task (most recent active, or first)
     const primaryTask = (tasks.find((t: any) => t.status === 'active') ?? tasks[0]) as any;
 
-    // Latest indicators come from the last cycle in cycleHistory
-    let latestRead: {
-      timestamp: string | null;
-      summary: string | null;
-      indicators: any[];
-    } = { timestamp: null, summary: null, indicators: [] };
-
-    if (primaryTask?.cycleHistory?.length) {
-      const last = primaryTask.cycleHistory[primaryTask.cycleHistory.length - 1];
-      latestRead = {
-        timestamp: last.timestamp ? new Date(last.timestamp).toISOString() : null,
-        summary: last.summary ?? null,
-        indicators: last.indicators ?? [],
+    // Build per-task alpha + latestRead for Section 01 (replaces old Current Market Read)
+    const taskAlphas = tasks.map((t: any) => {
+      let latestRead: { timestamp: string | null; summary: string | null; indicators: any[] } = {
+        timestamp: null, summary: null, indicators: [],
       };
-    }
+      if (t.cycleHistory?.length) {
+        const last = t.cycleHistory[t.cycleHistory.length - 1];
+        latestRead = {
+          timestamp: last.timestamp ? new Date(last.timestamp).toISOString() : null,
+          summary: last.summary ?? null,
+          indicators: last.indicators ?? [],
+        };
+      }
+      return {
+        id: String(t._id),
+        title: t.task,
+        alphaTitle: t.alphaTitle ?? null,
+        alphaDescription: t.alphaDescription ?? null,
+        intervalSeconds: t.intervalSeconds,
+        status: t.status,
+        nextRunAt: t.nextRunAt,
+        lastRunAt: t.lastRunAt ?? null,
+        cycleCount: t.cycleCount || 0,
+        alertCount: t.alertCount || 0,
+        latestRead,
+      };
+    });
 
     // Fetch signals & alerts for this agent (most recent 20)
     const signals = await MonitoringAlert.find(
@@ -81,6 +94,8 @@ export async function GET(
       task: primaryTask ? {
         id: String(primaryTask._id),
         title: primaryTask.task,
+        alphaTitle: primaryTask.alphaTitle ?? null,
+        alphaDescription: primaryTask.alphaDescription ?? null,
         intervalSeconds: primaryTask.intervalSeconds,
         status: primaryTask.status,
         nextRunAt: primaryTask.nextRunAt,
@@ -90,7 +105,10 @@ export async function GET(
         signalCount,
         createdAt: primaryTask.createdAt,
       } : null,
-      latestRead,
+      // All tasks with per-task alpha + latestRead (powers Alpha Intelligence section)
+      taskAlphas,
+      // Legacy latestRead from primary task (kept for backwards compat)
+      latestRead: taskAlphas[0]?.latestRead ?? { timestamp: null, summary: null, indicators: [] },
       signals: (signals as any[]).map((s: any) => ({
         id: String(s._id),
         title: s.title,

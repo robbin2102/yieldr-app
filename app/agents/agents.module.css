@@ -179,13 +179,40 @@
 
 .lastRun { font-family: 'IBM Plex Mono', monospace; font-size: 0.52rem; color: #2A2A2A; }
 
-/* Identity */
-.cardIdentity {
+/* Alpha identity — alpha title/description is primary, agent name is secondary */
+.alphaIdentity {
   display: flex;
   align-items: flex-start;
   gap: 12px;
   margin-bottom: 12px;
 }
+.alphaIdentityText { flex: 1; min-width: 0; }
+.alphaCardTitle {
+  font-size: 0.88rem;
+  font-weight: 700;
+  color: #F0F0F0;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+  margin-bottom: 5px;
+}
+.alphaCardDesc {
+  font-size: 0.6rem;
+  color: #8A8A8A;
+  line-height: 1.5;
+  margin-bottom: 5px;
+}
+.alphaCardDescPending {
+  font-size: 0.58rem;
+  color: #2A2A2A;
+  font-style: italic;
+  margin-bottom: 5px;
+}
+.alphaAgentLine {
+  font-size: 0.5rem;
+  color: #2A2A2A;
+  font-family: 'IBM Plex Mono', monospace;
+}
+
 .agentIcon {
   width: 44px;
   height: 44px;

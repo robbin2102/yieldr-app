@@ -216,7 +216,56 @@
   line-height: 1.5;
 }
 
-/* ── Signal rows (Current Market Read) ── */
+/* ── Alpha Intelligence section ── */
+.alphaBlock {
+  padding: 0;
+}
+.alphaBlockDivider {
+  height: 1px;
+  background: rgba(255,255,255,0.04);
+  margin: 0 18px;
+}
+
+.alphaThesis {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 16px 18px 12px;
+}
+.alphaThesisLeft { flex-shrink: 0; padding-top: 5px; }
+.atStatusDot { width: 7px; height: 7px; border-radius: 50%; }
+.atDotActive { background: #00C805; animation: pulse 2s infinite; }
+.atDotPaused { background: #2A2A2A; }
+
+.alphaThesisBody { flex: 1; min-width: 0; }
+.atTitle {
+  font-size: 0.88rem;
+  font-weight: 700;
+  color: #F0F0F0;
+  letter-spacing: -0.01em;
+  line-height: 1.3;
+  margin-bottom: 6px;
+}
+.atDesc {
+  font-size: 0.65rem;
+  color: #8A8A8A;
+  line-height: 1.6;
+  margin-bottom: 8px;
+}
+.atMeta {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+.atMetaItem { font-family: 'IBM Plex Mono', monospace; font-size: 0.5rem; color: #4A4A4A; }
+.atMetaDot  { font-size: 0.5rem; color: #2A2A2A; }
+
+.indicatorBlock {
+  border-top: 1px solid rgba(255,255,255,0.04);
+}
+
+/* ── Signal rows (indicator reads) ── */
 .signalRow {
   display: flex;
   align-items: flex-start;

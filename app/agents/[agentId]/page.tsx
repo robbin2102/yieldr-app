@@ -12,6 +12,24 @@ interface IndicatorRead {
   note: string;
 }
 
+interface TaskAlpha {
+  id: string;
+  title: string;
+  alphaTitle: string | null;
+  alphaDescription: string | null;
+  intervalSeconds: number;
+  status: string;
+  nextRunAt: string | null;
+  lastRunAt: string | null;
+  cycleCount: number;
+  alertCount: number;
+  latestRead: {
+    timestamp: string | null;
+    summary: string | null;
+    indicators: IndicatorRead[];
+  };
+}
+
 interface Signal {
   id: string;
   title: string;
@@ -38,6 +56,8 @@ interface AgentDetail {
   task: {
     id: string;
     title: string;
+    alphaTitle: string | null;
+    alphaDescription: string | null;
     intervalSeconds: number;
     status: string;
     nextRunAt: string | null;
@@ -47,11 +67,7 @@ interface AgentDetail {
     signalCount: number;
     createdAt: string;
   } | null;
-  latestRead: {
-    timestamp: string | null;
-    summary: string | null;
-    indicators: IndicatorRead[];
-  };
+  taskAlphas: TaskAlpha[];
   signals: Signal[];
 }
 
@@ -125,7 +141,7 @@ export default function AgentDetailPage() {
 
   const [data, setData] = useState<AgentDetail | null>(null);
   const [loading, setLoading] = useState(true);
-  const [readOpen, setReadOpen] = useState(true);
+  const [alphaOpen, setAlphaOpen] = useState(true);
   const [signalsOpen, setSignalsOpen] = useState(true);
 
   useEffect(() => {
@@ -170,7 +186,7 @@ export default function AgentDetailPage() {
     );
   }
 
-  const { agent, task, latestRead, signals } = data;
+  const { agent, task, taskAlphas, signals } = data;
   const isActive = task?.status === 'active';
   const marketIcons = agent.markets.map(m => MARKET_ICONS[m] ?? '🔧').join('');
 
@@ -195,7 +211,6 @@ export default function AgentDetailPage() {
             </div>
             <div className={s.heroMeta}>
               <div className={s.heroName}>{agent.name}</div>
-              <div className={s.heroMandate}>{task?.title ?? 'Monitoring agent'}</div>
               <div className={s.heroTags}>
                 {agent.markets.map(m => (
                   <span key={m} className={`${s.htag} ${s[`htag_${m}`] ?? ''}`}>
@@ -253,55 +268,96 @@ export default function AgentDetailPage() {
         </div>
       </div>
 
-      {/* ── SECTION 1: CURRENT MARKET READ ── */}
+      {/* ── SECTION 1: ALPHA INTELLIGENCE ── */}
       <div className={s.section}>
-        <div className={s.secHdr} onClick={() => setReadOpen(o => !o)}>
+        <div className={s.secHdr} onClick={() => setAlphaOpen(o => !o)}>
           <div className={s.secHdrLeft}>
             <div className={s.secEyebrow}>Section 01</div>
-            <div className={s.secTitle}>Current Market Read</div>
-            <div className={s.secSub}>Live signal state from the last completed scan cycle</div>
+            <div className={s.secTitle}>Alpha Intelligence</div>
+            <div className={s.secSub}>What this agent is hunting — alpha thesis and live indicator reads</div>
           </div>
           <div className={s.secHdrRight}>
-            {latestRead.timestamp ? (
+            {taskAlphas.some(t => t.latestRead.timestamp) ? (
               <div className={s.secBadgeLive}>
                 <div className={s.secBadgeDot} />
-                Updated {timeAgo(latestRead.timestamp)}
+                Live
               </div>
             ) : (
               <div className={s.secBadge}>No data yet</div>
             )}
-            <span className={`${s.secChev} ${readOpen ? s.secChevOpen : ''}`}>▾</span>
+            <span className={`${s.secChev} ${alphaOpen ? s.secChevOpen : ''}`}>▾</span>
           </div>
         </div>
 
-        {readOpen && (
+        {alphaOpen && (
           <div className={s.secBody}>
-            {latestRead.indicators.length > 0 ? (
-              <>
-                {latestRead.indicators.map((ind, i) => (
-                  <div key={i} className={s.signalRow}>
-                    <div className={`${s.srDot} ${dotClass(ind.dot)}`} />
-                    <div className={s.srBody}>
-                      <div className={s.srTop}>
-                        <span className={s.srName}>{ind.name}</span>
-                        <span className={`${s.srVal} ${s[`srVal_${ind.dot}`] ?? s.srValN}`}>{ind.value}</span>
-                      </div>
-                      <div className={s.srNote}>{ind.note}</div>
+            {taskAlphas.length > 0 ? (
+              taskAlphas.map((ta, idx) => (
+                <div key={ta.id} className={s.alphaBlock}>
+                  {/* Alpha thesis card */}
+                  <div className={s.alphaThesis}>
+                    <div className={s.alphaThesisLeft}>
+                      <div className={`${s.atStatusDot} ${ta.status === 'active' ? s.atDotActive : s.atDotPaused}`} />
                     </div>
-                    <div className={s.srRight}>
-                      <span className={s.srTime}>{timeAgo(latestRead.timestamp)}</span>
+                    <div className={s.alphaThesisBody}>
+                      <div className={s.atTitle}>
+                        {ta.alphaTitle ?? ta.title}
+                      </div>
+                      {ta.alphaDescription && (
+                        <div className={s.atDesc}>{ta.alphaDescription}</div>
+                      )}
+                      <div className={s.atMeta}>
+                        <span className={s.atMetaItem}>{intervalLabel(ta.intervalSeconds)}</span>
+                        <span className={s.atMetaDot}>·</span>
+                        <span className={s.atMetaItem}>{ta.cycleCount} cycles</span>
+                        {ta.latestRead.timestamp && (
+                          <>
+                            <span className={s.atMetaDot}>·</span>
+                            <span className={s.atMetaItem}>Updated {timeAgo(ta.latestRead.timestamp)}</span>
+                          </>
+                        )}
+                      </div>
                     </div>
                   </div>
-                ))}
-                {latestRead.summary && (
-                  <div className={s.readSummary}>{latestRead.summary}</div>
-                )}
-              </>
+
+                  {/* Indicators from latest cycle */}
+                  {ta.latestRead.indicators.length > 0 ? (
+                    <div className={s.indicatorBlock}>
+                      {ta.latestRead.indicators.map((ind, i) => (
+                        <div key={i} className={s.signalRow}>
+                          <div className={`${s.srDot} ${dotClass(ind.dot)}`} />
+                          <div className={s.srBody}>
+                            <div className={s.srTop}>
+                              <span className={s.srName}>{ind.name}</span>
+                              <span className={`${s.srVal} ${s[`srVal_${ind.dot}`] ?? s.srValN}`}>{ind.value}</span>
+                            </div>
+                            <div className={s.srNote}>{ind.note}</div>
+                          </div>
+                          <div className={s.srRight}>
+                            <span className={s.srTime}>{timeAgo(ta.latestRead.timestamp)}</span>
+                          </div>
+                        </div>
+                      ))}
+                      {ta.latestRead.summary && (
+                        <div className={s.readSummary}>{ta.latestRead.summary}</div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className={s.emptySection}>
+                      {ta.status === 'active'
+                        ? 'Waiting for first cycle — indicator reads will appear here shortly'
+                        : '⏸ Paused — resume to restart monitoring'}
+                    </div>
+                  )}
+
+                  {idx < taskAlphas.length - 1 && <div className={s.alphaBlockDivider} />}
+                </div>
+              ))
             ) : (
               <div className={s.emptySection}>
                 {isActive
-                  ? 'Waiting for first cycle to complete — check back shortly'
-                  : 'No market data yet — activate the agent to start monitoring'}
+                  ? 'Waiting for first cycle to complete — alpha intelligence will appear shortly'
+                  : 'No monitors set up yet — activate the agent to start monitoring'}
               </div>
             )}
           </div>
@@ -340,7 +396,6 @@ export default function AgentDetailPage() {
                   </div>
                   <div className={s.arBody}>{sig.message}</div>
 
-                  {/* Show per-indicator snapshot if available */}
                   {sig.indicators && sig.indicators.length > 0 && (
                     <div className={s.arIndicators}>
                       {sig.indicators.slice(0, 3).map((ind, i) => (
