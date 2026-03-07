@@ -215,6 +215,7 @@ export default function ChatPage() {
   const [monitoringTasks, setMonitoringTasks] = useState<MonitoringTaskUI[]>([]);
   const [monitoringAlerts, setMonitoringAlerts] = useState<MonitoringAlertUI[]>([]);
   const [unreadAlerts, setUnreadAlerts] = useState(0);
+  const [expandedAlerts, setExpandedAlerts] = useState<Set<string>>(new Set());
 
   // Ticker state
 
@@ -1121,23 +1122,31 @@ export default function ChatPage() {
                 ) : (
                   <>
                     <div className={s.alertsSectionDivider}>Signals &amp; Alerts</div>
-                    {monitoringAlerts.map(alert => (
-                      <div
-                        key={alert.id}
-                        className={`${s.alertItem} ${alert.severity === 'critical' ? s.crit : alert.severity === 'warning' ? s.warn : s.info}`}
-                      >
-                        <div className={s.alertTop}>
-                          <div className={s.alertDot}></div>
-                          <span className={s.alertSeverityLabel}>
-                            {alert.severity === 'critical' ? 'Alert' : alert.severity === 'warning' ? 'Watch' : 'Signal'}
-                          </span>
-                          {alert.assetSymbol && <span className={s.alertAsset}>{alert.assetSymbol}</span>}
-                          <span className={s.alertTitle}>{alert.title}</span>
-                          <span className={s.alertTime}>{timeAgo(alert.createdAt)}</span>
+                    {monitoringAlerts.map(alert => {
+                      const isExpanded = expandedAlerts.has(alert.id);
+                      return (
+                        <div
+                          key={alert.id}
+                          className={`${s.alertItem} ${alert.severity === 'critical' ? s.crit : alert.severity === 'warning' ? s.warn : s.info}`}
+                          onClick={() => setExpandedAlerts(prev => {
+                            const next = new Set(prev);
+                            if (next.has(alert.id)) next.delete(alert.id); else next.add(alert.id);
+                            return next;
+                          })}
+                        >
+                          <div className={s.alertTop}>
+                            <div className={s.alertDot}></div>
+                            <span className={s.alertSeverityLabel}>
+                              {alert.severity === 'critical' ? 'Alert' : alert.severity === 'warning' ? 'Watch' : 'Signal'}
+                            </span>
+                            {alert.assetSymbol && <span className={s.alertAsset}>{alert.assetSymbol}</span>}
+                            <span className={s.alertTitle}>{alert.title}</span>
+                            <span className={s.alertTime}>{timeAgo(alert.createdAt)}</span>
+                          </div>
+                          <div className={isExpanded ? s.alertBodyExpanded : s.alertBody}>{alert.message}</div>
                         </div>
-                        <div className={s.alertBody}>{alert.message}</div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </>
                 )}
               </>
