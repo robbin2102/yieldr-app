@@ -257,28 +257,9 @@ export default function AgentDetailPage() {
               <div className={s.hsLbl}>Alerts Fired</div>
             </div>
             <div className={s.hs}>
-              <div className={s.hsVal}>{task?.signalCount ?? agent.insightsGenerated}</div>
-              <div className={s.hsLbl}>Signals</div>
-            </div>
-            <div className={s.hs}>
-              <div className={`${s.hsVal} ${s.hsValY}`}>{agent.insightsGenerated}</div>
-              <div className={s.hsLbl}>Insights</div>
-            </div>
-            <div className={s.hs}>
               <div className={s.hsVal}>{timeUntil(task?.nextRunAt ?? null)}</div>
               <div className={s.hsLbl}>Next Scan</div>
             </div>
-          </div>
-
-          {/* Creator */}
-          <div className={s.heroCreator}>
-            <span className={s.hcLbl}>Created by</span>
-            <span className={s.hcWallet}>
-              {agent.ownerWallet.slice(0, 6)}...{agent.ownerWallet.slice(-4)}
-            </span>
-            <span className={s.hcSince}>
-              Deployed {new Date(agent.createdAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}
-            </span>
           </div>
         </div>
       </div>
