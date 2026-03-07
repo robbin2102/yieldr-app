@@ -1119,20 +1119,26 @@ export default function ChatPage() {
                     </div>
                   </div>
                 ) : (
-                  monitoringAlerts.map(alert => (
-                    <div
-                      key={alert.id}
-                      className={`${s.alertItem} ${alert.severity === 'critical' ? s.crit : alert.severity === 'warning' ? s.warn : s.info}`}
-                    >
-                      <div className={s.alertTop}>
-                        <div className={s.alertDot}></div>
-                        {alert.assetSymbol && <span className={s.alertAsset}>{alert.assetSymbol}</span>}
-                        <span className={s.alertTitle}>{alert.title}</span>
-                        <span className={s.alertTime}>{timeAgo(alert.createdAt)}</span>
+                  <>
+                    <div className={s.alertsSectionDivider}>Signals &amp; Alerts</div>
+                    {monitoringAlerts.map(alert => (
+                      <div
+                        key={alert.id}
+                        className={`${s.alertItem} ${alert.severity === 'critical' ? s.crit : alert.severity === 'warning' ? s.warn : s.info}`}
+                      >
+                        <div className={s.alertTop}>
+                          <div className={s.alertDot}></div>
+                          <span className={s.alertSeverityLabel}>
+                            {alert.severity === 'critical' ? 'Alert' : alert.severity === 'warning' ? 'Watch' : 'Signal'}
+                          </span>
+                          {alert.assetSymbol && <span className={s.alertAsset}>{alert.assetSymbol}</span>}
+                          <span className={s.alertTitle}>{alert.title}</span>
+                          <span className={s.alertTime}>{timeAgo(alert.createdAt)}</span>
+                        </div>
+                        <div className={s.alertBody}>{alert.message}</div>
                       </div>
-                      <div className={s.alertBody}>{alert.message}</div>
-                    </div>
-                  ))
+                    ))}
+                  </>
                 )}
               </>
             )}

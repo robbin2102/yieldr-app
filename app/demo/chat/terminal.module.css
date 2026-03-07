@@ -746,20 +746,48 @@
 .cdFill { height: 100%; background: var(--green); border-radius: 1px; transition: width 1s linear; }
 .cdCycle { font-size: 0.5rem; color: var(--t3); font-family: var(--font-mono); }
 
-.alertItem {
-  padding: 9px 12px;
+.alertsSectionDivider {
+  padding: 5px 12px;
+  font-size: 0.5rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--t4);
+  background: var(--bg2);
   border-bottom: 1px solid var(--border);
+}
+
+.alertItem {
+  padding: 9px 12px 9px 10px;
+  border-bottom: 1px solid var(--border);
+  border-left: 2px solid transparent;
   cursor: pointer;
   transition: background 0.1s;
   animation: fadeUp 0.2s ease both;
 }
 .alertItem:hover { background: var(--bg2); }
+.alertItem.crit { border-left-color: var(--red); }
+.alertItem.warn { border-left-color: var(--yellow); }
+.alertItem.info { border-left-color: var(--green); }
 
 .alertTop { display: flex; align-items: center; gap: 5px; margin-bottom: 4px; }
-.alertDot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+.alertDot { width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; }
 .alertItem.warn .alertDot { background: var(--yellow); }
 .alertItem.info .alertDot { background: var(--green); }
 .alertItem.crit .alertDot { background: var(--red); animation: pulse 1.2s infinite; }
+
+.alertSeverityLabel {
+  font-size: 0.48rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 1px 4px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+.alertItem.crit .alertSeverityLabel { color: var(--red);    background: rgba(255,71,87,0.12); }
+.alertItem.warn .alertSeverityLabel { color: var(--yellow); background: rgba(255,193,7,0.12); }
+.alertItem.info .alertSeverityLabel { color: var(--green);  background: rgba(0,255,102,0.10); }
 
 .alertAsset {
   font-size: 0.52rem;
