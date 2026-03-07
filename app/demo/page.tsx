@@ -80,13 +80,25 @@ export default function CreateAgentPage() {
   // Auto-redirect to chat if already authenticated
   useEffect(() => {
     if (!mounted) return;
+    // yieldr_auth_wallet alone is sufficient — agentCreated is not required
     const authWallet = localStorage.getItem('yieldr_auth_wallet');
-    const agentCreated = localStorage.getItem('agentCreated');
-    if (authWallet && agentCreated) {
-      // User already has an agent, redirect to chat
+    if (authWallet) {
       router.push('/demo/chat');
+      return;
     }
-  }, [mounted, router]);
+    // Also redirect if wagmi wallet is connected and DB confirms an existing agent
+    if (isConnected && address) {
+      fetch(`/api/demo/agents?wallet=${address}`)
+        .then(r => r.json())
+        .then(data => {
+          if (data.agent) {
+            localStorage.setItem('yieldr_auth_wallet', address.toLowerCase());
+            router.push('/demo/chat');
+          }
+        })
+        .catch(() => {});
+    }
+  }, [mounted, isConnected, address, router]);
 
   // Load saved data
   useEffect(() => {
