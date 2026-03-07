@@ -722,6 +722,25 @@ export default function ChatPage() {
             <span className={s.panelTitle}>Agent Monitoring</span>
           </div>
 
+          {/* ── Activity ticker ── */}
+          <div className={s.activityTicker}>
+            <div className={`${s.atDot} ${!hasTasks ? 'idle' : pendingTasks.length > 0 && activeTasks.length === 0 ? 'processing' : hasActiveTasks ? 'scanning' : 'idle'}`}></div>
+            <span className={`${s.atText} ${!hasActiveTasks ? s.idleMode : ''}`}>
+              {!hasTasks
+                ? 'Idle — no monitors configured'
+                : pendingTasks.length > 0 && activeTasks.length === 0
+                ? `Initializing — ${pendingTasks.length} monitor${pendingTasks.length > 1 ? 's' : ''} pending first scan`
+                : hasActiveTasks
+                ? `Scanning ${activeTasks.map(t => t.assetSymbol).filter(Boolean).join(', ') || 'markets'} — ${activeTasks.length} monitor${activeTasks.length > 1 ? 's' : ''} active`
+                : 'Paused — all monitors inactive'}
+            </span>
+            {hasActiveTasks && (
+              <span className={s.atCycle}>
+                ↻ {activeTasks.reduce((sum, t) => sum + t.cycleCount, 0)} cycles
+              </span>
+            )}
+          </div>
+
           <div className={s.lpanelTabs}>
             <button
               className={`${s.lpanelTab} ${activeLeftTab === 'positions' ? s.active : ''}`}
@@ -792,6 +811,14 @@ export default function ChatPage() {
                           </div>
                           <span className={`${s.chevron} ${isExpanded ? s.open : ''}`}>▾</span>
                         </div>
+
+                        {pills.length > 0 && (
+                          <div className={s.pillsRow}>
+                            {pills.map((p, pi) => (
+                              <span key={pi} className={`${s.sigPill} ${s[p.color] ?? ''}`}>{p.label}</span>
+                            ))}
+                          </div>
+                        )}
 
                         <div className={`${s.posStats} ${s.perpStats}`}>
                           <div className={s.psItem}>
@@ -906,6 +933,14 @@ export default function ChatPage() {
                             <span className={s.polyNoLbl}>NO {100 - yesOdds}¢</span>
                           </div>
                         </div>
+
+                        {pills.length > 0 && (
+                          <div className={s.pillsRow}>
+                            {pills.map((p, pi) => (
+                              <span key={pi} className={`${s.sigPill} ${s[p.color] ?? ''}`}>{p.label}</span>
+                            ))}
+                          </div>
+                        )}
 
                         <div className={`${s.posStats} ${s.polyStats}`}>
                           <div className={s.psItem}>
