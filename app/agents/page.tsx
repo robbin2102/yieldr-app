@@ -150,10 +150,6 @@ function AgentCard({ card, onClick }: { card: AgentCard; onClick: () => void }) 
             <div className={s.csLbl}>Signals</div>
           </div>
           <div className={s.cs}>
-            <div className={s.csVal}>{primaryTask?.assetSymbol || '—'}</div>
-            <div className={s.csLbl}>Asset</div>
-          </div>
-          <div className={s.cs}>
             <div className={`${s.csVal} ${monitorsLive > 0 ? s.csValG : ''}`}>{monitorsLive}</div>
             <div className={s.csLbl}>Monitors Live</div>
           </div>
