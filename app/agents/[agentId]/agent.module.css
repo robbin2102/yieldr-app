@@ -251,6 +251,10 @@
   color: #8A8A8A;
   line-height: 1.6;
   margin-bottom: 8px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 .atMeta {
   display: flex;
