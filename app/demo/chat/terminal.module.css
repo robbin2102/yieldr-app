@@ -801,7 +801,8 @@
 
 .alertTitle { font-size: 0.62rem; font-weight: 600; color: var(--t1); }
 .alertTime  { font-family: var(--font-mono); font-size: 0.5rem; color: var(--t3); margin-left: auto; }
-.alertBody  { font-size: 0.61rem; color: var(--t2); line-height: 1.5; padding-left: 11px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.alertBody         { font-size: 0.61rem; color: var(--t2); line-height: 1.5; padding-left: 11px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.alertBodyExpanded { font-size: 0.61rem; color: var(--t2); line-height: 1.5; padding-left: 11px; }
 
 /* ── Tokens Tab ── */
 .tokenRow {
