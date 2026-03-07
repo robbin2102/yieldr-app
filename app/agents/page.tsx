@@ -75,6 +75,7 @@ function AgentCard({ card, onClick }: { card: AgentCard; onClick: () => void }) 
 
   const marketIcons = card.markets.map(m => MARKET_ICONS[m] ?? '🔧').join('');
   const signalCount = card.insightsGenerated;
+  const monitorsLive = card.tasks.filter(t => t.status === 'active').length;
 
   return (
     <div
@@ -149,8 +150,8 @@ function AgentCard({ card, onClick }: { card: AgentCard; onClick: () => void }) 
             <div className={s.csLbl}>Signals</div>
           </div>
           <div className={s.cs}>
-            <div className={s.csVal}>{primaryTask?.assetSymbol || '—'}</div>
-            <div className={s.csLbl}>Asset</div>
+            <div className={`${s.csVal} ${monitorsLive > 0 ? s.csValG : ''}`}>{monitorsLive}</div>
+            <div className={s.csLbl}>Monitors Live</div>
           </div>
         </div>
       </div>
@@ -239,7 +240,7 @@ export default function AgentsPage() {
     return true;
   });
 
-  // Also show task-level cards if there are multiple tasks
+  // Fallback: task-level cards if no agent found
   const taskCards = tasks.map(t => ({
     agentId: (t as any).agentId ?? t.id,
     name: t.taskTitle,

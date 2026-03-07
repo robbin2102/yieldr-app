@@ -197,7 +197,6 @@ export default function ChatPage() {
   const [activeNavTab, setActiveNavTab] = useState<'terminal' | 'agents'>('terminal');
   const [showYldrModal, setShowYldrModal] = useState(false);
   const [yldrInput, setYldrInput] = useState(100);
-  const [showHistory, setShowHistory] = useState(false);
   const [mobPanelHidden, setMobPanelHidden] = useState(false);
 
   // Credits
@@ -230,8 +229,15 @@ export default function ChatPage() {
   // Sessions
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [chatSessions, setChatSessions] = useState<{ id: string; title: string; updatedAt: string }[]>([]);
+  const [totalMessages, setTotalMessages] = useState(0);
+  const [hasEarlierMessages, setHasEarlierMessages] = useState(false);
+  const [loadingEarlier, setLoadingEarlier] = useState(false);
 
   const initialAnalysisTriggered = useRef(false);
+  const isPrepending = useRef(false);
+  const chatStreamRef = useRef<HTMLDivElement>(null);
+  const topSentinelRef = useRef<HTMLDivElement>(null);
+  const SESSION_PAGE_SIZE = 20;
 
   // ── Mount
   useEffect(() => { setMounted(true); }, []);
@@ -444,7 +450,7 @@ export default function ChatPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTasks.map(t => t.id + t.nextRunAt + t.cycleCount).join(',')]);
 
-  // ── Chat sessions
+  // ── Chat sessions — refresh list only (called after sends, not on startup)
   const loadChatSessions = useCallback(async () => {
     if (!effectiveWallet) return;
     try {
@@ -456,44 +462,87 @@ export default function ChatPage() {
     } catch {}
   }, [effectiveWallet]);
 
-  useEffect(() => {
-    if (mounted && effectiveWallet) loadChatSessions();
-  }, [mounted, effectiveWallet, loadChatSessions]);
-
   const loadSession = useCallback(async (id: string) => {
     try {
-      const res = await fetch(`/api/demo/chat-sessions/${id}`);
+      const res = await fetch(`/api/demo/chat-sessions/${id}?limit=${SESSION_PAGE_SIZE}`);
       const d = await res.json();
       if (d.success && d.session) {
         setSessionId(id);
+        setTotalMessages(d.session.totalMessages ?? d.session.messages.length);
+        setHasEarlierMessages(d.session.hasMore ?? false);
         setMessages(d.session.messages.map((m: any, i: number) => ({
           id: `${id}-${i}`,
           role: m.role,
           content: m.content,
           time: new Date(m.timestamp).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false }),
         })));
-        setShowHistory(false);
+        return true;
       }
     } catch {}
-  }, []);
+    return false;
+  }, [SESSION_PAGE_SIZE]);
+
+  const loadEarlierMessages = useCallback(async () => {
+    if (!sessionId || !hasEarlierMessages || loadingEarlier) return;
+    setLoadingEarlier(true);
+    const container = chatStreamRef.current;
+    const prevScrollHeight = container?.scrollHeight ?? 0;
+    try {
+      const alreadyLoaded = messages.length;
+      const skip = Math.max(0, totalMessages - alreadyLoaded - SESSION_PAGE_SIZE);
+      const res = await fetch(`/api/demo/chat-sessions/${sessionId}?limit=${SESSION_PAGE_SIZE}&skip=${skip}`);
+      const d = await res.json();
+      if (d.success && d.session) {
+        const earlier = d.session.messages.map((m: any, i: number) => ({
+          id: `${sessionId}-earlier-${skip}-${i}`,
+          role: m.role,
+          content: m.content,
+          time: new Date(m.timestamp).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false }),
+        }));
+        isPrepending.current = true;
+        setMessages(prev => [...earlier, ...prev]);
+        setHasEarlierMessages(d.session.hasMore ?? skip > 0);
+        requestAnimationFrame(() => {
+          if (container) container.scrollTop = container.scrollHeight - prevScrollHeight;
+          isPrepending.current = false;
+        });
+      }
+    } catch {}
+    setLoadingEarlier(false);
+  }, [sessionId, hasEarlierMessages, loadingEarlier, messages.length, totalMessages, SESSION_PAGE_SIZE]);
 
   const startNewChat = useCallback(() => {
     setSessionId(null);
     setMessages([]);
-    setShowHistory(false);
+    setTotalMessages(0);
+    setHasEarlierMessages(false);
+    initialAnalysisTriggered.current = false;
   }, []);
 
-  // ── Initial analysis
+  // ── Single startup effect: restore last session OR run initial analysis (never both)
+  // Sequential — no race condition possible between session check and initial analysis.
   useEffect(() => {
-    if (!mounted || messages.length > 0 || !effectiveWallet || initialAnalysisTriggered.current) return;
-    initialAnalysisTriggered.current = true;
-    const now = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
-    const agentMsgId = 'initial-analysis';
-
-    setMessages([{ id: agentMsgId, role: 'agent', content: '', time: now }]);
-    setIsStreaming(true);
+    if (!mounted || !effectiveWallet || initialAnalysisTriggered.current) return;
+    initialAnalysisTriggered.current = true; // lock immediately before any await
 
     (async () => {
+      // Step 1: Try to restore most recent session
+      try {
+        const res = await fetch(`/api/demo/chat-sessions?wallet=${effectiveWallet}`);
+        const d = await res.json();
+        if (d.success && d.sessions?.length > 0) {
+          setChatSessions(d.sessions.map((s: any) => ({ id: s.id, title: s.title, updatedAt: s.updatedAt })));
+          const restored = await loadSession(d.sessions[0].id);
+          if (restored) return; // session loaded — skip initial analysis entirely
+        }
+      } catch {}
+
+      // Step 2: No sessions found (new user) — run initial analysis
+      const now = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+      const agentMsgId = 'initial-analysis';
+      setMessages([{ id: agentMsgId, role: 'agent', content: '', time: now }]);
+      setIsStreaming(true);
+
       try {
         const res = await fetch('/api/demo/chat/initial-analysis', {
           method: 'POST',
@@ -544,15 +593,34 @@ export default function ChatPage() {
       setIsStreaming(false);
       if (effectiveWallet) fetchCredits(effectiveWallet);
     })();
-  }, [mounted, effectiveWallet, agentName, messages.length, loadChatSessions, fetchCredits]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mounted, effectiveWallet]); // minimal deps — intentionally excludes agentName/loadChatSessions to prevent re-fires
 
-  // ── Auto-scroll
-  useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, toolStatus]);
+  // ── Auto-scroll (skip when prepending earlier messages to preserve position)
+  useEffect(() => {
+    if (isPrepending.current) return;
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages, toolStatus]);
   useEffect(() => {
     if (!isStreaming) return;
     const iv = setInterval(() => { chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, 300);
     return () => clearInterval(iv);
   }, [isStreaming]);
+
+  // ── Scroll-to-top sentinel: auto-load earlier messages when user scrolls up
+  useEffect(() => {
+    const sentinel = topSentinelRef.current;
+    const container = chatStreamRef.current;
+    if (!sentinel || !container || !hasEarlierMessages) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting && !loadingEarlier) loadEarlierMessages();
+      },
+      { root: container, threshold: 0.1 }
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [hasEarlierMessages, loadEarlierMessages, loadingEarlier]);
 
   // ── Send message
   const handleSend = useCallback(async () => {
@@ -722,6 +790,25 @@ export default function ChatPage() {
             <span className={s.panelTitle}>Agent Monitoring</span>
           </div>
 
+          {/* ── Activity ticker ── */}
+          <div className={s.activityTicker}>
+            <div className={`${s.atDot} ${!hasTasks ? 'idle' : pendingTasks.length > 0 && activeTasks.length === 0 ? 'processing' : hasActiveTasks ? 'scanning' : 'idle'}`}></div>
+            <span className={`${s.atText} ${!hasActiveTasks ? s.idleMode : ''}`}>
+              {!hasTasks
+                ? 'Idle — no monitors configured'
+                : pendingTasks.length > 0 && activeTasks.length === 0
+                ? `Initializing — ${pendingTasks.length} monitor${pendingTasks.length > 1 ? 's' : ''} pending first scan`
+                : hasActiveTasks
+                ? `Scanning ${activeTasks.map(t => t.assetSymbol).filter(Boolean).join(', ') || 'markets'} — ${activeTasks.length} monitor${activeTasks.length > 1 ? 's' : ''} active`
+                : 'Paused — all monitors inactive'}
+            </span>
+            {hasActiveTasks && (
+              <span className={s.atCycle}>
+                ↻ {activeTasks.reduce((sum, t) => sum + t.cycleCount, 0)} cycles
+              </span>
+            )}
+          </div>
+
           <div className={s.lpanelTabs}>
             <button
               className={`${s.lpanelTab} ${activeLeftTab === 'positions' ? s.active : ''}`}
@@ -792,6 +879,14 @@ export default function ChatPage() {
                           </div>
                           <span className={`${s.chevron} ${isExpanded ? s.open : ''}`}>▾</span>
                         </div>
+
+                        {pills.length > 0 && (
+                          <div className={s.pillsRow}>
+                            {pills.map((p, pi) => (
+                              <span key={pi} className={`${s.sigPill} ${s[p.color] ?? ''}`}>{p.label}</span>
+                            ))}
+                          </div>
+                        )}
 
                         <div className={`${s.posStats} ${s.perpStats}`}>
                           <div className={s.psItem}>
@@ -906,6 +1001,14 @@ export default function ChatPage() {
                             <span className={s.polyNoLbl}>NO {100 - yesOdds}¢</span>
                           </div>
                         </div>
+
+                        {pills.length > 0 && (
+                          <div className={s.pillsRow}>
+                            {pills.map((p, pi) => (
+                              <span key={pi} className={`${s.sigPill} ${s[p.color] ?? ''}`}>{p.label}</span>
+                            ))}
+                          </div>
+                        )}
 
                         <div className={`${s.posStats} ${s.polyStats}`}>
                           <div className={s.psItem}>
@@ -1140,37 +1243,17 @@ export default function ChatPage() {
                 : `${perpPositions.length + pmPositions.length} position${perpPositions.length + pmPositions.length !== 1 ? 's' : ''} loaded`
               }
             </div>
-            <div className={s.chatBtns}>
-              <button className={s.chatBtn} onClick={() => setShowHistory(p => !p)}>History</button>
-              <button className={s.chatBtn} onClick={startNewChat}>New Chat</button>
-            </div>
-
-            {/* History dropdown */}
-            {showHistory && (
-              <div className={s.historySidebar}>
-                <div className={s.historyHdr}>
-                  <span className={s.historyTitle}>Chat History</span>
-                  <button className={s.historyClose} onClick={() => setShowHistory(false)}>✕</button>
-                </div>
-                <div className={s.historyList}>
-                  {chatSessions.length === 0 ? (
-                    <div style={{ padding: '12px', color: '#4A4A4A', fontSize: '0.62rem' }}>No sessions yet</div>
-                  ) : (
-                    chatSessions.map(sess => (
-                      <div key={sess.id} className={s.historyItem} onClick={() => loadSession(sess.id)}>
-                        <div className={s.historyItemTitle}>{sess.title || 'Untitled session'}</div>
-                        <div className={s.historyItemTime}>{new Date(sess.updatedAt).toLocaleDateString()}</div>
-                      </div>
-                    ))
-                  )}
-                </div>
-                <button className={s.historyNew} onClick={startNewChat}>+ New chat</button>
-              </div>
-            )}
           </div>
 
           {/* Chat stream */}
-          <div className={s.chatStream}>
+          <div className={s.chatStream} ref={chatStreamRef}>
+            {/* Top sentinel — IntersectionObserver triggers earlier-message loading when scrolled into view */}
+            <div ref={topSentinelRef} style={{ height: 1 }} />
+            {loadingEarlier && (
+              <div style={{ textAlign: 'center', padding: '6px 0', fontSize: '0.58rem', color: '#4A4A4A', letterSpacing: '0.04em' }}>
+                Loading earlier messages...
+              </div>
+            )}
             {messages.map((msg, i) => {
               const isAgent = msg.role === 'agent';
               const isEmpty = !msg.content.trim();

@@ -181,6 +181,24 @@ export default function LaunchingPage() {
     const markets: string[] = setup.markets || ['perps'];
 
     const run = async () => {
+      // Check if wallet already has an agent — skip onboarding and go straight to chat
+      try {
+        const existingRes = await fetch(`/api/demo/agents?wallet=${address}`);
+        if (existingRes.ok) {
+          const existingData = await existingRes.json();
+          if (existingData.agent) {
+            localStorage.setItem('yieldr_auth_wallet', address.toLowerCase());
+            localStorage.setItem('agentCreated', JSON.stringify({
+              name: existingData.agent.name,
+              wallet: address,
+              createdAt: Date.now(),
+            }));
+            router.push('/demo/chat');
+            return;
+          }
+        }
+      } catch {}
+
       // Step 1: Initialize
       startStep(1);
       await new Promise(r => setTimeout(r, 1500));

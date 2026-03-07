@@ -25,6 +25,8 @@ export interface MonitoringTask {
   agentName: string;
   task: string;
   monitorInstruction: string;
+  alphaTitle?: string;
+  alphaDescription?: string;
   tools: ToolConfig[];
   intervalSeconds: number;
   status: 'active' | 'paused' | 'error';

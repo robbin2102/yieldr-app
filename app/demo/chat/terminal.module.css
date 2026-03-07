@@ -535,6 +535,15 @@
   padding: 0 12px 9px;
 }
 
+/* ── Indicator pills row on position cards ── */
+.pillsRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 4px 12px 5px;
+  border-top: 1px solid var(--border);
+}
+
 .sigPill {
   display: inline-flex;
   align-items: center;
