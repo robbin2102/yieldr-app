@@ -141,8 +141,6 @@ export default function AgentDetailPage() {
 
   const [data, setData] = useState<AgentDetail | null>(null);
   const [loading, setLoading] = useState(true);
-  const [alphaOpen, setAlphaOpen] = useState(true);
-  const [signalsOpen, setSignalsOpen] = useState(true);
   const [expandedMonitors, setExpandedMonitors] = useState<Set<string>>(new Set());
 
   useEffect(() => {
@@ -266,7 +264,7 @@ export default function AgentDetailPage() {
 
       {/* ── SECTION 1: ALPHA INTELLIGENCE ── */}
       <div className={s.section}>
-        <div className={s.secHdr} onClick={() => setAlphaOpen(o => !o)}>
+        <div className={s.secHdr}>
           <div className={s.secHdrLeft}>
             <div className={s.secEyebrow}>Section 01</div>
             <div className={s.secTitle}>Alpha Intelligence</div>
@@ -281,12 +279,10 @@ export default function AgentDetailPage() {
             ) : (
               <div className={s.secBadge}>No data yet</div>
             )}
-            <span className={`${s.secChev} ${alphaOpen ? s.secChevOpen : ''}`}>▾</span>
           </div>
         </div>
 
-        {alphaOpen && (
-          <div className={s.secBody}>
+        <div className={s.secBody}>
             {taskAlphas.length > 0 ? (
               taskAlphas.map((ta, idx) => {
                 const isExpanded = expandedMonitors.has(ta.id);
@@ -370,12 +366,11 @@ export default function AgentDetailPage() {
               </div>
             )}
           </div>
-        )}
       </div>
 
       {/* ── SECTION 2: SIGNALS SURFACED ── */}
       <div className={s.section}>
-        <div className={s.secHdr} onClick={() => setSignalsOpen(o => !o)}>
+        <div className={s.secHdr}>
           <div className={s.secHdrLeft}>
             <div className={s.secEyebrow}>Section 02</div>
             <div className={s.secTitle}>Signals Surfaced</div>
@@ -385,12 +380,10 @@ export default function AgentDetailPage() {
             <span className={s.secBadge}>
               {signals.length} total · {signals.filter(s => !s.read).length} new
             </span>
-            <span className={`${s.secChev} ${signalsOpen ? s.secChevOpen : ''}`}>▾</span>
           </div>
         </div>
 
-        {signalsOpen && (
-          <div className={s.secBody}>
+        <div className={s.secBody}>
             {signals.length > 0 ? (
               signals.map(sig => (
                 <div key={sig.id} className={`${s.alertRow} ${severityClass(sig.severity)}`}>
@@ -426,7 +419,6 @@ export default function AgentDetailPage() {
               </div>
             )}
           </div>
-        )}
       </div>
       </div>
     </div>
