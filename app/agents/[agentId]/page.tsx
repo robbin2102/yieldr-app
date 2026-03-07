@@ -143,6 +143,7 @@ export default function AgentDetailPage() {
   const [loading, setLoading] = useState(true);
   const [alphaOpen, setAlphaOpen] = useState(true);
   const [signalsOpen, setSignalsOpen] = useState(true);
+  const [expandedMonitors, setExpandedMonitors] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     if (!agentId) return;
@@ -155,13 +156,27 @@ export default function AgentDetailPage() {
       const walletParam = address ? `&wallet=${address}` : '';
       const res = await fetch(`/api/demo/agents/${agentId}/detail?${walletParam}`);
       if (res.ok) {
-        setData(await res.json());
+        const json = await res.json();
+        setData(json);
+        // Open the first monitor by default
+        if (json.taskAlphas?.length > 0) {
+          setExpandedMonitors(new Set([json.taskAlphas[0].id]));
+        }
       }
     } catch (e) {
       console.error('Failed to fetch agent detail', e);
     } finally {
       setLoading(false);
     }
+  }
+
+  function toggleMonitor(id: string) {
+    setExpandedMonitors(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
   }
 
   if (loading) {
@@ -292,24 +307,27 @@ export default function AgentDetailPage() {
         {alphaOpen && (
           <div className={s.secBody}>
             {taskAlphas.length > 0 ? (
-              taskAlphas.map((ta, idx) => (
+              taskAlphas.map((ta, idx) => {
+                const isExpanded = expandedMonitors.has(ta.id);
+                return (
                 <div key={ta.id} className={s.alphaBlock}>
-                  {/* Alpha thesis card */}
-                  <div className={s.alphaThesis}>
+                  {/* Accordion header — always visible, click to expand/collapse */}
+                  <div
+                    className={s.alphaThesis}
+                    onClick={() => toggleMonitor(ta.id)}
+                    style={{ cursor: 'pointer', userSelect: 'none' }}
+                  >
                     <div className={s.alphaThesisLeft}>
                       <div className={`${s.atStatusDot} ${ta.status === 'active' ? s.atDotActive : s.atDotPaused}`} />
                     </div>
                     <div className={s.alphaThesisBody}>
-                      <div className={s.atTitle}>
-                        {ta.alphaTitle ?? ta.title}
-                      </div>
-                      {ta.alphaDescription && (
-                        <div className={s.atDesc}>{ta.alphaDescription}</div>
-                      )}
+                      <div className={s.atTitle}>{ta.alphaTitle ?? ta.title}</div>
                       <div className={s.atMeta}>
                         <span className={s.atMetaItem}>{intervalLabel(ta.intervalSeconds)}</span>
                         <span className={s.atMetaDot}>·</span>
                         <span className={s.atMetaItem}>{ta.cycleCount} cycles</span>
+                        <span className={s.atMetaDot}>·</span>
+                        <span className={s.atMetaItem}>{ta.alertCount} alerts</span>
                         {ta.latestRead.timestamp && (
                           <>
                             <span className={s.atMetaDot}>·</span>
@@ -318,41 +336,51 @@ export default function AgentDetailPage() {
                         )}
                       </div>
                     </div>
+                    <span style={{ marginLeft: 'auto', fontSize: '0.7rem', color: '#4A4A4A', flexShrink: 0, paddingLeft: 8, transition: 'transform 0.18s', display: 'inline-block', transform: isExpanded ? 'rotate(180deg)' : 'rotate(0deg)' }}>▾</span>
                   </div>
 
-                  {/* Indicators from latest cycle */}
-                  {ta.latestRead.indicators.length > 0 ? (
-                    <div className={s.indicatorBlock}>
-                      {ta.latestRead.indicators.map((ind, i) => (
-                        <div key={i} className={s.signalRow}>
-                          <div className={`${s.srDot} ${dotClass(ind.dot)}`} />
-                          <div className={s.srBody}>
-                            <div className={s.srTop}>
-                              <span className={s.srName}>{ind.name}</span>
-                              <span className={`${s.srVal} ${s[`srVal_${ind.dot}`] ?? s.srValN}`}>{ind.value}</span>
-                            </div>
-                            <div className={s.srNote}>{ind.note}</div>
-                          </div>
-                          <div className={s.srRight}>
-                            <span className={s.srTime}>{timeAgo(ta.latestRead.timestamp)}</span>
-                          </div>
-                        </div>
-                      ))}
-                      {ta.latestRead.summary && (
-                        <div className={s.readSummary}>{ta.latestRead.summary}</div>
+                  {/* Accordion body — only visible when expanded */}
+                  {isExpanded && (
+                    <div>
+                      {ta.alphaDescription && (
+                        <div className={s.atDesc} style={{ marginBottom: 10 }}>{ta.alphaDescription}</div>
                       )}
-                    </div>
-                  ) : (
-                    <div className={s.emptySection}>
-                      {ta.status === 'active'
-                        ? 'Waiting for first cycle — indicator reads will appear here shortly'
-                        : '⏸ Paused — resume to restart monitoring'}
+
+                      {ta.latestRead.indicators.length > 0 ? (
+                        <div className={s.indicatorBlock}>
+                          {ta.latestRead.indicators.map((ind, i) => (
+                            <div key={i} className={s.signalRow}>
+                              <div className={`${s.srDot} ${dotClass(ind.dot)}`} />
+                              <div className={s.srBody}>
+                                <div className={s.srTop}>
+                                  <span className={s.srName}>{ind.name}</span>
+                                  <span className={`${s.srVal} ${s[`srVal_${ind.dot}`] ?? s.srValN}`}>{ind.value}</span>
+                                </div>
+                                <div className={s.srNote}>{ind.note}</div>
+                              </div>
+                              <div className={s.srRight}>
+                                <span className={s.srTime}>{timeAgo(ta.latestRead.timestamp)}</span>
+                              </div>
+                            </div>
+                          ))}
+                          {ta.latestRead.summary && (
+                            <div className={s.readSummary}>{ta.latestRead.summary}</div>
+                          )}
+                        </div>
+                      ) : (
+                        <div className={s.emptySection}>
+                          {ta.status === 'active'
+                            ? 'Waiting for first cycle — indicator reads will appear here shortly'
+                            : '⏸ Paused — resume to restart monitoring'}
+                        </div>
+                      )}
                     </div>
                   )}
 
                   {idx < taskAlphas.length - 1 && <div className={s.alphaBlockDivider} />}
                 </div>
-              ))
+                );
+              })
             ) : (
               <div className={s.emptySection}>
                 {isActive
