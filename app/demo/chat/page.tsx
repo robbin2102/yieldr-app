@@ -818,7 +818,7 @@ export default function ChatPage() {
               className={`${s.lpanelTab} ${activeLeftTab === 'alerts' ? s.active : ''}`}
               onClick={() => switchLeftTab('alerts')}
             >
-              Alerts
+              Monitors
               {unreadAlerts > 0 && <span className={s.tabBadge}>{unreadAlerts > 9 ? '9+' : unreadAlerts}</span>}
             </button>
             <button
@@ -1067,8 +1067,21 @@ export default function ChatPage() {
               <>
                 {/* Per-task monitor countdown strips */}
                 {activeTasks.length === 0 ? (
-                  <div className={s.countdownStrip}>
-                    <span className={s.cdLabel}>No monitors active</span>
+                  <div className={s.emptyState}>
+                    <div className={s.emptyTitle}>No monitors running</div>
+                    <div className={s.emptyText}>
+                      Ask your agent to set up a monitor for alpha detection. For example:
+                    </div>
+                    <div className={s.monitorExamples}>
+                      <div className={s.monitorExample}>
+                        <span className={s.monitorExampleTag}>Perps</span>
+                        "Monitor ETH funding rate and alert me when it flips negative with open interest diverging"
+                      </div>
+                      <div className={s.monitorExample}>
+                        <span className={s.monitorExampleTag}>Predictions</span>
+                        "Watch the Trump election market and alert if odds move more than 5% in under an hour"
+                      </div>
+                    </div>
                   </div>
                 ) : (
                   activeTasks.map(task => {
@@ -1078,23 +1091,15 @@ export default function ChatPage() {
                     const isOverdue = cd.str === 'Pending...' || cd.str === 'Running...';
                     return (
                       <div key={task.id} className={s.monitorItem}>
-                        <div className={s.monitorItemHdr}>
-                          <span className={`${s.monitorStatusDot} ${s[task.status]}`}></span>
-                          <span className={s.monitorTitle}>{task.taskTitle}</span>
-                        </div>
-                        <div className={s.monitorMeta}>
-                          <span className={s.monitorMetaItem}>⏱ {intervalLabel}</span>
-                          <span className={s.monitorMetaItem}>↻ Cycle {task.cycleCount}</span>
-                          <span className={s.monitorMetaItem}>🔔 {task.alertCount}</span>
-                          {task.lastRunAt && <span className={s.monitorMetaItem}>· {timeAgo(task.lastRunAt)}</span>}
-                        </div>
-                        <div className={s.monitorCountdownRow}>
-                          <span className={s.cdLabel}>{task.cycleCount === 0 ? 'First scan' : 'Next scan'}</span>
-                          <span className={`${s.cdTimer} ${isOverdue ? s.overdue : ''}`}>{cd.str}</span>
-                          <div className={s.cdBar}>
-                            <div className={s.cdFill} style={{ width: `${cd.pct}%` }}></div>
-                          </div>
-                        </div>
+                        <span className={`${s.monitorStatusDot} ${s[task.status]}`}></span>
+                        <span className={s.monitorTitle}>{task.taskTitle}</span>
+                        <span className={s.monitorRight}>
+                          <span className={s.monitorMeta}>{intervalLabel}</span>
+                          <span className={s.monitorSep}>·</span>
+                          <span className={s.monitorMeta}>C{task.cycleCount}</span>
+                          <span className={s.monitorSep}>·</span>
+                          <span className={`${s.monitorTimer} ${isOverdue ? s.overdue : ''}`}>{cd.str}</span>
+                        </span>
                       </div>
                     );
                   })
