@@ -230,8 +230,12 @@ export default function ChatPage() {
   // Sessions
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [chatSessions, setChatSessions] = useState<{ id: string; title: string; updatedAt: string }[]>([]);
+  const [totalMessages, setTotalMessages] = useState(0);
+  const [hasEarlierMessages, setHasEarlierMessages] = useState(false);
+  const [loadingEarlier, setLoadingEarlier] = useState(false);
 
   const initialAnalysisTriggered = useRef(false);
+  const SESSION_PAGE_SIZE = 30;
 
   // ── Mount
   useEffect(() => { setMounted(true); }, []);
@@ -445,42 +449,75 @@ export default function ChatPage() {
   }, [activeTasks.map(t => t.id + t.nextRunAt + t.cycleCount).join(',')]);
 
   // ── Chat sessions
-  const loadChatSessions = useCallback(async () => {
+  const loadChatSessions = useCallback(async (autoRestoreLast = false) => {
     if (!effectiveWallet) return;
     try {
       const res = await fetch(`/api/demo/chat-sessions?wallet=${effectiveWallet}`);
       const d = await res.json();
       if (d.success) {
-        setChatSessions(d.sessions.map((s: any) => ({ id: s.id, title: s.title, updatedAt: s.updatedAt })));
+        const sessions = d.sessions.map((s: any) => ({ id: s.id, title: s.title, updatedAt: s.updatedAt }));
+        setChatSessions(sessions);
+        // Auto-restore most recent session for returning users (only on initial load)
+        if (autoRestoreLast && sessions.length > 0 && !initialAnalysisTriggered.current) {
+          initialAnalysisTriggered.current = true; // block initial analysis
+          await loadSession(sessions[0].id, true);
+        }
       }
     } catch {}
-  }, [effectiveWallet]);
+  }, [effectiveWallet]); // loadSession added below after definition
 
   useEffect(() => {
-    if (mounted && effectiveWallet) loadChatSessions();
+    if (mounted && effectiveWallet) loadChatSessions(true); // auto-restore on first load
   }, [mounted, effectiveWallet, loadChatSessions]);
 
-  const loadSession = useCallback(async (id: string) => {
+  const loadSession = useCallback(async (id: string, silent = false) => {
     try {
-      const res = await fetch(`/api/demo/chat-sessions/${id}`);
+      const res = await fetch(`/api/demo/chat-sessions/${id}?limit=${SESSION_PAGE_SIZE}`);
       const d = await res.json();
       if (d.success && d.session) {
         setSessionId(id);
+        setTotalMessages(d.session.totalMessages ?? d.session.messages.length);
+        setHasEarlierMessages(d.session.hasMore ?? false);
         setMessages(d.session.messages.map((m: any, i: number) => ({
           id: `${id}-${i}`,
           role: m.role,
           content: m.content,
           time: new Date(m.timestamp).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false }),
         })));
-        setShowHistory(false);
+        if (!silent) setShowHistory(false);
       }
     } catch {}
-  }, []);
+  }, [SESSION_PAGE_SIZE]);
+
+  const loadEarlierMessages = useCallback(async () => {
+    if (!sessionId || !hasEarlierMessages || loadingEarlier) return;
+    setLoadingEarlier(true);
+    try {
+      const alreadyLoaded = messages.length;
+      const skip = Math.max(0, totalMessages - alreadyLoaded - SESSION_PAGE_SIZE);
+      const res = await fetch(`/api/demo/chat-sessions/${sessionId}?limit=${SESSION_PAGE_SIZE}&skip=${skip}`);
+      const d = await res.json();
+      if (d.success && d.session) {
+        const earlier = d.session.messages.map((m: any, i: number) => ({
+          id: `${sessionId}-earlier-${skip}-${i}`,
+          role: m.role,
+          content: m.content,
+          time: new Date(m.timestamp).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false }),
+        }));
+        setMessages(prev => [...earlier, ...prev]);
+        setHasEarlierMessages(d.session.hasMore ?? skip > 0);
+      }
+    } catch {}
+    setLoadingEarlier(false);
+  }, [sessionId, hasEarlierMessages, loadingEarlier, messages.length, totalMessages, SESSION_PAGE_SIZE]);
 
   const startNewChat = useCallback(() => {
     setSessionId(null);
     setMessages([]);
+    setTotalMessages(0);
+    setHasEarlierMessages(false);
     setShowHistory(false);
+    initialAnalysisTriggered.current = false; // allow fresh initial analysis
   }, []);
 
   // ── Initial analysis
@@ -1206,6 +1243,23 @@ export default function ChatPage() {
 
           {/* Chat stream */}
           <div className={s.chatStream}>
+            {/* Load earlier messages */}
+            {hasEarlierMessages && (
+              <div style={{ textAlign: 'center', padding: '8px 0 4px' }}>
+                <button
+                  onClick={loadEarlierMessages}
+                  disabled={loadingEarlier}
+                  style={{
+                    fontSize: '0.6rem', fontWeight: 600, padding: '5px 14px',
+                    background: 'transparent', border: '1px solid rgba(255,255,255,0.08)',
+                    borderRadius: 20, color: '#4A4A4A', cursor: loadingEarlier ? 'default' : 'pointer',
+                    fontFamily: 'inherit', letterSpacing: '0.04em',
+                  }}
+                >
+                  {loadingEarlier ? 'Loading...' : `↑ Load earlier messages (${totalMessages - messages.length} more)`}
+                </button>
+              </div>
+            )}
             {messages.map((msg, i) => {
               const isAgent = msg.role === 'agent';
               const isEmpty = !msg.content.trim();

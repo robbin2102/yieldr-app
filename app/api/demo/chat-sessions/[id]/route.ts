@@ -2,19 +2,40 @@ import { NextRequest, NextResponse } from 'next/server';
 import connectDB from '@/lib/mongoose';
 import ChatSession from '@/models/ChatSession';
 
-// GET /api/demo/chat-sessions/[id]
-// Get a single chat session with all messages
+// GET /api/demo/chat-sessions/[id]?limit=30&skip=0
+// Get a single chat session. Supports pagination to avoid loading huge message arrays.
+// - limit: max messages to return (default: all). When set, returns the LAST N messages.
+// - skip: how many messages from the start to skip (for loading earlier batches)
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const { id } = await params;
+    const limitParam = request.nextUrl.searchParams.get('limit');
+    const skipParam = request.nextUrl.searchParams.get('skip');
+
     await connectDB();
     const session = await ChatSession.findById(id).lean();
 
     if (!session) {
       return NextResponse.json({ success: false, error: 'Session not found' }, { status: 404 });
+    }
+
+    const allMessages: any[] = (session as any).messages || [];
+    const totalMessages = allMessages.length;
+
+    let messages = allMessages;
+    let hasMore = false;
+
+    if (limitParam) {
+      const limit = Math.max(1, parseInt(limitParam, 10) || 30);
+      // When no skip given, default to the last `limit` messages
+      const skip = skipParam !== null
+        ? Math.max(0, parseInt(skipParam, 10))
+        : Math.max(0, totalMessages - limit);
+      messages = allMessages.slice(skip, skip + limit);
+      hasMore = skip > 0;
     }
 
     return NextResponse.json({
@@ -23,7 +44,9 @@ export async function GET(
         id: (session as any)._id.toString(),
         walletAddress: (session as any).walletAddress,
         title: (session as any).title,
-        messages: (session as any).messages,
+        messages,
+        totalMessages,
+        hasMore,
         createdAt: (session as any).createdAt,
         updatedAt: (session as any).updatedAt,
       },
