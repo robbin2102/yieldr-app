@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import s from './agent.module.css';
+import TopNav from '../../components/TopNav';
 
 interface IndicatorRead {
   name: string;
@@ -149,16 +150,22 @@ export default function AgentDetailPage() {
 
   if (loading) {
     return (
-      <div className={s.page}>
-        <div className={s.loadingState}>Loading agent...</div>
+      <div style={{ background: '#000', minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
+        <TopNav activePage="agents" />
+        <div className={s.page}>
+          <div className={s.loadingState}>Loading agent...</div>
+        </div>
       </div>
     );
   }
 
   if (!data) {
     return (
-      <div className={s.page}>
-        <div className={s.loadingState}>Agent not found</div>
+      <div style={{ background: '#000', minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
+        <TopNav activePage="agents" />
+        <div className={s.page}>
+          <div className={s.loadingState}>Agent not found</div>
+        </div>
       </div>
     );
   }
@@ -168,7 +175,9 @@ export default function AgentDetailPage() {
   const marketIcons = agent.markets.map(m => MARKET_ICONS[m] ?? '🔧').join('');
 
   return (
-    <div className={s.page}>
+    <div style={{ background: '#000', minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
+      <TopNav activePage="agents" />
+      <div className={s.page}>
       {/* Breadcrumb */}
       <div className={s.breadcrumb}>
         <span className={s.bcLink} onClick={() => router.push('/agents')}>← Agents</span>
@@ -354,6 +363,7 @@ export default function AgentDetailPage() {
             )}
           </div>
         )}
+      </div>
       </div>
     </div>
   );

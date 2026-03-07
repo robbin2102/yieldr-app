@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import s from './agents.module.css';
+import TopNav from '../components/TopNav';
 
 interface AgentTask {
   id: string;
@@ -253,7 +254,9 @@ export default function AgentsPage() {
   const displayCards = agents.length > 0 ? filteredAgents : taskCards;
 
   return (
-    <div className={s.explorer}>
+    <div style={{ background: '#000', minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
+      <TopNav activePage="agents" />
+      <div className={s.explorer}>
       {/* Page header */}
       <div className={s.pageHdr}>
         <div>
@@ -310,6 +313,7 @@ export default function AgentsPage() {
           ))}
         </div>
       )}
+      </div>
     </div>
   );
 }
