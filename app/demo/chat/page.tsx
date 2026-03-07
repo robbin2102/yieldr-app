@@ -232,7 +232,6 @@ export default function ChatPage() {
   const [totalMessages, setTotalMessages] = useState(0);
   const [hasEarlierMessages, setHasEarlierMessages] = useState(false);
   const [loadingEarlier, setLoadingEarlier] = useState(false);
-  const [sessionCheckComplete, setSessionCheckComplete] = useState(false);
 
   const initialAnalysisTriggered = useRef(false);
   const isPrepending = useRef(false);
@@ -451,31 +450,19 @@ export default function ChatPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTasks.map(t => t.id + t.nextRunAt + t.cycleCount).join(',')]);
 
-  // ── Chat sessions
-  const loadChatSessions = useCallback(async (autoRestoreLast = false) => {
+  // ── Chat sessions — refresh list only (called after sends, not on startup)
+  const loadChatSessions = useCallback(async () => {
     if (!effectiveWallet) return;
     try {
       const res = await fetch(`/api/demo/chat-sessions?wallet=${effectiveWallet}`);
       const d = await res.json();
       if (d.success) {
-        const sessions = d.sessions.map((s: any) => ({ id: s.id, title: s.title, updatedAt: s.updatedAt }));
-        setChatSessions(sessions);
-        // Auto-restore most recent session for returning users (only on initial load)
-        if (autoRestoreLast && sessions.length > 0 && !initialAnalysisTriggered.current) {
-          initialAnalysisTriggered.current = true; // block initial analysis
-          await loadSession(sessions[0].id, true);
-        }
+        setChatSessions(d.sessions.map((s: any) => ({ id: s.id, title: s.title, updatedAt: s.updatedAt })));
       }
     } catch {}
-    // Always mark check as done so initial analysis can proceed if no sessions found
-    setSessionCheckComplete(true);
-  }, [effectiveWallet]); // loadSession added below after definition
+  }, [effectiveWallet]);
 
-  useEffect(() => {
-    if (mounted && effectiveWallet) loadChatSessions(true); // auto-restore on first load
-  }, [mounted, effectiveWallet, loadChatSessions]);
-
-  const loadSession = useCallback(async (id: string, silent = false) => {
+  const loadSession = useCallback(async (id: string) => {
     try {
       const res = await fetch(`/api/demo/chat-sessions/${id}?limit=${SESSION_PAGE_SIZE}`);
       const d = await res.json();
@@ -489,8 +476,10 @@ export default function ChatPage() {
           content: m.content,
           time: new Date(m.timestamp).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false }),
         })));
+        return true;
       }
     } catch {}
+    return false;
   }, [SESSION_PAGE_SIZE]);
 
   const loadEarlierMessages = useCallback(async () => {
@@ -513,11 +502,8 @@ export default function ChatPage() {
         isPrepending.current = true;
         setMessages(prev => [...earlier, ...prev]);
         setHasEarlierMessages(d.session.hasMore ?? skip > 0);
-        // After DOM updates, restore scroll position so user stays at same point
         requestAnimationFrame(() => {
-          if (container) {
-            container.scrollTop = container.scrollHeight - prevScrollHeight;
-          }
+          if (container) container.scrollTop = container.scrollHeight - prevScrollHeight;
           isPrepending.current = false;
         });
       }
@@ -530,20 +516,33 @@ export default function ChatPage() {
     setMessages([]);
     setTotalMessages(0);
     setHasEarlierMessages(false);
-    initialAnalysisTriggered.current = false; // allow fresh initial analysis
+    initialAnalysisTriggered.current = false;
   }, []);
 
-  // ── Initial analysis — only fires after session check completes with no sessions found
+  // ── Single startup effect: restore last session OR run initial analysis (never both)
+  // Sequential — no race condition possible between session check and initial analysis.
   useEffect(() => {
-    if (!mounted || !sessionCheckComplete || messages.length > 0 || !effectiveWallet || initialAnalysisTriggered.current) return;
-    initialAnalysisTriggered.current = true;
-    const now = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
-    const agentMsgId = 'initial-analysis';
-
-    setMessages([{ id: agentMsgId, role: 'agent', content: '', time: now }]);
-    setIsStreaming(true);
+    if (!mounted || !effectiveWallet || initialAnalysisTriggered.current) return;
+    initialAnalysisTriggered.current = true; // lock immediately before any await
 
     (async () => {
+      // Step 1: Try to restore most recent session
+      try {
+        const res = await fetch(`/api/demo/chat-sessions?wallet=${effectiveWallet}`);
+        const d = await res.json();
+        if (d.success && d.sessions?.length > 0) {
+          setChatSessions(d.sessions.map((s: any) => ({ id: s.id, title: s.title, updatedAt: s.updatedAt })));
+          const restored = await loadSession(d.sessions[0].id);
+          if (restored) return; // session loaded — skip initial analysis entirely
+        }
+      } catch {}
+
+      // Step 2: No sessions found (new user) — run initial analysis
+      const now = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+      const agentMsgId = 'initial-analysis';
+      setMessages([{ id: agentMsgId, role: 'agent', content: '', time: now }]);
+      setIsStreaming(true);
+
       try {
         const res = await fetch('/api/demo/chat/initial-analysis', {
           method: 'POST',
@@ -594,7 +593,8 @@ export default function ChatPage() {
       setIsStreaming(false);
       if (effectiveWallet) fetchCredits(effectiveWallet);
     })();
-  }, [mounted, sessionCheckComplete, effectiveWallet, agentName, messages.length, loadChatSessions, fetchCredits]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mounted, effectiveWallet]); // minimal deps — intentionally excludes agentName/loadChatSessions to prevent re-fires
 
   // ── Auto-scroll (skip when prepending earlier messages to preserve position)
   useEffect(() => {
