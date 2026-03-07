@@ -1135,7 +1135,6 @@ export default function ChatPage() {
                           })}
                         >
                           <div className={s.alertTop}>
-                            <div className={s.alertDot}></div>
                             <span className={s.alertSeverityLabel}>
                               {alert.severity === 'critical' ? 'Alert' : alert.severity === 'warning' ? 'Watch' : 'Signal'}
                             </span>
