@@ -25,6 +25,7 @@ import { getMacroSnapshotTool } from './market/get-macro-snapshot.js';
 import { getFundingRateHistoryTool } from './market/get-funding-rate-history.js';
 import { getFundingRateCurrentTool } from './market/get-funding-rate-current.js';
 import { getDerivativesHistoryTool } from './market/get-derivatives-history.js';
+import { getNewsHeadlinesTool } from './market/get-news-headlines.js';
 import { getCoinPriceTool } from './market/get-coin-price.js';
 
 // Export individual tools
@@ -39,7 +40,7 @@ export {
   getPMClosedPositionsTool,
   getHLPortfolioTool,
 } from './live-api/index.js';
-export { getMarketSnapshotTool, fetchLiveIndicatorTool, getCoinPriceTool, getMacroSnapshotTool, getFundingRateHistoryTool, getFundingRateCurrentTool, getDerivativesHistoryTool } from './market/index.js';
+export { getMarketSnapshotTool, fetchLiveIndicatorTool, getCoinPriceTool, getMacroSnapshotTool, getFundingRateHistoryTool, getFundingRateCurrentTool, getDerivativesHistoryTool, getNewsHeadlinesTool } from './market/index.js';
 
 // Tool registry for MCP server
 export const tools = [
@@ -68,6 +69,8 @@ export const tools = [
   getFundingRateCurrentTool,
   // Binance derivatives history (15m OI + L/S ratios)
   getDerivativesHistoryTool,
+  // Live RSS news headlines (BBC, AJZ, Sky, NPR, CoinTelegraph)
+  getNewsHeadlinesTool,
 ];
 
 // Tool map for quick lookup
