@@ -1066,7 +1066,8 @@ async function executeTool(name: string, input: any, wallet?: string): Promise<s
         if (action === 'delete') {
           if (!taskId) return JSON.stringify({ error: 'taskId required for delete' });
           const { ObjectId } = await import('mongodb');
-          await tasksCol.deleteOne({ _id: new ObjectId(taskId), userId: wallet.toLowerCase() });
+          const delResult = await tasksCol.deleteOne({ _id: new ObjectId(taskId), userId: wallet.toLowerCase() });
+          if (delResult.deletedCount === 0) return JSON.stringify({ error: 'Monitor not found or not owned by you' });
           return JSON.stringify({ ok: true, taskId, deleted: true });
         }
 
