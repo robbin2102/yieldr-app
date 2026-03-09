@@ -42,7 +42,8 @@ export async function GET(
     const primaryTask = (tasks.find((t: any) => t.status === 'active') ?? tasks[0]) as any;
 
     // Build per-task alpha + latestRead for Section 01 (replaces old Current Market Read)
-    const taskAlphas = tasks.map((t: any) => {
+    // Only include active (and error) monitors — exclude paused ones
+    const taskAlphas = tasks.filter((t: any) => t.status !== 'paused').map((t: any) => {
       let latestRead: { timestamp: string | null; summary: string | null; indicators: any[] } = {
         timestamp: null, summary: null, indicators: [],
       };
