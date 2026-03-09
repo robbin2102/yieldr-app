@@ -82,6 +82,14 @@ interface MonitoringTaskUI {
   signalPills: SignalPill[];
 }
 
+interface NewsLink {
+  title: string;
+  url: string;
+  source: string;
+  publishedAt: string;
+  age?: string;
+}
+
 interface MonitoringAlertUI {
   id: string;
   taskId: string;
@@ -92,6 +100,7 @@ interface MonitoringAlertUI {
   read: boolean;
   assetSymbol: string;
   createdAt: string;
+  newsLinks?: NewsLink[];
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -1143,6 +1152,26 @@ export default function ChatPage() {
                             <span className={s.alertTime}>{timeAgo(alert.createdAt)}</span>
                           </div>
                           <div className={isExpanded ? s.alertBodyExpanded : s.alertBody}>{alert.message}</div>
+                          {isExpanded && alert.newsLinks && alert.newsLinks.length > 0 && (
+                            <div className={s.alertNewsLinks} onClick={e => e.stopPropagation()}>
+                              <div className={s.alertNewsLinksLabel}>Related News</div>
+                              {alert.newsLinks.map((link, i) => (
+                                <a
+                                  key={i}
+                                  href={link.url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className={s.alertNewsLink}
+                                >
+                                  <span className={s.alertNewsLinkTitle}>{link.title}</span>
+                                  <span className={s.alertNewsLinkMeta}>
+                                    {link.source}
+                                    {link.age ? ` · ${link.age}` : link.publishedAt ? ` · ${timeAgo(link.publishedAt)}` : ''}
+                                  </span>
+                                </a>
+                              ))}
+                            </div>
+                          )}
                         </div>
                       );
                     })}

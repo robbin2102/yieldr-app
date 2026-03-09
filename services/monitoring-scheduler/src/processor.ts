@@ -14,6 +14,31 @@ import { callToolsAndExtract } from './tool-caller';
 import { buildEvaluatorPrompt, callEvaluator, callAlphaDefiner, EvaluationResult } from './evaluator';
 import { logger } from './utils/logger';
 
+/** Extract top 3 news article links from get_news_headlines tool output in strippedData */
+function extractNewsLinks(data: Record<string, any>): Array<{ title: string; url: string; source: string; publishedAt: string; age?: string }> {
+  // Search recursively for an 'articles' array that looks like RSS articles
+  function findArticles(obj: any): any[] | null {
+    if (!obj || typeof obj !== 'object') return null;
+    if (Array.isArray(obj.articles) && obj.articles.length > 0 && obj.articles[0]?.url && obj.articles[0]?.title) {
+      return obj.articles;
+    }
+    for (const v of Object.values(obj)) {
+      const found = findArticles(v);
+      if (found) return found;
+    }
+    return null;
+  }
+  const articles = findArticles(data);
+  if (!articles) return [];
+  return articles.slice(0, 3).map((a: any) => ({
+    title: String(a.title || ''),
+    url: String(a.url || ''),
+    source: String(a.source || ''),
+    publishedAt: String(a.publishedAt || new Date().toISOString()),
+    ...(a.age ? { age: String(a.age) } : {}),
+  })).filter(a => a.title && a.url);
+}
+
 /**
  * Process a single monitoring task for one cycle:
  * 1. Call tools and extract fields
@@ -82,6 +107,11 @@ export async function processTask(task: WithId<MonitoringTask>): Promise<void> {
   if (evaluation.alert || evaluation.signal) {
     const newCycleCount = (task.cycleCount || 0) + 1;
 
+    // Extract newsLinks from get_news_headlines tool output if present
+    const alertData: Record<string, any> = { ...strippedData };
+    const newsArticles = extractNewsLinks(strippedData);
+    if (newsArticles.length > 0) alertData.newsLinks = newsArticles;
+
     const alert = await createAlert({
       userId: task.userId,
       taskId,
@@ -91,7 +121,7 @@ export async function processTask(task: WithId<MonitoringTask>): Promise<void> {
       severity: evaluation.severity ?? 'info',
       isSignal: evaluation.signal,
       indicators: evaluation.indicators,
-      data: strippedData,
+      data: alertData,
       cycleNumber: newCycleCount,
       read: false,
       createdAt: new Date(),

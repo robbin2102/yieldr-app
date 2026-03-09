@@ -86,6 +86,7 @@ export async function GET(req: NextRequest) {
       read: a.read,
       assetSymbol: taskSymbolMap[String(a.taskId)] || '',
       createdAt: a.createdAt,
+      newsLinks: Array.isArray(a.data?.newsLinks) ? a.data.newsLinks : undefined,
     }));
 
     return NextResponse.json({ alerts: result, unreadCount, total: alerts.length });

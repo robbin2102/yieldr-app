@@ -5,6 +5,7 @@ import mongoose from 'mongoose';
 import Agent from '@/models/Agent';
 import ChatSession from '@/models/ChatSession';
 import { trackUsage, TokenUsageData } from '@/lib/tokenTracking';
+import { fetchNews, formatArticlesForLLM } from '@/lib/rss';
 
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY || '',
@@ -349,6 +350,34 @@ const toolDefinitions: Anthropic.Tool[] = [
   },
 ];
 
+// ─── RSS News tool ───────────────────────────────────────────────────────────
+toolDefinitions.push({
+  name: 'get_news_headlines',
+  description: 'Fetch the latest news headlines from 5 live RSS feeds (BBC World, Al Jazeera, Sky News, NPR World, CoinTelegraph). Returns top 2-3 articles per source with title, clickable URL, source, recency (age), and a short snippet. Use for macro/geopolitical context, market-moving events, or when a user asks about news affecting a position or asset. Supports keyword filtering (topics param) and source type filtering (geo=world news, crypto=crypto news, all=both). Token-optimised — each call returns at most 15 articles.',
+  input_schema: {
+    type: 'object' as const,
+    properties: {
+      topics: {
+        type: 'string',
+        description: 'Comma-separated keywords to filter headlines, e.g. "iran,oil,sanctions" or "bitcoin,etf,sec". Omit for top headlines.',
+      },
+      sourceTypes: {
+        type: 'string',
+        enum: ['geo', 'crypto', 'all'],
+        description: '"geo" for world/geopolitical news (BBC, AJZ, Sky, NPR), "crypto" for crypto news (CoinTelegraph), "all" for both. Default: all.',
+      },
+      limitPerFeed: {
+        type: 'number',
+        description: 'Max articles per RSS source (default: 3, max: 5). Keep at 2-3 to save tokens.',
+      },
+      maxAgeMinutes: {
+        type: 'number',
+        description: 'Only include articles published in the last N minutes (default: 1440 = 24h). Use 120 for last 2h only.',
+      },
+    },
+  },
+});
+
 // Claude native web search tool
 const webSearchTool = {
   type: 'web_search_20250305' as const,
@@ -401,6 +430,12 @@ function getToolStatusLabel(name: string, input: any): string {
         delete: 'Deleting monitor...',
       };
       return actionLabels[input.action] || 'Managing monitor...';
+    }
+    case 'get_news_headlines': {
+      const src = input.sourceTypes === 'geo' ? 'world' : input.sourceTypes === 'crypto' ? 'crypto' : 'world + crypto';
+      return input.topics
+        ? `Scanning ${src} news for "${input.topics}"...`
+        : `Fetching latest ${src} headlines...`;
     }
     case 'web_search':
       return `Searching the web...`;
@@ -957,6 +992,16 @@ async function executeTool(name: string, input: any, wallet?: string): Promise<s
           },
         });
       }
+      case 'get_news_headlines': {
+        const articles = await fetchNews({
+          topics: input.topics,
+          sourceTypes: input.sourceTypes ?? 'all',
+          limitPerFeed: Math.min(input.limitPerFeed ?? 3, 5),
+          maxAgeMinutes: input.maxAgeMinutes ?? 1440,
+        });
+        return formatArticlesForLLM(articles);
+      }
+
       case 'manage_monitoring': {
         if (!wallet) return JSON.stringify({ error: 'No wallet in session — cannot manage monitors' });
         await connectDB();
@@ -1141,6 +1186,7 @@ You have access to powerful data tools. USE THEM proactively:
 • get_macro_snapshot — Daily macro: ETF flows, Fear & Greed, Coinbase premium
 • get_funding_rate_history — Settled 8h Binance funding rate time-series (use only for multi-day trend history; may return no data if binance-fetcher is down — always fall back to get_market_snapshot)
 • get_derivatives_history — 15m OI + long/short ratio history from Binance (up to 7 days)
+• get_news_headlines — Live RSS headlines from BBC, Al Jazeera, Sky News, NPR, CoinTelegraph with clickable links. Filter by topics (e.g. "iran,oil") or sourceTypes (geo/crypto/all). Use for macro context, market-moving events, or when news could impact a position.
 • web_search — Search the web for market news, macro events (native Claude tool)
 
 ---
@@ -1450,6 +1496,9 @@ You have access to live market data for 89 tracked coins on Binance Futures, ref
 • fetch_live_indicator — Real-time TAAPI call when snapshot is stale (data_age_minutes > 60) or user explicitly asks for current/live values
 • get_macro_snapshot — Daily macro: BTC + ETH ETF flows, net assets, Coinbase premium (BTC + ETH), Fear & Greed index, stablecoin market cap
 
+### News & Macro Intelligence
+• get_news_headlines — Live RSS news from BBC World, Al Jazeera, Sky News, NPR World, CoinTelegraph. Returns top 2-3 articles per source with title, **clickable URL**, source name, age, and snippet. Filter by topics= (e.g. "iran,oil,sanctions") or sourceTypes= (geo/crypto/all). Max ~15 articles per call. Articles include publishedAt timestamp for recency context.
+
 ### Binance history tools (requires binance-fetcher service — may have no data)
 • get_funding_rate_history — Multi-day settled funding rate time-series only. If it returns found:false, use get_market_snapshot instead (derivatives.funding_rate). Symbol = coin name only, e.g. BTC not BTCUSDT.
 • get_derivatives_history — 15-minute OI + long/short ratio history (default 24h, max 7 days). Returns: OI in USDT with 4h/24h % change, global retail L/S, top trader account L/S, top trader position L/S. Symbol = coin name only.
@@ -1466,6 +1515,9 @@ You have access to live market data for 89 tracked coins on Binance Futures, ref
 • NEVER fabricate indicator values (RSI, funding rate, EMA, OI, etc.). Always call the tool first.
 • If get_funding_rate_history returns found:false → immediately call get_market_snapshot instead, note the fallback to the user
 • User wants to monitor something persistently → follow the Monitoring flow (see above), call data tools first, then manage_monitoring
+• User asks "what's in the news", "any news on X", "macro events", "why is BTC moving" → call get_news_headlines (use topics= to filter relevant keywords)
+• Analyzing a position with geopolitical exposure (oil, gold, Middle East) → always call get_news_headlines with relevant topics
+• When you surface news articles, always include the clickable URL and age so the user can read the full article
 
 ### Key signals to highlight when analyzing a coin
 • RSI > 70 or < 30 → overbought / oversold
