@@ -79,7 +79,6 @@ async function refreshPolymarketPositions(userIds: string[]): Promise<void> {
     try {
       const result = await callMCPTool('get_pm_live_positions', {
         walletAddress: userId,
-        limit: 20,
       });
 
       if (!result || result.totalPositions === 0) continue;

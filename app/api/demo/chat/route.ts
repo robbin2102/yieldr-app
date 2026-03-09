@@ -217,6 +217,36 @@ const toolDefinitions: Anthropic.Tool[] = [
     },
   },
   {
+    name: 'get_pm_market',
+    description: 'Fetch Polymarket market data including outcomes, current odds/probabilities, volume, and liquidity. Look up by slug, conditionId, or keyword search.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        slug: { type: 'string', description: 'Market slug (e.g. "will-israel-attack-iran-in-2025")' },
+        conditionId: { type: 'string', description: 'Market condition ID (0x hex string)' },
+        keyword: { type: 'string', description: 'Search keyword to find markets by title (e.g. "bitcoin", "trump", "taiwan")' },
+        limit: { type: 'number', description: 'Number of markets to return for keyword search (default: 5, max: 20)' },
+        activeOnly: { type: 'boolean', description: 'Only return active/open markets (default: true)' },
+      },
+    },
+  },
+  {
+    name: 'get_pm_user_activity',
+    description: 'Fetch recent trade activity (buys, sells, redeems) for a Polymarket wallet. Filter by market, side, or days back. Useful for tracking what a wallet is actively trading.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        walletAddress: { type: 'string', description: 'Ethereum wallet address (0x...)' },
+        market: { type: 'string', description: 'Filter by condition ID to see activity in one market' },
+        side: { type: 'string', enum: ['BUY', 'SELL'], description: 'Filter by trade side' },
+        type: { type: 'string', enum: ['TRADE', 'REDEEM', 'MERGE'], description: 'Filter by activity type' },
+        afterDays: { type: 'number', description: 'Only return activity from the last N days (default: 7)' },
+        limit: { type: 'number', description: 'Number of activity records (default: 20, max: 100)' },
+      },
+      required: ['walletAddress'],
+    },
+  },
+  {
     name: 'get_hl_live_positions_batch',
     description: 'Get open positions for multiple Hyperliquid wallets in ONE call. ALWAYS use this instead of calling get_hl_live_positions multiple times when you have multiple wallet addresses.',
     input_schema: {
@@ -405,6 +435,12 @@ function getToolStatusLabel(name: string, input: any): string {
       return `Pulling trade history for ${input.walletAddress?.slice(0, 10)}...`;
     case 'get_pm_closed_positions':
       return `Checking resolved positions for ${input.walletAddress?.slice(0, 10)}...`;
+    case 'get_pm_market':
+      return input.keyword
+        ? `Searching Polymarket for "${input.keyword}" markets...`
+        : `Fetching Polymarket market data...`;
+    case 'get_pm_user_activity':
+      return `Fetching Polymarket activity for ${input.walletAddress?.slice(0, 10)}...`;
     case 'get_hl_live_positions_batch':
       return `Checking positions for ${input.walletAddresses?.length || 0} wallets...`;
     case 'get_hl_portfolio':
@@ -783,6 +819,49 @@ async function executeTool(name: string, input: any, wallet?: string): Promise<s
             size: parseFloat(p.size || '0'), pnl: parseFloat(p.cashPnl || '0'),
           })),
         });
+      }
+      case 'get_pm_market': {
+        const { slug, conditionId, keyword, limit: mktLimit = 5, activeOnly = true } = input;
+        if (!slug && !conditionId && !keyword) return JSON.stringify({ error: 'Provide slug, conditionId, or keyword' });
+        const GAMMA_API = 'https://gamma-api.polymarket.com';
+        let url: string;
+        if (conditionId) {
+          url = `${GAMMA_API}/markets?condition_id=${encodeURIComponent(conditionId)}`;
+        } else if (slug) {
+          url = `${GAMMA_API}/markets?slug=${encodeURIComponent(slug)}`;
+        } else {
+          const p = new URLSearchParams({ _q: keyword, limit: String(Math.min(mktLimit, 20)), order: 'volume', ascending: 'false', ...(activeOnly ? { active: 'true', closed: 'false' } : {}) });
+          url = `${GAMMA_API}/markets?${p.toString()}`;
+        }
+        const res = await fetch(url, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(8000) });
+        if (!res.ok) return JSON.stringify({ error: `Gamma API error: ${res.status}` });
+        const raw = await res.json();
+        const markets = (Array.isArray(raw) ? raw : [raw]).map((m: any) => {
+          let outcomes: Array<{ name: string; probability: number }> = [];
+          try {
+            const names = typeof m.outcomes === 'string' ? JSON.parse(m.outcomes) : (m.outcomes ?? []);
+            const prices = typeof m.outcomePrices === 'string' ? JSON.parse(m.outcomePrices) : (m.outcomePrices ?? []);
+            outcomes = names.map((n: string, i: number) => ({ name: n, probability: Math.round((prices[i] ?? 0) * 100) }));
+          } catch {}
+          return { conditionId: m.conditionId, slug: m.slug, title: m.question ?? m.title, category: m.category, endDate: m.endDate, active: m.active, volume: parseFloat(m.volume ?? '0'), liquidity: parseFloat(m.liquidity ?? '0'), outcomes, url: m.slug ? `https://polymarket.com/event/${m.slug}` : '' };
+        });
+        return JSON.stringify({ totalFound: markets.length, markets });
+      }
+      case 'get_pm_user_activity': {
+        const { walletAddress, market, side, type: actType, afterDays = 7, limit: actLimit = 20 } = input;
+        const afterTs = Math.floor(Date.now() / 1000) - (afterDays * 86400);
+        const p = new URLSearchParams({ user: walletAddress, limit: String(Math.min(actLimit, 100)), after: String(afterTs) });
+        if (market) p.set('market', market);
+        if (side) p.set('side', side);
+        if (actType) p.set('type', actType);
+        const res = await fetch(`${POLYMARKET_API_BASE}/activity?${p.toString()}`, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(8000) });
+        if (!res.ok) return JSON.stringify({ wallet: walletAddress, totalActivity: 0, activity: [] });
+        const raw = await res.json();
+        const records: any[] = Array.isArray(raw) ? raw : (raw?.data ?? raw?.activity ?? []);
+        const activity = records.map((r: any) => ({ type: r.type ?? 'TRADE', side: r.side, conditionId: r.conditionId ?? r.market, marketTitle: r.title ?? r.question ?? 'Unknown', outcome: r.outcome, size: parseFloat(r.size ?? r.shares ?? '0'), price: parseFloat(r.price ?? '0'), value: parseFloat(r.usdcSize ?? r.value ?? '0'), timestamp: r.timestamp, transactionHash: r.transactionHash }));
+        const buys = activity.filter((a: any) => a.side === 'BUY').length;
+        const sells = activity.filter((a: any) => a.side === 'SELL').length;
+        return JSON.stringify({ wallet: walletAddress, totalActivity: activity.length, summary: { buys, sells, totalVolumeUsd: activity.reduce((s: number, a: any) => s + a.value, 0), uniqueMarkets: new Set(activity.map((a: any) => a.conditionId).filter(Boolean)).size }, activity });
       }
       case 'get_hl_portfolio': {
         const res = await fetch(HYPERLIQUID_API_URL, {
@@ -1188,6 +1267,8 @@ You have access to powerful data tools. USE THEM proactively:
 • get_funding_rate_history — Settled 8h Binance funding rate time-series (use only for multi-day trend history; may return no data if binance-fetcher is down — always fall back to get_market_snapshot)
 • get_derivatives_history — 15m OI + long/short ratio history from Binance (up to 7 days)
 • get_news_headlines — Live RSS headlines from BBC, Al Jazeera, Sky News, NPR, CoinTelegraph with clickable links. Filter by topics (e.g. "iran,oil") or sourceTypes (geo/crypto/all). Use for macro context, market-moving events, or when news could impact a position.
+• get_pm_market — Fetch Polymarket market odds, outcomes, volume, and liquidity. Search by keyword (e.g. "taiwan", "bitcoin etf") or look up by slug/conditionId. Use to check current market prices for any topic.
+• get_pm_user_activity — Fetch recent Polymarket trades (buys/sells/redeems) for any wallet. Filter by market, side, or days back. Use to see what a wallet is actively trading on Polymarket.
 • web_search — Search the web for market news, macro events (native Claude tool)
 
 ---
@@ -1231,6 +1312,8 @@ If no results match, offer to expand:
 • When user asks about a category like NBA, NHL → call get_top_pm_traders with that category
 • When user asks to build a portfolio → first fetch trader data, then construct plan
 • When user asks about trader history → call get_hl_trade_history or get_pm_closed_positions
+• When user asks about a Polymarket market's current odds/prices → call get_pm_market with keyword or slug
+• When user asks what a wallet has been trading on Polymarket → call get_pm_user_activity
 • When market context would help → call web_search (only when current info adds value)
 • NEVER say you can't fetch data. You have tools. USE THEM.
 • You can call multiple tools in sequence
