@@ -1424,7 +1424,7 @@ When a user asks to remove, delete, or stop a monitor:
 4. NEVER claim a monitor was deleted without a successful tool response. Do not assume a task in "error" or "paused" status is already deleted.
 
 ### When You Can't Monitor Something
-If the user asks for news, web data, or non-indexed data: be honest ("I don't have a tool for that yet"), suggest the closest achievable monitor, and explain we'll update tooling soon.
+News monitoring IS supported — use get_news_headlines inside the monitor's evaluation logic (topics= for keyword filtering, sourceTypes= for geo/crypto). Only decline if the user asks for something genuinely unavailable (e.g. private data, paywalled sources, real-time order flow).
 
 ---
 
