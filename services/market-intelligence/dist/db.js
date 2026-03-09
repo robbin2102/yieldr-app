@@ -16,7 +16,10 @@ async function connectDB() {
         return;
     await mongoose_1.default.connect(config_1.config.mongodbUri, {
         serverSelectionTimeoutMS: 30000,
-        socketTimeoutMS: 45000,
+        socketTimeoutMS: 120000, // 4 concurrent cycles each ~54s; 45s was too short cross-region
+        maxPoolSize: 10, // default 5 is too low for 4 simultaneous cron cycles
+        minPoolSize: 2,
+        heartbeatFrequencyMS: 10000,
     });
     connected = true;
     logger_1.logger.info('DB', 'Connected to MongoDB');

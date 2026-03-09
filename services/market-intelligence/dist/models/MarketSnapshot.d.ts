@@ -19,10 +19,7 @@ export interface IMarketSnapshot extends Document {
     derivatives: Record<string, unknown>;
     computed: {
         ma_crossovers: unknown[];
-        divergences: unknown[];
         market_structure: Record<string, unknown>;
-        fvg: unknown[];
-        order_blocks: unknown[];
         alerts: unknown[];
     };
     chart_patterns: unknown[];
@@ -31,7 +28,7 @@ export interface IMarketSnapshot extends Document {
     on_demand_expires_at: Date | null;
     fetch_duration_ms: number;
 }
-declare const _default: mongoose.Model<any, {}, {}, {}, any, any> | mongoose.Model<IMarketSnapshot, {}, {}, {}, mongoose.Document<unknown, {}, IMarketSnapshot, {}, {}> & IMarketSnapshot & Required<{
+declare const _default: mongoose.Model<IMarketSnapshot, {}, {}, {}, mongoose.Document<unknown, {}, IMarketSnapshot, {}, {}> & IMarketSnapshot & Required<{
     _id: mongoose.Types.ObjectId;
 }> & {
     __v: number;

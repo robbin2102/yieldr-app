@@ -29,9 +29,9 @@ async function binanceGet(path: string): Promise<any> {
   return res.json();
 }
 
-// ─── Funding Rate (premiumIndexKlines) ────────────────────────────────────────
-// Each 1h candle's close value is the instantaneous funding rate at that hour.
-// Binance settles every 8h (3×/day), so annualized = rate * 3 * 365 * 100.
+// ─── Funding Rate (fundingRate) ───────────────────────────────────────────────
+// Returns actual settled 8h funding rates. Binance settles 3×/day (00:00, 08:00,
+// 16:00 UTC). annualized = rate * 3 * 365 * 100.
 
 export interface FundingRateRecord {
   timestamp: Date;
@@ -39,29 +39,66 @@ export interface FundingRateRecord {
   annualized_rate: number;
 }
 
-export async function fetchFundingRateKlines(
+export async function fetchFundingRates(
   pair: string,
   startTime?: number,
-  limit = 200,
+  limit = 1000,
 ): Promise<FundingRateRecord[]> {
   const params = new URLSearchParams({
     symbol: pair,
+    limit: String(Math.min(limit, 1000)),
+    ...(startTime ? { startTime: String(startTime) } : {}),
+  });
+
+  const data = await binanceGet(`/fapi/v1/fundingRate?${params}`);
+  if (!data || !Array.isArray(data)) return [];
+
+  return data.map((d: any) => {
+    const fundingRate = parseFloat(d.fundingRate);
+    return {
+      timestamp:       new Date(d.fundingTime),
+      funding_rate:    fundingRate,
+      annualized_rate: fundingRate * 3 * 365 * 100,
+    };
+  });
+}
+
+// ─── Premium Index Klines (premiumIndexKlines) ────────────────────────────────
+// 1h candles of the premium index. The `close` value approximates the predicted
+// funding rate at the next 8h settlement. Used to show "current / predicted" rate.
+
+export interface PremiumIndexKlineRecord {
+  open_time:     Date;
+  close_time:    Date;
+  open_premium:  number;
+  high_premium:  number;
+  low_premium:   number;
+  premium_index: number;   // close = current predicted funding rate
+}
+
+export async function fetchPremiumIndexKlines(
+  pair: string,
+  startTime?: number,
+  limit = 1000,
+): Promise<PremiumIndexKlineRecord[]> {
+  const params = new URLSearchParams({
+    symbol:   pair,
     interval: '1h',
-    limit: String(Math.min(limit, 1500)),
+    limit:    String(Math.min(limit, 1500)),
     ...(startTime ? { startTime: String(startTime) } : {}),
   });
 
   const data = await binanceGet(`/fapi/v1/premiumIndexKlines?${params}`);
   if (!data || !Array.isArray(data)) return [];
 
-  return data.map((candle: any[]) => {
-    const fundingRate = parseFloat(candle[4]);   // close
-    return {
-      timestamp:      new Date(candle[0]),        // openTime
-      funding_rate:   fundingRate,
-      annualized_rate: fundingRate * 3 * 365 * 100,
-    };
-  });
+  return data.map((d: any[]) => ({
+    open_time:     new Date(d[0]),
+    open_premium:  parseFloat(d[1]),
+    high_premium:  parseFloat(d[2]),
+    low_premium:   parseFloat(d[3]),
+    premium_index: parseFloat(d[4]),   // close
+    close_time:    new Date(d[6]),
+  }));
 }
 
 // ─── Open Interest (openInterestHist) ─────────────────────────────────────────

@@ -11,8 +11,33 @@ import {
 } from './db/monitoring';
 import { getUserPositions } from './db/positions';
 import { callToolsAndExtract } from './tool-caller';
-import { buildEvaluatorPrompt, callEvaluator } from './evaluator';
+import { buildEvaluatorPrompt, callEvaluator, callAlphaDefiner, EvaluationResult } from './evaluator';
 import { logger } from './utils/logger';
+
+/** Extract top 3 news article links from get_news_headlines tool output in strippedData */
+function extractNewsLinks(data: Record<string, any>): Array<{ title: string; url: string; source: string; publishedAt: string; age?: string }> {
+  // Search recursively for an 'articles' array that looks like RSS articles
+  function findArticles(obj: any): any[] | null {
+    if (!obj || typeof obj !== 'object') return null;
+    if (Array.isArray(obj.articles) && obj.articles.length > 0 && obj.articles[0]?.url && obj.articles[0]?.title) {
+      return obj.articles;
+    }
+    for (const v of Object.values(obj)) {
+      const found = findArticles(v);
+      if (found) return found;
+    }
+    return null;
+  }
+  const articles = findArticles(data);
+  if (!articles) return [];
+  return articles.slice(0, 3).map((a: any) => ({
+    title: String(a.title || ''),
+    url: String(a.url || ''),
+    source: String(a.source || ''),
+    publishedAt: String(a.publishedAt || new Date().toISOString()),
+    ...(a.age ? { age: String(a.age) } : {}),
+  })).filter(a => a.title && a.url);
+}
 
 /**
  * Process a single monitoring task for one cycle:
@@ -56,8 +81,8 @@ export async function processTask(task: WithId<MonitoringTask>): Promise<void> {
   const userPositions = await getUserPositions(task.userId).catch(() => []);
 
   // Step 4: Evaluate
-  const evaluation = cooldownActive
-    ? { alert: false as const, summary: 'Cooldown active — evaluator skipped' }
+  const evaluation: EvaluationResult = cooldownActive
+    ? { alert: false, signal: false, summary: 'Cooldown active — evaluator skipped' }
     : await callEvaluator(buildEvaluatorPrompt(task, strippedData, userPositions));
 
   logger.info(
@@ -78,9 +103,14 @@ export async function processTask(task: WithId<MonitoringTask>): Promise<void> {
       : (evaluation.summary ?? 'No alert'),
   };
 
-  // Step 6: Create alert + update agent stats if triggered
-  if (evaluation.alert) {
+  // Step 6: Create alert/signal record + update agent stats
+  if (evaluation.alert || evaluation.signal) {
     const newCycleCount = (task.cycleCount || 0) + 1;
+
+    // Extract newsLinks from get_news_headlines tool output if present
+    const alertData: Record<string, any> = { ...strippedData };
+    const newsArticles = extractNewsLinks(strippedData);
+    if (newsArticles.length > 0) alertData.newsLinks = newsArticles;
 
     const alert = await createAlert({
       userId: task.userId,
@@ -89,7 +119,9 @@ export async function processTask(task: WithId<MonitoringTask>): Promise<void> {
       title: evaluation.title!,
       message: evaluation.message!,
       severity: evaluation.severity ?? 'info',
-      data: strippedData,
+      isSignal: evaluation.signal,
+      indicators: evaluation.indicators,
+      data: alertData,
       cycleNumber: newCycleCount,
       read: false,
       createdAt: new Date(),
@@ -97,18 +129,23 @@ export async function processTask(task: WithId<MonitoringTask>): Promise<void> {
 
     logEntry.alertId = alert._id as ObjectId;
 
-    await markTaskAlert(taskId, {
-      lastAlertAt: new Date(),
-      alertCount: (task.alertCount || 0) + 1,
-    });
+    if (evaluation.alert) {
+      await markTaskAlert(taskId, {
+        lastAlertAt: new Date(),
+        alertCount: (task.alertCount || 0) + 1,
+      });
+    }
 
-    // Increment agent's alertsSent + insightsGenerated counters
+    // Increment agent counters: alertsSent for alerts, insightsGenerated for signals
     try {
       const db = await getDB();
       await db.collection(COLLECTIONS.AGENTS).updateOne(
         { agentId: task.agentId },
         {
-          $inc: { alertsSent: 1, insightsGenerated: 1 },
+          $inc: {
+            alertsSent: evaluation.alert ? 1 : 0,
+            insightsGenerated: 1,
+          },
           $set: { lastActiveAt: new Date() },
         }
       );
@@ -124,9 +161,11 @@ export async function processTask(task: WithId<MonitoringTask>): Promise<void> {
     timestamp: new Date(),
     data: strippedData,
     alerted: evaluation.alert,
+    signaled: evaluation.signal,
     summary: evaluation.alert
       ? (evaluation.title ?? 'Alert')
       : (evaluation.summary ?? 'No alert'),
+    indicators: evaluation.indicators,
   };
 
   const updatedHistory: CycleEntry[] = [
@@ -140,6 +179,23 @@ export async function processTask(task: WithId<MonitoringTask>): Promise<void> {
     lastRunAt: new Date(),
     cycleCount: (task.cycleCount || 0) + 1,
   });
+
+  // Define alpha thesis on first completed cycle (or backfill for existing monitors)
+  if (!task.alphaTitle) {
+    const alpha = await callAlphaDefiner(task);
+    if (alpha) {
+      try {
+        const db = await getDB();
+        await db.collection(COLLECTIONS.MONITORING_TASKS).updateOne(
+          { _id: taskId },
+          { $set: { alphaTitle: alpha.alphaTitle, alphaDescription: alpha.alphaDescription } }
+        );
+        logger.info('Processor', `Alpha defined for task ${taskId}: "${alpha.alphaTitle}"`);
+      } catch (err: any) {
+        logger.warn('Processor', `Failed to persist alpha definition: ${err.message}`);
+      }
+    }
+  }
 
   logger.info('Processor', `Task ${taskId} complete — next run at ${new Date(Date.now() + task.intervalSeconds * 1000).toISOString()}`);
 }

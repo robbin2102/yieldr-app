@@ -1,6 +1,6 @@
 "use strict";
 /**
- * Queries the binance_funding_1h and binance_derivatives_15m collections
+ * Queries the binance_funding_8h and binance_derivatives_15m collections
  * written by the binance-fetcher service (Singapore Railway deployment).
  * Uses the raw mongoose connection to avoid registering duplicate Mongoose models.
  */
@@ -10,7 +10,7 @@ exports.getLatestBinanceDerivatives = getLatestBinanceDerivatives;
 const db_1 = require("../db");
 const logger_1 = require("../utils/logger");
 /**
- * Returns the latest funding rate record for a symbol from binance_funding_1h.
+ * Returns the latest funding rate record for a symbol from binance_funding_8h.
  * Returns null if the collection is empty or symbol not found.
  */
 async function getLatestBinanceFunding(symbol) {
@@ -18,7 +18,7 @@ async function getLatestBinanceFunding(symbol) {
         const db = db_1.mongoose.connection.db;
         if (!db)
             return null;
-        const record = await db.collection('binance_funding_1h').findOne({ symbol: symbol.toUpperCase() }, { sort: { timestamp: -1 } });
+        const record = await db.collection('binance_funding_8h').findOne({ symbol: symbol.toUpperCase() }, { sort: { timestamp: -1 } });
         if (!record)
             return null;
         return {

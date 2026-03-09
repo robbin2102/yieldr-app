@@ -33,7 +33,8 @@ export async function callMCPTool(toolName: string, params: Record<string, any>)
     if (err.name === 'AbortError') {
       throw new Error(`MCP tool ${toolName} timed out after ${TOOL_TIMEOUT_MS}ms`);
     }
-    throw err;
+    const cause = err.cause ? ` (cause: ${err.cause?.code ?? err.cause?.message ?? err.cause})` : '';
+    throw new Error(`MCP tool ${toolName} fetch failed — url: ${url}${cause}`);
   } finally {
     clearTimeout(timeout);
   }

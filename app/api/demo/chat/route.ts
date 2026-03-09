@@ -5,6 +5,7 @@ import mongoose from 'mongoose';
 import Agent from '@/models/Agent';
 import ChatSession from '@/models/ChatSession';
 import { trackUsage, TokenUsageData } from '@/lib/tokenTracking';
+import { fetchNews, formatArticlesForLLM } from '@/lib/rss';
 
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY || '',
@@ -288,7 +289,7 @@ const toolDefinitions: Anthropic.Tool[] = [
   },
   {
     name: 'get_funding_rate_history',
-    description: 'Get hourly funding rate history for a coin from Binance Futures (up to 30 days). Returns full time-series plus computed stats: current rate, annualized %, 24h avg, 7d avg, min/max over period, and trend direction (rising/flat/falling). Use when analyzing funding dynamics, carry trade setups, or spotting extreme funding that signals mean reversion risk. Symbol is just the coin name (BTC, ETH, SOL) — no USDT suffix.',
+    description: 'Get settled 8h funding rate history for a coin from Binance Futures (up to 30 days). NOTE: requires the binance-fetcher service to have data — if it returns found:false, fall back to get_market_snapshot which always has funding rate in derivatives.funding_rate. Prefer get_market_snapshot for most funding rate queries. Only use this tool when the user specifically needs a multi-day funding rate time-series or trend analysis.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -315,7 +316,67 @@ const toolDefinitions: Anthropic.Tool[] = [
       required: ['symbol'],
     },
   },
+  {
+    name: 'manage_monitoring',
+    description: 'Create, list, update, pause, resume, or delete persistent monitoring tasks that run on a schedule. Each task calls MCP tools each cycle, extracts key fields, and uses an LLM evaluator to decide whether to alert. Use when a user asks to monitor market data, funding rates, RSI/indicators, trader activity, or position changes. ALWAYS call the relevant data tool(s) first to verify the exact field paths before creating a monitor.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        action: {
+          type: 'string' as const,
+          enum: ['create', 'list', 'get', 'update', 'pause', 'resume', 'delete'],
+          description: 'Operation to perform',
+        },
+        taskId: { type: 'string', description: 'Required for get/update/pause/resume/delete' },
+        task: { type: 'string', description: 'Short title, e.g. "ETH RSI oversold monitor"' },
+        monitorInstruction: { type: 'string', description: 'Detailed natural-language instruction for the evaluator LLM — what to watch, thresholds, severity. Be specific with numbers. The evaluator only sees the extracted fields + last 5 cycles + user positions.' },
+        tools: {
+          type: 'array' as const,
+          description: 'Tools to call each cycle (max 5). extractFields are dot-path strings into the tool response (e.g. "stats.avg_24h"). Keep minimal — each field adds to per-cycle token cost. Use [*] wildcard for arrays.',
+          items: {
+            type: 'object' as const,
+            properties: {
+              toolName: { type: 'string' },
+              toolParams: { type: 'object' },
+              extractFields: { type: 'array', items: { type: 'string' } },
+            },
+          },
+        },
+        intervalSeconds: { type: 'number', description: 'Check interval in seconds. Minimum 300 (5 minutes).' },
+        updates: { type: 'object', description: 'For action=update: fields to change (task, monitorInstruction, tools, intervalSeconds, status)' },
+      },
+      required: ['action'],
+    },
+  },
 ];
+
+// ─── RSS News tool ───────────────────────────────────────────────────────────
+toolDefinitions.push({
+  name: 'get_news_headlines',
+  description: 'Fetch the latest news headlines from 5 live RSS feeds (BBC World, Al Jazeera, Sky News, NPR World, CoinTelegraph). Returns top 2-3 articles per source with title, clickable URL, source, recency (age), and a short snippet. Use for macro/geopolitical context, market-moving events, or when a user asks about news affecting a position or asset. Supports keyword filtering (topics param) and source type filtering (geo=world news, crypto=crypto news, all=both). Token-optimised — each call returns at most 15 articles.',
+  input_schema: {
+    type: 'object' as const,
+    properties: {
+      topics: {
+        type: 'string',
+        description: 'Comma-separated keywords to filter headlines, e.g. "iran,oil,sanctions" or "bitcoin,etf,sec". Omit for top headlines.',
+      },
+      sourceTypes: {
+        type: 'string',
+        enum: ['geo', 'crypto', 'all'],
+        description: '"geo" for world/geopolitical news (BBC, AJZ, Sky, NPR), "crypto" for crypto news (CoinTelegraph), "all" for both. Default: all.',
+      },
+      limitPerFeed: {
+        type: 'number',
+        description: 'Max articles per RSS source (default: 3, max: 5). Keep at 2-3 to save tokens.',
+      },
+      maxAgeMinutes: {
+        type: 'number',
+        description: 'Only include articles published in the last N minutes (default: 1440 = 24h). Use 120 for last 2h only.',
+      },
+    },
+  },
+});
 
 // Claude native web search tool
 const webSearchTool = {
@@ -358,6 +419,24 @@ function getToolStatusLabel(name: string, input: any): string {
       return `Fetching ${input.hours || 24}h funding rate history for ${input.symbol?.toUpperCase()}...`;
     case 'get_derivatives_history':
       return `Fetching ${input.hours || 24}h OI + L/S data for ${input.symbol?.toUpperCase()}...`;
+    case 'manage_monitoring': {
+      const actionLabels: Record<string, string> = {
+        create: 'Creating monitoring task...',
+        list:   'Loading your monitors...',
+        get:    'Loading monitor details...',
+        update: 'Updating monitor...',
+        pause:  'Pausing monitor...',
+        resume: 'Resuming monitor...',
+        delete: 'Deleting monitor...',
+      };
+      return actionLabels[input.action] || 'Managing monitor...';
+    }
+    case 'get_news_headlines': {
+      const src = input.sourceTypes === 'geo' ? 'world' : input.sourceTypes === 'crypto' ? 'crypto' : 'world + crypto';
+      return input.topics
+        ? `Scanning ${src} news for "${input.topics}"...`
+        : `Fetching latest ${src} headlines...`;
+    }
     case 'web_search':
       return `Searching the web...`;
     default:
@@ -367,7 +446,7 @@ function getToolStatusLabel(name: string, input: any): string {
 
 // ─── Tool Execution ────────────────────────────────────────────────────────
 
-async function executeTool(name: string, input: any): Promise<string> {
+async function executeTool(name: string, input: any, wallet?: string): Promise<string> {
   console.log(`[chat] Executing tool: ${name}`, JSON.stringify(input).slice(0, 200));
   try {
     switch (name) {
@@ -913,6 +992,160 @@ async function executeTool(name: string, input: any): Promise<string> {
           },
         });
       }
+      case 'get_news_headlines': {
+        const articles = await fetchNews({
+          topics: input.topics,
+          sourceTypes: input.sourceTypes ?? 'all',
+          limitPerFeed: Math.min(input.limitPerFeed ?? 3, 5),
+          maxAgeMinutes: input.maxAgeMinutes ?? 1440,
+        });
+        return formatArticlesForLLM(articles);
+      }
+
+      case 'manage_monitoring': {
+        if (!wallet) return JSON.stringify({ error: 'No wallet in session — cannot manage monitors' });
+        await connectDB();
+        const db2 = mongoose.connection.db!;
+        const tasksCol = db2.collection('monitoring_tasks');
+        const { action, taskId, task, monitorInstruction, tools: monTools, intervalSeconds, updates } = input;
+
+        if (action === 'list') {
+          const docs = await tasksCol
+            .find({ userId: wallet.toLowerCase() }, { projection: { cycleHistory: 0 } })
+            .sort({ createdAt: -1 })
+            .toArray();
+          return JSON.stringify({
+            count: docs.length,
+            tasks: docs.map(d => ({
+              taskId: d._id.toString(),
+              agentId: d.agentId,
+              agentName: d.agentName,
+              task: d.task,
+              status: d.status,
+              intervalSeconds: d.intervalSeconds,
+              nextRunAt: d.nextRunAt,
+              lastRunAt: d.lastRunAt,
+              cycleCount: d.cycleCount,
+              alertCount: d.alertCount,
+              lastError: d.lastError,
+            })),
+          });
+        }
+
+        if (action === 'get') {
+          if (!taskId) return JSON.stringify({ error: 'taskId required for get' });
+          const { ObjectId } = await import('mongodb');
+          const doc = await tasksCol.findOne({ _id: new ObjectId(taskId), userId: wallet.toLowerCase() });
+          if (!doc) return JSON.stringify({ error: 'Task not found' });
+          return JSON.stringify({ ...doc, _id: doc._id.toString(), taskId: doc._id.toString() });
+        }
+
+        if (action === 'pause') {
+          if (!taskId) return JSON.stringify({ error: 'taskId required for pause' });
+          const { ObjectId } = await import('mongodb');
+          await tasksCol.updateOne(
+            { _id: new ObjectId(taskId), userId: wallet.toLowerCase() },
+            { $set: { status: 'paused', updatedAt: new Date() } }
+          );
+          return JSON.stringify({ ok: true, taskId, status: 'paused' });
+        }
+
+        if (action === 'resume') {
+          if (!taskId) return JSON.stringify({ error: 'taskId required for resume' });
+          const { ObjectId } = await import('mongodb');
+          const doc = await tasksCol.findOne({ _id: new ObjectId(taskId), userId: wallet.toLowerCase() });
+          if (!doc) return JSON.stringify({ error: 'Task not found' });
+          const nextRunAt = new Date(Date.now() + (doc.intervalSeconds || 3600) * 1000);
+          await tasksCol.updateOne(
+            { _id: new ObjectId(taskId) },
+            { $set: { status: 'active', nextRunAt, updatedAt: new Date() } }
+          );
+          return JSON.stringify({ ok: true, taskId, status: 'active', nextRunAt });
+        }
+
+        if (action === 'delete') {
+          if (!taskId) return JSON.stringify({ error: 'taskId required for delete' });
+          const { ObjectId } = await import('mongodb');
+          await tasksCol.deleteOne({ _id: new ObjectId(taskId), userId: wallet.toLowerCase() });
+          return JSON.stringify({ ok: true, taskId, deleted: true });
+        }
+
+        if (action === 'update') {
+          if (!taskId) return JSON.stringify({ error: 'taskId required for update' });
+          const { ObjectId } = await import('mongodb');
+          const allowed = ['task', 'monitorInstruction', 'tools', 'intervalSeconds', 'status'];
+          const patch: Record<string, any> = { updatedAt: new Date() };
+          for (const k of allowed) {
+            if (updates?.[k] !== undefined) patch[k] = updates[k];
+          }
+          if (patch.intervalSeconds) {
+            patch.nextRunAt = new Date(Date.now() + patch.intervalSeconds * 1000);
+          }
+          await tasksCol.updateOne({ _id: new ObjectId(taskId), userId: wallet.toLowerCase() }, { $set: patch });
+          return JSON.stringify({ ok: true, taskId, updated: Object.keys(patch) });
+        }
+
+        if (action === 'create') {
+          if (!task || !monitorInstruction || !monTools || !intervalSeconds) {
+            return JSON.stringify({ error: 'task, monitorInstruction, tools, and intervalSeconds are required for create' });
+          }
+          if (intervalSeconds < 300) {
+            return JSON.stringify({ error: 'intervalSeconds must be at least 300 (5 minutes)' });
+          }
+          if (monTools.length > 5) {
+            return JSON.stringify({ error: 'Maximum 5 tools per monitor' });
+          }
+
+          // Check active monitor limit
+          const activeCount = await tasksCol.countDocuments({ userId: wallet.toLowerCase(), status: 'active' });
+          if (activeCount >= 10) {
+            return JSON.stringify({ error: 'Maximum 10 active monitors reached. Pause or delete an existing monitor first.' });
+          }
+
+          // Look up agent for agentId and agentName
+          const agent = await Agent.findOne({ ownerWallet: wallet.toLowerCase() });
+          const agentId = agent?.agentId || `agent-${wallet.slice(2, 8).toLowerCase()}`;
+          const agentName = agent?.name || 'Yieldr Agent';
+
+          const now = new Date();
+          const doc = {
+            userId:             wallet.toLowerCase(),
+            agentId,
+            agentName,
+            task,
+            monitorInstruction,
+            tools:              monTools,
+            intervalSeconds,
+            status:             'active' as const,
+            nextRunAt:          new Date(Date.now() + intervalSeconds * 1000),
+            lastRunAt:          null,
+            lastAlertAt:        null,
+            alertCount:         0,
+            cycleCount:         0,
+            errorCount:         0,
+            lastError:          null,
+            cycleHistory:       [],
+            createdAt:          now,
+            updatedAt:          now,
+          };
+
+          const result = await tasksCol.insertOne(doc);
+          return JSON.stringify({
+            ok: true,
+            taskId: result.insertedId.toString(),
+            agentId,
+            agentName,
+            task,
+            status: 'active',
+            nextRunAt: doc.nextRunAt,
+            intervalSeconds,
+            message: `Monitor created. First cycle runs in ${Math.round(intervalSeconds / 60)} minutes. First cycle records baseline only — alerts start from cycle 2.`,
+          });
+        }
+
+        return JSON.stringify({ error: `Unknown action: ${action}` });
+      }
+
       default:
         return JSON.stringify({ error: `Unknown tool: ${name}` });
     }
@@ -948,11 +1181,12 @@ You have access to powerful data tools. USE THEM proactively:
 • get_hl_trade_history — Get recent trades/fills for a Hyperliquid wallet
 • get_pm_closed_positions — Get resolved Polymarket positions
 • get_hl_portfolio — Get Hyperliquid portfolio overview and account value
-• get_market_snapshot — Latest TAAPI + CoinGlass snapshot for any coin (technicals + derivatives)
+• get_market_snapshot — Latest TAAPI + CoinGlass snapshot for any coin (technicals + derivatives incl. funding rate, OI, L/S ratios) — PRIMARY tool for all market data including funding rates
 • fetch_live_indicator — Real-time TAAPI indicators when snapshot is stale
 • get_macro_snapshot — Daily macro: ETF flows, Fear & Greed, Coinbase premium
-• get_funding_rate_history — Hourly Binance funding rate history (up to 30 days) with trend stats
+• get_funding_rate_history — Settled 8h Binance funding rate time-series (use only for multi-day trend history; may return no data if binance-fetcher is down — always fall back to get_market_snapshot)
 • get_derivatives_history — 15m OI + long/short ratio history from Binance (up to 7 days)
+• get_news_headlines — Live RSS headlines from BBC, Al Jazeera, Sky News, NPR, CoinTelegraph with clickable links. Filter by topics (e.g. "iran,oil") or sourceTypes (geo/crypto/all). Use for macro context, market-moving events, or when news could impact a position.
 • web_search — Search the web for market news, macro events (native Claude tool)
 
 ---
@@ -1118,19 +1352,82 @@ If you catch yourself about to use any of these, rephrase immediately.
 
 ---
 
+## 🔔 Monitoring
+
+You can create persistent monitoring tasks that run on a schedule. When a user asks to monitor something, follow this flow:
+
+### Step 1: Understand What to Monitor
+Ask clarifying questions. Don't assume. Examples:
+• "Which indicator matters most — RSI, funding rate, OI change, or something else?"
+• "What threshold should trigger the alert?"
+• "How often should I check — every hour, every 4 hours?"
+
+### Step 2: Call the Relevant Tool(s) to See the Data
+ALWAYS call the relevant tool(s) first to verify exact field paths before structuring the task.
+This lets you confirm dot-paths for extractFields and show the user current values.
+
+### Step 3: Structure the Task
+Based on the conversation and tool response, build:
+• task: short title
+• monitorInstruction: specific, number-anchored instruction for the evaluator. Be explicit about thresholds and severity. The evaluator ONLY sees the extracted fields + last 5 cycles + user positions.
+• tools: which tools to call each cycle (max 5), with toolName, toolParams, and extractFields (dot-paths, keep minimal)
+• intervalSeconds: minimum 300
+
+### Step 4: Confirm with the User
+Show: what's monitored, which fields, what triggers alerts, interval, current values.
+
+### Step 5: Create
+Call manage_monitoring with action "create" after user confirms.
+
+### Correct Field Paths by Tool
+
+**get_market_snapshot** (symbol, fields: "indicators"|"derivatives"|"all") — USE THIS for funding rate, OI, and all standard monitoring tasks:
+• indicators.rsi_14 / macd / bbands / ema_8 / ema_21 / ema_50 / adx / stoch_rsi / atr_14
+• derivatives.funding_rate.current / annualized — ← USE THIS for funding rate queries
+• derivatives.open_interest.total_usd / change_4h_pct / change_24h_pct
+• derivatives.long_short_ratio.global_accounts / top_accounts / top_positions
+• computed.trend_score / momentum_score / volatility_regime
+
+**get_derivatives_history** (symbol, hours, include?) — use when user needs OI/L/S trend over hours/days:
+• stats.open_interest.current_usdt / change_4h_pct / change_24h_pct
+• stats.long_short_global.current.long_pct / .short_pct / .ratio / avg_long_pct / bias
+• stats.long_short_top_accounts.* (same structure)
+• stats.long_short_top_positions.* (same structure)
+• latest.open_interest_usdt / long_short_global / long_short_top_accounts / long_short_top_positions
+
+**get_funding_rate_history** (symbol, hours) — SECONDARY: only for multi-day funding history; may return found:false if binance-fetcher has no data — fall back to get_market_snapshot:
+• stats.latest_predicted_rate / stats.latest_predicted_annualized_pct
+• stats.avg_24h / stats.avg_7d / stats.trend / stats.min_period / stats.max_period
+
+**get_top_perp_traders** (protocol, sortBy, limit):
+• traders[*].wallet / pnl.month / winRate / openPositions / accountValue
+
+**get_hl_live_positions_batch** (walletAddresses: [], limit):
+• wallets[*].wallet / wallets[*].positions[*].coin / .side / .size / .unrealizedPnl / .leverage
+• Note: set walletAddresses: [] for tool chaining — scheduler fills it from the previous tool's output
+
+### Constraints
+• Minimum interval: 300 seconds (5 minutes)
+• Max 5 tools per task
+• Max 10 active monitors per user
+• Keep extractFields minimal — each field adds per-cycle token cost
+• First cycle always records baseline, never alerts
+
+### When You Can't Monitor Something
+If the user asks for news, web data, or non-indexed data: be honest ("I don't have a tool for that yet"), suggest the closest achievable monitor, and explain we'll update tooling soon.
+
+---
+
 ## 🚧 Features NOT Available in Demo — NEVER OFFER
 
 These features do NOT exist yet. NEVER offer or suggest them:
-• Monitoring alerts / price alerts
 • Telegram or Discord notifications
 • Automated trading or trade execution
 • Portfolio rebalancing
-• Setting up alerts for trader activity
 • SMS or email notifications
-• Watchlists with notifications
 • Any form of automated action
 
-If a user asks about these, say: "That's coming in V1! For now, I can show you live data and analysis whenever you ask."
+If a user asks about these, say: "That's coming in V1! For now, I can monitor market conditions and alert you in the chat."
 
 ---
 
@@ -1194,24 +1491,33 @@ If a tool call fails or returns an error:
 
 You have access to live market data for 89 tracked coins on Binance Futures, refreshed continuously.
 
-### Snapshot tools (1h refresh)
-• get_market_snapshot — Latest TAAPI + CoinGlass indicators for any coin: price, EMA/SMA, RSI, MACD, ADX, BBands, Ichimoku, Supertrend, Pivots, funding rate, OI, long/short ratios, CVD, liquidations, taker buy/sell, computed signals, active candlestick patterns
+### Snapshot tools (1h refresh) — PRIMARY data source
+• get_market_snapshot — Latest TAAPI + CoinGlass indicators for any coin: price, EMA/SMA (8/21/50/200), RSI, MACD, ADX, BBands, Ichimoku, Supertrend, Pivots, **funding rate, OI, long/short ratios**, CVD, liquidations, taker buy/sell, computed signals, active candlestick patterns. Use this for all funding rate and OI queries by default.
 • fetch_live_indicator — Real-time TAAPI call when snapshot is stale (data_age_minutes > 60) or user explicitly asks for current/live values
 • get_macro_snapshot — Daily macro: BTC + ETH ETF flows, net assets, Coinbase premium (BTC + ETH), Fear & Greed index, stablecoin market cap
 
-### Binance history tools (direct from Binance Futures, updated every 1h/15m)
-• get_funding_rate_history — Hourly funding rate time-series for any coin (default 24h, max 30 days). Returns: current rate, annualized %, 24h avg, 7d avg, min/max, trend direction (rising/flat/falling). Symbol = coin name only, e.g. BTC not BTCUSDT.
-• get_derivatives_history — 15-minute OI + long/short ratio history (default 24h, max 7 days). Returns: OI in USDT with 4h/24h % change, global retail L/S, top trader account L/S, top trader position L/S — each with current values, period averages, and bias label. Symbol = coin name only, e.g. BTC not BTCUSDT.
+### News & Macro Intelligence
+• get_news_headlines — Live RSS news from BBC World, Al Jazeera, Sky News, NPR World, CoinTelegraph. Returns top 2-3 articles per source with title, **clickable URL**, source name, age, and snippet. Filter by topics= (e.g. "iran,oil,sanctions") or sourceTypes= (geo/crypto/all). Max ~15 articles per call. Articles include publishedAt timestamp for recency context.
+
+### Binance history tools (requires binance-fetcher service — may have no data)
+• get_funding_rate_history — Multi-day settled funding rate time-series only. If it returns found:false, use get_market_snapshot instead (derivatives.funding_rate). Symbol = coin name only, e.g. BTC not BTCUSDT.
+• get_derivatives_history — 15-minute OI + long/short ratio history (default 24h, max 7 days). Returns: OI in USDT with 4h/24h % change, global retail L/S, top trader account L/S, top trader position L/S. Symbol = coin name only.
 
 ### When to call each
-• User asks about a coin's setup, technicals, or indicators → call get_market_snapshot first
+• User asks about a coin's setup, technicals, indicators, funding rate, or OI → call get_market_snapshot first (it has all of this)
 • User asks "right now" / "current" / "live" data → use fetch_live_indicator
 • User asks about ETF flows, macro, Fear & Greed, Coinbase premium → call get_macro_snapshot
 • get_market_snapshot shows data_age_minutes > 60 → follow up with fetch_live_indicator for fresh values
-• User asks about funding rate trend, carry trade, funding history, annualized rate → call get_funding_rate_history
-• User asks about open interest trend, OI change, positioning, long/short ratios over time → call get_derivatives_history
+• User asks about funding rate trend, carry trade, funding history, annualized rate → call get_market_snapshot (derivatives.funding_rate) — NOT get_funding_rate_history unless they need 7d+ historical trend
+• User asks about OI trend over hours/days → call get_derivatives_history for the time-series
 • Doing a full coin analysis or trade setup → call get_market_snapshot AND get_derivatives_history together for complete picture
+• Creating a monitoring task for funding rate, RSI, OI → use get_market_snapshot as the task tool (it's reliable; get_funding_rate_history requires binance-fetcher which may have gaps)
 • NEVER fabricate indicator values (RSI, funding rate, EMA, OI, etc.). Always call the tool first.
+• If get_funding_rate_history returns found:false → immediately call get_market_snapshot instead, note the fallback to the user
+• User wants to monitor something persistently → follow the Monitoring flow (see above), call data tools first, then manage_monitoring
+• User asks "what's in the news", "any news on X", "macro events", "why is BTC moving" → call get_news_headlines (use topics= to filter relevant keywords)
+• Analyzing a position with geopolitical exposure (oil, gold, Middle East) → always call get_news_headlines with relevant topics
+• When you surface news articles, always include the clickable URL and age so the user can read the full article
 
 ### Key signals to highlight when analyzing a coin
 • RSI > 70 or < 30 → overbought / oversold
@@ -1512,7 +1818,7 @@ export async function POST(request: NextRequest) {
                   // Track tool call
                   allToolCalls.push({ name: currentToolName });
                   // Execute the tool
-                  const toolResult = await executeTool(currentToolName, parsedInput);
+                  const toolResult = await executeTool(currentToolName, parsedInput, walletLower);
                   console.log(`[TOKENS] Tool result for "${currentToolName}": ${estimateTokens(toolResult)} est. tokens (${toolResult.length} chars)`);
                   toolResults.push({
                     role: 'user',

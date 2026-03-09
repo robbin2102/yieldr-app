@@ -8,6 +8,7 @@ export interface IMacroDaily extends Document {
             ticker: string;
             flow_usd: number;
         }>;
+        data_date: Date | null;
     };
     eth_etf: {
         total_flow_usd: number | null;
@@ -16,10 +17,10 @@ export interface IMacroDaily extends Document {
             ticker: string;
             flow_usd: number;
         }>;
+        data_date: Date | null;
     };
     coinbase_premium: {
         btc: number | null;
-        eth: number | null;
     };
     fear_greed: {
         value: number | null;

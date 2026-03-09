@@ -4,8 +4,10 @@ import { config } from '../config';
 import { mongoose } from '../db';
 import FundingRate1h from '../models/FundingRate1h';
 import Derivatives15m from '../models/Derivatives15m';
+import PremiumIndex1h from '../models/PremiumIndex1h';
 import {
-  fetchFundingRateKlines,
+  fetchFundingRates,
+  fetchPremiumIndexKlines,
   fetchOIHistory,
   fetchGlobalLSRatio,
   fetchTopAccountLSRatio,
@@ -74,10 +76,10 @@ export async function runFundingRateCycle(coins?: string[]): Promise<void> {
         { sort: { timestamp: -1 } }
       );
       const startTime = latest ? latest.timestamp.getTime() + 1 : undefined;
-      // If no data, fetch limit=200 (covers ~8 days at 1h intervals)
-      const limit = startTime ? 10 : 200;
+      // If no data, fetch limit=1000 (covers ~333 days of 8h settlements)
+      const limit = startTime ? 5 : 1000;
 
-      const records = await fetchFundingRateKlines(pair, startTime, limit);
+      const records = await fetchFundingRates(pair, startTime, limit);
       if (records.length === 0) {
         skipped++;
         await sleep(config.binance.requestDelayMs);
@@ -103,6 +105,67 @@ export async function runFundingRateCycle(coins?: string[]): Promise<void> {
   const dur = ((Date.now() - start) / 1000).toFixed(1);
   logger.info('Funding', `Cycle complete — ${saved} records saved, ${skipped} coins skipped, ${dur}s`);
   fundingRunning = false;
+}
+
+// ─── Premium Index Cycle (1h) ─────────────────────────────────────────────────
+// Fetches 1h premium index klines. The close value = predicted funding rate at
+// next 8h settlement. Provides hourly granularity for current/predicted rate.
+
+let premiumRunning = false;
+
+export async function runPremiumIndexCycle(coins?: string[]): Promise<void> {
+  if (premiumRunning) {
+    logger.warn('Premium', 'Previous premium index cycle still running — skipping');
+    return;
+  }
+  premiumRunning = true;
+  const start = Date.now();
+  const allCoins = coins ?? await loadCoins();
+
+  logger.info('Premium', `Starting premium index cycle for ${allCoins.length} coins`);
+
+  let saved = 0;
+  let skipped = 0;
+
+  for (const symbol of allCoins) {
+    const pair = toPair(symbol);
+
+    try {
+      const latest = await (PremiumIndex1h as any).findOne(
+        { symbol },
+        null,
+        { sort: { open_time: -1 } }
+      );
+      const startTime = latest ? latest.open_time.getTime() + 1 : undefined;
+      // If no data, fetch limit=720 (covers 30 days at 1h); otherwise fetch last 3
+      const limit = startTime ? 3 : 720;
+
+      const records = await fetchPremiumIndexKlines(pair, startTime, limit);
+      if (records.length === 0) {
+        skipped++;
+        await sleep(config.binance.requestDelayMs);
+        continue;
+      }
+
+      const ops = records.map(r => ({
+        updateOne: {
+          filter:  { symbol, open_time: r.open_time },
+          update:  { $set: { symbol, pair, ...r } },
+          upsert:  true,
+        },
+      }));
+      await (PremiumIndex1h as any).bulkWrite(ops, { ordered: false });
+      saved += records.length;
+    } catch (err: any) {
+      logger.warn('Premium', `${symbol} failed: ${err.message}`);
+    }
+
+    await sleep(config.binance.requestDelayMs);
+  }
+
+  const dur = ((Date.now() - start) / 1000).toFixed(1);
+  logger.info('Premium', `Cycle complete — ${saved} records saved, ${skipped} coins skipped, ${dur}s`);
+  premiumRunning = false;
 }
 
 // ─── Derivatives Cycle (15m) ──────────────────────────────────────────────────
@@ -204,16 +267,17 @@ export async function runBackfill(): Promise<void> {
   const backfillMs = config.backfillDays * 24 * 60 * 60 * 1000;
   const startTime = Date.now() - backfillMs;
 
-  let fundingSaved = 0;
-  let derivSaved   = 0;
+  let fundingSaved   = 0;
+  let premiumSaved   = 0;
+  let derivSaved     = 0;
 
   for (const symbol of coins) {
     const pair = toPair(symbol);
 
     try {
-      // Funding: 1h candles. backfillDays * 24 records. Fetch in 1 call (limit 1500 max).
-      const fundingLimit = config.backfillDays * 24 + 5;
-      const fundingRecords = await fetchFundingRateKlines(pair, startTime, fundingLimit);
+      // Funding: 8h settlements. backfillDays * 3 records. Fetch in 1 call (limit 1000 max).
+      const fundingLimit = config.backfillDays * 3 + 5;
+      const fundingRecords = await fetchFundingRates(pair, startTime, fundingLimit);
       if (fundingRecords.length > 0) {
         const ops = fundingRecords.map(r => ({
           updateOne: {
@@ -224,6 +288,23 @@ export async function runBackfill(): Promise<void> {
         }));
         await (FundingRate1h as any).bulkWrite(ops, { ordered: false });
         fundingSaved += ops.length;
+      }
+
+      await sleep(config.binance.requestDelayMs);
+
+      // Premium index klines: 1h candles. backfillDays * 24 records.
+      const premiumLimit = config.backfillDays * 24;
+      const premiumRecords = await fetchPremiumIndexKlines(pair, startTime, premiumLimit);
+      if (premiumRecords.length > 0) {
+        const ops = premiumRecords.map(r => ({
+          updateOne: {
+            filter:  { symbol, open_time: r.open_time },
+            update:  { $set: { symbol, pair, ...r } },
+            upsert:  true,
+          },
+        }));
+        await (PremiumIndex1h as any).bulkWrite(ops, { ordered: false });
+        premiumSaved += ops.length;
       }
 
       await sleep(config.binance.requestDelayMs);
@@ -286,16 +367,22 @@ export async function runBackfill(): Promise<void> {
     await sleep(config.binance.requestDelayMs);
   }
 
-  logger.info('Backfill', `Complete — ${fundingSaved} funding records, ${derivSaved} derivatives records`);
+  logger.info('Backfill', `Complete — ${fundingSaved} funding records, ${premiumSaved} premium index records, ${derivSaved} derivatives records`);
 }
 
 // ─── Cron jobs ────────────────────────────────────────────────────────────────
 
 export function startCronJobs(): void {
-  // Hourly funding rate fetch — at minute 5 of every hour (5 mins after market-intelligence cycle starts)
+  // Hourly funding rate fetch (8h settled rates)
   cron.schedule('5 * * * *', async () => {
     logger.info('Cron', 'Running hourly funding rate cycle');
     await runFundingRateCycle();
+  });
+
+  // Hourly premium index fetch (1h predicted/current rates)
+  cron.schedule('8 * * * *', async () => {
+    logger.info('Cron', 'Running hourly premium index cycle');
+    await runPremiumIndexCycle();
   });
 
   // Every 15m derivatives fetch
@@ -304,5 +391,5 @@ export function startCronJobs(): void {
     await runDerivativesCycle();
   });
 
-  logger.info('Cron', 'Cron jobs started: funding (5 * * * *), derivatives (*/15 * * * *)');
+  logger.info('Cron', 'Cron jobs started: funding (5 * * * *), premium index (8 * * * *), derivatives (*/15 * * * *)');
 }

@@ -21,6 +21,10 @@ export interface IMonitoringTask extends Document {
   task: string;              // short title
   monitorInstruction: string; // detailed instruction for evaluator LLM
 
+  // LLM-defined alpha thesis (populated after first cycle)
+  alphaTitle?: string;
+  alphaDescription?: string;
+
   tools: IToolConfig[];
   intervalSeconds: number;
   status: 'active' | 'paused' | 'error';
@@ -61,8 +65,11 @@ const MonitoringTaskSchema = new Schema<IMonitoringTask>({
   task: { type: String, required: true },
   monitorInstruction: { type: String, required: true },
 
+  alphaTitle: { type: String },
+  alphaDescription: { type: String },
+
   tools: { type: [ToolConfigSchema], required: true },
-  intervalSeconds: { type: Number, required: true, min: 3600 },
+  intervalSeconds: { type: Number, required: true, min: 300 },
   status: { type: String, enum: ['active', 'paused', 'error'], default: 'active' },
 
   nextRunAt: { type: Date, required: true },
@@ -76,7 +83,7 @@ const MonitoringTaskSchema = new Schema<IMonitoringTask>({
   cycleHistory: { type: [CycleEntrySchema], default: [] },
 
   expiresAt: { type: Date },
-}, { timestamps: true });
+}, { timestamps: true, collection: 'monitoring_tasks' });
 
 MonitoringTaskSchema.index({ userId: 1, status: 1 });
 MonitoringTaskSchema.index({ status: 1, nextRunAt: 1 });

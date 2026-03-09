@@ -43,7 +43,6 @@ dotenv.config({ path: '../../.env.local' });
 const db_1 = require("../db");
 const taapi_1 = require("../fetchers/taapi");
 const coinglass_1 = require("../fetchers/coinglass");
-const binance_1 = require("../fetchers/binance");
 const snapshot_builder_1 = require("../processors/snapshot-builder");
 const logger_1 = require("../utils/logger");
 // ─── Formatting helpers ────────────────────────────────────────────────────────
@@ -236,11 +235,10 @@ async function main() {
             logger_1.logger.info('Script', `[${symbol}] Fetching CoinGlass per-coin...`);
             const perCoin = await (0, coinglass_1.fetchPerCoinData)(symbol);
             logger_1.logger.info('Script', `[${symbol}] Fetching Binance OHLCV...`);
-            const binance = await (0, binance_1.fetchBinanceCandle)(symbol);
             const taapi = taapiMap.get(symbol) ?? { indicators: {}, candlestick_patterns: [], errors: [] };
             const aggregate = aggregateMap.get(symbol);
             logger_1.logger.info('Script', `[${symbol}] Building and saving snapshot...`);
-            const { _id, snapshot } = await (0, snapshot_builder_1.buildAndSaveSnapshot)({ symbol, timestamp, tier: 'full', taapi, aggregate, perCoin, coinbasePremium: premium, binance });
+            const { _id, snapshot } = await (0, snapshot_builder_1.buildAndSaveSnapshot)({ symbol, timestamp, tier: 'full', taapi, aggregate, perCoin, coinbasePremium: premium });
             printCoinSnapshot(_id, snapshot);
             if (taapi.errors.length > 0) {
                 logger_1.logger.warn('Script', `[${symbol}] Fetch errors: ${taapi.errors.join(', ')}`);
