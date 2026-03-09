@@ -7,6 +7,7 @@ import { z } from 'zod';
 
 const POLYMARKET_API_BASE = 'https://data-api.polymarket.com';
 const RATE_LIMIT_DELAY = 300; // 300ms between requests
+const FETCH_TIMEOUT_MS = 8000; // 8s — prevents server-side 408 timeouts
 
 // Helper for rate limiting
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
@@ -59,11 +60,23 @@ export async function executeGetPMPositions(
   while (true) {
     const url = `${POLYMARKET_API_BASE}/positions?user=${walletAddress}&limit=${limit}&offset=${offset}`;
 
-    const response = await fetch(url, {
-      headers: { 'Accept': 'application/json' },
-    });
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        headers: { 'Accept': 'application/json' },
+        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      });
+    } catch (err: any) {
+      // Timeout or network error — return empty positions rather than crashing
+      if (err.name === 'TimeoutError' || err.name === 'AbortError') {
+        break;
+      }
+      throw err;
+    }
 
     if (!response.ok) {
+      // 408 = server timeout — treat as empty (wallet may have no positions or API is slow)
+      if (response.status === 408 || response.status === 429) break;
       throw new Error(`Polymarket API error: ${response.status}`);
     }
 

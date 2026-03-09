@@ -18,6 +18,10 @@ import { getPMClosedPositionsTool } from './live-api/get-pm-closed-positions.js'
 // Live API tools - Portfolio / PnL history
 import { getHLPortfolioTool } from './live-api/get-hl-portfolio.js';
 
+// Polymarket market data + user activity
+import { getPMMarketTool } from './live-api/get-pm-market.js';
+import { getPMUserActivityTool } from './live-api/get-pm-user-activity.js';
+
 // Market intelligence tools
 import { getMarketSnapshotTool } from './market/get-market-snapshot.js';
 import { fetchLiveIndicatorTool } from './market/fetch-live-indicator.js';
@@ -39,6 +43,8 @@ export {
   getHLTradeHistoryTool,
   getPMClosedPositionsTool,
   getHLPortfolioTool,
+  getPMMarketTool,
+  getPMUserActivityTool,
 } from './live-api/index.js';
 export { getMarketSnapshotTool, fetchLiveIndicatorTool, getCoinPriceTool, getMacroSnapshotTool, getFundingRateHistoryTool, getFundingRateCurrentTool, getDerivativesHistoryTool, getNewsHeadlinesTool } from './market/index.js';
 
@@ -71,6 +77,9 @@ export const tools = [
   getDerivativesHistoryTool,
   // Live RSS news headlines (BBC, AJZ, Sky, NPR, CoinTelegraph)
   getNewsHeadlinesTool,
+  // Polymarket market data (odds, volume, outcomes) + user activity
+  getPMMarketTool,
+  getPMUserActivityTool,
 ];
 
 // Tool map for quick lookup
