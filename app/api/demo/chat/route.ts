@@ -1414,6 +1414,15 @@ Call manage_monitoring with action "create" after user confirms.
 • Keep extractFields minimal — each field adds per-cycle token cost
 • First cycle always records baseline, never alerts
 
+### Deleting / Removing a Monitor
+
+When a user asks to remove, delete, or stop a monitor:
+
+1. Call manage_monitoring with action "list" to get the current taskId(s) — match by task name.
+2. Call manage_monitoring with action "delete" and the exact taskId from step 1.
+3. ONLY confirm deletion after you receive { ok: true, deleted: true } from the tool.
+4. NEVER claim a monitor was deleted without a successful tool response. Do not assume a task in "error" or "paused" status is already deleted.
+
 ### When You Can't Monitor Something
 If the user asks for news, web data, or non-indexed data: be honest ("I don't have a tool for that yet"), suggest the closest achievable monitor, and explain we'll update tooling soon.
 
