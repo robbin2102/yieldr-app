@@ -83,7 +83,7 @@ export async function executeGetPMUserActivity(input: GetPMUserActivityInput): P
     throw new Error(`Polymarket API error: ${res.status}`);
   }
 
-  const raw = await res.json();
+  const raw = await res.json() as any;
   const records: any[] = Array.isArray(raw) ? raw : (raw?.data ?? raw?.activity ?? []);
 
   const activity: PMActivity[] = records.map((r: any) => ({
