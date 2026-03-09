@@ -30,24 +30,20 @@ interface AgentSignal {
 interface AgentCard {
   agentId: string;
   name: string;
+  ownerWallet?: string;
   markets: string[];
   status: string;
   alertsSent: number;
   insightsGenerated: number;
   tasks: AgentTask[];
   latestSignal?: AgentSignal;
+  isOwn?: boolean;
 }
 
 const MARKET_ICONS: Record<string, string> = {
   perps: '⚡',
   predictions: '🎲',
   liquidity: '💧',
-};
-
-const PLATFORM_FROM_TASK: Record<string, string> = {
-  'avantis': 'Avantis',
-  'hyperliquid': 'Hyperliquid',
-  'polymarket': 'Polymarket',
 };
 
 function intervalLabel(seconds: number): string {
@@ -69,7 +65,7 @@ function timeAgo(iso: string | null): string {
 
 function AgentCard({ card, onClick }: { card: AgentCard; onClick: () => void }) {
   const primaryTask = card.tasks.find(t => t.status === 'active') ?? card.tasks[0];
-  const status = primaryTask?.status ?? 'paused';
+  const status = primaryTask?.status ?? 'active';
   const isActive = status === 'active';
   const isError = status === 'error';
 
@@ -86,11 +82,18 @@ function AgentCard({ card, onClick }: { card: AgentCard; onClick: () => void }) 
       <div className={s.cardInner}>
         {/* Top row */}
         <div className={s.cardTopRow}>
-          <div className={`${s.statusBadge} ${isActive ? s.badgeActive : isError ? s.badgeError : s.badgePaused}`}>
-            <div className={`${s.statusDot} ${isActive ? s.dotActive : isError ? s.dotError : s.dotPaused}`} />
-            <span className={`${s.statusTxt} ${isActive ? s.txtActive : isError ? s.txtError : s.txtPaused}`}>
-              {isActive ? 'Active' : isError ? 'Error' : 'Paused'}
-            </span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <div className={`${s.statusBadge} ${isActive ? s.badgeActive : isError ? s.badgeError : s.badgePaused}`}>
+              <div className={`${s.statusDot} ${isActive ? s.dotActive : isError ? s.dotError : s.dotPaused}`} />
+              <span className={`${s.statusTxt} ${isActive ? s.txtActive : isError ? s.txtError : s.txtPaused}`}>
+                {isActive ? 'Active' : isError ? 'Error' : 'Paused'}
+              </span>
+            </div>
+            {card.isOwn && (
+              <span style={{ fontSize: '10px', fontWeight: 600, color: '#a78bfa', background: 'rgba(167,139,250,0.12)', border: '1px solid rgba(167,139,250,0.25)', borderRadius: '4px', padding: '1px 5px', letterSpacing: '0.04em' }}>
+                YOURS
+              </span>
+            )}
           </div>
           <span className={s.lastRun}>{timeAgo(primaryTask?.lastRunAt ?? null)}</span>
         </div>
@@ -163,8 +166,6 @@ export default function AgentsPage() {
   const router = useRouter();
   const [address, setAddress] = useState<string | null>(null);
   const [agents, setAgents] = useState<AgentCard[]>([]);
-  const [tasks, setTasks] = useState<AgentTask[]>([]);
-  const [latestSignals, setLatestSignals] = useState<AgentSignal[]>([]);
   const [filter, setFilter] = useState('all');
   const [loading, setLoading] = useState(true);
 
@@ -174,58 +175,50 @@ export default function AgentsPage() {
   }, []);
 
   useEffect(() => {
-    if (!address) return;
     fetchData();
   }, [address]);
 
   async function fetchData() {
-    if (!address) return;
     setLoading(true);
     try {
-      const [agentRes, taskRes, alertRes] = await Promise.all([
-        fetch(`/api/demo/agents?wallet=${address}`),
-        fetch(`/api/demo/monitoring-tasks?wallet=${address}`),
-        fetch(`/api/demo/alerts?wallet=${address}`),
-      ]);
+      const res = await fetch('/api/demo/agents/all');
+      const data = res.ok ? await res.json() : { agents: [] };
+      const allAgents: any[] = data.agents ?? [];
 
-      const agentData = agentRes.ok ? await agentRes.json() : null;
-      const taskData = taskRes.ok ? await taskRes.json() : { tasks: [] };
-      const alertData = alertRes.ok ? await alertRes.json() : { alerts: [] };
+      const cards: AgentCard[] = allAgents.map(ag => ({
+        agentId: ag.agentId,
+        name: ag.name,
+        ownerWallet: ag.ownerWallet,
+        markets: ag.markets ?? ['perps'],
+        status: ag.status,
+        alertsSent: ag.alertsSent ?? 0,
+        insightsGenerated: ag.insightsGenerated ?? 0,
+        tasks: (ag.activeTasks ?? []).map((t: any) => ({
+          id: t.id,
+          taskTitle: t.taskTitle,
+          assetSymbol: '',
+          status: t.status,
+          intervalSeconds: t.intervalSeconds,
+          cycleCount: t.cycleCount,
+          alertCount: t.alertCount,
+          nextRunAt: null,
+          lastRunAt: t.lastRunAt,
+          signalPills: [],
+        })),
+        latestSignal: ag.latestSignal ?? undefined,
+        isOwn: address ? ag.ownerWallet?.toLowerCase() === address.toLowerCase() : false,
+      }));
 
-      const taskList: AgentTask[] = taskData.tasks ?? [];
-      const alertList: AgentSignal[] = alertData.alerts ?? [];
-      setTasks(taskList);
-      setLatestSignals(alertList);
+      // Sort: own agent first, then by alertsSent desc
+      cards.sort((a, b) => {
+        if (a.isOwn && !b.isOwn) return -1;
+        if (!a.isOwn && b.isOwn) return 1;
+        return (b.alertsSent ?? 0) - (a.alertsSent ?? 0);
+      });
 
-      if (agentData?.agent) {
-        // Build cards — one card per agent, with its tasks
-        const tasksByAgent: Record<string, AgentTask[]> = {};
-        for (const t of taskList) {
-          const key = (t as any).agentId ?? 'default';
-          if (!tasksByAgent[key]) tasksByAgent[key] = [];
-          tasksByAgent[key].push(t);
-        }
-
-        const latestByAgent: Record<string, AgentSignal> = {};
-        for (const a of alertList) {
-          const key = (a as any).agentId ?? 'default';
-          if (!latestByAgent[key]) latestByAgent[key] = a;
-        }
-
-        const card: AgentCard = {
-          agentId: agentData.agent.agentId,
-          name: agentData.agent.name,
-          markets: agentData.agent.markets ?? ['perps'],
-          status: agentData.agent.status,
-          alertsSent: agentData.agent.alertsSent ?? 0,
-          insightsGenerated: agentData.agent.insightsGenerated ?? 0,
-          tasks: tasksByAgent[agentData.agent.agentId] ?? taskList,
-          latestSignal: latestByAgent[agentData.agent.agentId] ?? alertList[0],
-        };
-        setAgents([card]);
-      }
+      setAgents(cards);
     } catch (e) {
-      console.error('Failed to fetch agents data', e);
+      console.error('Failed to fetch agents', e);
     } finally {
       setLoading(false);
     }
@@ -233,26 +226,12 @@ export default function AgentsPage() {
 
   const filteredAgents = agents.filter(a => {
     if (filter === 'all') return true;
+    if (filter === 'mine') return a.isOwn;
     if (filter === 'active') return a.tasks.some(t => t.status === 'active');
-    if (filter === 'paused') return a.tasks.every(t => t.status !== 'active');
     if (filter === 'perps') return a.markets.includes('perps');
     if (filter === 'predictions') return a.markets.includes('predictions');
     return true;
   });
-
-  // Fallback: task-level cards if no agent found
-  const taskCards = tasks.map(t => ({
-    agentId: (t as any).agentId ?? t.id,
-    name: t.taskTitle,
-    markets: t.assetSymbol ? ['perps'] : ['perps'],
-    status: t.status,
-    alertsSent: t.alertCount,
-    insightsGenerated: t.alertCount,
-    tasks: [t],
-    latestSignal: latestSignals.find(s => (s as any).taskId === t.id),
-  }));
-
-  const displayCards = agents.length > 0 ? filteredAgents : taskCards;
 
   return (
     <div style={{ background: '#000', minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
@@ -265,9 +244,9 @@ export default function AgentsPage() {
             <span className={s.liveDot} />
             Agent Explorer
           </div>
-          <div className={s.pageTitle}>Your Quant Agents</div>
+          <div className={s.pageTitle}>Quant Agent Explorer</div>
           <div className={s.pageSub}>
-            AI analysts running 24/7 — monitoring signals, surfacing alpha, and alerting when conditions change.
+            All agents actively monitoring signals — surfacing alpha across perps, predictions, and macro.
           </div>
         </div>
         <button className={s.newAgentBtn} onClick={() => router.push('/demo')}>
@@ -277,13 +256,13 @@ export default function AgentsPage() {
 
       {/* Filter bar */}
       <div className={s.filterBar}>
-        {['all', 'active', 'paused', 'perps', 'predictions'].map(f => (
+        {['all', 'mine', 'active', 'perps', 'predictions'].map(f => (
           <button
             key={f}
             className={`${s.filterChip} ${filter === f ? s.filterActive : ''}`}
             onClick={() => setFilter(f)}
           >
-            {f === 'all' ? 'All Agents' : f.charAt(0).toUpperCase() + f.slice(1)}
+            {f === 'all' ? 'All Agents' : f === 'mine' ? 'My Agent' : f.charAt(0).toUpperCase() + f.slice(1)}
           </button>
         ))}
       </div>
@@ -293,19 +272,18 @@ export default function AgentsPage() {
         <div className={s.gridEmpty}>
           <div className={s.gridEmptyText}>Loading agents...</div>
         </div>
-      ) : !address ? (
-        <div className={s.gridEmpty}>
-          <div className={s.gridEmptyIcon}>🔌</div>
-          <div className={s.gridEmptyText}>Connect your wallet to view your agents</div>
-        </div>
-      ) : displayCards.length === 0 ? (
+      ) : filteredAgents.length === 0 ? (
         <div className={s.gridEmpty}>
           <div className={s.gridEmptyIcon}>🤖</div>
-          <div className={s.gridEmptyText}>No agents deployed yet — create your first agent to start monitoring</div>
+          <div className={s.gridEmptyText}>
+            {filter === 'mine'
+              ? 'No agent deployed from this wallet yet'
+              : 'No agents with active monitors found'}
+          </div>
         </div>
       ) : (
         <div className={s.agentGrid}>
-          {displayCards.map(card => (
+          {filteredAgents.map(card => (
             <AgentCard
               key={card.agentId}
               card={card}

@@ -62,6 +62,26 @@ export async function POST(request: NextRequest) {
   }
 }
 
+export async function PATCH(request: NextRequest) {
+  try {
+    await connectDB();
+    const { wallet, name } = await request.json();
+    if (!wallet || !name) {
+      return NextResponse.json({ error: 'wallet and name are required' }, { status: 400 });
+    }
+    const agent = await Agent.findOne({ ownerWallet: wallet.toLowerCase() });
+    if (!agent) {
+      return NextResponse.json({ error: 'Agent not found' }, { status: 404 });
+    }
+    agent.name = name.trim().slice(0, 30);
+    await agent.save();
+    return NextResponse.json({ success: true, agent });
+  } catch (error) {
+    console.error('Error renaming agent:', error);
+    return NextResponse.json({ error: 'Failed to rename agent' }, { status: 500 });
+  }
+}
+
 export async function GET(request: NextRequest) {
   try {
     await connectDB();
