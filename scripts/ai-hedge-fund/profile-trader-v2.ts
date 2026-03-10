@@ -399,6 +399,13 @@ function computeCashFlowPnL(activities: Activity[], openPositions: OpenPosition[
   const conditionIds = new Set<string>();
   const positionCashFlow = new Map<string, number>();
 
+  // Only conditionIds with a BUY in this period are counted for sells/redeems/endingValue.
+  // This prevents pre-window positions from inflating PnL (their buy cost is not captured).
+  const buyConditionIds = new Set<string>();
+  for (const a of activities) {
+    if (a.type === 'TRADE' && a.side === 'BUY') buyConditionIds.add(a.conditionId);
+  }
+
   for (const a of activities) {
     conditionIds.add(a.conditionId);
     const flow = positionCashFlow.get(a.conditionId) ?? 0;
@@ -407,19 +414,23 @@ function computeCashFlowPnL(activities: Activity[], openPositions: OpenPosition[
       totalBuys += a.usdcSize;
       positionCashFlow.set(a.conditionId, flow - a.usdcSize);
     } else if (a.type === 'TRADE' && a.side === 'SELL') {
-      totalSells += a.usdcSize;
-      positionCashFlow.set(a.conditionId, flow + a.usdcSize);
+      if (buyConditionIds.has(a.conditionId)) {
+        totalSells += a.usdcSize;
+        positionCashFlow.set(a.conditionId, flow + a.usdcSize);
+      }
     } else if (a.type === 'REDEEM') {
-      totalRedeems += a.usdcSize;
-      positionCashFlow.set(a.conditionId, flow + a.usdcSize);
+      if (buyConditionIds.has(a.conditionId)) {
+        totalRedeems += a.usdcSize;
+        positionCashFlow.set(a.conditionId, flow + a.usdcSize);
+      }
     }
   }
 
-  // Add current value for open positions that had activity in this period (exclude resolved-to-zero)
+  // Add current value for open positions that had a BUY in this period (exclude pre-window positions)
   const activePositions = openPositions.filter(p => p.curPrice > 0.001);
   let totalEndingValue = 0;
   for (const p of activePositions) {
-    if (conditionIds.has(p.conditionId)) {
+    if (buyConditionIds.has(p.conditionId)) {
       totalEndingValue += p.currentValue;
       const flow = positionCashFlow.get(p.conditionId) ?? 0;
       positionCashFlow.set(p.conditionId, flow + p.currentValue);
@@ -452,6 +463,12 @@ function computeTimeframePnL(activities: Activity[], openPositions: OpenPosition
   const conditionIds = new Set<string>();
   const positionCashFlow = new Map<string, number>();
 
+  // Only conditionIds with a BUY in this window count for sells/redeems/endingValue
+  const buyConditionIds = new Set<string>();
+  for (const a of windowActivities) {
+    if (a.type === 'TRADE' && a.side === 'BUY') buyConditionIds.add(a.conditionId);
+  }
+
   for (const a of windowActivities) {
     conditionIds.add(a.conditionId);
     const flow = positionCashFlow.get(a.conditionId) ?? 0;
@@ -461,19 +478,23 @@ function computeTimeframePnL(activities: Activity[], openPositions: OpenPosition
       tradeCount++;
       positionCashFlow.set(a.conditionId, flow - a.usdcSize);
     } else if (a.type === 'TRADE' && a.side === 'SELL') {
-      sells += a.usdcSize;
-      tradeCount++;
-      positionCashFlow.set(a.conditionId, flow + a.usdcSize);
+      if (buyConditionIds.has(a.conditionId)) {
+        sells += a.usdcSize;
+        tradeCount++;
+        positionCashFlow.set(a.conditionId, flow + a.usdcSize);
+      }
     } else if (a.type === 'REDEEM') {
-      redeems += a.usdcSize;
-      positionCashFlow.set(a.conditionId, flow + a.usdcSize);
+      if (buyConditionIds.has(a.conditionId)) {
+        redeems += a.usdcSize;
+        positionCashFlow.set(a.conditionId, flow + a.usdcSize);
+      }
     }
   }
 
   const activePositions = openPositions.filter(p => p.curPrice > 0.001);
   let endingValue = 0;
   for (const p of activePositions) {
-    if (conditionIds.has(p.conditionId)) {
+    if (buyConditionIds.has(p.conditionId)) {
       endingValue += p.currentValue;
       const flow = positionCashFlow.get(p.conditionId) ?? 0;
       positionCashFlow.set(p.conditionId, flow + p.currentValue);
