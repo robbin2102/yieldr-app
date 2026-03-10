@@ -685,6 +685,9 @@ export default function ChatPage() {
             } else if (parsed.type === 'session') {
               setSessionId(parsed.sessionId);
               loadChatSessions();
+            } else if (parsed.type === 'monitor_created') {
+              // Monitor was just created — refresh the monitors list immediately
+              if (effectiveWallet) fetchMonitoring(effectiveWallet);
             } else if (parsed.type === 'error') {
               setMessages(prev => prev.map(m => m.id === agentMsgId ? { ...m, content: m.content || `Error: ${parsed.error}` } : m));
             }

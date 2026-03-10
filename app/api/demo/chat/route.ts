@@ -1839,7 +1839,7 @@ export async function POST(request: NextRequest) {
         try {
           // Agentic loop: keep calling Claude until it stops using tools
           let currentMessages = [...anthropicMessages];
-          let maxIterations = 5; // safety limit — monitor creation needs up to 4 turns (data tool + list + create + response)
+          let maxIterations = 8; // safety limit — monitor creation needs up to 5 turns (data tool + list + create + verify list + response)
           const calledTools = new Set<string>(); // prevent identical tool+input retry loops
 
           while (maxIterations > 0) {
@@ -1932,8 +1932,9 @@ export async function POST(request: NextRequest) {
 
                   // Break loop if identical tool+input called twice — prevents retry loops on empty results
                   // Key includes input so same tool with different params (e.g. get_coin_price BTC vs ETH) is allowed
+                  // manage_monitoring is excluded: it's stateful (list results change after create/delete)
                   const toolCallKey = `${currentToolName}:${JSON.stringify(parsedInput)}`;
-                  if (calledTools.has(toolCallKey)) {
+                  if (currentToolName !== 'manage_monitoring' && calledTools.has(toolCallKey)) {
                     console.log(`[chat] Duplicate tool call detected: ${currentToolName} — breaking loop`);
                     maxIterations = 0;
                   }
@@ -1942,6 +1943,19 @@ export async function POST(request: NextRequest) {
                   // Execute the tool
                   const toolResult = await executeTool(currentToolName, parsedInput, walletLower);
                   console.log(`[TOKENS] Tool result for "${currentToolName}": ${estimateTokens(toolResult)} est. tokens (${toolResult.length} chars)`);
+
+                  // Notify frontend immediately when a monitor is created so it can refresh the list
+                  if (currentToolName === 'manage_monitoring' && parsedInput.action === 'create') {
+                    try {
+                      const r = JSON.parse(toolResult);
+                      if (r.ok && r.taskId) {
+                        controller.enqueue(encoder.encode(
+                          JSON.stringify({ type: 'monitor_created', taskId: r.taskId }) + '\n'
+                        ));
+                      }
+                    } catch {}
+                  }
+
                   toolResults.push({
                     role: 'user',
                     content: [{
