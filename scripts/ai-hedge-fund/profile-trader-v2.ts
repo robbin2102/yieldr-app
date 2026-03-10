@@ -415,8 +415,8 @@ function computeCashFlowPnL(activities: Activity[], openPositions: OpenPosition[
     }
   }
 
-  // Add current value for active open positions that had activity in this period
-  const activePositions = openPositions.filter(p => p.curPrice > 0.001 && p.curPrice < 0.99);
+  // Add current value for open positions that had activity in this period (exclude resolved-to-zero)
+  const activePositions = openPositions.filter(p => p.curPrice > 0.001);
   let totalEndingValue = 0;
   for (const p of activePositions) {
     if (conditionIds.has(p.conditionId)) {
@@ -470,7 +470,7 @@ function computeTimeframePnL(activities: Activity[], openPositions: OpenPosition
     }
   }
 
-  const activePositions = openPositions.filter(p => p.curPrice > 0.001 && p.curPrice < 0.99);
+  const activePositions = openPositions.filter(p => p.curPrice > 0.001);
   let endingValue = 0;
   for (const p of activePositions) {
     if (conditionIds.has(p.conditionId)) {
@@ -1192,8 +1192,7 @@ export async function profileTrader(
 
   // ── Open/closed position categorization ───────────────────
   const LOSS_THRESHOLD = 0.001;
-  const WIN_THRESHOLD = 0.99;
-  const openPositions = allOpenPositions.filter(p => p.curPrice >= LOSS_THRESHOLD && p.curPrice <= WIN_THRESHOLD);
+  const openPositions = allOpenPositions.filter(p => p.curPrice >= LOSS_THRESHOLD);
 
   // ── Category breakdown and market titles ──────────────────
   const category_breakdown = buildCategoryBreakdown(closedPositions1000);
