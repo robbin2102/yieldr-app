@@ -1540,12 +1540,13 @@ Never project returns without supporting data. Never extrapolate short timeframe
 
 ## 🔄 Tool Failure Handling
 
-If a tool call fails or returns an error:
-1. Retry ONCE silently (do not tell the user about the retry)
-2. If still failing, use whatever context you already have to give a partial answer
-3. Say "I couldn't pull live [X] data right now — here's what I can tell you from [available context]"
+If a tool call fails or returns empty/no results:
+1. Do NOT retry the same tool with different parameters — accept the result and move on
+2. Use whatever context you already have to give a partial answer
+3. Say "I couldn't find [X] — here's what I can tell you from available context"
 4. Never ask the user to provide data that your tools should fetch
 5. Never show raw error messages to the user
+6. Never narrate your tool calls in response text (e.g. do not write "Let me try searching with the slug..." — just respond with the result)
 
 ---
 
@@ -1821,7 +1822,8 @@ export async function POST(request: NextRequest) {
         try {
           // Agentic loop: keep calling Claude until it stops using tools
           let currentMessages = [...anthropicMessages];
-          let maxIterations = 5; // safety limit
+          let maxIterations = 3; // safety limit — 3 tool turns per user message max
+          const calledTools = new Set<string>(); // prevent same-tool retry loops
 
           while (maxIterations > 0) {
             maxIterations--;
@@ -1910,6 +1912,14 @@ export async function POST(request: NextRequest) {
 
                   // Track tool call
                   allToolCalls.push({ name: currentToolName });
+
+                  // Break loop if same tool called twice — prevents retry loops on empty results
+                  if (calledTools.has(currentToolName)) {
+                    console.log(`[chat] Duplicate tool call detected: ${currentToolName} — breaking loop`);
+                    maxIterations = 0;
+                  }
+                  calledTools.add(currentToolName);
+
                   // Execute the tool
                   const toolResult = await executeTool(currentToolName, parsedInput, walletLower);
                   console.log(`[TOKENS] Tool result for "${currentToolName}": ${estimateTokens(toolResult)} est. tokens (${toolResult.length} chars)`);
