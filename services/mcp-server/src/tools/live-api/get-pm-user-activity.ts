@@ -17,8 +17,9 @@ export const getPMUserActivitySchema = z.object({
   market: z.string().optional().describe('Filter by condition ID (0x hex) to see activity in one market'),
   side: z.enum(['BUY', 'SELL']).optional().describe('Filter by trade side: BUY or SELL'),
   type: z.enum(['TRADE', 'REDEEM', 'MERGE']).optional().describe('Filter by activity type (default: all)'),
-  afterDays: z.number().optional().default(7).describe('Only return activity from the last N days (default: 7)'),
-  limit: z.number().optional().default(20).describe('Number of activity records to return (default: 20, max: 100)'),
+  afterDays: z.number().optional().default(7).describe('Only return activity from the last N days (default: 7). Use 0.04 (~1h) for recent monitoring.'),
+  limit: z.number().optional().default(20).describe('Number of activity records to return (default: 20, hard max: 100). Never request more than 100 — large limits destroy context and inflate costs.'),
+  minValueUsd: z.number().optional().describe('Only return activities with USD value >= this threshold (e.g. 10000 for $10k+ conviction bets). Applied client-side after fetch.'),
 });
 
 export type GetPMUserActivityInput = z.infer<typeof getPMUserActivitySchema>;
@@ -50,7 +51,7 @@ interface PMUserActivityOutput {
 }
 
 export async function executeGetPMUserActivity(input: GetPMUserActivityInput): Promise<PMUserActivityOutput> {
-  const { walletAddress, market, side, type, afterDays = 7, limit = 20 } = input;
+  const { walletAddress, market, side, type, afterDays = 7, limit = 20, minValueUsd } = input;
 
   if (!/^0x[a-fA-F0-9]{40}$/.test(walletAddress)) {
     throw new Error('Invalid Ethereum address format');
@@ -83,7 +84,7 @@ export async function executeGetPMUserActivity(input: GetPMUserActivityInput): P
     throw new Error(`Polymarket API error: ${res.status}`);
   }
 
-  const raw = await res.json();
+  const raw = await res.json() as any;
   const records: any[] = Array.isArray(raw) ? raw : (raw?.data ?? raw?.activity ?? []);
 
   const activity: PMActivity[] = records.map((r: any) => ({
@@ -100,24 +101,28 @@ export async function executeGetPMUserActivity(input: GetPMUserActivityInput): P
     transactionHash: r.transactionHash ?? '',
   }));
 
-  const buys = activity.filter(a => a.side === 'BUY').length;
-  const sells = activity.filter(a => a.side === 'SELL').length;
-  const totalVolumeUsd = activity.reduce((s, a) => s + a.value, 0);
-  const uniqueMarkets = new Set(activity.map(a => a.conditionId).filter(Boolean)).size;
+  const filteredActivity = minValueUsd != null ? activity.filter(a => a.value >= minValueUsd) : activity;
+
+  const buys = filteredActivity.filter(a => a.side === 'BUY').length;
+  const sells = filteredActivity.filter(a => a.side === 'SELL').length;
+  const totalVolumeUsd = filteredActivity.reduce((s, a) => s + a.value, 0);
+  const uniqueMarkets = new Set(filteredActivity.map(a => a.conditionId).filter(Boolean)).size;
 
   return {
     wallet: walletAddress.toLowerCase(),
-    totalActivity: activity.length,
+    totalActivity: filteredActivity.length,
     summary: { buys, sells, totalVolumeUsd, uniqueMarkets },
-    activity,
+    activity: filteredActivity,
   };
 }
 
 export const getPMUserActivityTool = {
   name: 'get_pm_user_activity',
   description:
-    'Fetch recent trade activity for a Polymarket wallet. Returns buys, sells, and redeems with market titles, ' +
-    'prices, and sizes. Filter by market, side (BUY/SELL), or days back. Useful for tracking what a wallet is trading.',
+    'Fetch recent trade activity for a Polymarket wallet. Returns buys, sells, and redeems with market titles, prices, and sizes. ' +
+    'HARD LIMIT: max 100 activities per call — never request more. Default is 20. ' +
+    'For monitoring large conviction bets: set afterDays=0.04 (~1h window) and minValueUsd=10000 to surface $10k+ trades. ' +
+    'Filter by market (conditionId), side (BUY/SELL), or days back.',
   inputSchema: getPMUserActivitySchema,
   execute: executeGetPMUserActivity,
 };
