@@ -1839,7 +1839,7 @@ export async function POST(request: NextRequest) {
         try {
           // Agentic loop: keep calling Claude until it stops using tools
           let currentMessages = [...anthropicMessages];
-          let maxIterations = 8; // safety limit — monitor creation needs up to 5 turns (data tool + list + create + verify list + response)
+          let maxIterations = 5; // safety limit — monitor creation needs up to 4 turns (data tool + list + create + response)
           const calledTools = new Set<string>(); // prevent identical tool+input retry loops
 
           while (maxIterations > 0) {
