@@ -399,21 +399,6 @@ function computeCashFlowPnL(activities: Activity[], openPositions: OpenPosition[
   const conditionIds = new Set<string>();
   const positionCashFlow = new Map<string, number>();
 
-  // Track net shares bought per conditionId within this period.
-  // Used to apportion EndingValue for positions that span before/after the window —
-  // only the fraction of shares bought in-period is credited to avoid inflating PnL
-  // with pre-window shares whose cost is not captured in totalBuys.
-  const periodNetShares = new Map<string, number>();
-  for (const a of activities) {
-    const cur = periodNetShares.get(a.conditionId) ?? 0;
-    if (a.type === 'TRADE' && a.side === 'BUY') periodNetShares.set(a.conditionId, cur + a.size);
-    else if (a.type === 'TRADE' && a.side === 'SELL') periodNetShares.set(a.conditionId, cur - a.size);
-    else if (a.type === 'REDEEM') periodNetShares.set(a.conditionId, cur - a.size);
-  }
-  const buyConditionIds = new Set<string>(
-    [...periodNetShares.entries()].filter(([, s]) => s > 0).map(([id]) => id)
-  );
-
   for (const a of activities) {
     conditionIds.add(a.conditionId);
     const flow = positionCashFlow.get(a.conditionId) ?? 0;
@@ -422,33 +407,23 @@ function computeCashFlowPnL(activities: Activity[], openPositions: OpenPosition[
       totalBuys += a.usdcSize;
       positionCashFlow.set(a.conditionId, flow - a.usdcSize);
     } else if (a.type === 'TRADE' && a.side === 'SELL') {
-      if (buyConditionIds.has(a.conditionId)) {
-        totalSells += a.usdcSize;
-        positionCashFlow.set(a.conditionId, flow + a.usdcSize);
-      }
+      totalSells += a.usdcSize;
+      positionCashFlow.set(a.conditionId, flow + a.usdcSize);
     } else if (a.type === 'REDEEM') {
-      if (buyConditionIds.has(a.conditionId)) {
-        totalRedeems += a.usdcSize;
-        positionCashFlow.set(a.conditionId, flow + a.usdcSize);
-      }
+      totalRedeems += a.usdcSize;
+      positionCashFlow.set(a.conditionId, flow + a.usdcSize);
     }
   }
 
-  // EndingValue: for positions bought partly before the window, only credit the in-period share fraction.
-  // fraction = min(periodNetShares, openPosition.size) / openPosition.size
+  // Add current value for open positions that had activity in this period (exclude resolved-to-zero)
   const activePositions = openPositions.filter(p => p.curPrice > 0.001);
   let totalEndingValue = 0;
-  let totalUnrealizedPnl = 0;
   for (const p of activePositions) {
-    const netShares = periodNetShares.get(p.conditionId) ?? 0;
-    if (netShares <= 0 || p.size <= 0) continue;
-    const fraction = Math.min(netShares, p.size) / p.size;
-    const creditedValue = p.currentValue * fraction;
-    const creditedCashPnl = p.cashPnl * fraction;
-    totalEndingValue += creditedValue;
-    totalUnrealizedPnl += creditedCashPnl;
-    const flow = positionCashFlow.get(p.conditionId) ?? 0;
-    positionCashFlow.set(p.conditionId, flow + creditedValue);
+    if (conditionIds.has(p.conditionId)) {
+      totalEndingValue += p.currentValue;
+      const flow = positionCashFlow.get(p.conditionId) ?? 0;
+      positionCashFlow.set(p.conditionId, flow + p.currentValue);
+    }
   }
 
   let wins = 0, losses = 0;
@@ -457,13 +432,10 @@ function computeCashFlowPnL(activities: Activity[], openPositions: OpenPosition[
     else losses++;
   }
 
-  // totalPnl = full economic PnL (realized + unrealized), accurate but higher than Polymarket UI
-  // Polymarket UI shows only unrealizedPnl (open position gains, excludes already-cashed-out profits)
   const totalPnl = totalSells + totalRedeems + totalEndingValue - totalBuys;
-  const realizedPnl = totalPnl - totalUnrealizedPnl;
   const winRate = (wins + losses) > 0 ? (wins / (wins + losses)) * 100 : 0;
 
-  return { totalPnl, realizedPnl, totalUnrealizedPnl, totalBuys, totalSells, totalRedeems, totalEndingValue, positionsWithActivity: conditionIds.size, wins, losses, winRate };
+  return { totalPnl, totalBuys, totalSells, totalRedeems, totalEndingValue, positionsWithActivity: conditionIds.size, wins, losses, winRate };
 }
 
 function computeTimeframePnL(activities: Activity[], openPositions: OpenPosition[], days: number) {
@@ -480,18 +452,6 @@ function computeTimeframePnL(activities: Activity[], openPositions: OpenPosition
   const conditionIds = new Set<string>();
   const positionCashFlow = new Map<string, number>();
 
-  // Track net shares per conditionId to apportion EndingValue for partial pre-window positions
-  const periodNetShares = new Map<string, number>();
-  for (const a of windowActivities) {
-    const cur = periodNetShares.get(a.conditionId) ?? 0;
-    if (a.type === 'TRADE' && a.side === 'BUY') periodNetShares.set(a.conditionId, cur + a.size);
-    else if (a.type === 'TRADE' && a.side === 'SELL') periodNetShares.set(a.conditionId, cur - a.size);
-    else if (a.type === 'REDEEM') periodNetShares.set(a.conditionId, cur - a.size);
-  }
-  const buyConditionIds = new Set<string>(
-    [...periodNetShares.entries()].filter(([, s]) => s > 0).map(([id]) => id)
-  );
-
   for (const a of windowActivities) {
     conditionIds.add(a.conditionId);
     const flow = positionCashFlow.get(a.conditionId) ?? 0;
@@ -501,31 +461,23 @@ function computeTimeframePnL(activities: Activity[], openPositions: OpenPosition
       tradeCount++;
       positionCashFlow.set(a.conditionId, flow - a.usdcSize);
     } else if (a.type === 'TRADE' && a.side === 'SELL') {
-      if (buyConditionIds.has(a.conditionId)) {
-        sells += a.usdcSize;
-        tradeCount++;
-        positionCashFlow.set(a.conditionId, flow + a.usdcSize);
-      }
+      sells += a.usdcSize;
+      tradeCount++;
+      positionCashFlow.set(a.conditionId, flow + a.usdcSize);
     } else if (a.type === 'REDEEM') {
-      if (buyConditionIds.has(a.conditionId)) {
-        redeems += a.usdcSize;
-        positionCashFlow.set(a.conditionId, flow + a.usdcSize);
-      }
+      redeems += a.usdcSize;
+      positionCashFlow.set(a.conditionId, flow + a.usdcSize);
     }
   }
 
   const activePositions = openPositions.filter(p => p.curPrice > 0.001);
   let endingValue = 0;
-  let unrealizedPnl = 0;
   for (const p of activePositions) {
-    const netShares = periodNetShares.get(p.conditionId) ?? 0;
-    if (netShares <= 0 || p.size <= 0) continue;
-    const fraction = Math.min(netShares, p.size) / p.size;
-    const creditedValue = p.currentValue * fraction;
-    endingValue += creditedValue;
-    unrealizedPnl += p.cashPnl * fraction;
-    const flow = positionCashFlow.get(p.conditionId) ?? 0;
-    positionCashFlow.set(p.conditionId, flow + creditedValue);
+    if (conditionIds.has(p.conditionId)) {
+      endingValue += p.currentValue;
+      const flow = positionCashFlow.get(p.conditionId) ?? 0;
+      positionCashFlow.set(p.conditionId, flow + p.currentValue);
+    }
   }
 
   let wins = 0, losses = 0;
@@ -535,7 +487,6 @@ function computeTimeframePnL(activities: Activity[], openPositions: OpenPosition
   }
 
   const pnl = sells + redeems + endingValue - buys;
-  const realizedPnl = pnl - unrealizedPnl;
   const capitalDeployed = buys;
   const roce = capitalDeployed > 0 ? (pnl / capitalDeployed) * 100 : 0;
   const winRate = (wins + losses) > 0 ? (wins / (wins + losses)) * 100 : 0;
@@ -572,7 +523,7 @@ function computeTimeframePnL(activities: Activity[], openPositions: OpenPosition
     }
   }
 
-  return { timeframe: `${days}d`, days, pnl, realizedPnl, unrealizedPnl, buys, sells, redeems, endingValue, capitalDeployed, roce, tradeCount, tradesPerDay: tradeCount / days, positionCount: conditionIds.size, tradingDays, wins, losses, winRate, hasData: true, hitApiLimit: false, maxDrawdownAmt, maxDrawdownPct };
+  return { timeframe: `${days}d`, days, pnl, buys, sells, redeems, endingValue, capitalDeployed, roce, tradeCount, tradesPerDay: tradeCount / days, positionCount: conditionIds.size, tradingDays, wins, losses, winRate, hasData: true, hitApiLimit: false, maxDrawdownAmt, maxDrawdownPct };
 }
 
 
@@ -1432,9 +1383,7 @@ export async function profileTrader(
     console.log('\n═══════════════════════════════════════════════════════════════');
     console.log('                    PERFORMANCE (30-Day, Cash-Flow Based)       ');
     console.log('═══════════════════════════════════════════════════════════════');
-    console.log(`  Total PnL:          $${cashFlowPnL.totalPnl.toFixed(2)}  (realized + unrealized)`);
-    console.log(`  Unrealized PnL:     $${cashFlowPnL.totalUnrealizedPnl.toFixed(2)}  ← matches Polymarket UI`);
-    console.log(`  Realized PnL:       $${cashFlowPnL.realizedPnl.toFixed(2)}  (already cashed out)`);
+    console.log(`  Total PnL:          $${cashFlowPnL.totalPnl.toFixed(2)}`);
     console.log(`  Total Buys:         $${cashFlowPnL.totalBuys.toFixed(2)}`);
     console.log(`  Total Sells:        $${cashFlowPnL.totalSells.toFixed(2)}`);
     console.log(`  Total Redeems:      $${cashFlowPnL.totalRedeems.toFixed(2)}`);
@@ -1448,7 +1397,7 @@ export async function profileTrader(
         const ddStr = data.maxDrawdownAmt !== null && data.maxDrawdownPct !== null
           ? ` | Drawdown=$${data.maxDrawdownAmt.toFixed(0)} (${data.maxDrawdownPct.toFixed(1)}%)`
           : ' | Drawdown=n/a';
-        console.log(`    ${frame.padEnd(4)}: PnL=$${data.pnl.toFixed(0).padStart(10)} (unrealized=$${data.unrealizedPnl.toFixed(0)} realized=$${data.realizedPnl.toFixed(0)}) | ROCE=${data.roce.toFixed(1)}% | Capital=$${data.capitalDeployed.toFixed(0)}${ddStr} | TradingDays=${data.tradingDays}`);
+        console.log(`    ${frame.padEnd(4)}: PnL=$${data.pnl.toFixed(0).padStart(10)} | ROCE=${data.roce.toFixed(1)}% | Capital=$${data.capitalDeployed.toFixed(0)}${ddStr} | TradingDays=${data.tradingDays}`);
       } else {
         console.log(`    ${frame.padEnd(4)}: no data`);
       }
