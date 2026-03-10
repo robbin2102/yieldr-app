@@ -1008,6 +1008,32 @@ export async function profileTrader(
     lastActiveAt,
   };
 
+  // ── Activity data coverage diagnostic ─────────────────────
+  if (verbose) {
+    const fmt = (a: Activity) =>
+      `${new Date(a.timestamp * 1000).toISOString()} | ${a.type}${a.side ? '/' + a.side : ''} | $${a.usdcSize.toFixed(2)} USDC | ${a.size.toFixed(4)} shares @ ${a.price.toFixed(4)} | ${a.title?.slice(0, 60) ?? 'N/A'}`;
+
+    console.log('\n─── ACTIVITY DATA COVERAGE ───────────────────────────────');
+    if (firstActivityInPeriod) {
+      console.log(`  OLDEST in period : ${fmt(firstActivityInPeriod)}`);
+    } else {
+      console.log('  OLDEST in period : (no activities)');
+    }
+    if (lastActivity) {
+      console.log(`  NEWEST in period : ${fmt(lastActivity)}`);
+    } else {
+      console.log('  NEWEST in period : (no activities)');
+    }
+    const coverageDays = (lastActivity && firstActivityInPeriod)
+      ? ((lastActivity.timestamp - firstActivityInPeriod.timestamp) / 86400).toFixed(1)
+      : '0';
+    console.log(`  Coverage         : ${coverageDays} days across ${activities.length} activities`);
+    if (activities.length >= 10000) {
+      console.log('  ⚠ Hit 10k API limit — older activities may be missing');
+    }
+    console.log('──────────────────────────────────────────────────────────\n');
+  }
+
   const last_active_days_ago: number | null = lastActiveAt
     ? (Date.now() - lastActiveAt.getTime()) / 86400000
     : null;
