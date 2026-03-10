@@ -237,7 +237,7 @@ export async function DELETE(req: NextRequest) {
     }
 
     await connectDB();
-    const db = mongoose.connection.db!;
+    const db = mongoose.connection.useDb('yieldr');
     const result = await db.collection('monitoring_tasks').deleteOne({
       _id: new ObjectId(taskId),
       userId: wallet,
