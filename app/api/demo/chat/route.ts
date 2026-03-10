@@ -1823,7 +1823,7 @@ export async function POST(request: NextRequest) {
           // Agentic loop: keep calling Claude until it stops using tools
           let currentMessages = [...anthropicMessages];
           let maxIterations = 3; // safety limit — 3 tool turns per user message max
-          const calledTools = new Set<string>(); // prevent same-tool retry loops
+          const calledTools = new Set<string>(); // prevent identical tool+input retry loops
 
           while (maxIterations > 0) {
             maxIterations--;
@@ -1913,12 +1913,14 @@ export async function POST(request: NextRequest) {
                   // Track tool call
                   allToolCalls.push({ name: currentToolName });
 
-                  // Break loop if same tool called twice — prevents retry loops on empty results
-                  if (calledTools.has(currentToolName)) {
+                  // Break loop if identical tool+input called twice — prevents retry loops on empty results
+                  // Key includes input so same tool with different params (e.g. get_coin_price BTC vs ETH) is allowed
+                  const toolCallKey = `${currentToolName}:${JSON.stringify(parsedInput)}`;
+                  if (calledTools.has(toolCallKey)) {
                     console.log(`[chat] Duplicate tool call detected: ${currentToolName} — breaking loop`);
                     maxIterations = 0;
                   }
-                  calledTools.add(currentToolName);
+                  calledTools.add(toolCallKey);
 
                   // Execute the tool
                   const toolResult = await executeTool(currentToolName, parsedInput, walletLower);
