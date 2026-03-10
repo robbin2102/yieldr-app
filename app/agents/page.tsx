@@ -115,7 +115,7 @@ function AgentCard({ card, onClick }: { card: AgentCard; onClick: () => void }) 
         <div className={s.cardMarkets}>
           {card.markets.map(m => (
             <span key={m} className={`${s.mktTag} ${s[`mkt_${m}`] ?? ''}`}>
-              {m === 'perps' ? 'Perpetuals' : m === 'predictions' ? 'Polymarket' : 'Liquidity'}
+              {m === 'perps' ? 'Perpetuals' : m === 'predictions' ? 'Predictions' : 'Liquidity'}
             </span>
           ))}
           {primaryTask && (

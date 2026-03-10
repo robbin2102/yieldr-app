@@ -187,6 +187,18 @@ export default function LaunchingPage() {
         if (existingRes.ok) {
           const existingData = await existingRes.json();
           if (existingData.agent) {
+            // Update markets if user went through setup again
+            if (setup.markets && setup.markets.length > 0) {
+              await fetch('/api/demo/agents', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  name: existingData.agent.name,
+                  ownerWallet: address,
+                  markets: setup.markets,
+                }),
+              });
+            }
             localStorage.setItem('yieldr_auth_wallet', address.toLowerCase());
             localStorage.setItem('agentCreated', JSON.stringify({
               name: existingData.agent.name,
