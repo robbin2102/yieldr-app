@@ -526,6 +526,7 @@ function computeTimeframePnL(activities: Activity[], openPositions: OpenPosition
   return { timeframe: `${days}d`, days, pnl, buys, sells, redeems, endingValue, capitalDeployed, roce, tradeCount, tradesPerDay: tradeCount / days, positionCount: conditionIds.size, tradingDays, wins, losses, winRate, hasData: true, hitApiLimit: false, maxDrawdownAmt, maxDrawdownPct };
 }
 
+
 function computePnlConsistency(timeframePnL: Record<string, ReturnType<typeof computeTimeframePnL>>) {
   const frames = ['1d', '7d', '15d', '30d'];
   const available = frames.filter(f => timeframePnL[f].hasData);
