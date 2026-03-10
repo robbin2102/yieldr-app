@@ -3,8 +3,7 @@
  * Fetches trade activity for a wallet using the Polymarket data-api /activity endpoint
  *
  * API reference: GET https://data-api.polymarket.com/activity
- * Params: user, market (conditionId), side (BUY|SELL), type (TRADE|REDEEM|MERGE),
- *         before (unix ts), after (unix ts), limit, cursor
+ * Params: user (required), market, side, type, start (unix ts), end (unix ts), limit, offset, sortBy, sortDirection
  */
 
 import { z } from 'zod';
@@ -16,7 +15,7 @@ export const getPMUserActivitySchema = z.object({
   walletAddress: z.string().describe('Ethereum wallet address (0x...)'),
   market: z.string().optional().describe('Filter by condition ID (0x hex) to see activity in one market'),
   side: z.enum(['BUY', 'SELL']).optional().describe('Filter by trade side: BUY or SELL'),
-  type: z.enum(['TRADE', 'REDEEM', 'MERGE']).optional().describe('Filter by activity type (default: all)'),
+  type: z.enum(['TRADE', 'SPLIT', 'MERGE', 'REDEEM', 'REWARD', 'CONVERSION', 'MAKER_REBATE']).optional().describe('Filter by activity type (default: all)'),
   afterDays: z.number().optional().default(7).describe('Only return activity from the last N days (default: 7). Use 0.04 (~1h) for recent monitoring.'),
   limit: z.number().optional().default(20).describe('Number of activity records to return (default: 20, hard max: 100). Never request more than 100 — large limits destroy context and inflate costs.'),
   minValueUsd: z.number().optional().describe('Only return activities with USD value >= this threshold (e.g. 10000 for $10k+ conviction bets). Applied client-side after fetch.'),
@@ -63,7 +62,7 @@ export async function executeGetPMUserActivity(input: GetPMUserActivityInput): P
   const params = new URLSearchParams({
     user: walletAddress,
     limit: String(effectiveLimit),
-    after: String(afterTs),
+    start: String(afterTs),
   });
 
   if (market) params.set('market', market);
