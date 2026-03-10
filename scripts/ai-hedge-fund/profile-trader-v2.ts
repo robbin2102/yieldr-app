@@ -429,9 +429,12 @@ function computeCashFlowPnL(activities: Activity[], openPositions: OpenPosition[
   // Add current value for open positions that had a BUY in this period (exclude pre-window positions)
   const activePositions = openPositions.filter(p => p.curPrice > 0.001);
   let totalEndingValue = 0;
+  // unrealizedPnl = sum of cashPnl (currentValue - costBasis) — matches Polymarket UI's "30d PnL"
+  let totalUnrealizedPnl = 0;
   for (const p of activePositions) {
     if (buyConditionIds.has(p.conditionId)) {
       totalEndingValue += p.currentValue;
+      totalUnrealizedPnl += p.cashPnl;
       const flow = positionCashFlow.get(p.conditionId) ?? 0;
       positionCashFlow.set(p.conditionId, flow + p.currentValue);
     }
@@ -443,10 +446,13 @@ function computeCashFlowPnL(activities: Activity[], openPositions: OpenPosition[
     else losses++;
   }
 
+  // totalPnl = full economic PnL (realized + unrealized), accurate but higher than Polymarket UI
+  // Polymarket UI shows only unrealizedPnl (open position gains, excludes already-cashed-out profits)
   const totalPnl = totalSells + totalRedeems + totalEndingValue - totalBuys;
+  const realizedPnl = totalPnl - totalUnrealizedPnl;
   const winRate = (wins + losses) > 0 ? (wins / (wins + losses)) * 100 : 0;
 
-  return { totalPnl, totalBuys, totalSells, totalRedeems, totalEndingValue, positionsWithActivity: conditionIds.size, wins, losses, winRate };
+  return { totalPnl, realizedPnl, totalUnrealizedPnl, totalBuys, totalSells, totalRedeems, totalEndingValue, positionsWithActivity: conditionIds.size, wins, losses, winRate };
 }
 
 function computeTimeframePnL(activities: Activity[], openPositions: OpenPosition[], days: number) {
@@ -493,9 +499,11 @@ function computeTimeframePnL(activities: Activity[], openPositions: OpenPosition
 
   const activePositions = openPositions.filter(p => p.curPrice > 0.001);
   let endingValue = 0;
+  let unrealizedPnl = 0;
   for (const p of activePositions) {
     if (buyConditionIds.has(p.conditionId)) {
       endingValue += p.currentValue;
+      unrealizedPnl += p.cashPnl;
       const flow = positionCashFlow.get(p.conditionId) ?? 0;
       positionCashFlow.set(p.conditionId, flow + p.currentValue);
     }
@@ -508,6 +516,7 @@ function computeTimeframePnL(activities: Activity[], openPositions: OpenPosition
   }
 
   const pnl = sells + redeems + endingValue - buys;
+  const realizedPnl = pnl - unrealizedPnl;
   const capitalDeployed = buys;
   const roce = capitalDeployed > 0 ? (pnl / capitalDeployed) * 100 : 0;
   const winRate = (wins + losses) > 0 ? (wins / (wins + losses)) * 100 : 0;
@@ -544,7 +553,7 @@ function computeTimeframePnL(activities: Activity[], openPositions: OpenPosition
     }
   }
 
-  return { timeframe: `${days}d`, days, pnl, buys, sells, redeems, endingValue, capitalDeployed, roce, tradeCount, tradesPerDay: tradeCount / days, positionCount: conditionIds.size, tradingDays, wins, losses, winRate, hasData: true, hitApiLimit: false, maxDrawdownAmt, maxDrawdownPct };
+  return { timeframe: `${days}d`, days, pnl, realizedPnl, unrealizedPnl, buys, sells, redeems, endingValue, capitalDeployed, roce, tradeCount, tradesPerDay: tradeCount / days, positionCount: conditionIds.size, tradingDays, wins, losses, winRate, hasData: true, hitApiLimit: false, maxDrawdownAmt, maxDrawdownPct };
 }
 
 
@@ -1404,7 +1413,9 @@ export async function profileTrader(
     console.log('\n═══════════════════════════════════════════════════════════════');
     console.log('                    PERFORMANCE (30-Day, Cash-Flow Based)       ');
     console.log('═══════════════════════════════════════════════════════════════');
-    console.log(`  Total PnL:          $${cashFlowPnL.totalPnl.toFixed(2)}`);
+    console.log(`  Total PnL:          $${cashFlowPnL.totalPnl.toFixed(2)}  (realized + unrealized)`);
+    console.log(`  Unrealized PnL:     $${cashFlowPnL.totalUnrealizedPnl.toFixed(2)}  ← matches Polymarket UI`);
+    console.log(`  Realized PnL:       $${cashFlowPnL.realizedPnl.toFixed(2)}  (already cashed out)`);
     console.log(`  Total Buys:         $${cashFlowPnL.totalBuys.toFixed(2)}`);
     console.log(`  Total Sells:        $${cashFlowPnL.totalSells.toFixed(2)}`);
     console.log(`  Total Redeems:      $${cashFlowPnL.totalRedeems.toFixed(2)}`);
@@ -1418,7 +1429,7 @@ export async function profileTrader(
         const ddStr = data.maxDrawdownAmt !== null && data.maxDrawdownPct !== null
           ? ` | Drawdown=$${data.maxDrawdownAmt.toFixed(0)} (${data.maxDrawdownPct.toFixed(1)}%)`
           : ' | Drawdown=n/a';
-        console.log(`    ${frame.padEnd(4)}: PnL=$${data.pnl.toFixed(0).padStart(10)} | ROCE=${data.roce.toFixed(1)}% | Capital=$${data.capitalDeployed.toFixed(0)}${ddStr} | TradingDays=${data.tradingDays}`);
+        console.log(`    ${frame.padEnd(4)}: PnL=$${data.pnl.toFixed(0).padStart(10)} (unrealized=$${data.unrealizedPnl.toFixed(0)} realized=$${data.realizedPnl.toFixed(0)}) | ROCE=${data.roce.toFixed(1)}% | Capital=$${data.capitalDeployed.toFixed(0)}${ddStr} | TradingDays=${data.tradingDays}`);
       } else {
         console.log(`    ${frame.padEnd(4)}: no data`);
       }
