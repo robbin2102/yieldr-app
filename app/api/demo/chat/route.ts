@@ -1084,7 +1084,9 @@ async function executeTool(name: string, input: any, wallet?: string): Promise<s
       case 'manage_monitoring': {
         if (!wallet) return JSON.stringify({ error: 'No wallet in session — cannot manage monitors' });
         await connectDB();
-        const db2 = mongoose.connection.useDb('yieldr');
+        const db2 = mongoose.connection.db;
+        if (!db2) return JSON.stringify({ error: 'Database not connected' });
+        console.log(`[manage_monitoring] db=${db2.databaseName} action=${input.action} wallet=${wallet}`);
         const tasksCol = db2.collection('monitoring_tasks');
         const { action, taskId, task, monitorInstruction, tools: monTools, intervalSeconds, updates } = input;
 
@@ -1209,7 +1211,9 @@ async function executeTool(name: string, input: any, wallet?: string): Promise<s
             updatedAt:          now,
           };
 
+          console.log(`[manage_monitoring] inserting task for userId=${doc.userId} db=${db2.databaseName}`);
           const result = await tasksCol.insertOne(doc);
+          console.log(`[manage_monitoring] inserted taskId=${result.insertedId} acknowledged=${result.acknowledged}`);
           return JSON.stringify({
             ok: true,
             taskId: result.insertedId.toString(),
