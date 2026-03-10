@@ -122,6 +122,11 @@ async function fetchActivities(wallet: string, days: number): Promise<Activity[]
   while (!done && offset <= MAX_OFFSET) {
     const url = `${API_BASE}/activity?user=${wallet}&limit=${LIMIT}&offset=${offset}&sortBy=TIMESTAMP&sortDirection=DESC`;
     const response = await fetch(url);
+    // 400 at high offsets = Polymarket's pagination cap — treat as end of results
+    if (response.status === 400) {
+      console.log(`  API returned 400 at offset=${offset} (pagination limit reached) — stopping`);
+      break;
+    }
     if (!response.ok) throw new Error(`API error: ${response.status}`);
 
     const batch = await response.json() as Activity[];
@@ -162,6 +167,10 @@ async function fetchOpenPositions(wallet: string): Promise<OpenPosition[]> {
   while (offset <= MAX_OFFSET) {
     const url = `${API_BASE}/positions?user=${wallet}&sizeThreshold=0.1&limit=${LIMIT}&offset=${offset}`;
     const response = await fetch(url);
+    if (response.status === 400) {
+      console.log(`  API returned 400 at offset=${offset} (pagination limit reached) — stopping`);
+      break;
+    }
     if (!response.ok) throw new Error(`API error: ${response.status}`);
 
     const batch = await response.json() as OpenPosition[];
@@ -203,6 +212,10 @@ async function fetchClosedPositions(
   while (!done && offset <= MAX_OFFSET) {
     const url = `${API_BASE}/v1/closed-positions?user=${wallet}&limit=${LIMIT}&offset=${offset}&sortBy=TIMESTAMP&sortDirection=DESC`;
     const response = await fetch(url);
+    if (response.status === 400) {
+      console.log(`  API returned 400 at offset=${offset} (pagination limit reached) — stopping`);
+      break;
+    }
     if (!response.ok) throw new Error(`API error: ${response.status}`);
 
     const batch = await response.json() as ClosedPosition[];
@@ -300,7 +313,8 @@ function categorizeMarket(title: string): string {
   const soccerTeams = ['premier league', 'la liga', 'bundesliga', 'serie a', 'ligue 1', 'champions league',
     'europa league', 'conference league', 'manchester', 'liverpool', 'chelsea', 'arsenal', 'tottenham',
     'barcelona', 'real madrid', 'bayern', 'juventus', 'psg', 'fc ', ' fc', 'united', 'inter milan',
-    'ac milan', 'as roma', 'napoli', 'atletico', 'sevilla', 'ajax', 'benfica', 'porto'];
+    'ac milan', 'as roma', 'napoli', 'atletico', 'sevilla', 'ajax', 'benfica', 'porto',
+    'borussia', 'olympique', 'hamburger sv', ' az '];
   if (soccerTeams.some(team => lower.includes(team))) return 'Soccer';
 
   // MLB
@@ -358,14 +372,15 @@ function detectSubLeague(title: string, category: string): string | null {
     ['LA_LIGA', ['real madrid', 'fc barcelona', 'atletico madrid', 'sevilla', 'real betis',
       'valencia', 'villarreal', 'athletic club', 'rc celta', 'getafe', 'girona',
       'espanyol', 'cadiz', 'deportivo', 'la liga', 'osasuna', 'mallorca', 'rayo vallecano']],
-    ['BUNDESLIGA', ['fc bayern', 'borussia dortmund', 'rb leipzig', 'wolfsburg',
+    ['BUNDESLIGA', ['fc bayern', 'borussia dortmund', 'borussia', 'rb leipzig', 'wolfsburg',
       'eintracht frankfurt', 'borussia monchengladbach', 'freiburg', 'bayer leverkusen',
-      'hertha', 'schalke', 'augsburg', 'bundesliga', 'hoffenheim', 'werder bremen']],
+      'hertha', 'schalke', 'augsburg', 'bundesliga', 'hoffenheim', 'werder bremen', 'hamburger sv']],
     ['SERIE_A', ['juventus', 'inter milan', 'fc internazionale', 'ac milan', 'as roma',
       'ss lazio', 'napoli', 'atalanta', 'fiorentina', 'torino', 'bologna',
       'udinese', 'serie a', 'coppa italia', 'sampdoria', 'sassuolo']],
-    ['LIGUE_1', ['paris saint-germain', 'psg', 'olympique lyonnais', 'as monaco',
-      'olympique de marseille', 'lille', 'rennes', 'nice', 'lens', 'ligue 1', 'strasbourg']],
+    ['LIGUE_1', ['paris saint-germain', 'psg', 'olympique lyonnais', 'olympique de marseille', 'olympique',
+      'as monaco', 'lille', 'rennes', 'nice', 'lens', 'ligue 1', 'strasbourg']],
+    ['EREDIVISIE', ['ajax', 'psv eindhoven', 'feyenoord', 'az alkmaar', ' az ', 'vitesse', 'eredivisie']],
   ];
 
   for (const [league, keywords] of leagues) {
@@ -384,6 +399,13 @@ function computeCashFlowPnL(activities: Activity[], openPositions: OpenPosition[
   const conditionIds = new Set<string>();
   const positionCashFlow = new Map<string, number>();
 
+  // Only conditionIds with a BUY in this period are counted for sells/redeems/endingValue.
+  // This prevents pre-window positions from inflating PnL (their buy cost is not captured).
+  const buyConditionIds = new Set<string>();
+  for (const a of activities) {
+    if (a.type === 'TRADE' && a.side === 'BUY') buyConditionIds.add(a.conditionId);
+  }
+
   for (const a of activities) {
     conditionIds.add(a.conditionId);
     const flow = positionCashFlow.get(a.conditionId) ?? 0;
@@ -392,19 +414,23 @@ function computeCashFlowPnL(activities: Activity[], openPositions: OpenPosition[
       totalBuys += a.usdcSize;
       positionCashFlow.set(a.conditionId, flow - a.usdcSize);
     } else if (a.type === 'TRADE' && a.side === 'SELL') {
-      totalSells += a.usdcSize;
-      positionCashFlow.set(a.conditionId, flow + a.usdcSize);
+      if (buyConditionIds.has(a.conditionId)) {
+        totalSells += a.usdcSize;
+        positionCashFlow.set(a.conditionId, flow + a.usdcSize);
+      }
     } else if (a.type === 'REDEEM') {
-      totalRedeems += a.usdcSize;
-      positionCashFlow.set(a.conditionId, flow + a.usdcSize);
+      if (buyConditionIds.has(a.conditionId)) {
+        totalRedeems += a.usdcSize;
+        positionCashFlow.set(a.conditionId, flow + a.usdcSize);
+      }
     }
   }
 
-  // Add current value for active open positions that had activity in this period
-  const activePositions = openPositions.filter(p => p.curPrice > 0.001 && p.curPrice < 0.99);
+  // Add current value for open positions that had a BUY in this period (exclude pre-window positions)
+  const activePositions = openPositions.filter(p => p.curPrice > 0.001);
   let totalEndingValue = 0;
   for (const p of activePositions) {
-    if (conditionIds.has(p.conditionId)) {
+    if (buyConditionIds.has(p.conditionId)) {
       totalEndingValue += p.currentValue;
       const flow = positionCashFlow.get(p.conditionId) ?? 0;
       positionCashFlow.set(p.conditionId, flow + p.currentValue);
@@ -430,12 +456,18 @@ function computeTimeframePnL(activities: Activity[], openPositions: OpenPosition
   const windowActivities = activities.filter(a => a.timestamp >= startTs);
 
   if (windowActivities.length === 0) {
-    return { timeframe: `${days}d`, days, pnl: 0, buys: 0, sells: 0, redeems: 0, endingValue: 0, capitalDeployed: 0, roce: 0, tradeCount: 0, tradesPerDay: 0, positionCount: 0, tradingDays: 0, wins: 0, losses: 0, winRate: 0, hasData: false, hitApiLimit: false };
+    return { timeframe: `${days}d`, days, pnl: 0, buys: 0, sells: 0, redeems: 0, endingValue: 0, capitalDeployed: 0, roce: 0, tradeCount: 0, tradesPerDay: 0, positionCount: 0, tradingDays: 0, wins: 0, losses: 0, winRate: 0, hasData: false, hitApiLimit: false, maxDrawdownAmt: null, maxDrawdownPct: null };
   }
 
   let buys = 0, sells = 0, redeems = 0, tradeCount = 0;
   const conditionIds = new Set<string>();
   const positionCashFlow = new Map<string, number>();
+
+  // Only conditionIds with a BUY in this window count for sells/redeems/endingValue
+  const buyConditionIds = new Set<string>();
+  for (const a of windowActivities) {
+    if (a.type === 'TRADE' && a.side === 'BUY') buyConditionIds.add(a.conditionId);
+  }
 
   for (const a of windowActivities) {
     conditionIds.add(a.conditionId);
@@ -446,19 +478,23 @@ function computeTimeframePnL(activities: Activity[], openPositions: OpenPosition
       tradeCount++;
       positionCashFlow.set(a.conditionId, flow - a.usdcSize);
     } else if (a.type === 'TRADE' && a.side === 'SELL') {
-      sells += a.usdcSize;
-      tradeCount++;
-      positionCashFlow.set(a.conditionId, flow + a.usdcSize);
+      if (buyConditionIds.has(a.conditionId)) {
+        sells += a.usdcSize;
+        tradeCount++;
+        positionCashFlow.set(a.conditionId, flow + a.usdcSize);
+      }
     } else if (a.type === 'REDEEM') {
-      redeems += a.usdcSize;
-      positionCashFlow.set(a.conditionId, flow + a.usdcSize);
+      if (buyConditionIds.has(a.conditionId)) {
+        redeems += a.usdcSize;
+        positionCashFlow.set(a.conditionId, flow + a.usdcSize);
+      }
     }
   }
 
-  const activePositions = openPositions.filter(p => p.curPrice > 0.001 && p.curPrice < 0.99);
+  const activePositions = openPositions.filter(p => p.curPrice > 0.001);
   let endingValue = 0;
   for (const p of activePositions) {
-    if (conditionIds.has(p.conditionId)) {
+    if (buyConditionIds.has(p.conditionId)) {
       endingValue += p.currentValue;
       const flow = positionCashFlow.get(p.conditionId) ?? 0;
       positionCashFlow.set(p.conditionId, flow + p.currentValue);
@@ -477,8 +513,40 @@ function computeTimeframePnL(activities: Activity[], openPositions: OpenPosition
   const winRate = (wins + losses) > 0 ? (wins / (wins + losses)) * 100 : 0;
   const tradingDays = new Set(windowActivities.map(a => new Date(a.timestamp * 1000).toISOString().split('T')[0])).size;
 
-  return { timeframe: `${days}d`, days, pnl, buys, sells, redeems, endingValue, capitalDeployed, roce, tradeCount, tradesPerDay: tradeCount / days, positionCount: conditionIds.size, tradingDays, wins, losses, winRate, hasData: true, hitApiLimit: false };
+  // Per-window drawdown (3-day gate, same peak-to-trough logic as computeMaxDrawdown30d)
+  let maxDrawdownAmt: number | null = null;
+  let maxDrawdownPct: number | null = null;
+
+  if (tradingDays >= 3) {
+    const ddDayMap = new Map<string, number>();
+    for (const a of windowActivities) {
+      const day = new Date(a.timestamp * 1000).toISOString().split('T')[0];
+      const cur = ddDayMap.get(day) ?? 0;
+      if (a.type === 'TRADE' && a.side === 'BUY') ddDayMap.set(day, cur - a.usdcSize);
+      else if (a.type === 'TRADE' && a.side === 'SELL') ddDayMap.set(day, cur + a.usdcSize);
+      else if (a.type === 'REDEEM') ddDayMap.set(day, cur + a.usdcSize);
+    }
+    const sortedDd = Array.from(ddDayMap.entries()).sort(([a], [b]) => a.localeCompare(b));
+    let ddCumPnl = 0, ddPeak = 0, ddMax = 0, ddFirstPos = false;
+    for (const [, dailyFlow] of sortedDd) {
+      ddCumPnl += dailyFlow;
+      if (!ddFirstPos) {
+        if (ddCumPnl > 0) { ddFirstPos = true; ddPeak = ddCumPnl; }
+        continue;
+      }
+      if (ddCumPnl > ddPeak) ddPeak = ddCumPnl;
+      const dd = ddPeak - ddCumPnl;
+      if (dd > ddMax) ddMax = dd;
+    }
+    if (ddFirstPos && ddPeak > 0) {
+      maxDrawdownAmt = ddMax;
+      maxDrawdownPct = Math.min((ddMax / ddPeak) * 100, 100);
+    }
+  }
+
+  return { timeframe: `${days}d`, days, pnl, buys, sells, redeems, endingValue, capitalDeployed, roce, tradeCount, tradesPerDay: tradeCount / days, positionCount: conditionIds.size, tradingDays, wins, losses, winRate, hasData: true, hitApiLimit: false, maxDrawdownAmt, maxDrawdownPct };
 }
+
 
 function computePnlConsistency(timeframePnL: Record<string, ReturnType<typeof computeTimeframePnL>>) {
   const frames = ['1d', '7d', '15d', '30d'];
@@ -862,11 +930,13 @@ function determineTraderLabel(params: {
   win_rate: number;
   profitFactor: number;
   strengths: MarketPerformance[];
+  isWhaleConcentrator: boolean;
 }): string {
   const labels: string[] = [];
 
-  if (params.volumeLabel === 'LOW') labels.push('LOW_VOLUME');
-  if (params.volumeLabel === 'HIGH') labels.push('HIGH_VOLUME');
+  if (params.isWhaleConcentrator) labels.push('WHALE_CONCENTRATOR');
+  else if (params.volumeLabel === 'LOW') labels.push('LOW_VOLUME');
+  else if (params.volumeLabel === 'HIGH') labels.push('HIGH_VOLUME');
   if (params.strategyLabel === 'BUY_AND_HOLD') labels.push('HOLDER');
   if (params.win_rate >= 70) labels.push('HIGH_WIN_RATE');
   if (params.profitFactor >= 2) labels.push('PROFITABLE');
@@ -959,6 +1029,32 @@ export async function profileTrader(
     lastActiveAt,
   };
 
+  // ── Activity data coverage diagnostic ─────────────────────
+  if (verbose) {
+    const fmt = (a: Activity) =>
+      `${new Date(a.timestamp * 1000).toISOString()} | ${a.type}${a.side ? '/' + a.side : ''} | $${a.usdcSize.toFixed(2)} USDC | ${a.size.toFixed(4)} shares @ ${a.price.toFixed(4)} | ${a.title?.slice(0, 60) ?? 'N/A'}`;
+
+    console.log('\n─── ACTIVITY DATA COVERAGE ───────────────────────────────');
+    if (firstActivityInPeriod) {
+      console.log(`  OLDEST in period : ${fmt(firstActivityInPeriod)}`);
+    } else {
+      console.log('  OLDEST in period : (no activities)');
+    }
+    if (lastActivity) {
+      console.log(`  NEWEST in period : ${fmt(lastActivity)}`);
+    } else {
+      console.log('  NEWEST in period : (no activities)');
+    }
+    const coverageDays = (lastActivity && firstActivityInPeriod)
+      ? ((lastActivity.timestamp - firstActivityInPeriod.timestamp) / 86400).toFixed(1)
+      : '0';
+    console.log(`  Coverage         : ${coverageDays} days across ${activities.length} activities`);
+    if (activities.length >= 10000) {
+      console.log('  ⚠ Hit 10k API limit — older activities may be missing');
+    }
+    console.log('──────────────────────────────────────────────────────────\n');
+  }
+
   const last_active_days_ago: number | null = lastActiveAt
     ? (Date.now() - lastActiveAt.getTime()) / 86400000
     : null;
@@ -1036,6 +1132,22 @@ export async function profileTrader(
 
   const pnlConsistency = computePnlConsistency(timeframePnL);
 
+  // ── Capital trend ──────────────────────────────────────────
+  const capital_trend: 'scaling_up' | 'scaling_down' | 'stable' | 'inactive' | null =
+    (!timeframePnL['15d'].hasData || !timeframePnL['30d'].hasData) ? null :
+    timeframePnL['15d'].capitalDeployed === 0 ? 'inactive' :
+    timeframePnL['15d'].capitalDeployed > timeframePnL['30d'].capitalDeployed * 0.6 ? 'scaling_up' :
+    timeframePnL['15d'].capitalDeployed < timeframePnL['30d'].capitalDeployed * 0.3 ? 'scaling_down' :
+    'stable';
+
+  const _dd15 = timeframePnL['15d'].maxDrawdownPct;
+  const _dd30 = timeframePnL['30d'].maxDrawdownPct;
+  const drawdown_trend: 'improving' | 'worsening' | 'stable' | 'insufficient_data' =
+    (_dd15 === null || _dd30 === null) ? 'insufficient_data' :
+    _dd15 < _dd30 * 0.7 ? 'improving' :
+    _dd15 > _dd30 * 1.3 ? 'worsening' :
+    'stable';
+
   // ── ROCE trend ──────────────────────────────────────────────
   const _r7  = timeframePnL['7d'].hasData  ? timeframePnL['7d'].roce  : null;
   const _r15 = timeframePnL['15d'].hasData ? timeframePnL['15d'].roce : null;
@@ -1074,7 +1186,8 @@ export async function profileTrader(
   }
 
   const wins_open_resolved = allOpenPositions.filter(p => p.curPrice >= 0.99 && p.size > 0).length;
-  const losses_open_resolved = allOpenPositions.filter(p => p.curPrice <= 0.001 && p.size > 0).length;
+  const openResolvedLossPositions = allOpenPositions.filter(p => p.curPrice <= 0.001 && p.size > 0);
+  const losses_open_resolved = openResolvedLossPositions.length;
 
   const totalWins = wins_closed + wins_open_resolved;
   const totalLosses = losses_closed + losses_open_resolved;
@@ -1086,8 +1199,10 @@ export async function profileTrader(
   const avg_entry_price_wins = wins_closed > 0
     ? closedPositions1000.filter(p => p.realizedPnl >= 0).reduce((sum, p) => sum + p.avgPrice, 0) / wins_closed
     : null;
-  const avg_entry_price_losses = losses_closed > 0
-    ? closedPositions1000.filter(p => p.realizedPnl < 0).reduce((sum, p) => sum + p.avgPrice, 0) / losses_closed
+  const totalLossesForAvg = losses_closed + losses_open_resolved;
+  const avg_entry_price_losses = totalLossesForAvg > 0
+    ? (closedPositions1000.filter(p => p.realizedPnl < 0).reduce((sum, p) => sum + p.avgPrice, 0)
+       + openResolvedLossPositions.reduce((sum, p) => sum + p.avgPrice, 0)) / totalLossesForAvg
     : null;
 
   // Current streak from 1000 sample
@@ -1125,8 +1240,7 @@ export async function profileTrader(
 
   // ── Open/closed position categorization ───────────────────
   const LOSS_THRESHOLD = 0.001;
-  const WIN_THRESHOLD = 0.99;
-  const openPositions = allOpenPositions.filter(p => p.curPrice >= LOSS_THRESHOLD && p.curPrice <= WIN_THRESHOLD);
+  const openPositions = allOpenPositions.filter(p => p.curPrice >= LOSS_THRESHOLD);
 
   // ── Category breakdown and market titles ──────────────────
   const category_breakdown = buildCategoryBreakdown(closedPositions1000);
@@ -1148,10 +1262,6 @@ export async function profileTrader(
   const totalTradingVolume = tradeSizes.reduce((a, b) => a + b, 0);
   const asymmetricVolumePercent = totalTradingVolume > 0 ? (asymmetricVolume / totalTradingVolume) * 100 : 0;
 
-  // ── Trader label ───────────────────────────────────────────
-  const traderLabel = `Trader-${cleanWallet.slice(0, 6)}`;
-  const label = determineTraderLabel({ volumeLabel, strategyLabel, win_rate, profitFactor, strengths });
-
   // ── avg_bet_size_usdc ─────────────────────────────────────
   const avg_bet_size_usdc = win_rate_sample_size > 0 ? cashFlowPnL.totalBuys / win_rate_sample_size : 0;
 
@@ -1160,6 +1270,10 @@ export async function profileTrader(
   // into very few markets with large average bets — they are scaling into
   // concentrated positions, not bot-trading across hundreds of markets.
   const isWhaleConcentrator = total_unique_markets_30d <= 15 && avg_bet_size_usdc > 50000;
+
+  // ── Trader label ───────────────────────────────────────────
+  const traderLabel = `Trader-${cleanWallet.slice(0, 6)}`;
+  const label = determineTraderLabel({ volumeLabel, strategyLabel, win_rate, profitFactor, strengths, isWhaleConcentrator });
 
   // ── Insider score ──────────────────────────────────────────
   const { insider_score, insider_probability, insider_signals_fired } = computeInsiderScore({
@@ -1183,7 +1297,12 @@ export async function profileTrader(
     roce_trend,
     pnl_consistency_score: pnlConsistency.score,
     avg_unique_markets_per_day_7d,
-    max_drawdown_30d_pct: maxDrawdown30dPct,
+    max_drawdown_15d_amt: timeframePnL['15d'].maxDrawdownAmt,
+    max_drawdown_15d_pct: timeframePnL['15d'].maxDrawdownPct,
+    max_drawdown_30d_amt: timeframePnL['30d'].maxDrawdownAmt,
+    max_drawdown_30d_pct: timeframePnL['30d'].maxDrawdownPct,
+    capital_trend,
+    drawdown_trend,
     last_active_days_ago,
     profiled_at: profiledAt,
   };
@@ -1296,7 +1415,10 @@ export async function profileTrader(
     console.log('\n  Timeframe P&L:');
     for (const [frame, data] of Object.entries(timeframePnL)) {
       if (data.hasData) {
-        console.log(`    ${frame.padEnd(4)}: PnL=$${data.pnl.toFixed(0).padStart(10)} | ROCE=${data.roce.toFixed(1)}% | Capital=$${data.capitalDeployed.toFixed(0)} | TradingDays=${data.tradingDays}`);
+        const ddStr = data.maxDrawdownAmt !== null && data.maxDrawdownPct !== null
+          ? ` | Drawdown=$${data.maxDrawdownAmt.toFixed(0)} (${data.maxDrawdownPct.toFixed(1)}%)`
+          : ' | Drawdown=n/a';
+        console.log(`    ${frame.padEnd(4)}: PnL=$${data.pnl.toFixed(0).padStart(10)} | ROCE=${data.roce.toFixed(1)}% | Capital=$${data.capitalDeployed.toFixed(0)}${ddStr} | TradingDays=${data.tradingDays}`);
       } else {
         console.log(`    ${frame.padEnd(4)}: no data`);
       }
@@ -1306,6 +1428,8 @@ export async function profileTrader(
       ? ` (15d vs 30d — 7d inactive${last_active_days_ago !== null ? `, last active ${last_active_days_ago.toFixed(0)}d ago` : ''})`
       : '';
     console.log(`\n  ROCE Trend:    7d=${roce_trend.d7 !== null ? roce_trend.d7.toFixed(1) + '%' : 'n/a'}  15d=${roce_trend.d15 !== null ? roce_trend.d15.toFixed(1) + '%' : 'n/a'}  30d=${roce_trend.d30 !== null ? roce_trend.d30.toFixed(1) + '%' : 'n/a'}  → ${roce_trend.direction.toUpperCase()}${roceDirNote}`);
+    console.log(`  Capital Trend: ${capital_trend ?? 'n/a'}`);
+    console.log(`  Drawdown Trend: ${drawdown_trend}`);
 
     const lowSampleWarning = (pnlConsistency.tradingDays30d ?? 0) < 15
       ? `  ⚠️ LOW SAMPLE (${pnlConsistency.tradingDays30d ?? 0} trading days — need 15+ for reliable score)`
@@ -1520,6 +1644,8 @@ export async function profileTrader(
     // P&L (cashFlow-based — source of truth)
     cashFlowPnL,
     timeframePnL,
+    capital_trend,
+    drawdown_trend,
     pnlConsistency,
     profitFactor,
 
