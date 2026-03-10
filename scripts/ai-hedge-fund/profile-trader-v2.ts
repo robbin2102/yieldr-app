@@ -122,6 +122,11 @@ async function fetchActivities(wallet: string, days: number): Promise<Activity[]
   while (!done && offset <= MAX_OFFSET) {
     const url = `${API_BASE}/activity?user=${wallet}&limit=${LIMIT}&offset=${offset}&sortBy=TIMESTAMP&sortDirection=DESC`;
     const response = await fetch(url);
+    // 400 at high offsets = Polymarket's pagination cap — treat as end of results
+    if (response.status === 400) {
+      console.log(`  API returned 400 at offset=${offset} (pagination limit reached) — stopping`);
+      break;
+    }
     if (!response.ok) throw new Error(`API error: ${response.status}`);
 
     const batch = await response.json() as Activity[];
@@ -162,6 +167,10 @@ async function fetchOpenPositions(wallet: string): Promise<OpenPosition[]> {
   while (offset <= MAX_OFFSET) {
     const url = `${API_BASE}/positions?user=${wallet}&sizeThreshold=0.1&limit=${LIMIT}&offset=${offset}`;
     const response = await fetch(url);
+    if (response.status === 400) {
+      console.log(`  API returned 400 at offset=${offset} (pagination limit reached) — stopping`);
+      break;
+    }
     if (!response.ok) throw new Error(`API error: ${response.status}`);
 
     const batch = await response.json() as OpenPosition[];
@@ -203,6 +212,10 @@ async function fetchClosedPositions(
   while (!done && offset <= MAX_OFFSET) {
     const url = `${API_BASE}/v1/closed-positions?user=${wallet}&limit=${LIMIT}&offset=${offset}&sortBy=TIMESTAMP&sortDirection=DESC`;
     const response = await fetch(url);
+    if (response.status === 400) {
+      console.log(`  API returned 400 at offset=${offset} (pagination limit reached) — stopping`);
+      break;
+    }
     if (!response.ok) throw new Error(`API error: ${response.status}`);
 
     const batch = await response.json() as ClosedPosition[];
