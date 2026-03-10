@@ -399,12 +399,20 @@ function computeCashFlowPnL(activities: Activity[], openPositions: OpenPosition[
   const conditionIds = new Set<string>();
   const positionCashFlow = new Map<string, number>();
 
-  // Only conditionIds with a BUY in this period are counted for sells/redeems/endingValue.
-  // This prevents pre-window positions from inflating PnL (their buy cost is not captured).
-  const buyConditionIds = new Set<string>();
+  // Track net shares bought per conditionId within this period.
+  // Used to apportion EndingValue for positions that span before/after the window —
+  // only the fraction of shares bought in-period is credited to avoid inflating PnL
+  // with pre-window shares whose cost is not captured in totalBuys.
+  const periodNetShares = new Map<string, number>();
   for (const a of activities) {
-    if (a.type === 'TRADE' && a.side === 'BUY') buyConditionIds.add(a.conditionId);
+    const cur = periodNetShares.get(a.conditionId) ?? 0;
+    if (a.type === 'TRADE' && a.side === 'BUY') periodNetShares.set(a.conditionId, cur + a.size);
+    else if (a.type === 'TRADE' && a.side === 'SELL') periodNetShares.set(a.conditionId, cur - a.size);
+    else if (a.type === 'REDEEM') periodNetShares.set(a.conditionId, cur - a.size);
   }
+  const buyConditionIds = new Set<string>(
+    [...periodNetShares.entries()].filter(([, s]) => s > 0).map(([id]) => id)
+  );
 
   for (const a of activities) {
     conditionIds.add(a.conditionId);
@@ -426,18 +434,21 @@ function computeCashFlowPnL(activities: Activity[], openPositions: OpenPosition[
     }
   }
 
-  // Add current value for open positions that had a BUY in this period (exclude pre-window positions)
+  // EndingValue: for positions bought partly before the window, only credit the in-period share fraction.
+  // fraction = min(periodNetShares, openPosition.size) / openPosition.size
   const activePositions = openPositions.filter(p => p.curPrice > 0.001);
   let totalEndingValue = 0;
-  // unrealizedPnl = sum of cashPnl (currentValue - costBasis) — matches Polymarket UI's "30d PnL"
   let totalUnrealizedPnl = 0;
   for (const p of activePositions) {
-    if (buyConditionIds.has(p.conditionId)) {
-      totalEndingValue += p.currentValue;
-      totalUnrealizedPnl += p.cashPnl;
-      const flow = positionCashFlow.get(p.conditionId) ?? 0;
-      positionCashFlow.set(p.conditionId, flow + p.currentValue);
-    }
+    const netShares = periodNetShares.get(p.conditionId) ?? 0;
+    if (netShares <= 0 || p.size <= 0) continue;
+    const fraction = Math.min(netShares, p.size) / p.size;
+    const creditedValue = p.currentValue * fraction;
+    const creditedCashPnl = p.cashPnl * fraction;
+    totalEndingValue += creditedValue;
+    totalUnrealizedPnl += creditedCashPnl;
+    const flow = positionCashFlow.get(p.conditionId) ?? 0;
+    positionCashFlow.set(p.conditionId, flow + creditedValue);
   }
 
   let wins = 0, losses = 0;
@@ -469,11 +480,17 @@ function computeTimeframePnL(activities: Activity[], openPositions: OpenPosition
   const conditionIds = new Set<string>();
   const positionCashFlow = new Map<string, number>();
 
-  // Only conditionIds with a BUY in this window count for sells/redeems/endingValue
-  const buyConditionIds = new Set<string>();
+  // Track net shares per conditionId to apportion EndingValue for partial pre-window positions
+  const periodNetShares = new Map<string, number>();
   for (const a of windowActivities) {
-    if (a.type === 'TRADE' && a.side === 'BUY') buyConditionIds.add(a.conditionId);
+    const cur = periodNetShares.get(a.conditionId) ?? 0;
+    if (a.type === 'TRADE' && a.side === 'BUY') periodNetShares.set(a.conditionId, cur + a.size);
+    else if (a.type === 'TRADE' && a.side === 'SELL') periodNetShares.set(a.conditionId, cur - a.size);
+    else if (a.type === 'REDEEM') periodNetShares.set(a.conditionId, cur - a.size);
   }
+  const buyConditionIds = new Set<string>(
+    [...periodNetShares.entries()].filter(([, s]) => s > 0).map(([id]) => id)
+  );
 
   for (const a of windowActivities) {
     conditionIds.add(a.conditionId);
@@ -501,12 +518,14 @@ function computeTimeframePnL(activities: Activity[], openPositions: OpenPosition
   let endingValue = 0;
   let unrealizedPnl = 0;
   for (const p of activePositions) {
-    if (buyConditionIds.has(p.conditionId)) {
-      endingValue += p.currentValue;
-      unrealizedPnl += p.cashPnl;
-      const flow = positionCashFlow.get(p.conditionId) ?? 0;
-      positionCashFlow.set(p.conditionId, flow + p.currentValue);
-    }
+    const netShares = periodNetShares.get(p.conditionId) ?? 0;
+    if (netShares <= 0 || p.size <= 0) continue;
+    const fraction = Math.min(netShares, p.size) / p.size;
+    const creditedValue = p.currentValue * fraction;
+    endingValue += creditedValue;
+    unrealizedPnl += p.cashPnl * fraction;
+    const flow = positionCashFlow.get(p.conditionId) ?? 0;
+    positionCashFlow.set(p.conditionId, flow + creditedValue);
   }
 
   let wins = 0, losses = 0;
