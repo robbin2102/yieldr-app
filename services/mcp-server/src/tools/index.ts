@@ -18,10 +18,19 @@ import { getPMClosedPositionsTool } from './live-api/get-pm-closed-positions.js'
 // Live API tools - Portfolio / PnL history
 import { getHLPortfolioTool } from './live-api/get-hl-portfolio.js';
 
+// Polymarket market data + user activity
+import { getPMMarketTool } from './live-api/get-pm-market.js';
+import { getPMUserActivityTool } from './live-api/get-pm-user-activity.js';
+
 // Market intelligence tools
 import { getMarketSnapshotTool } from './market/get-market-snapshot.js';
 import { fetchLiveIndicatorTool } from './market/fetch-live-indicator.js';
 import { getMacroSnapshotTool } from './market/get-macro-snapshot.js';
+import { getFundingRateHistoryTool } from './market/get-funding-rate-history.js';
+import { getFundingRateCurrentTool } from './market/get-funding-rate-current.js';
+import { getDerivativesHistoryTool } from './market/get-derivatives-history.js';
+import { getNewsHeadlinesTool } from './market/get-news-headlines.js';
+import { getCoinPriceTool } from './market/get-coin-price.js';
 
 // Export individual tools
 export { getTopPMTradersTool } from './top-traders/index.js';
@@ -34,8 +43,10 @@ export {
   getHLTradeHistoryTool,
   getPMClosedPositionsTool,
   getHLPortfolioTool,
+  getPMMarketTool,
+  getPMUserActivityTool,
 } from './live-api/index.js';
-export { getMarketSnapshotTool, fetchLiveIndicatorTool, getMacroSnapshotTool } from './market/index.js';
+export { getMarketSnapshotTool, fetchLiveIndicatorTool, getCoinPriceTool, getMacroSnapshotTool, getFundingRateHistoryTool, getFundingRateCurrentTool, getDerivativesHistoryTool, getNewsHeadlinesTool } from './market/index.js';
 
 // Tool registry for MCP server
 export const tools = [
@@ -56,8 +67,19 @@ export const tools = [
   getMarketSnapshotTool,
   // Market intelligence - live TAAPI fetch
   fetchLiveIndicatorTool,
+  getCoinPriceTool,
   // Market intelligence - daily macro (ETF flows, Fear/Greed, Coinbase premium)
   getMacroSnapshotTool,
+  // Binance funding rates — historical (8h settled) and current/predicted (1h premium index)
+  getFundingRateHistoryTool,
+  getFundingRateCurrentTool,
+  // Binance derivatives history (15m OI + L/S ratios)
+  getDerivativesHistoryTool,
+  // Live RSS news headlines (BBC, AJZ, Sky, NPR, CoinTelegraph)
+  getNewsHeadlinesTool,
+  // Polymarket market data (odds, volume, outcomes) + user activity
+  getPMMarketTool,
+  getPMUserActivityTool,
 ];
 
 // Tool map for quick lookup

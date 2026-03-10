@@ -14,6 +14,9 @@ export declare const config: {
         rateDelayMs: number;
         tokensPerMinute: number;
     };
+    binance: {
+        spotBaseUrl: string;
+    };
     fullDerivativesTier: number;
     totalTrackedCoins: number;
     onDemandCacheTtlMs: number;

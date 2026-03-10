@@ -34,9 +34,20 @@ async function cgGet(path, retries = 3) {
             }
             if (res.status === 429) {
                 const waitMs = 30000 * (attempt + 1);
-                logger_1.logger.warn('CoinGlass', `Rate limited on ${path}, waiting ${waitMs}ms`);
+                logger_1.logger.warn('CoinGlass', `Rate limited (429) on ${path}, waiting ${waitMs}ms`);
                 await sleep(waitMs);
                 continue;
+            }
+            // CoinGlass returns 400 (not 429) for rate-limit errors — detect and retry
+            if (res.status === 400) {
+                const text = await res.text();
+                if (text.toLowerCase().includes('too many') || text.toLowerCase().includes('rate')) {
+                    const waitMs = 30000 * (attempt + 1);
+                    logger_1.logger.warn('CoinGlass', `Rate limited (400) on ${path}, waiting ${waitMs}ms`);
+                    await sleep(waitMs);
+                    continue;
+                }
+                throw new Error(`CoinGlass 400 on ${path}: ${text.slice(0, 200)}`);
             }
             if (!res.ok) {
                 const text = await res.text();
@@ -44,6 +55,13 @@ async function cgGet(path, retries = 3) {
             }
             const json = await res.json();
             if (json.code !== '0' && json.code !== 0) {
+                const msg = String(json.msg || '');
+                if (msg.toLowerCase().includes('too many') || msg.toLowerCase().includes('rate')) {
+                    const waitMs = 30000 * (attempt + 1);
+                    logger_1.logger.warn('CoinGlass', `Rate limited (JSON ${json.code}) on ${path}, waiting ${waitMs}ms`);
+                    await sleep(waitMs);
+                    continue;
+                }
                 logger_1.logger.warn('CoinGlass', `Non-zero code on ${path}: ${json.code} — ${json.msg}`);
                 return null;
             }
@@ -115,83 +133,18 @@ async function fetchAggregateData(trackedCoins) {
 async function fetchPerCoinData(symbol) {
     const result = {
         symbol,
-        funding_rate_history: [],
-        oi_weighted_funding_history: [],
-        oi_history: [],
-        long_short_global: { long: null, short: null, ratio: null },
-        long_short_top_accounts: { long: null, short: null, ratio: null },
-        long_short_top_positions: { long: null, short: null, ratio: null },
         liq_history: [],
         taker_history: [],
         basis: null,
         errors: [],
     };
     const pair = `${symbol}USDT`; // e.g. BTCUSDT — required by pair-level endpoints
+    // NOTE: Funding rate, OI history, and long/short ratios are now sourced from the
+    // binance-fetcher service (Singapore) which writes to binance_funding_1h and
+    // binance_derivatives_15m collections at 1h and 15m intervals respectively.
+    // CoinGlass per-coin calls are now limited to liquidations, taker volume, and basis.
     const endpoints = [
-        // Funding rate OHLC history (pair-level, Binance)
-        // Hobby: min interval 4h. Response: [{ time, open, high, low, close }]
-        {
-            path: `/api/futures/funding-rate/history?exchange=Binance&symbol=${pair}&interval=4h&limit=1`,
-            handler: (d) => { result.funding_rate_history = d || []; },
-        },
-        // OI-weighted funding rate OHLC (coin-level, all exchanges)
-        // Hobby: min interval 4h. Response: [{ time, open, high, low, close }]
-        {
-            path: `/api/futures/funding-rate/oi-weight-history?symbol=${symbol}&interval=4h&limit=1`,
-            handler: (d) => { result.oi_weighted_funding_history = d || []; },
-        },
-        // Aggregated OI OHLC history at 4h (coin-level, all exchanges)
-        // Hobby: min interval 4h. limit=7 → 28h, enough to compute 4h and 24h pct change.
-        {
-            path: `/api/futures/open-interest/aggregated-history?symbol=${symbol}&interval=4h&limit=7&unit=usd`,
-            handler: (d) => { result.oi_history = d || []; },
-        },
-        // Global long/short account ratio (pair-level, Binance)
-        // Hobby: min interval 4h. Response: [{ time, global_account_long_percent, global_account_short_percent, global_account_long_short_ratio }]
-        {
-            path: `/api/futures/global-long-short-account-ratio/history?exchange=Binance&symbol=${pair}&interval=4h&limit=1`,
-            handler: (d) => {
-                const latest = Array.isArray(d) ? d[0] : d;
-                if (latest) {
-                    result.long_short_global = {
-                        long: latest.global_account_long_percent ?? null,
-                        short: latest.global_account_short_percent ?? null,
-                        ratio: latest.global_account_long_short_ratio ?? null,
-                    };
-                }
-            },
-        },
-        // Top trader account long/short ratio (pair-level, Binance)
-        // Hobby: min interval 4h. Response: [{ time, top_account_long_percent, top_account_short_percent, top_account_long_short_ratio }]
-        {
-            path: `/api/futures/top-long-short-account-ratio/history?exchange=Binance&symbol=${pair}&interval=4h&limit=1`,
-            handler: (d) => {
-                const latest = Array.isArray(d) ? d[0] : d;
-                if (latest) {
-                    result.long_short_top_accounts = {
-                        long: latest.top_account_long_percent ?? null,
-                        short: latest.top_account_short_percent ?? null,
-                        ratio: latest.top_account_long_short_ratio ?? null,
-                    };
-                }
-            },
-        },
-        // Top trader position long/short ratio (pair-level, Binance)
-        // Hobby: min interval 4h. Response: [{ time, top_position_long_percent, top_position_short_percent, top_position_long_short_ratio }]
-        {
-            path: `/api/futures/top-long-short-position-ratio/history?exchange=Binance&symbol=${pair}&interval=4h&limit=1`,
-            handler: (d) => {
-                const latest = Array.isArray(d) ? d[0] : d;
-                if (latest) {
-                    result.long_short_top_positions = {
-                        long: latest.top_position_long_percent ?? null,
-                        short: latest.top_position_short_percent ?? null,
-                        ratio: latest.top_position_long_short_ratio ?? null,
-                    };
-                }
-            },
-        },
-        // Aggregated liquidation history (coin-level, multi-exchange)
+        // Aggregated liquidation history (coin-level, multi-exchange: Binance + OKX + Bybit)
         // Hobby: min interval 4h. limit=6 → 24h window for h24 sum.
         {
             path: `/api/futures/liquidation/aggregated-history?exchange_list=Binance,OKX,Bybit&symbol=${symbol}&interval=4h&limit=6`,

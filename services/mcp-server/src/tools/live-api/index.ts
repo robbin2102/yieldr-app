@@ -13,3 +13,7 @@ export { getPMClosedPositionsTool } from './get-pm-closed-positions.js';
 
 // Portfolio / PnL history
 export { getHLPortfolioTool } from './get-hl-portfolio.js';
+
+// Polymarket market data + user activity
+export { getPMMarketTool } from './get-pm-market.js';
+export { getPMUserActivityTool } from './get-pm-user-activity.js';

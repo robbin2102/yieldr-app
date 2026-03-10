@@ -71,4 +71,15 @@ export const COLLECTIONS = {
   CHART_PATTERNS: 'chart_patterns',
   MACRO_DAILY: 'macro_daily',
   TRACKED_COINS: 'tracked_coins',
+
+  // Binance fetcher collections (written by Singapore binance-fetcher service)
+  BINANCE_FUNDING_8H: 'binance_funding_8h',
+  BINANCE_PREMIUM_INDEX_1H: 'binance_premium_index_1h',
+  BINANCE_DERIVATIVES_15M: 'binance_derivatives_15m',
+
+  // Monitoring collections
+  MONITORING_TASKS: 'monitoring_tasks',
+  MONITORING_ALERTS: 'monitoring_alerts',
+  MONITORING_TASK_LOGS: 'monitoring_task_logs',
+  USER_POSITIONS: 'user_positions',
 } as const;

@@ -30,7 +30,14 @@ export const config = {
     get apiKey() { return required('COINGLASS_API_KEY'); },
     baseUrl: 'https://open-api-v4.coinglass.com',
     rateDelayMs: parseInt(process.env.COINGLASS_RATE_DELAY_MS || '2200'),
-    tokensPerMinute: 28,
+    tokensPerMinute: parseInt(process.env.COINGLASS_TOKENS_PER_MINUTE || '15'),
+  },
+
+  binance: {
+    // Override to use alternative Binance endpoints if primary returns 451 (geo-restriction).
+    // Binance alternatives: api1.binance.com, api2.binance.com, api3.binance.com, api4.binance.com
+    // For US-hosted deployments use: api.binance.us
+    spotBaseUrl: process.env.BINANCE_SPOT_BASE_URL || 'https://api.binance.com',
   },
 
   fullDerivativesTier: 20,

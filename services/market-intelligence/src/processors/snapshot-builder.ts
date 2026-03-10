@@ -1,7 +1,8 @@
 import { logger } from '../utils/logger';
 import { TaapiCoinData } from '../fetchers/taapi';
 import { CoinAggregateData, CoinPerCoinData } from '../fetchers/coinglass';
-import { BinanceCandleData } from '../fetchers/binance';
+import { OhlcvData, getLatestOhlcv } from '../fetchers/ohlcv';
+import { getLatestBinanceFunding, getLatestBinanceDerivatives } from '../fetchers/binance-db';
 import MarketSnapshot from '../models/MarketSnapshot';
 import LiquidationLevels from '../models/LiquidationLevels';
 import { bucketLiquidations } from './liquidation-bucketer';
@@ -14,30 +15,40 @@ interface BuildSnapshotArgs {
   aggregate: CoinAggregateData;
   perCoin?: CoinPerCoinData;
   coinbasePremium?: { btc: number | null; eth: number | null };
-  binance?: BinanceCandleData;
 }
 
-export async function buildAndSaveSnapshot(args: BuildSnapshotArgs): Promise<void> {
-  const { symbol, timestamp, tier, taapi, aggregate, perCoin, coinbasePremium, binance } = args;
+export async function buildAndSaveSnapshot(args: BuildSnapshotArgs): Promise<{ _id: string; snapshot: Record<string, unknown> }> {
+  const { symbol, timestamp, tier, taapi, aggregate, perCoin, coinbasePremium } = args;
   const start = Date.now();
+
+  // OHLCV: read latest 15m candle from ohlcv_15m collection (written by ohlcv cron at :03/:18/:33/:48)
+  // Binance /api/v3/klines is no longer called — replaced by TAAPI candle via ohlcv fetcher.
+  const ohlcv = await getLatestOhlcv(symbol);
+
+  // Load Binance derivatives data (written by binance-fetcher service, Singapore)
+  // These replace the CoinGlass per-coin endpoints for funding rate, OI, and L/S ratios.
+  const [binanceFunding, binanceDerivatives] = await Promise.all([
+    getLatestBinanceFunding(symbol),
+    getLatestBinanceDerivatives(symbol),
+  ]);
 
   const indicators = taapi.indicators as any;
 
-  // Price: Binance OHLCV only — no fallback to VWAP (that would corrupt computed fields)
-  const closePrice: number | null = binance?.close ?? null;
+  // Price: from ohlcv_15m collection — no fallback to VWAP (that would corrupt computed fields)
+  const closePrice: number | null = ohlcv.close;
 
   const price = {
-    open:   binance?.open   ?? null,
-    high:   binance?.high   ?? null,
-    low:    binance?.low    ?? null,
+    open:   ohlcv.open,
+    high:   ohlcv.high,
+    low:    ohlcv.low,
     close:  closePrice,
-    volume: binance?.volume ?? null,
+    volume: ohlcv.volume,
   };
 
-  // Pivot points: prefer TAAPI result, fall back to computing from Binance daily candle
-  const pivotPoints = computePivotPoints(indicators?.pivot_points, binance);
+  // Pivot points: prefer TAAPI result, fall back to computing from 24h OHLCV high/low
+  const pivotPoints = computePivotPoints(indicators?.pivot_points, ohlcv);
 
-  const derivatives = buildDerivatives(aggregate, perCoin, coinbasePremium, symbol);
+  const derivatives = buildDerivatives(aggregate, perCoin, coinbasePremium, symbol, binanceFunding, binanceDerivatives);
 
   const indicatorsDoc = {
     ema_8:        indicators?.ema_8        ?? null,
@@ -85,43 +96,47 @@ export async function buildAndSaveSnapshot(args: BuildSnapshotArgs): Promise<voi
     fetch_errors: taapi.errors,
   };
 
+  let savedId: string;
   try {
-    await (MarketSnapshot as any).findOneAndUpdate(
+    const saved = await (MarketSnapshot as any).findOneAndUpdate(
       { symbol: snapshotDoc.symbol, timestamp },
       { $set: snapshotDoc },
       { upsert: true, new: true }
     );
-    logger.debug('Snapshot', `${symbol} saved (tier=${tier})`);
+    savedId = String(saved._id);
+    logger.debug('Snapshot', `${symbol} saved (tier=${tier}) _id=${savedId}`);
   } catch (err: any) {
     logger.error('Snapshot', `${symbol} save failed: ${err.message}`);
     throw err;
   }
 
   if (perCoin?.liq_history && perCoin.liq_history.length > 0) {
-    await updateLiquidationLevels(symbol, perCoin.liq_history, closePrice);
+    await updateLiquidationLevels(symbol, perCoin.liq_history, closePrice ?? (indicators?.vwap as number | null) ?? null);
   }
+
+  return { _id: savedId, snapshot: snapshotDoc as unknown as Record<string, unknown> };
 }
 
 // ─── Pivot Points ──────────────────────────────────────────────────────────────
 
 /**
  * Returns TAAPI pivot points if populated, otherwise computes classic floor-trader
- * pivots from the previous day's Binance OHLC.
+ * pivots from the 24h high/low/close derived from the ohlcv_15m collection.
  *  PP = (H+L+C)/3
  *  R1 = 2*PP-L,  R2 = PP+(H-L),  R3 = H+2*(PP-L)
  *  S1 = 2*PP-H,  S2 = PP-(H-L),  S3 = L-2*(H-PP)
  */
 function computePivotPoints(
   taapiPivots: any,
-  binance: BinanceCandleData | undefined,
+  ohlcv: OhlcvData,
 ): Record<string, number | null> {
   // Use TAAPI if it returned real values
   if (taapiPivots?.pp != null) return taapiPivots;
 
-  // Fall back to Binance daily OHLC
-  const H = binance?.daily_high  ?? null;
-  const L = binance?.daily_low   ?? null;
-  const C = binance?.daily_close ?? null;
+  // Fall back to 24h high/low from ohlcv_15m
+  const H = ohlcv.daily_high  ?? null;
+  const L = ohlcv.daily_low   ?? null;
+  const C = ohlcv.daily_close ?? null;
 
   if (H == null || L == null || C == null) {
     return { pp: null, r1: null, r2: null, r3: null, s1: null, s2: null, s3: null };
@@ -146,44 +161,28 @@ function buildDerivatives(
   perCoin: CoinPerCoinData | undefined,
   coinbasePremium: { btc: number | null; eth: number | null } | undefined,
   symbol: string,
+  binanceFunding: Awaited<ReturnType<typeof getLatestBinanceFunding>>,
+  binanceDerivatives: Awaited<ReturnType<typeof getLatestBinanceDerivatives>>,
 ): Record<string, unknown> {
   const sym = symbol.toUpperCase();
 
-  const fundingCurrent = aggregate.funding_rate_current;
-  const fundingAnnualized = fundingCurrent != null ? fundingCurrent * 3 * 365 * 100 : null;
+  // Funding rate: Binance (1h granularity) preferred; fallback to CoinGlass aggregate
+  const fundingCurrent   = binanceFunding?.funding_rate   ?? aggregate.funding_rate_current;
+  const fundingAnnualized = binanceFunding?.annualized_rate
+    ?? (fundingCurrent != null ? fundingCurrent * 3 * 365 * 100 : null);
 
-  // OI-weighted funding rate — close of latest 4h candle
-  let oiWeightedFunding: number | null = null;
-  if (perCoin?.oi_weighted_funding_history && perCoin.oi_weighted_funding_history.length > 0) {
-    const latest = perCoin.oi_weighted_funding_history[perCoin.oi_weighted_funding_history.length - 1];
-    oiWeightedFunding = parseFloat(latest?.close ?? '') || null;
-  }
+  // OI: from Binance 15m collection (all 100 coins, with 4h/24h change pre-computed)
+  const oiTotal     = binanceDerivatives?.oi.total_usdt     ?? null;
+  const oiChange4h  = binanceDerivatives?.oi.change_4h_pct  ?? null;
+  const oiChange24h = binanceDerivatives?.oi.change_24h_pct ?? null;
 
-  // OI: use 4h history (limit=7 → ~28h) for 4h and 24h change
-  let oiTotal: number | null = null;
-  let oiChange4h: number | null = null;
-  let oiChange24h: number | null = null;
+  // L/S ratios: from Binance 15m collection (all 100 coins)
+  const null3 = { long: null, short: null, ratio: null };
+  const lsGlobal   = binanceDerivatives?.long_short_global        ?? null3;
+  const lsTopAcct  = binanceDerivatives?.long_short_top_accounts  ?? null3;
+  const lsTopPos   = binanceDerivatives?.long_short_top_positions ?? null3;
 
-  if (perCoin?.oi_history && perCoin.oi_history.length >= 1) {
-    const vals = perCoin.oi_history;
-    const curr  = parseFloat(vals[vals.length - 1]?.close ?? '') || null;
-    oiTotal = curr;
-
-    // 4h change: compare last two candles
-    if (vals.length >= 2) {
-      const prev4h = parseFloat(vals[vals.length - 2]?.close ?? '') || null;
-      if (curr && prev4h) oiChange4h = ((curr - prev4h) / prev4h) * 100;
-    }
-
-    // 24h change: compare last candle to 6 candles ago (6 * 4h = 24h)
-    if (vals.length >= 7) {
-      const prev24h = parseFloat(vals[vals.length - 7]?.close ?? '') || null;
-      if (curr && prev24h) oiChange24h = ((curr - prev24h) / prev24h) * 100;
-    }
-  }
-
-
-  // Liquidations from extended history (limit=6 → 24h)
+  // Liquidations: still from CoinGlass (multi-exchange: Binance + OKX + Bybit)
   let liqH4  = { long_usd: null as number | null, short_usd: null as number | null };
   let liqH24 = { long_usd: null as number | null, short_usd: null as number | null };
   let liqLatest = { long_usd: null as number | null, short_usd: null as number | null, count: null as number | null };
@@ -198,13 +197,11 @@ function buildDerivatives(
       count:     null,
     };
 
-    // h4: sum of last 1 candle (4h window — single candle at 4h interval)
     liqH4 = {
       long_usd:  hist.slice(-1).reduce((s: number, d: any) => s + (d?.aggregated_long_liquidation_usd  ?? 0), 0) || null,
       short_usd: hist.slice(-1).reduce((s: number, d: any) => s + (d?.aggregated_short_liquidation_usd ?? 0), 0) || null,
     };
 
-    // h24: sum of all 6 candles (6 * 4h = 24h)
     const h24Long  = hist.reduce((s: number, d: any) => s + (d?.aggregated_long_liquidation_usd  ?? 0), 0);
     const h24Short = hist.reduce((s: number, d: any) => s + (d?.aggregated_short_liquidation_usd ?? 0), 0);
     liqH24 = {
@@ -212,7 +209,6 @@ function buildDerivatives(
       short_usd: h24Short || aggregate.liq_short_24h || null,
     };
   } else {
-    // Fallback to aggregate-level 24h data
     liqH24 = { long_usd: aggregate.liq_long_24h, short_usd: aggregate.liq_short_24h };
   }
 
@@ -223,17 +219,13 @@ function buildDerivatives(
       change_24h_pct: oiChange24h,
     },
     funding_rate: {
-      current:      fundingCurrent,
-      predicted:    null,
-      oi_weighted:  oiWeightedFunding,
-      vol_weighted: null,
-      annualized:   fundingAnnualized,
+      current:    fundingCurrent,
+      annualized: fundingAnnualized,
     },
-    funding_arbitrage: [],
     long_short_ratio: {
-      global_accounts: perCoin?.long_short_global        ?? { long: null, short: null, ratio: null },
-      top_accounts:    perCoin?.long_short_top_accounts  ?? { long: null, short: null, ratio: null },
-      top_positions:   perCoin?.long_short_top_positions ?? { long: null, short: null, ratio: null },
+      global_accounts: lsGlobal,
+      top_accounts:    lsTopAcct,
+      top_positions:   lsTopPos,
     },
     liquidations: {
       latest: liqLatest,
@@ -262,19 +254,15 @@ function buildDerivatives(
 
 /**
  * Derives market_structure, ma_crossovers, and alerts from current snapshot data.
- * Note: divergences, fvg, order_blocks require multi-candle history (future work).
  */
 function computeSnapshotFields(
   indicators: any,
   derivatives: any,
   closePrice: number | null,
 ): {
-  ma_crossovers:   unknown[];
-  divergences:     unknown[];
+  ma_crossovers:    unknown[];
   market_structure: Record<string, unknown>;
-  fvg:             unknown[];
-  order_blocks:    unknown[];
-  alerts:          unknown[];
+  alerts:           unknown[];
 } {
   const ema8   = indicators?.ema_8   ?? null;
   const ema21  = indicators?.ema_21  ?? null;
@@ -388,10 +376,7 @@ function computeSnapshotFields(
 
   return {
     ma_crossovers,
-    divergences:     [],   // requires multi-candle history
     market_structure,
-    fvg:             [],   // requires multi-candle history
-    order_blocks:    [],   // requires multi-candle history
     alerts,
   };
 }

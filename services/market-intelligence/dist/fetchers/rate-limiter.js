@@ -46,7 +46,7 @@ function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
 let _cgRateLimiter = null;
-function getCoinGlassRateLimiter(tokensPerMinute = 28) {
+function getCoinGlassRateLimiter(tokensPerMinute = 8) {
     if (!_cgRateLimiter) {
         _cgRateLimiter = new RateLimiter(tokensPerMinute, 'CoinGlass');
         logger_1.logger.info('RateLimiter', `CoinGlass rate limiter initialized: ${tokensPerMinute} req/min`);

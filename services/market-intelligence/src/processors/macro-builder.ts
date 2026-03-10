@@ -2,55 +2,77 @@ import { logger } from '../utils/logger';
 import { fetchMacroData, fetchCoinbasePremium } from '../fetchers/coinglass';
 import MacroDaily from '../models/MacroDaily';
 
-export async function buildAndSaveMacroDaily(): Promise<void> {
+export async function buildAndSaveMacroDaily(): Promise<{ _id: string; doc: Record<string, unknown> }> {
   logger.info('Macro', 'Building daily macro snapshot');
 
-  try {
-    const { btcEtfFlows, ethEtfFlows, btcEtfNetAssets, fearGreed, stablecoinMcap } = await fetchMacroData();
-    const premium = await fetchCoinbasePremium();
+  const { btcEtfFlows, ethEtfFlows, btcEtfNetAssets, fearGreed, stablecoinMcap } = await fetchMacroData();
+  const premium = await fetchCoinbasePremium();
 
-    const today = new Date();
-    today.setUTCHours(0, 0, 0, 0);
+  const today = new Date();
+  today.setUTCHours(0, 0, 0, 0);
 
-    const doc = {
-      date: today,
-      btc_etf: buildEtfFlows(btcEtfFlows, btcEtfNetAssets),
-      eth_etf: buildEtfFlows(ethEtfFlows, null),
-      coinbase_premium: premium,
-      fear_greed: buildFearGreed(fearGreed),
-      stablecoin_mcap: buildStablecoinMcap(stablecoinMcap),
-    };
+  const btcEtf = buildEtfFlows(btcEtfFlows, btcEtfNetAssets);
+  const ethEtf = buildEtfFlows(ethEtfFlows, null);
 
-    await (MacroDaily as any).findOneAndUpdate(
-      { date: today },
-      { $set: doc },
-      { upsert: true, new: true }
-    );
-
-    logger.info('Macro', `Macro daily saved for ${today.toISOString().split('T')[0]}`);
-    logger.info('Macro', `Fear/Greed: ${doc.fear_greed.value} (${doc.fear_greed.classification})`);
-    logger.info('Macro', `BTC ETF flows: ${formatUsd(doc.btc_etf.total_flow_usd)}`);
-    logger.info('Macro', `Coinbase premium BTC: ${premium.btc}`);
-    logger.info('Macro', `Stablecoin mcap: total=${doc.stablecoin_mcap.total_usd}, change24h=${doc.stablecoin_mcap.change_24h_usd}`);
-  } catch (err: any) {
-    logger.error('Macro', `Failed to build macro daily: ${err.message}`);
+  // Warn if ETF data is stale (data_date hasn't changed from what was previously fetched)
+  const yesterday = new Date(today);
+  yesterday.setUTCDate(yesterday.getUTCDate() - 1);
+  if (btcEtf.data_date) {
+    const d = new Date(btcEtf.data_date);
+    d.setUTCHours(0, 0, 0, 0);
+    if (d < yesterday) {
+      logger.warn('Macro', `BTC ETF data is stale — API returned data from ${d.toISOString().slice(0, 10)}, expected ${yesterday.toISOString().slice(0, 10)} or later`);
+    } else {
+      logger.info('Macro', `BTC ETF data date: ${d.toISOString().slice(0, 10)}`);
+    }
+  } else {
+    logger.warn('Macro', 'BTC ETF data_date missing from API response — cannot verify freshness');
   }
+
+  const doc = {
+    date: today,
+    btc_etf: btcEtf,
+    eth_etf: ethEtf,
+    coinbase_premium: { btc: premium.btc },
+    fear_greed: buildFearGreed(fearGreed),
+    stablecoin_mcap: buildStablecoinMcap(stablecoinMcap),
+  };
+
+  const saved = await (MacroDaily as any).findOneAndUpdate(
+    { date: today },
+    { $set: doc },
+    { upsert: true, new: true }
+  );
+  const _id = String(saved._id);
+
+  logger.debug('Macro', `Macro daily saved _id=${_id}`);
+
+  return { _id, doc: doc as unknown as Record<string, unknown> };
 }
 
 function buildEtfFlows(
   flowsData: any,
   netAssetsData: any,
-): { total_flow_usd: number | null; net_assets_usd: number | null; flows_by_ticker: Array<{ ticker: string; flow_usd: number }> } {
+): { total_flow_usd: number | null; net_assets_usd: number | null; flows_by_ticker: Array<{ ticker: string; flow_usd: number }>; data_date: Date | null } {
   if (!flowsData) {
-    return { total_flow_usd: null, net_assets_usd: null, flows_by_ticker: [] };
+    return { total_flow_usd: null, net_assets_usd: null, flows_by_ticker: [], data_date: null };
   }
 
-  // /api/etf/bitcoin/flow-history returns array of daily entries
+  // /api/etf/bitcoin/flow-history returns array of daily entries (descending — newest first)
   // Each entry: { timestamp, flow_usd, price_usd, etf_flows: [{ etf_ticker, flow_usd }] }
   const latest = Array.isArray(flowsData) ? flowsData[0] : flowsData;
   const totalFlow: number | null = latest?.flow_usd ?? null;
 
-  // /api/etf/bitcoin/net-assets/history returns array
+  // Parse data_date from the API entry's own timestamp so we can detect stale data.
+  // CoinGlass returns timestamps in milliseconds; detect by magnitude to avoid double-converting.
+  const rawTs = latest?.timestamp ?? latest?.time ?? null;
+  const dataDate: Date | null = rawTs != null ? new Date(
+    typeof rawTs === 'number'
+      ? (rawTs > 1e12 ? rawTs : rawTs * 1000)  // already ms if > year 2001 in seconds
+      : rawTs
+  ) : null;
+
+  // /api/etf/bitcoin/net-assets/history returns array (descending — newest first)
   // Each entry: { net_assets_usd, change_usd, timestamp, price_usd }
   let netAssets: number | null = null;
   if (netAssetsData) {
@@ -68,7 +90,7 @@ function buildEtfFlows(
     }
   }
 
-  return { total_flow_usd: totalFlow, net_assets_usd: netAssets, flows_by_ticker: flowsByTicker };
+  return { total_flow_usd: totalFlow, net_assets_usd: netAssets, flows_by_ticker: flowsByTicker, data_date: dataDate };
 }
 
 function classifyFearGreed(value: number): string {
