@@ -227,7 +227,7 @@ export default function AgentDetailPage() {
               <div className={s.heroTags}>
                 {agent.markets.map(m => (
                   <span key={m} className={`${s.htag} ${s[`htag_${m}`] ?? ''}`}>
-                    {m === 'perps' ? 'Perpetuals' : m === 'predictions' ? 'Polymarket' : 'Liquidity'}
+                    {m === 'perps' ? 'Perpetuals' : m === 'predictions' ? 'Predictions' : 'Liquidity'}
                   </span>
                 ))}
                 {task && <span className={s.htagInterval}>{intervalLabel(task.intervalSeconds)}</span>}
