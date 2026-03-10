@@ -850,7 +850,7 @@ async function executeTool(name: string, input: any, wallet?: string): Promise<s
       case 'get_pm_user_activity': {
         const { walletAddress, market, side, type: actType, afterDays = 7, limit: actLimit = 20 } = input;
         const afterTs = Math.floor(Date.now() / 1000) - (afterDays * 86400);
-        const p = new URLSearchParams({ user: walletAddress, limit: String(Math.min(actLimit, 100)), after: String(afterTs) });
+        const p = new URLSearchParams({ user: walletAddress, limit: String(Math.min(actLimit, 100)), start: String(afterTs) });
         if (market) p.set('market', market);
         if (side) p.set('side', side);
         if (actType) p.set('type', actType);
