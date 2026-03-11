@@ -106,7 +106,7 @@ class UpdateMarginRequest(BaseModel):
 
 
 class CancelLimitRequest(BaseModel):
-    order_index: int
+    trade_index: int
     pair_index: int
 
 
@@ -446,7 +446,7 @@ async def execute_cancel_limit(body: CancelLimitRequest, _: str = Depends(verify
     try:
         tx = await client.trade.build_order_cancel_tx(
             pair_index=body.pair_index,
-            trade_index=body.order_index,
+            trade_index=body.trade_index,
             trader=agent_wallet,
         )
         tx["nonce"] = await _fresh_nonce(agent_wallet)
@@ -455,7 +455,7 @@ async def execute_cancel_limit(body: CancelLimitRequest, _: str = Depends(verify
             "success": True,
             "tx_hash": receipt.transactionHash.hex(),
             "status": receipt.status,
-            "order_index": body.order_index,
+            "trade_index": body.trade_index,
         }
     except HTTPException:
         raise
