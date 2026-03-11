@@ -3,7 +3,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import asyncio
 import os
+from pathlib import Path
+from dotenv import load_dotenv
 from web3 import Web3
+
+# Load .env.local from project root (one level up from python-service/)
+load_dotenv(Path(__file__).parent.parent / ".env.local")
 from avantis_trader_sdk import TraderClient, FeedClient
 from trade_routes import router as trade_router
 
