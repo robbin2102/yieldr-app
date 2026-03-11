@@ -9,7 +9,7 @@ from web3 import Web3
 
 # Load .env.local from project root (one level up from python-service/)
 _env_path = Path(__file__).parent.parent / ".env.local"
-load_dotenv(_env_path)
+load_dotenv(_env_path, override=True)
 
 # ── Startup diagnostics ──────────────────────────────────────────────────────
 _raw_pk = os.getenv("AGENT_WALLET_PRIVATE_KEY", "")
