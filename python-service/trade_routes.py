@@ -40,9 +40,11 @@ def _get_rpc_url() -> str:
 
 def _build_trader_client() -> TraderClient:
     rpc_url = _get_rpc_url()
-    private_key = os.getenv("AGENT_WALLET_PRIVATE_KEY", "")
+    private_key = os.getenv("AGENT_WALLET_PRIVATE_KEY", "").strip().strip('"').strip("'")
     if not private_key:
         raise HTTPException(status_code=503, detail="AGENT_WALLET_PRIVATE_KEY is not configured")
+    if not private_key.startswith("0x"):
+        private_key = "0x" + private_key
     async_web3 = AsyncWeb3(AsyncWeb3.AsyncHTTPProvider(rpc_url, request_kwargs={"timeout": 60}))
     signer = LocalSigner(private_key, async_web3)
     return TraderClient(provider_url=rpc_url, signer=signer)
