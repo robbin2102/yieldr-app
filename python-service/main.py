@@ -162,3 +162,13 @@ async def fetch_positions(request: FetchRequest):
 
 # Trade execution routes (Avantis SDK + agent wallet)
 app.include_router(trade_router, prefix="/trade", tags=["Trade Execution"])
+
+# ── Print all registered routes at startup ────────────────────────────────────
+@app.on_event("startup")
+async def _print_routes():
+    for route in app.routes:
+        methods = getattr(route, "methods", None)
+        path    = getattr(route, "path", None)
+        if path:
+            print(f"[ROUTE] {sorted(methods) if methods else '?':30s} {path}")
+# ─────────────────────────────────────────────────────────────────────────────
