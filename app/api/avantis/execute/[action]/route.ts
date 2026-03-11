@@ -54,7 +54,7 @@ async function proxyToPython(endpoint: string, body: Record<string, any>) {
 
 export async function POST(
   request: NextRequest,
-  { params }: { params: { action: string } }
+  { params }: { params: Promise<{ action: string }> }
 ) {
   // ── Auth: require internal secret ─────────────────────────────────────────
   // Only the app's own server-side code (MCP tools, server actions) may call
@@ -66,7 +66,7 @@ export async function POST(
     }
   }
 
-  const { action } = params;
+  const { action } = await params;
   const pythonEndpoint = ACTION_MAP[action];
 
   if (!pythonEndpoint) {
