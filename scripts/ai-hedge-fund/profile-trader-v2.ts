@@ -108,53 +108,73 @@ interface PublicProfile {
 // Fetch Functions
 // ═══════════════════════════════════════════════════════════════
 
-// fetchActivities — unchanged from profile-trader.ts (time-based, 30 days)
+// fetchActivities — time-windowed pagination to bypass Polymarket's 3500-record offset cap.
+// Uses start/end params with ASC sort. When the cap is hit, slides the window forward
+// using the newest collected timestamp and continues until the full period is covered.
 async function fetchActivities(wallet: string, days: number): Promise<Activity[]> {
   const now = Math.floor(Date.now() / 1000);
-  const startTs = now - (days * 24 * 60 * 60);
+  const periodStart = now - (days * 24 * 60 * 60);
   const LIMIT = 500;
-  const MAX_OFFSET = 10000;
+  const API_OFFSET_CAP = 3500; // Polymarket's hard server-side offset cap
 
-  let allActivities: Activity[] = [];
-  let offset = 0;
-  let done = false;
+  const seen = new Set<string>();
+  const allActivities: Activity[] = [];
+  let windowStart = periodStart;
 
-  while (!done && offset <= MAX_OFFSET) {
-    const url = `${API_BASE}/activity?user=${wallet}&limit=${LIMIT}&offset=${offset}&sortBy=TIMESTAMP&sortDirection=DESC`;
-    const response = await fetch(url);
-    if (!response.ok) {
-      // 400 at high offsets = Polymarket's pagination cap — treat as end of results
-      if (Number(response.status) === 400) {
-        console.log(`  API returned 400 at offset=${offset} (pagination limit reached) — stopping`);
-        break;
+  outer: while (true) {
+    let offset = 0;
+    let lastTsInWindow = windowStart;
+    let hitCap = false;
+
+    while (offset < API_OFFSET_CAP) {
+      const url = `${API_BASE}/activity?user=${wallet}&limit=${LIMIT}&offset=${offset}` +
+        `&start=${windowStart}&end=${now}&sortBy=TIMESTAMP&sortDirection=ASC`;
+
+      const response = await fetch(url);
+      if (!response.ok) {
+        if (Number(response.status) === 400) {
+          console.log(`  API returned 400 at offset=${offset} — sliding window`);
+          hitCap = true;
+          break;
+        }
+        throw new Error(`API error: ${response.status}`);
       }
-      throw new Error(`API error: ${response.status}`);
+
+      const batch = await response.json() as Activity[];
+      if (batch.length === 0) break outer;
+
+      const lastTs = batch[batch.length - 1]?.timestamp;
+      console.log(`  Fetching activities offset=${offset}... [${allActivities.length} collected] (${lastTs ? new Date(lastTs * 1000).toISOString().split('T')[0] : 'N/A'})`);
+
+      for (const activity of batch) {
+        const key = activity.transactionHash || `${activity.timestamp}-${activity.conditionId}-${activity.outcome}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          allActivities.push(activity);
+          lastTsInWindow = activity.timestamp;
+        }
+      }
+
+      if (batch.length < LIMIT) break outer; // Last page — all data collected
+      offset += LIMIT;
+      await new Promise(r => setTimeout(r, 100));
     }
 
-    const batch = await response.json() as Activity[];
-    if (batch.length === 0) break;
+    // Hit offset cap (3500) — slide window forward past what we've collected
+    if (!hitCap && offset >= API_OFFSET_CAP) hitCap = true;
 
-    const lastTs = batch[batch.length - 1]?.timestamp;
-    console.log(`  Fetching activities offset=${offset}... [${allActivities.length} collected] (${lastTs ? new Date(lastTs * 1000).toISOString().split('T')[0] : 'N/A'})`);
-
-    for (const activity of batch) {
-      if (activity.timestamp >= startTs) {
-        allActivities.push(activity);
-      } else {
-        done = true;
+    if (hitCap) {
+      if (lastTsInWindow <= windowStart) {
+        console.log(`  ⚠️  Cannot advance window (all activities at same timestamp) — stopping`);
         break;
       }
+      console.log(`  Sliding window past ${new Date(lastTsInWindow * 1000).toISOString().split('T')[0]} (${allActivities.length} collected so far)...`);
+      windowStart = lastTsInWindow; // Dedup via `seen` handles any boundary overlap
     }
-
-    if (batch.length < LIMIT) break;
-    offset += LIMIT;
-    await new Promise(r => setTimeout(r, 100));
   }
 
-  if (offset > MAX_OFFSET && !done) {
-    console.log(`  Hit API offset limit (${MAX_OFFSET}) — may have more activities`);
-  }
-
+  // Sort newest first to match expected behavior
+  allActivities.sort((a, b) => b.timestamp - a.timestamp);
   return allActivities;
 }
 
