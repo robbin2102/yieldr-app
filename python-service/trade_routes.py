@@ -230,12 +230,14 @@ async def execute_open(body: OpenTradeRequest, _: str = Depends(verify_api_key))
         pair_index = await client.pairs_cache.get_pair_index(body.pair)
         is_long = body.direction.lower() == "long"
 
-        # Fetch live price to compute TP/SL
+        # Fetch live price for reference; use limit price as TP/SL base for LIMIT orders
         price_data = await client.trade.feed_client.get_price_update_data(pair_index)
-        entry_price = price_data.core.price
+        live_price = price_data.core.price
+        is_limit = body.order_type.upper() in ("LIMIT", "STOP_LIMIT")
+        tp_sl_base = body.open_price if (is_limit and body.open_price) else live_price
 
-        tp_price = entry_price * (1 + body.tp_pct / 100) if is_long else entry_price * (1 - body.tp_pct / 100)
-        sl_price = entry_price * (1 - body.sl_pct / 100) if is_long else entry_price * (1 + body.sl_pct / 100)
+        tp_price = tp_sl_base * (1 + body.tp_pct / 100) if is_long else tp_sl_base * (1 - body.tp_pct / 100)
+        sl_price = tp_sl_base * (1 - body.sl_pct / 100) if is_long else tp_sl_base * (1 + body.sl_pct / 100)
 
         # Approve USDC if needed
         allowance = await client.get_usdc_allowance_for_trading(agent_wallet)
@@ -279,13 +281,15 @@ async def execute_open(body: OpenTradeRequest, _: str = Depends(verify_api_key))
             "tx_hash": receipt.transactionHash.hex(),
             "block_number": receipt.blockNumber,
             "status": receipt.status,
+            "order_type": body.order_type.upper(),
             "agent_wallet": agent_wallet,
             "pair": body.pair,
             "pair_index": pair_index,
             "direction": body.direction,
             "collateral": body.collateral,
             "leverage": body.leverage,
-            "entry_price": entry_price,
+            "live_price": live_price,
+            "limit_price": body.open_price if is_limit else None,
             "tp_price": tp_price,
             "sl_price": sl_price,
             "opening_fee_usdc": opening_fee,
