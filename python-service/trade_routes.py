@@ -208,8 +208,18 @@ async def get_fees(
 # POST /trade/execute-open
 # ─────────────────────────────────────────────
 
+MIN_POSITION_SIZE_USDC = 100.0  # Avantis protocol minimum
+
 @router.post("/execute-open")
 async def execute_open(body: OpenTradeRequest, _: str = Depends(verify_api_key)):
+    position_size = body.collateral * body.leverage
+    if position_size < MIN_POSITION_SIZE_USDC:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Position size ${position_size:.2f} is below Avantis minimum of ${MIN_POSITION_SIZE_USDC:.0f} USDC. "
+                   f"Increase collateral or leverage (e.g. collateral=10, leverage=10 → $100).",
+        )
+
     client = _build_trader_client()
     agent_wallet = client.get_signer().get_ethereum_address()
     try:
