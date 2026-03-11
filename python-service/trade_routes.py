@@ -174,11 +174,6 @@ async def get_fees(
     agent_wallet = client.get_signer().get_ethereum_address()
     try:
         pair_index = await client.pairs_cache.get_pair_index(pair)
-        opening_fee = await client.fee_parameters.get_opening_fee(
-            position_size=collateral * leverage,
-            is_long=is_long,
-            pair_index=pair_index,
-        )
         trade_input = TradeInput(
             trader=agent_wallet,
             pair_index=pair_index,
@@ -189,6 +184,7 @@ async def get_fees(
             sl=0.0001,
             open_price=0,
         )
+        opening_fee = await client.fee_parameters.get_new_trade_opening_fee(trade_input)
         loss_protection = await client.trading_parameters.get_loss_protection_for_trade_input(
             trade_input, opening_fee_usdc=opening_fee
         )
@@ -255,11 +251,7 @@ async def execute_open(body: OpenTradeRequest, _: str = Depends(verify_api_key))
             open_price=body.open_price or 0,
         )
 
-        opening_fee = await client.fee_parameters.get_opening_fee(
-            position_size=body.collateral * body.leverage,
-            is_long=is_long,
-            pair_index=pair_index,
-        )
+        opening_fee = await client.fee_parameters.get_new_trade_opening_fee(trade_input)
         loss_protection = await client.trading_parameters.get_loss_protection_for_trade_input(
             trade_input, opening_fee_usdc=opening_fee
         )
