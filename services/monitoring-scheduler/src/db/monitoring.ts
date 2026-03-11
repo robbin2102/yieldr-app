@@ -9,6 +9,16 @@ export interface ToolConfig {
   extractFields: string[];
 }
 
+export interface SignalConfig {
+  signalId: string;          // unique within the task, e.g. "rsi_exit"
+  label: string;             // human-readable, e.g. "RSI > 70"
+  sourceType: 'mongodb_snapshot' | 'taapi_live' | 'dedicated_collection' | 'computed';
+  field: string;             // dot-path to value in strippedData, e.g. "indicators.rsi"
+  operator: '>' | '<' | '>=' | '<=' | '==' | '!=';
+  threshold: number;
+  role: 'entry' | 'exit';
+}
+
 export interface CycleEntry {
   timestamp: Date;
   data: Record<string, any>;
@@ -16,6 +26,8 @@ export interface CycleEntry {
   signaled: boolean;
   summary: string;
   indicators?: Array<{ name: string; value: string; dot: string; note: string }>;
+  entryTriggered?: boolean;
+  exitTriggered?: boolean;
 }
 
 export interface MonitoringTask {
@@ -27,6 +39,18 @@ export interface MonitoringTask {
   monitorInstruction: string;
   alphaTitle?: string;
   alphaDescription?: string;
+
+  // Trading linkage
+  mode: 'monitor' | 'autonomous' | 'confirm';
+  linkedTradeSetupId?: string;
+  linkedTradeIndex?: number;
+  linkedPairIndex?: number;
+
+  // Signal definitions
+  signals: SignalConfig[];
+  entryLogic: 'AND' | 'OR' | 'ANY';
+  exitLogic: 'AND' | 'OR' | 'ANY';
+
   tools: ToolConfig[];
   intervalSeconds: number;
   status: 'active' | 'paused' | 'error';

@@ -6,6 +6,9 @@ import { getTopPMTradersTool } from './top-traders/get-top-pm-traders.js';
 import { getTopPerpTradersTool } from './top-traders/get-top-perp-traders.js';
 import { compareTradersTool } from './top-traders/compare-traders.js';
 
+// Trading tools
+import { getStrategyTemplateTool } from './trading/strategy-templates.js';
+
 // Live API tools - Open positions
 import { getHLPositionsTool } from './live-api/get-hl-positions.js';
 import { getAvantisPositionsTool } from './live-api/get-avantis-positions.js';
@@ -47,6 +50,7 @@ export {
   getPMUserActivityTool,
 } from './live-api/index.js';
 export { getMarketSnapshotTool, fetchLiveIndicatorTool, getCoinPriceTool, getMacroSnapshotTool, getFundingRateHistoryTool, getFundingRateCurrentTool, getDerivativesHistoryTool, getNewsHeadlinesTool } from './market/index.js';
+export { getStrategyTemplateTool } from './trading/index.js';
 
 // Tool registry for MCP server
 export const tools = [
@@ -80,6 +84,8 @@ export const tools = [
   // Polymarket market data (odds, volume, outcomes) + user activity
   getPMMarketTool,
   getPMUserActivityTool,
+  // Strategy templates + signal catalog
+  getStrategyTemplateTool,
 ];
 
 // Tool map for quick lookup

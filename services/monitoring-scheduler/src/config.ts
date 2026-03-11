@@ -20,4 +20,7 @@ export const config = {
   // Position refresh intervals
   positionRefreshMs: parseInt(process.env.POSITION_REFRESH_MS || '120000'),       // 2 min
   avantisRefreshMs: parseInt(process.env.AVANTIS_REFRESH_MS || '600000'),          // 10 min
+  // Autonomous trade execution: scheduler calls Next.js execute proxy
+  nextjsApiUrl: process.env.NEXTJS_API_URL || 'http://localhost:3000',
+  internalSecret: process.env.YIELDR_INTERNAL_SECRET || '',
 };
