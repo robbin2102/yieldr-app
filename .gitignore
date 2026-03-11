@@ -47,3 +47,8 @@ BUILD-IN-PUBLIC-TRANSPARENCY.md
 services/**/*_NOTES.md
 services/**/*_TODO.md
 services/**/*_DRAFT.md
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
