@@ -170,5 +170,5 @@ async def _print_routes():
         methods = getattr(route, "methods", None)
         path    = getattr(route, "path", None)
         if path:
-            print(f"[ROUTE] {sorted(methods) if methods else '?':30s} {path}")
+            print(f"[ROUTE] {str(sorted(methods) if methods else '?'):30s} {path}")
 # ─────────────────────────────────────────────────────────────────────────────
