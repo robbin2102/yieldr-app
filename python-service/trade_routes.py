@@ -280,7 +280,7 @@ async def execute_open(body: OpenTradeRequest, _: str = Depends(verify_api_key))
             "direction": body.direction,
             "collateral": body.collateral,
             "leverage": body.leverage,
-            "live_price": live_price,
+            "entry_price": live_price,
             "limit_price": body.open_price if is_limit else None,
             "tp_price": tp_price,
             "sl_price": sl_price,
@@ -303,6 +303,43 @@ async def execute_close(body: CloseTradeRequest, _: str = Depends(verify_api_key
     client = _build_trader_client()
     agent_wallet = client.get_signer().get_ethereum_address()
     try:
+        # Fetch trade data before closing to get open_price, is_long, leverage
+        trades, _ = await client.trade.get_trades(trader=agent_wallet)
+        open_trade = next(
+            (t for t in trades
+             if getattr(t.trade if hasattr(t, "trade") else t, "trade_index", None) == body.trade_index
+             and getattr(t.trade if hasattr(t, "trade") else t, "pair_index", None) == body.pair_index),
+            None,
+        )
+        trade_obj = open_trade.trade if (open_trade and hasattr(open_trade, "trade")) else open_trade
+        open_price = getattr(trade_obj, "open_price", None)
+        is_long    = getattr(trade_obj, "is_long", None)
+        leverage   = getattr(trade_obj, "leverage", None)
+
+        # Fetch live price as exit price
+        price_data = await client.trade.feed_client.get_price_update_data(body.pair_index)
+        exit_price = price_data.core.price
+
+        # Calculate PnL
+        pnl = None
+        if open_price and exit_price and leverage is not None and is_long is not None:
+            price_delta_pct = (exit_price - open_price) / open_price
+            if not is_long:
+                price_delta_pct = -price_delta_pct
+            pnl = round(price_delta_pct * leverage * body.collateral_to_close, 6)
+
+        # Estimate closing fee (best-effort)
+        closing_fee_usdc = None
+        try:
+            closing_fee_usdc = await client.fee_parameters.get_trade_closing_fee(
+                pair_index=body.pair_index,
+                trade_index=body.trade_index,
+                collateral_to_close=body.collateral_to_close,
+                trader=agent_wallet,
+            )
+        except Exception:
+            pass
+
         tx = await client.trade.build_trade_close_tx(
             pair_index=body.pair_index,
             trade_index=body.trade_index,
@@ -318,6 +355,9 @@ async def execute_close(body: CloseTradeRequest, _: str = Depends(verify_api_key
             "status": receipt.status,
             "trade_index": body.trade_index,
             "pair_index": body.pair_index,
+            "exit_price": exit_price,
+            "pnl": pnl,
+            "closing_fee_usdc": closing_fee_usdc,
         }
     except HTTPException:
         raise

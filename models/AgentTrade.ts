@@ -13,7 +13,6 @@ export type TradeLogStatus = 'success' | 'failed';
 export interface IAgentTrade extends Document {
   agentId: string;
   userId: string;
-  walletAddress?: string;
 
   // What was done
   action: TradeAction;
@@ -37,6 +36,7 @@ export interface IAgentTrade extends Document {
   tpPrice?: number;
   slPrice?: number;
   txHash?: string;
+  feeUsdc?: number;
 
   // Close / margin update
   exitPrice?: number;
@@ -55,9 +55,8 @@ export interface IAgentTrade extends Document {
 
 const AgentTradeSchema = new Schema<IAgentTrade>(
   {
-    agentId:       { type: String, required: true, index: true },
-    userId:        { type: String, required: true, lowercase: true, index: true },
-    walletAddress: { type: String },
+    agentId: { type: String, required: true, index: true },
+    userId:  { type: String, required: true, lowercase: true, index: true },
 
     action:     { type: String, required: true },
 
@@ -77,6 +76,7 @@ const AgentTradeSchema = new Schema<IAgentTrade>(
     tpPrice:    { type: Number },
     slPrice:    { type: Number },
     txHash:     { type: String },
+    feeUsdc:    { type: Number },
 
     exitPrice:   { type: Number },
     pnl:         { type: Number },

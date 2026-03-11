@@ -164,7 +164,6 @@ export async function POST(
     await AgentTrade.create({
       agentId,
       userId:       userId.toLowerCase(),
-      walletAddress: result.agent_wallet,
       action:       tradeAction,
       pair:         tradeParams.pair,
       pairIndex:    result.pair_index,
@@ -179,6 +178,7 @@ export async function POST(
       tpPrice:      result.tp_price,
       slPrice:      result.sl_price,
       txHash:       result.tx_hash,
+      feeUsdc:      result.opening_fee_usdc,
       status:       'success',
       tradeSetupId: setup._id.toString(),
       timestamp:    new Date(),
@@ -255,6 +255,7 @@ export async function POST(
       tradeIndex: trade_index,
       exitPrice:  result.exit_price,
       pnl:        result.pnl,
+      feeUsdc:    result.closing_fee_usdc,
       txHash:     result.tx_hash,
       status:     'success',
       tradeSetupId,
