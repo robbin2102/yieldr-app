@@ -284,7 +284,7 @@ async def execute_open(body: OpenTradeRequest, _: str = Depends(verify_api_key))
             "limit_price": body.open_price if is_limit else None,
             "tp_price": tp_price,
             "sl_price": sl_price,
-            "opening_fee_usdc": opening_fee,
+            "opening_fee_usdc": float(opening_fee) if opening_fee is not None else None,
             "loss_protection_pct": loss_protection.percentage,
             "loss_protection_usdc": loss_protection.amount,
         }
@@ -355,9 +355,11 @@ async def execute_close(body: CloseTradeRequest, _: str = Depends(verify_api_key
             "status": receipt.status,
             "trade_index": body.trade_index,
             "pair_index": body.pair_index,
+            "entry_price": float(open_price) if open_price is not None else None,
+            "collateral_closed": body.collateral_to_close,
             "exit_price": exit_price,
             "pnl": pnl,
-            "closing_fee_usdc": closing_fee_usdc,
+            "closing_fee_usdc": float(closing_fee_usdc) if closing_fee_usdc is not None else None,
         }
     except HTTPException:
         raise

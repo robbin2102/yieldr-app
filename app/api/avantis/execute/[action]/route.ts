@@ -253,6 +253,8 @@ export async function POST(
       pair:       tradeParams.pair,
       pairIndex:  pair_index,
       tradeIndex: trade_index,
+      collateral: result.collateral_closed,
+      entryPrice: result.entry_price,
       exitPrice:  result.exit_price,
       pnl:        result.pnl,
       feeUsdc:    result.closing_fee_usdc,
