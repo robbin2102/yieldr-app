@@ -5,6 +5,7 @@ import asyncio
 import os
 from web3 import Web3
 from avantis_trader_sdk import TraderClient, FeedClient
+from trade_routes import router as trade_router
 
 app = FastAPI(title="Yieldr Python Service", version="1.0.0")
 
@@ -143,3 +144,6 @@ async def fetch_positions(request: FetchRequest):
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+
+# Trade execution routes (Avantis SDK + agent wallet)
+app.include_router(trade_router, prefix="/trade", tags=["Trade Execution"])
