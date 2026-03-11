@@ -267,6 +267,7 @@ async def execute_open(body: OpenTradeRequest, _: str = Depends(verify_api_key))
         order_type = order_type_map.get(body.order_type.upper(), TradeInputOrderType.MARKET)
 
         tx = await client.trade.build_trade_open_tx(trade_input, order_type, slippage_percentage=1)
+        tx["nonce"] = await client.get_signer().get_web3().eth.get_transaction_count(agent_wallet, "pending")
         receipt = await client.sign_and_get_receipt(tx)
 
         return {
@@ -308,6 +309,7 @@ async def execute_close(body: CloseTradeRequest, _: str = Depends(verify_api_key
             collateral_to_close=body.collateral_to_close,
             trader=agent_wallet,
         )
+        tx["nonce"] = await client.get_signer().get_web3().eth.get_transaction_count(agent_wallet, "pending")
         receipt = await client.sign_and_get_receipt(tx)
         return {
             "success": True,
@@ -339,6 +341,7 @@ async def execute_update_tp_sl(body: UpdateTpSlRequest, _: str = Depends(verify_
             stop_loss_price=body.new_sl,
             trader=agent_wallet,
         )
+        tx["nonce"] = await client.get_signer().get_web3().eth.get_transaction_count(agent_wallet, "pending")
         receipt = await client.sign_and_get_receipt(tx)
         return {
             "success": True,
@@ -375,6 +378,7 @@ async def execute_update_margin(body: UpdateMarginRequest, _: str = Depends(veri
             margin_update_type=MarginUpdateType[body.action.upper()],
             collateral_change=body.amount,
         )
+        tx["nonce"] = await client.get_signer().get_web3().eth.get_transaction_count(agent_wallet, "pending")
         receipt = await client.sign_and_get_receipt(tx)
         return {
             "success": True,
@@ -403,6 +407,7 @@ async def execute_cancel_limit(body: CancelLimitRequest, _: str = Depends(verify
             trade_index=body.order_index,
             trader=agent_wallet,
         )
+        tx["nonce"] = await client.get_signer().get_web3().eth.get_transaction_count(agent_wallet, "pending")
         receipt = await client.sign_and_get_receipt(tx)
         return {
             "success": True,
