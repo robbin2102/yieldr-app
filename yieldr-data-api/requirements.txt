@@ -18,3 +18,7 @@ numpy==1.24.3
 
 # === Utilities ===
 python-dotenv==1.0.0
+
+# === Avantis Trade Execution ===
+avantis-trader-sdk==0.8.16
+web3==6.20.4

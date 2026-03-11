@@ -10,6 +10,7 @@ from db.mongodb import connect_db, close_db
 from api.spot.router import router as spot_router
 from api.trending.tokens import router as trending_router
 from api.trader.top import router as trader_router
+from api.avantis_trade.router import router as avantis_trade_router
 from config import get_settings
 
 settings = get_settings()
@@ -70,6 +71,7 @@ async def health_check():
 app.include_router(spot_router, prefix="/api/v1", tags=["Spot Wallet Scanning"])
 app.include_router(trending_router, prefix="/api/v1/trending", tags=["Trending Tokens"])
 app.include_router(trader_router, prefix="/api/v1/trader", tags=["Top Traders"])
+app.include_router(avantis_trade_router, prefix="/api/v1/trade", tags=["Avantis Trade Execution"])
 
 
 if __name__ == "__main__":
