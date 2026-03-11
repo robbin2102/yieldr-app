@@ -8,7 +8,17 @@ from dotenv import load_dotenv
 from web3 import Web3
 
 # Load .env.local from project root (one level up from python-service/)
-load_dotenv(Path(__file__).parent.parent / ".env.local")
+_env_path = Path(__file__).parent.parent / ".env.local"
+load_dotenv(_env_path)
+
+# ── Startup diagnostics ──────────────────────────────────────────────────────
+_raw_pk = os.getenv("AGENT_WALLET_PRIVATE_KEY", "")
+print(f"[DIAG] .env.local path: {_env_path} (exists={_env_path.exists()})")
+print(f"[DIAG] AGENT_WALLET_PRIVATE_KEY loaded: len={len(_raw_pk)}, repr_first10={repr(_raw_pk[:10])}")
+print(f"[DIAG] API_KEY loaded: {'yes (len=' + str(len(os.getenv('API_KEY',''))) + ')' if os.getenv('API_KEY') else 'NO'}")
+print(f"[DIAG] QUICKNODE_BASE_RPC_URL: {'set' if os.getenv('QUICKNODE_BASE_RPC_URL') else 'NOT SET'}")
+# ─────────────────────────────────────────────────────────────────────────────
+
 from avantis_trader_sdk import TraderClient, FeedClient
 from trade_routes import router as trade_router
 
