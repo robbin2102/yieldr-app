@@ -12,7 +12,6 @@ from web3 import AsyncWeb3, Web3
 
 from avantis_trader_sdk import TraderClient
 from avantis_trader_sdk.types import TradeInput, TradeInputOrderType, MarginUpdateType
-from avantis_trader_sdk.signers.local_signer import LocalSigner
 
 router = APIRouter()
 
@@ -45,9 +44,14 @@ def _build_trader_client() -> TraderClient:
         raise HTTPException(status_code=503, detail="AGENT_WALLET_PRIVATE_KEY is not configured")
     if not private_key.startswith("0x"):
         private_key = "0x" + private_key
-    async_web3 = AsyncWeb3(AsyncWeb3.AsyncHTTPProvider(rpc_url, request_kwargs={"timeout": 60}))
-    signer = LocalSigner(private_key, async_web3)
-    return TraderClient(provider_url=rpc_url, signer=signer)
+    client = TraderClient(provider_url=rpc_url)
+    client.set_local_signer(private_key)
+    return client
+
+
+async def _fresh_nonce(agent_wallet: str) -> int:
+    w3 = AsyncWeb3(AsyncWeb3.AsyncHTTPProvider(_get_rpc_url()))
+    return await w3.eth.get_transaction_count(agent_wallet, "pending")
 
 
 def _serialize_trade(trade) -> dict:
@@ -267,7 +271,7 @@ async def execute_open(body: OpenTradeRequest, _: str = Depends(verify_api_key))
         order_type = order_type_map.get(body.order_type.upper(), TradeInputOrderType.MARKET)
 
         tx = await client.trade.build_trade_open_tx(trade_input, order_type, slippage_percentage=1)
-        tx["nonce"] = await client.get_signer().get_web3().eth.get_transaction_count(agent_wallet, "pending")
+        tx["nonce"] = await _fresh_nonce(agent_wallet)
         receipt = await client.sign_and_get_receipt(tx)
 
         return {
@@ -309,7 +313,7 @@ async def execute_close(body: CloseTradeRequest, _: str = Depends(verify_api_key
             collateral_to_close=body.collateral_to_close,
             trader=agent_wallet,
         )
-        tx["nonce"] = await client.get_signer().get_web3().eth.get_transaction_count(agent_wallet, "pending")
+        tx["nonce"] = await _fresh_nonce(agent_wallet)
         receipt = await client.sign_and_get_receipt(tx)
         return {
             "success": True,
@@ -341,7 +345,7 @@ async def execute_update_tp_sl(body: UpdateTpSlRequest, _: str = Depends(verify_
             stop_loss_price=body.new_sl,
             trader=agent_wallet,
         )
-        tx["nonce"] = await client.get_signer().get_web3().eth.get_transaction_count(agent_wallet, "pending")
+        tx["nonce"] = await _fresh_nonce(agent_wallet)
         receipt = await client.sign_and_get_receipt(tx)
         return {
             "success": True,
@@ -378,7 +382,7 @@ async def execute_update_margin(body: UpdateMarginRequest, _: str = Depends(veri
             margin_update_type=MarginUpdateType[body.action.upper()],
             collateral_change=body.amount,
         )
-        tx["nonce"] = await client.get_signer().get_web3().eth.get_transaction_count(agent_wallet, "pending")
+        tx["nonce"] = await _fresh_nonce(agent_wallet)
         receipt = await client.sign_and_get_receipt(tx)
         return {
             "success": True,
@@ -407,7 +411,7 @@ async def execute_cancel_limit(body: CancelLimitRequest, _: str = Depends(verify
             trade_index=body.order_index,
             trader=agent_wallet,
         )
-        tx["nonce"] = await client.get_signer().get_web3().eth.get_transaction_count(agent_wallet, "pending")
+        tx["nonce"] = await _fresh_nonce(agent_wallet)
         receipt = await client.sign_and_get_receipt(tx)
         return {
             "success": True,
