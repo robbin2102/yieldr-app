@@ -7,8 +7,9 @@ import AgentTrade, { TradeAction } from '@/models/AgentTrade';
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
-const PYTHON_URL = process.env.PYTHON_SERVICE_URL || 'http://localhost:8001';
-const API_KEY    = process.env.API_KEY || '';
+const PYTHON_URL       = process.env.PYTHON_SERVICE_URL    || 'http://localhost:8001';
+const DATA_API_SECRET  = process.env.YIELDR_DATA_API_SECRET || '';
+const INTERNAL_SECRET  = process.env.YIELDR_INTERNAL_SECRET || '';
 
 // Map Next.js action slug → Python endpoint path
 const ACTION_MAP: Record<string, string> = {
@@ -38,7 +39,7 @@ async function proxyToPython(endpoint: string, body: Record<string, any>) {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'X-API-Key': API_KEY,
+      'X-API-Key': DATA_API_SECRET,
     },
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(60_000),
@@ -55,6 +56,16 @@ export async function POST(
   request: NextRequest,
   { params }: { params: { action: string } }
 ) {
+  // ── Auth: require internal secret ─────────────────────────────────────────
+  // Only the app's own server-side code (MCP tools, server actions) may call
+  // this route. Reject any request that does not carry the shared secret.
+  if (INTERNAL_SECRET) {
+    const authHeader = request.headers.get('authorization');
+    if (authHeader !== `Bearer ${INTERNAL_SECRET}`) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+  }
+
   const { action } = params;
   const pythonEndpoint = ACTION_MAP[action];
 
