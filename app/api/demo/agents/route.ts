@@ -30,15 +30,20 @@ function getCdpClient(): CdpClient | null {
   }
 }
 
-// Creates a deterministic CDP wallet per owner wallet.
-// Idempotent: same ownerWallet always produces same agent wallet address.
-async function createAgentWallet(ownerWallet: string): Promise<{ address: string; cdpWalletId: string } | null> {
+// Creates a unique CDP wallet per agent.
+// idempotencyKey = ownerWallet + agentSlug so that:
+//   • same agent re-created with same name → same wallet (safe retry / idempotent)
+//   • different agents for the same user  → different wallets (isolation)
+async function createAgentWallet(
+  ownerWallet: string,
+  agentSlug: string,
+): Promise<{ address: string; cdpWalletId: string } | null> {
   const cdp = getCdpClient();
   if (!cdp) return null;
   try {
     const account = await cdp.evm.createAccount({
-      name: `yieldr-agent-${ownerWallet.slice(2, 10).toLowerCase()}`,
-      idempotencyKey: `yieldr-agent-${ownerWallet.toLowerCase()}`,
+      name: `yieldr-${agentSlug.slice(0, 20)}`,
+      idempotencyKey: `yieldr-agent-${ownerWallet.toLowerCase()}-${agentSlug}`,
     });
     return { address: account.address, cdpWalletId: account.address };
   } catch (err: any) {
@@ -95,8 +100,17 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: true, agent: existingAgent, updated: true });
     }
 
-    // New agent — provision a dedicated CDP agentic wallet
-    const wallet = await createAgentWallet(ownerWallet);
+    // Derive the agentId slug ahead of save (mirrors Mongoose pre-save hook)
+    const agentSlug = name
+      .toLowerCase()
+      .trim()
+      .replace(/[^a-z0-9\s-]/g, '')
+      .replace(/\s+/g, '-')
+      .replace(/-+/g, '-')
+      .slice(0, 40);
+
+    // New agent — provision a dedicated CDP agentic wallet (unique per agent)
+    const wallet = await createAgentWallet(ownerWallet, agentSlug);
     if (wallet) {
       agentData.agentWalletAddress = wallet.address;
       agentData.cdpWalletId        = wallet.cdpWalletId;

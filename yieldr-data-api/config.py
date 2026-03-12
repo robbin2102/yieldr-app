@@ -29,9 +29,14 @@ class Settings(BaseSettings):
     taapi_api_key: str = ""
     quicknode_stream_secret: str = ""
 
-    # Agent wallet — EOA private key for signing trades via Avantis SDK
+    # Agent wallet — EOA private key for signing trades via Avantis SDK (shared fallback)
     # Generate with: cast wallet new  OR  python -c "from eth_account import Account; import secrets; print(Account.from_key(secrets.token_hex(32)).key.hex())"
     agent_wallet_private_key: str = Field(default="", alias="AGENT_WALLET_PRIVATE_KEY")
+
+    # CDP per-agent wallet signing (preferred over shared key when all three are set)
+    cdp_api_key_id: str = Field(default="", alias="CDP_API_KEY_ID")
+    cdp_api_key_secret: str = Field(default="", alias="CDP_API_KEY_SECRET")
+    cdp_wallet_secret: str = Field(default="", alias="CDP_WALLET_SECRET")
 
     model_config = SettingsConfigDict(
         env_file="../.env.local",  # Look for .env.local in project root
