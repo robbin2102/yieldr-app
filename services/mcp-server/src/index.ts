@@ -11,7 +11,9 @@ import { connectDB } from './db/index.js';
 import { tools, toolMap } from './tools/index.js';
 import { logger } from './utils/index.js';
 
-const PORT = parseInt(process.env.PORT || '3000');
+// MCP_SERVER_PORT lets you run locally alongside Next.js (which uses PORT=3000).
+// On Railway each service gets its own PORT injected automatically, so this is local-only.
+const PORT = parseInt(process.env.MCP_SERVER_PORT || process.env.PORT || '3001');
 
 async function main() {
   const app = express();
