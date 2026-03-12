@@ -14,9 +14,6 @@
 
 import { z } from 'zod';
 
-const NEXTJS_API_URL = process.env.NEXTJS_API_URL || 'http://localhost:3000';
-const INTERNAL_SECRET = process.env.YIELDR_INTERNAL_SECRET || '';
-
 export const cancelLimitOrderSchema = z.object({
   agent_id: z.string().describe('The agent ID executing the cancellation.'),
   user_id: z.string().describe('The wallet address of the user who placed the order.'),
@@ -27,6 +24,10 @@ export const cancelLimitOrderSchema = z.object({
 export type CancelLimitOrderInput = z.infer<typeof cancelLimitOrderSchema>;
 
 export async function executeCancelLimitOrder(input: CancelLimitOrderInput) {
+  // Read at call time, not module load time — dotenv loads after ESM imports resolve
+  const NEXTJS_API_URL = process.env.NEXTJS_API_URL || 'http://localhost:3000';
+  const INTERNAL_SECRET = process.env.YIELDR_INTERNAL_SECRET || '';
+
   const { agent_id, user_id, pair_index, trade_index } = input;
 
   let data: Record<string, any>;

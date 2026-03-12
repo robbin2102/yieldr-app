@@ -17,9 +17,6 @@
 
 import { z } from 'zod';
 
-const NEXTJS_API_URL  = process.env.NEXTJS_API_URL    || 'http://localhost:3000';
-const INTERNAL_SECRET = process.env.YIELDR_INTERNAL_SECRET || '';
-
 export const openTradeSchema = z.object({
   // ── Identity ────────────────────────────────────────────────────────────────
   agent_id: z.string().describe('The agent ID executing the trade.'),
@@ -73,6 +70,10 @@ export const openTradeSchema = z.object({
 export type OpenTradeInput = z.infer<typeof openTradeSchema>;
 
 export async function executeOpenTrade(input: OpenTradeInput) {
+  // Read at call time, not module load time — dotenv loads after ESM imports resolve
+  const NEXTJS_API_URL  = process.env.NEXTJS_API_URL    || 'http://localhost:3000';
+  const INTERNAL_SECRET = process.env.YIELDR_INTERNAL_SECRET || '';
+
   const {
     agent_id,
     user_id,

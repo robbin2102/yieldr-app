@@ -13,9 +13,6 @@
 
 import { z } from 'zod';
 
-const NEXTJS_API_URL = process.env.NEXTJS_API_URL || 'http://localhost:3000';
-const INTERNAL_SECRET = process.env.YIELDR_INTERNAL_SECRET || '';
-
 export const closeTradeSchema = z.object({
   agent_id: z.string().describe('The agent ID executing the close.'),
   user_id: z.string().describe('The wallet address of the user who owns the position.'),
@@ -31,6 +28,10 @@ export const closeTradeSchema = z.object({
 export type CloseTradeInput = z.infer<typeof closeTradeSchema>;
 
 export async function executeCloseTrade(input: CloseTradeInput) {
+  // Read at call time, not module load time — dotenv loads after ESM imports resolve
+  const NEXTJS_API_URL = process.env.NEXTJS_API_URL || 'http://localhost:3000';
+  const INTERNAL_SECRET = process.env.YIELDR_INTERNAL_SECRET || '';
+
   const { agent_id, user_id, pair_index, trade_index, close_reason = 'agent_decision' } = input;
 
   let data: Record<string, any>;
