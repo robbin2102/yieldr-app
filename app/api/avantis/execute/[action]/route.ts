@@ -3,6 +3,7 @@ import connectDB from '@/lib/mongoose';
 import TradeSetup from '@/models/TradeSetup';
 import MonitoringTask from '@/models/MonitoringTask';
 import AgentTrade, { TradeAction } from '@/models/AgentTrade';
+import Agent from '@/models/Agent';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -95,12 +96,26 @@ export async function POST(
 
   await connectDB();
 
+  // ── Resolve agent's CDP wallet address ─────────────────────────────────────
+  // Passed to Python so it signs with the per-agent CDP wallet instead of the
+  // shared AGENT_WALLET_PRIVATE_KEY fallback.
+  let agentWalletAddress: string | undefined;
+  if (agentId) {
+    const agent = await Agent.findOne({ agentId })
+      .select('agentWalletAddress')
+      .lean() as { agentWalletAddress?: string } | null;
+    agentWalletAddress = agent?.agentWalletAddress;
+  }
+
   const tradeAction = resolveTradeAction(action, tradeParams.order_type);
 
   // ── Proxy to Python service ─────────────────────────────────────────────────
   let result: Record<string, any>;
   try {
-    result = await proxyToPython(pythonEndpoint, tradeParams);
+    result = await proxyToPython(pythonEndpoint, {
+      ...tradeParams,
+      ...(agentWalletAddress ? { agent_wallet_address: agentWalletAddress } : {}),
+    });
   } catch (err: any) {
     // Log failed attempt to agent_trades
     if (agentId && userId) {

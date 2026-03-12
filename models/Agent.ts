@@ -31,8 +31,9 @@ export interface IAgent extends Document {
   goals?: ('invest' | 'improve' | 'fund')[];
   status: 'creating' | 'active' | 'paused';
 
-  // Agent-owned trading wallet (EOA, signs trades autonomously via Avantis SDK)
-  agentWalletAddress?: string;      // Derived from AGENT_WALLET_PRIVATE_KEY env var
+  // Agent-owned trading wallet (CDP Agentic Wallet — per-agent, signs trades autonomously)
+  agentWalletAddress?: string;      // CDP wallet address (0x...)
+  cdpWalletId?: string;             // CDP account ID (same as address in CDP v2)
   agentWalletNetworkId?: string;    // "base-mainnet"
   userWalletAddress?: string;       // User's RainbowKit-connected wallet (for funding)
 
@@ -109,6 +110,7 @@ const AgentSchema = new Schema<IAgent>({
     default: 'creating',
   },
   agentWalletAddress: { type: String, sparse: true },
+  cdpWalletId: { type: String, sparse: true },
   agentWalletNetworkId: { type: String, default: 'base-mainnet' },
   userWalletAddress: { type: String, lowercase: true },
   portfolioSummary: {

@@ -1,6 +1,33 @@
 import { NextRequest, NextResponse } from 'next/server';
 import connectDB from '@/lib/mongoose';
 import Agent from '@/models/Agent';
+import { CdpClient } from '@coinbase/cdp-sdk';
+
+// Lazy CDP client — only instantiated if env vars are present
+function getCdpClient(): CdpClient | null {
+  const apiKeyId     = process.env.CDP_API_KEY_ID;
+  const apiKeySecret = process.env.CDP_API_KEY_SECRET;
+  const walletSecret = process.env.CDP_WALLET_SECRET;
+  if (!apiKeyId || !apiKeySecret || !walletSecret) return null;
+  return new CdpClient({ apiKeyId, apiKeySecret, walletSecret });
+}
+
+// Creates a deterministic CDP wallet per owner wallet.
+// Idempotent: same ownerWallet always produces same agent wallet address.
+async function createAgentWallet(ownerWallet: string): Promise<{ address: string; cdpWalletId: string } | null> {
+  const cdp = getCdpClient();
+  if (!cdp) return null;
+  try {
+    const account = await cdp.evm.createAccount({
+      name: `yieldr-agent-${ownerWallet.slice(2, 10).toLowerCase()}`,
+      idempotencyKey: `yieldr-agent-${ownerWallet.toLowerCase()}`,
+    });
+    return { address: account.address, cdpWalletId: account.address };
+  } catch (err: any) {
+    console.error('[CDP] wallet creation failed:', err.message);
+    return null;
+  }
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -50,12 +77,25 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: true, agent: existingAgent, updated: true });
     }
 
+    // New agent — provision a dedicated CDP agentic wallet
+    const wallet = await createAgentWallet(ownerWallet);
+    if (wallet) {
+      agentData.agentWalletAddress = wallet.address;
+      agentData.cdpWalletId        = wallet.cdpWalletId;
+      agentData.agentWalletNetworkId = 'base-mainnet';
+    }
+
     const agent = new Agent({
       ownerWallet: ownerWallet.toLowerCase(),
       ...agentData,
     });
     await agent.save();
-    return NextResponse.json({ success: true, agent, created: true });
+    return NextResponse.json({
+      success: true,
+      agent,
+      created: true,
+      agentWalletAddress: wallet?.address ?? null,
+    });
   } catch (error) {
     console.error('Error creating agent:', error);
     return NextResponse.json({ error: 'Failed to create agent' }, { status: 500 });
