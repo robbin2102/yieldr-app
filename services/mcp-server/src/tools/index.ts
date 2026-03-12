@@ -8,6 +8,7 @@ import { compareTradersTool } from './top-traders/compare-traders.js';
 
 // Trading tools
 import { getStrategyTemplateTool } from './trading/strategy-templates.js';
+import { openTradeTool } from './trading/open-trade.js';
 import { closeTradeTool } from './trading/close-trade.js';
 import { cancelLimitOrderTool } from './trading/cancel-limit-order.js';
 
@@ -52,7 +53,7 @@ export {
   getPMUserActivityTool,
 } from './live-api/index.js';
 export { getMarketSnapshotTool, fetchLiveIndicatorTool, getCoinPriceTool, getMacroSnapshotTool, getFundingRateHistoryTool, getFundingRateCurrentTool, getDerivativesHistoryTool, getNewsHeadlinesTool } from './market/index.js';
-export { getStrategyTemplateTool, closeTradeTool, cancelLimitOrderTool } from './trading/index.js';
+export { getStrategyTemplateTool, openTradeTool, closeTradeTool, cancelLimitOrderTool } from './trading/index.js';
 
 // Tool registry for MCP server
 export const tools = [
@@ -88,7 +89,8 @@ export const tools = [
   getPMUserActivityTool,
   // Strategy templates + signal catalog
   getStrategyTemplateTool,
-  // Trade execution actions (close position, cancel limit order)
+  // Trade execution: open, close, cancel
+  openTradeTool,
   closeTradeTool,
   cancelLimitOrderTool,
 ];
