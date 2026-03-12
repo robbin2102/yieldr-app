@@ -263,6 +263,8 @@ export async function POST(
       tradeSetupId,
       timestamp:  new Date(),
     }).catch(() => {});
+
+    return NextResponse.json({ success: true, trade: result, tradeSetupId });
   }
 
   if (action === 'update-tp-sl') {
@@ -297,17 +299,41 @@ export async function POST(
   }
 
   if (action === 'cancel-limit') {
+    const { trade_index, pair_index } = tradeParams;
+    let tradeSetupId: string | undefined;
+
+    // Mark the linked TradeSetup as cancelled so the audit trail is complete
+    if (trade_index != null && pair_index != null) {
+      const updated = await TradeSetup.findOneAndUpdate(
+        {
+          tradeIndex: trade_index,
+          pairIndex:  pair_index,
+          status:     { $in: ['open', 'monitoring', 'executing'] },
+        },
+        {
+          status:      'cancelled',
+          closedAt:    new Date(),
+          closeReason: 'manual',
+          closeTxHash: result.tx_hash,
+        },
+        { new: true }
+      );
+      tradeSetupId = updated?._id?.toString();
+    }
+
     await AgentTrade.create({
-      agentId:    agentId || body.agentId,
-      userId:     (userId || body.userId || '').toLowerCase(),
-      action:     'limit_cancel',
-      pairIndex:  tradeParams.pair_index,
-      pairIndex:  tradeParams.pair_index,
-      tradeIndex: tradeParams.trade_index,
-      txHash:     result.tx_hash,
-      status:     'success',
-      timestamp:  new Date(),
+      agentId:      agentId || body.agentId,
+      userId:       (userId || body.userId || '').toLowerCase(),
+      action:       'limit_cancel',
+      pairIndex:    pair_index,
+      tradeIndex:   trade_index,
+      txHash:       result.tx_hash,
+      status:       'success',
+      tradeSetupId,
+      timestamp:    new Date(),
     }).catch(() => {});
+
+    return NextResponse.json({ success: true, trade: result, tradeSetupId });
   }
 
   return NextResponse.json({ success: true, trade: result });

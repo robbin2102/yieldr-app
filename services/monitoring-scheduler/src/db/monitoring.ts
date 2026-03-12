@@ -72,6 +72,7 @@ export interface MonitoringAlert {
   userId: string;
   taskId: ObjectId;
   agentId: string;
+  tradeSetupId?: string;   // links alert to the originating TradeSetup for full audit trail
   title: string;
   message: string;
   severity: 'info' | 'warning' | 'critical';
