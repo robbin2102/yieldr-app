@@ -47,7 +47,7 @@ export async function executeCancelLimitOrder(input: CancelLimitOrderInput) {
       signal: AbortSignal.timeout(60_000),
     });
 
-    data = await res.json().catch(() => ({}));
+    data = await res.json().catch(() => ({})) as Record<string, any>;
 
     if (!res.ok) {
       return {
