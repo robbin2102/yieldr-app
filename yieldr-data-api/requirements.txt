@@ -11,11 +11,6 @@ pymongo==4.6.0
 # === HTTP Client ===
 httpx==0.25.1
 
-# === Data Processing (for later parts) ===
-pandas==2.0.3
-numpy==1.24.3
-# pandas-ta will be added in Part 4 when needed
-
 # === Utilities ===
 python-dotenv==1.0.0
 
