@@ -8,8 +8,14 @@ function getCdpClient(): CdpClient | null {
   const apiKeyId     = process.env.CDP_API_KEY_ID;
   const apiKeySecret = process.env.CDP_API_KEY_SECRET;
   const walletSecret = process.env.CDP_WALLET_SECRET;
+  console.log('[CDP] env check — KEY_ID:', apiKeyId ? 'SET' : 'MISSING', '| KEY_SECRET:', apiKeySecret ? 'SET' : 'MISSING', '| WALLET_SECRET:', walletSecret ? 'SET' : 'MISSING');
   if (!apiKeyId || !apiKeySecret || !walletSecret) return null;
-  return new CdpClient({ apiKeyId, apiKeySecret, walletSecret });
+  try {
+    return new CdpClient({ apiKeyId, apiKeySecret, walletSecret });
+  } catch (err: any) {
+    console.error('[CDP] client init failed:', err.message);
+    return null;
+  }
 }
 
 // Creates a deterministic CDP wallet per owner wallet.
