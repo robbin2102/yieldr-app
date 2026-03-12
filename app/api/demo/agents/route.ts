@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { createPrivateKey } from 'crypto';
 import connectDB from '@/lib/mongoose';
 import Agent from '@/models/Agent';
 import { CdpClient } from '@coinbase/cdp-sdk';
@@ -6,9 +7,19 @@ import { CdpClient } from '@coinbase/cdp-sdk';
 // Lazy CDP client — only instantiated if env vars are present
 function getCdpClient(): CdpClient | null {
   const apiKeyId     = process.env.CDP_API_KEY_ID;
-  // Normalize escaped \n to real newlines (handles .env.local single-line PEM storage)
-  const apiKeySecret = (process.env.CDP_API_KEY_SECRET || '').replace(/\\n/g, '\n');
   const walletSecret = process.env.CDP_WALLET_SECRET;
+
+  // Normalize escaped \n → real newlines (handles .env.local single-line PEM storage)
+  let apiKeySecret = (process.env.CDP_API_KEY_SECRET || '').replace(/\\n/g, '\n');
+  // CDP SDK requires PKCS#8 ("BEGIN PRIVATE KEY"). If we have SEC1 ("BEGIN EC PRIVATE KEY"),
+  // convert it automatically using Node's crypto module.
+  if (apiKeySecret.includes('BEGIN EC PRIVATE KEY')) {
+    try {
+      apiKeySecret = createPrivateKey(apiKeySecret).export({ type: 'pkcs8', format: 'pem' }) as string;
+    } catch (err: any) {
+      console.error('[CDP] SEC1→PKCS#8 conversion failed:', err.message);
+    }
+  }
   console.log('[CDP] env check — KEY_ID:', apiKeyId ? 'SET' : 'MISSING', '| KEY_SECRET:', apiKeySecret ? 'SET' : 'MISSING', '| WALLET_SECRET:', walletSecret ? 'SET' : 'MISSING');
   if (!apiKeyId || !apiKeySecret || !walletSecret) return null;
   try {
