@@ -6,7 +6,8 @@ import { CdpClient } from '@coinbase/cdp-sdk';
 // Lazy CDP client — only instantiated if env vars are present
 function getCdpClient(): CdpClient | null {
   const apiKeyId     = process.env.CDP_API_KEY_ID;
-  const apiKeySecret = process.env.CDP_API_KEY_SECRET;
+  // Normalize escaped \n to real newlines (handles .env.local single-line PEM storage)
+  const apiKeySecret = (process.env.CDP_API_KEY_SECRET || '').replace(/\\n/g, '\n');
   const walletSecret = process.env.CDP_WALLET_SECRET;
   console.log('[CDP] env check — KEY_ID:', apiKeyId ? 'SET' : 'MISSING', '| KEY_SECRET:', apiKeySecret ? 'SET' : 'MISSING', '| WALLET_SECRET:', walletSecret ? 'SET' : 'MISSING');
   if (!apiKeyId || !apiKeySecret || !walletSecret) return null;
