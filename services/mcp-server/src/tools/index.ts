@@ -87,15 +87,12 @@ export const tools = [
   // Polymarket market data (odds, volume, outcomes) + user activity
   getPMMarketTool,
   getPMUserActivityTool,
-<<<<<<< HEAD
-=======
   // Strategy templates + signal catalog
   getStrategyTemplateTool,
   // Trade execution: open, close, cancel
   openTradeTool,
   closeTradeTool,
   cancelLimitOrderTool,
->>>>>>> origin/claude/trader-agent-execution-l7pev
 ];
 
 // Tool map for quick lookup
