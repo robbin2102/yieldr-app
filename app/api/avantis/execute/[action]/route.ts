@@ -47,7 +47,8 @@ async function proxyToPython(endpoint: string, body: Record<string, any>) {
 
   const data = await res.json();
   if (!res.ok) {
-    throw new Error(data.detail || `Python service error ${res.status}`);
+    const detail = typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail);
+    throw new Error(detail || `Python service error ${res.status}`);
   }
   return data;
 }

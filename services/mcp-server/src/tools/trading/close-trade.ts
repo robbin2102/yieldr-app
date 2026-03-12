@@ -18,6 +18,10 @@ export const closeTradeSchema = z.object({
   user_id: z.string().describe('The wallet address of the user who owns the position.'),
   pair_index: z.number().int().describe('On-chain pair index (e.g. 1 for BTC/USD). Get from get_avantis_positions.'),
   trade_index: z.number().int().describe('On-chain trade index for the position. Get from get_avantis_positions.'),
+  collateral_to_close: z
+    .number()
+    .positive()
+    .describe('Collateral amount to close in USDC. Use open_collateral from get_avantis_positions to close the full position.'),
   close_reason: z
     .enum(['manual', 'agent_decision', 'signal_exit', 'tp_hit', 'sl_hit'])
     .optional()
@@ -32,7 +36,7 @@ export async function executeCloseTrade(input: CloseTradeInput) {
   const NEXTJS_API_URL = process.env.NEXTJS_API_URL || 'http://localhost:3000';
   const INTERNAL_SECRET = process.env.YIELDR_INTERNAL_SECRET || '';
 
-  const { agent_id, user_id, pair_index, trade_index, close_reason = 'agent_decision' } = input;
+  const { agent_id, user_id, pair_index, trade_index, collateral_to_close, close_reason = 'agent_decision' } = input;
 
   let data: Record<string, any>;
   try {
@@ -47,6 +51,7 @@ export async function executeCloseTrade(input: CloseTradeInput) {
         userId: user_id,
         pair_index,
         trade_index,
+        collateral_to_close,
         closeReason: close_reason,
       }),
       signal: AbortSignal.timeout(60_000),
