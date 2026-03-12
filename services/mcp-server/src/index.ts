@@ -6,6 +6,15 @@
  * 2. MCP server for tool execution (via stdio or HTTP SSE)
  */
 
+// Load env vars: first from a local .env (if present), then from the monorepo root
+// .env.local. On Railway, env vars are injected directly so these are no-ops.
+import * as dotenv from 'dotenv';
+import * as path from 'path';
+import { fileURLToPath } from 'url';
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+dotenv.config({ path: path.resolve(__dirname, '../.env') });
+dotenv.config({ path: path.resolve(__dirname, '../../../.env.local') });
+
 import express from 'express';
 import { connectDB } from './db/index.js';
 import { tools, toolMap } from './tools/index.js';
