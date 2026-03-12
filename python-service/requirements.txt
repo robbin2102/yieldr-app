@@ -1,5 +1,6 @@
 fastapi>=0.109.0
 uvicorn[standard]>=0.24.0
-avantis-trader-sdk==0.8.10
+avantis-trader-sdk==0.8.16
 web3>=6.0.0
 eth-abi>=4.0.0
+python-dotenv

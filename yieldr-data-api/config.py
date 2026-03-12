@@ -29,6 +29,10 @@ class Settings(BaseSettings):
     taapi_api_key: str = ""
     quicknode_stream_secret: str = ""
 
+    # Agent wallet — EOA private key for signing trades via Avantis SDK
+    # Generate with: cast wallet new  OR  python -c "from eth_account import Account; import secrets; print(Account.from_key(secrets.token_hex(32)).key.hex())"
+    agent_wallet_private_key: str = Field(default="", alias="AGENT_WALLET_PRIVATE_KEY")
+
     model_config = SettingsConfigDict(
         env_file="../.env.local",  # Look for .env.local in project root
         env_file_encoding="utf-8",

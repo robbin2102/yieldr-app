@@ -13,6 +13,16 @@ export interface ICycleEntry {
   summary: string;
 }
 
+export interface ISignalConfig {
+  signalId: string;          // unique within the task, e.g. "rsi_exit"
+  label: string;             // human-readable, e.g. "RSI > 70"
+  sourceType: 'mongodb_snapshot' | 'taapi_live' | 'dedicated_collection' | 'computed';
+  field: string;             // dot-path to value, e.g. "indicators.rsi"
+  operator: '>' | '<' | '>=' | '<=' | '==' | '!=';
+  threshold: number;
+  role: 'entry' | 'exit';
+}
+
 export interface IMonitoringTask extends Document {
   userId: string;            // wallet address of creator
   agentId: string;           // links to Agent.agentId
@@ -24,6 +34,17 @@ export interface IMonitoringTask extends Document {
   // LLM-defined alpha thesis (populated after first cycle)
   alphaTitle?: string;
   alphaDescription?: string;
+
+  // Trading linkage (set when task is created from a trade)
+  mode: 'monitor' | 'autonomous' | 'confirm';
+  linkedTradeSetupId?: string;   // TradeSetup._id
+  linkedTradeIndex?: number;     // on-chain trade index (filled after execute-open)
+  linkedPairIndex?: number;
+
+  // Signal definitions (evaluated by TradeSignalEvaluator in Phase 5)
+  signals: ISignalConfig[];
+  entryLogic: 'AND' | 'OR' | 'ANY';   // how entry signals combine
+  exitLogic: 'AND' | 'OR' | 'ANY';    // how exit signals combine
 
   tools: IToolConfig[];
   intervalSeconds: number;
@@ -57,6 +78,16 @@ const CycleEntrySchema = new Schema<ICycleEntry>({
   summary: { type: String, default: '' },
 }, { _id: false });
 
+const SignalConfigSchema = new Schema<ISignalConfig>({
+  signalId:   { type: String, required: true },
+  label:      { type: String, required: true },
+  sourceType: { type: String, enum: ['mongodb_snapshot', 'taapi_live', 'dedicated_collection', 'computed'], required: true },
+  field:      { type: String, required: true },
+  operator:   { type: String, enum: ['>', '<', '>=', '<=', '==', '!='], required: true },
+  threshold:  { type: Number, required: true },
+  role:       { type: String, enum: ['entry', 'exit'], required: true },
+}, { _id: false });
+
 const MonitoringTaskSchema = new Schema<IMonitoringTask>({
   userId: { type: String, required: true, lowercase: true },
   agentId: { type: String, required: true },
@@ -67,6 +98,15 @@ const MonitoringTaskSchema = new Schema<IMonitoringTask>({
 
   alphaTitle: { type: String },
   alphaDescription: { type: String },
+
+  mode: { type: String, enum: ['monitor', 'autonomous', 'confirm'], default: 'monitor' },
+  linkedTradeSetupId: { type: String },
+  linkedTradeIndex:   { type: Number },
+  linkedPairIndex:    { type: Number },
+
+  signals:    { type: [SignalConfigSchema], default: [] },
+  entryLogic: { type: String, enum: ['AND', 'OR', 'ANY'], default: 'AND' },
+  exitLogic:  { type: String, enum: ['AND', 'OR', 'ANY'], default: 'ANY' },
 
   tools: { type: [ToolConfigSchema], required: true },
   intervalSeconds: { type: Number, required: true, min: 300 },

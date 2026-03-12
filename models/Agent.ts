@@ -31,6 +31,11 @@ export interface IAgent extends Document {
   goals?: ('invest' | 'improve' | 'fund')[];
   status: 'creating' | 'active' | 'paused';
 
+  // Agent-owned trading wallet (EOA, signs trades autonomously via Avantis SDK)
+  agentWalletAddress?: string;      // Derived from AGENT_WALLET_PRIVATE_KEY env var
+  agentWalletNetworkId?: string;    // "base-mainnet"
+  userWalletAddress?: string;       // User's RainbowKit-connected wallet (for funding)
+
   // Monitoring stats (incremented by scheduler)
   alertsSent: number;
   insightsGenerated: number;
@@ -103,6 +108,9 @@ const AgentSchema = new Schema<IAgent>({
     enum: ['creating', 'active', 'paused'],
     default: 'creating',
   },
+  agentWalletAddress: { type: String, sparse: true },
+  agentWalletNetworkId: { type: String, default: 'base-mainnet' },
+  userWalletAddress: { type: String, lowercase: true },
   portfolioSummary: {
     totalValue: { type: Number, default: 0 },
     totalPnl: { type: Number, default: 0 },

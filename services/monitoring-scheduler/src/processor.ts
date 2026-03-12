@@ -12,6 +12,8 @@ import {
 import { getUserPositions } from './db/positions';
 import { callToolsAndExtract } from './tool-caller';
 import { buildEvaluatorPrompt, callEvaluator, callAlphaDefiner, EvaluationResult } from './evaluator';
+import { tradeSignalEvaluator, TradeSignalResult } from './trade-signal-evaluator';
+import { config } from './config';
 import { logger } from './utils/logger';
 
 /** Extract top 3 news article links from get_news_headlines tool output in strippedData */
@@ -37,6 +39,54 @@ function extractNewsLinks(data: Record<string, any>): Array<{ title: string; url
     publishedAt: String(a.publishedAt || new Date().toISOString()),
     ...(a.age ? { age: String(a.age) } : {}),
   })).filter(a => a.title && a.url);
+}
+
+/**
+ * Call the Next.js execute/close proxy to autonomously close a trade.
+ * Returns true if the HTTP call succeeded (tx submitted), false otherwise.
+ */
+async function executeAutonomousClose(task: MonitoringTask): Promise<boolean> {
+  if (task.linkedTradeIndex == null || task.linkedPairIndex == null) return false;
+  try {
+    const url = `${config.nextjsApiUrl}/api/avantis/execute/close`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(config.internalSecret ? { Authorization: `Bearer ${config.internalSecret}` } : {}),
+      },
+      body: JSON.stringify({
+        agentId: task.agentId,
+        userId: task.userId,
+        pair_index: task.linkedPairIndex,
+        trade_index: task.linkedTradeIndex,
+        closeReason: 'signal_exit',
+      }),
+      signal: AbortSignal.timeout(60_000),
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      logger.warn('Processor', `execute-close returned ${res.status}: ${text}`);
+    }
+    return res.ok;
+  } catch (err: any) {
+    logger.error('Processor', `executeAutonomousClose failed: ${err.message}`);
+    return false;
+  }
+}
+
+/**
+ * Inject signal state into the LLM evaluator prompt for 'confirm' mode exit triggers.
+ * Tells the LLM that exit conditions fired so it can present a "Close / Hold?" message.
+ */
+function injectSignalContext(prompt: string, signalResult: import('./trade-signal-evaluator').TradeSignalResult): string {
+  const triggered = signalResult.exitSignals
+    .filter((s) => s.triggered)
+    .map((s) => `  - ${s.label}: current=${s.currentValue} ${s.operator} ${s.threshold} ✓`)
+    .join('\n');
+
+  const signalBlock = `\nSIGNAL EVALUATOR — EXIT CONDITIONS TRIGGERED:\n${triggered}\n\nThe exit conditions above have been met. Format your response as an actionable "Close / Hold?" recommendation. Set alert:true, severity:"warning".`;
+  return prompt + signalBlock;
 }
 
 /**
@@ -72,6 +122,73 @@ export async function processTask(task: WithId<MonitoringTask>): Promise<void> {
     return;
   }
 
+  // Step 1b: Trade signal evaluator — runs before LLM, deterministic
+  let signalResult: TradeSignalResult | null = null;
+  if (task.signals && task.signals.length > 0) {
+    signalResult = tradeSignalEvaluator.evaluate(task, strippedData);
+    logger.info('Processor', `Signal eval for task ${taskId}: ${signalResult.summary}`);
+
+    // Autonomous mode: exit triggered → close trade immediately, skip LLM eval
+    if (
+      signalResult.exitTriggered &&
+      task.mode === 'autonomous' &&
+      task.linkedTradeIndex != null &&
+      task.linkedPairIndex != null
+    ) {
+      logger.info('Processor', `Autonomous EXIT for task ${taskId} — calling execute/close`);
+      const closed = await executeAutonomousClose(task);
+
+      const exitSummary = closed
+        ? `Auto-closed: ${signalResult.summary}`
+        : `Auto-close attempted (tx pending): ${signalResult.summary}`;
+
+      await createAlert({
+        userId: task.userId,
+        taskId,
+        agentId: task.agentId,
+        tradeSetupId: task.linkedTradeSetupId,
+        title: closed ? 'Position auto-closed by signal' : 'Auto-close submitted',
+        message: `${signalResult.summary}. Triggered signals: ${signalResult.exitSignals.filter((s) => s.triggered).map((s) => `${s.label}=${s.currentValue}`).join(', ')}`,
+        severity: 'warning',
+        isSignal: true,
+        indicators: signalResult.exitSignals.map((s) => ({
+          name: s.label,
+          value: s.currentValue != null ? String(s.currentValue) : 'n/a',
+          dot: s.triggered ? 'red' : 'green',
+          note: `${s.operator} ${s.threshold} — ${s.triggered ? 'TRIGGERED' : 'nominal'}`,
+        })),
+        data: { ...strippedData, signalState: signalResult },
+        cycleNumber: (task.cycleCount || 0) + 1,
+        read: false,
+        createdAt: new Date(),
+      });
+
+      await markTaskAlert(taskId, {
+        lastAlertAt: new Date(),
+        alertCount: (task.alertCount || 0) + 1,
+      });
+
+      // Still update cycleHistory and nextRunAt
+      const exitCycle: CycleEntry = {
+        timestamp: new Date(),
+        data: strippedData,
+        alerted: true,
+        signaled: true,
+        summary: exitSummary,
+        exitTriggered: true,
+      };
+      await markTaskRun(taskId, {
+        cycleHistory: [...(task.cycleHistory || []), exitCycle].slice(-5),
+        nextRunAt: new Date(Date.now() + task.intervalSeconds * 1000),
+        lastRunAt: new Date(),
+        cycleCount: (task.cycleCount || 0) + 1,
+      });
+
+      logger.info('Processor', `Task ${taskId} autonomous exit complete`);
+      return;
+    }
+  }
+
   // Step 2: Cooldown check — skip evaluator if we alerted within the last interval
   const cooldownActive =
     task.lastAlertAt != null &&
@@ -80,10 +197,18 @@ export async function processTask(task: WithId<MonitoringTask>): Promise<void> {
   // Step 3: User positions for evaluator context
   const userPositions = await getUserPositions(task.userId).catch(() => []);
 
-  // Step 4: Evaluate
-  const evaluation: EvaluationResult = cooldownActive
-    ? { alert: false, signal: false, summary: 'Cooldown active — evaluator skipped' }
-    : await callEvaluator(buildEvaluatorPrompt(task, strippedData, userPositions));
+  // Step 4: Evaluate — inject signal state into prompt for 'confirm' mode exit triggers
+  let evaluation: EvaluationResult;
+  if (cooldownActive) {
+    evaluation = { alert: false, signal: false, summary: 'Cooldown active — evaluator skipped' };
+  } else {
+    const basePrompt = buildEvaluatorPrompt(task, strippedData, userPositions);
+    const prompt =
+      signalResult?.exitTriggered && task.mode === 'confirm'
+        ? injectSignalContext(basePrompt, signalResult)
+        : basePrompt;
+    evaluation = await callEvaluator(prompt);
+  }
 
   logger.info(
     'Processor',
@@ -116,6 +241,7 @@ export async function processTask(task: WithId<MonitoringTask>): Promise<void> {
       userId: task.userId,
       taskId,
       agentId: task.agentId,
+      tradeSetupId: task.linkedTradeSetupId,
       title: evaluation.title!,
       message: evaluation.message!,
       severity: evaluation.severity ?? 'info',
@@ -166,6 +292,8 @@ export async function processTask(task: WithId<MonitoringTask>): Promise<void> {
       ? (evaluation.title ?? 'Alert')
       : (evaluation.summary ?? 'No alert'),
     indicators: evaluation.indicators,
+    entryTriggered: signalResult?.entryTriggered ?? false,
+    exitTriggered: signalResult?.exitTriggered ?? false,
   };
 
   const updatedHistory: CycleEntry[] = [

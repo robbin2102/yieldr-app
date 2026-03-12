@@ -3,8 +3,24 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import asyncio
 import os
+from pathlib import Path
+from dotenv import load_dotenv
 from web3 import Web3
+
+# Load .env.local from project root (one level up from python-service/)
+_env_path = Path(__file__).parent.parent / ".env.local"
+load_dotenv(_env_path, override=True)
+
+# ── Startup diagnostics ──────────────────────────────────────────────────────
+_raw_pk = os.getenv("AGENT_WALLET_PRIVATE_KEY", "")
+print(f"[DIAG] .env.local path: {_env_path} (exists={_env_path.exists()})")
+print(f"[DIAG] AGENT_WALLET_PRIVATE_KEY loaded: len={len(_raw_pk)}, repr_first10={repr(_raw_pk[:10])}")
+print(f"[DIAG] API_KEY loaded: {'yes (len=' + str(len(os.getenv('API_KEY',''))) + ')' if os.getenv('API_KEY') else 'NO'}")
+print(f"[DIAG] QUICKNODE_BASE_RPC_URL: {'set' if os.getenv('QUICKNODE_BASE_RPC_URL') else 'NOT SET'}")
+# ─────────────────────────────────────────────────────────────────────────────
+
 from avantis_trader_sdk import TraderClient, FeedClient
+from trade_routes import router as trade_router
 
 app = FastAPI(title="Yieldr Python Service", version="1.0.0")
 
@@ -143,3 +159,16 @@ async def fetch_positions(request: FetchRequest):
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+
+# Trade execution routes (Avantis SDK + agent wallet)
+app.include_router(trade_router, prefix="/trade", tags=["Trade Execution"])
+
+# ── Print all registered routes at startup ────────────────────────────────────
+@app.on_event("startup")
+async def _print_routes():
+    for route in app.routes:
+        methods = getattr(route, "methods", None)
+        path    = getattr(route, "path", None)
+        if path:
+            print(f"[ROUTE] {str(sorted(methods) if methods else '?'):30s} {path}")
+# ─────────────────────────────────────────────────────────────────────────────

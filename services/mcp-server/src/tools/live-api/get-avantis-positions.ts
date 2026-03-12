@@ -16,6 +16,8 @@ export type GetAvantisPositionsInput = z.infer<typeof getAvantisPositionsSchema>
 
 interface AvantisPosition {
   pair: string;
+  pair_index: number | null;
+  trade_index: number | null;
   direction: 'LONG' | 'SHORT';
   positionSize: number;
   leverage: number;
@@ -82,6 +84,8 @@ export async function executeGetAvantisPositions(
     // Map positions to simplified format
     const positions: AvantisPosition[] = (data.data?.positions || []).map((p: any) => ({
       pair: p.asset || p.pair || 'Unknown',
+      pair_index: p.pair_index ?? p.pairIndex ?? null,
+      trade_index: p.trade_index ?? p.tradeIndex ?? p.index ?? null,
       direction: p.direction || (p.isLong ? 'LONG' : 'SHORT'),
       positionSize: p.positionSize || p.size || 0,
       leverage: p.leverage || 1,
