@@ -230,6 +230,13 @@ class FundAgentRequest(BaseModel):
     agent_wallet_address: Optional[str] = None  # override destination if CDP wallet
 
 
+class WithdrawRequest(BaseModel):
+    amount: float
+    asset: str                              # "ETH" | "USDC"
+    to_address: str
+    agent_wallet_address: Optional[str] = None
+
+
 # ─────────────────────────────────────────────
 # GET /trade/balance
 # ─────────────────────────────────────────────
@@ -695,3 +702,89 @@ async def fund_agent(body: FundAgentRequest, _: str = Depends(verify_api_key)):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Fund agent tx build failed: {str(e)}")
+
+
+# ─────────────────────────────────────────────
+# POST /trade/withdraw
+# Withdraw ETH or USDC from the agent wallet to any address
+# ─────────────────────────────────────────────
+
+@router.post("/withdraw")
+async def withdraw_from_agent(body: WithdrawRequest, _: str = Depends(verify_api_key)):
+    if body.asset.upper() not in ("ETH", "USDC"):
+        raise HTTPException(status_code=400, detail="asset must be ETH or USDC")
+
+    cdp = _get_cdp_client()
+    using_cdp = bool(body.agent_wallet_address and cdp)
+
+    if using_cdp:
+        agent_wallet = Web3.to_checksum_address(body.agent_wallet_address)
+    else:
+        client = _build_trader_client()
+        agent_wallet = client.get_signer().get_ethereum_address()
+
+    to_addr = Web3.to_checksum_address(body.to_address)
+
+    try:
+        w3 = AsyncWeb3(AsyncWeb3.AsyncHTTPProvider(_get_rpc_url()))
+        nonce = await _fresh_nonce(agent_wallet)
+
+        if body.asset.upper() == "ETH":
+            amount_wei = int(body.amount * 10 ** 18)
+            tx = {
+                "to": to_addr,
+                "value": amount_wei,
+                "data": "0x",
+                "nonce": nonce,
+                "gas": 21_000,
+                "chainId": 8453,
+            }
+        else:  # USDC
+            w3_sync = Web3(Web3.HTTPProvider(_get_rpc_url()))
+            usdc = w3_sync.eth.contract(
+                address=Web3.to_checksum_address(USDC_BASE_ADDRESS),
+                abi=USDC_TRANSFER_ABI,
+            )
+            amount_units = int(body.amount * 10 ** 6)
+            calldata = usdc.encodeABI(fn_name="transfer", args=[to_addr, amount_units])
+            tx = {
+                "to": USDC_BASE_ADDRESS,
+                "value": 0,
+                "data": calldata,
+                "nonce": nonce,
+                "gas": 100_000,
+                "chainId": 8453,
+            }
+
+        if using_cdp:
+            receipt = await _cdp_send_and_receipt(cdp, agent_wallet, tx)
+            tx_hash = receipt.transactionHash.hex()
+        else:
+            # local EOA: sign with private key directly
+            from eth_account import Account
+            private_key = os.getenv("AGENT_WALLET_PRIVATE_KEY", "").strip().strip('"').strip("'")
+            if not private_key.startswith("0x"):
+                private_key = "0x" + private_key
+            fee_data = await w3.eth.get_block("latest")
+            base_fee = fee_data.get("baseFeePerGas", 1_000_000_000)
+            tx["maxPriorityFeePerGas"] = 1_000_000
+            tx["maxFeePerGas"] = base_fee * 2 + 1_000_000
+            tx["type"] = 2
+            signed = Account.sign_transaction(tx, private_key)
+            tx_hash_bytes = await w3.eth.send_raw_transaction(signed.raw_transaction)
+            receipt = await w3.eth.wait_for_transaction_receipt(tx_hash_bytes, timeout=120)
+            tx_hash = receipt.transactionHash.hex()
+
+        return {
+            "success": True,
+            "tx_hash": tx_hash,
+            "asset": body.asset.upper(),
+            "amount": body.amount,
+            "from": agent_wallet,
+            "to": to_addr,
+            "status": receipt.status,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Withdraw failed: {str(e)}")
