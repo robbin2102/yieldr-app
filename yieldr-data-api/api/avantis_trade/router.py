@@ -3,16 +3,19 @@ Avantis Trade Execution Router
 FastAPI endpoints for opening, closing, and managing perp trades on Avantis (Base chain).
 
 Signing strategy (per-agent CDP wallets):
-  - If agent_wallet_address is provided AND CDP env vars are set → CdpTraderClient
-    signs transactions via Coinbase CDP MPC wallets (no private key exposure).
+  - If agent_wallet_address is provided AND CDP_SERVICE_URL + CDP_SERVICE_SECRET are set
+    → CdpTraderClient delegates signing to the cdp-wallet-service microservice via HTTP.
+    This sidesteps the web3 version conflict (avantis-trader-sdk needs web3<7,
+    cdp-sdk needs web3>=7.6.0) by keeping them in separate processes.
   - Otherwise falls back to shared LocalSigner (AGENT_WALLET_PRIVATE_KEY).
 """
 
-import os
-from typing import Optional, Any
+import logging
+from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from web3 import AsyncWeb3
+import httpx
 
 from avantis_trader_sdk import TraderClient
 from avantis_trader_sdk.types import TradeInput, TradeInputOrderType, MarginUpdateType
@@ -24,35 +27,44 @@ from config import get_settings
 
 settings = get_settings()
 router = APIRouter()
+logger = logging.getLogger("avantis_trade.router")
+
 
 # ─────────────────────────────────────────────
-# CDP Client — lazy singleton
+# CDP Wallet Service — HTTP client helpers
 # ─────────────────────────────────────────────
 
-_cdp_client: Any = None  # cdp.CdpClient | None
+def _cdp_service_configured() -> bool:
+    """True when cdp-wallet-service URL and secret are both set."""
+    return bool(settings.cdp_service_url and settings.cdp_service_secret)
 
-def _get_cdp_client():
-    """Return a cached CdpClient if CDP env vars are set, otherwise None."""
-    global _cdp_client
-    if _cdp_client is not None:
-        return _cdp_client
-    key_id     = os.getenv("CDP_API_KEY_ID")
-    key_secret = (os.getenv("CDP_API_KEY_SECRET") or "").replace("\\n", "\n")
-    wallet_sec = os.getenv("CDP_WALLET_SECRET")
-    if not (key_id and key_secret and wallet_sec):
-        return None
-    try:
-        from cdp import CdpClient
-        _cdp_client = CdpClient(
-            api_key_id=key_id,
-            api_key_secret=key_secret,
-            wallet_secret=wallet_sec,
+
+async def _cdp_send_transaction(wallet_address: str, to: str, data: str = "0x", value: int = 0) -> str:
+    """
+    Delegate transaction signing + broadcast to cdp-wallet-service.
+    Returns the tx hash string.
+    """
+    url = f"{settings.cdp_service_url.rstrip('/')}/evm/send-transaction"
+    payload = {
+        "wallet_address": wallet_address,
+        "to": to,
+        "data": data,
+        "value": value,
+        "network": "base-mainnet",
+    }
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        resp = await client.post(
+            url,
+            json=payload,
+            headers={"x-cdp-secret": settings.cdp_service_secret},
         )
-        print("[CDP-Python] client initialised OK")
-        return _cdp_client
-    except Exception as e:
-        print(f"[CDP-Python] client init failed: {e}")
-        return None
+    if resp.status_code != 200:
+        logger.error(f"[CDP-svc] send-transaction failed {resp.status_code}: {resp.text}")
+        raise HTTPException(
+            status_code=502,
+            detail=f"CDP wallet service error {resp.status_code}: {resp.text}",
+        )
+    return resp.json()["tx_hash"]
 
 
 # ─────────────────────────────────────────────
@@ -61,9 +73,9 @@ def _get_cdp_client():
 
 class CdpSigner(BaseSigner):
     """
-    Adapter so avantis-trader-sdk sees a valid signer while we route actual signing
-    through CDP.  sign_transaction() is intentionally unused — CdpTraderClient
-    overrides sign_and_get_receipt() to call cdp.evm.send_transaction() directly.
+    Adapter so avantis-trader-sdk sees a valid signer.
+    sign_transaction() is intentionally unused — CdpTraderClient overrides
+    sign_and_get_receipt() to delegate to the cdp-wallet-service via HTTP.
     """
     def __init__(self, wallet_address: str):
         self._address = wallet_address
@@ -72,38 +84,32 @@ class CdpSigner(BaseSigner):
         return self._address
 
     async def sign_transaction(self, transaction):
-        raise NotImplementedError("Signing is handled by CdpTraderClient.sign_and_get_receipt")
+        raise NotImplementedError("Signing is delegated to cdp-wallet-service")
 
 
 # ─────────────────────────────────────────────
-# CdpTraderClient — subclass that signs via CDP
+# CdpTraderClient — signs via cdp-wallet-service
 # ─────────────────────────────────────────────
 
 class CdpTraderClient(TraderClient):
     """
     Extends TraderClient so that every call to sign_and_get_receipt() is routed
-    through Coinbase CDP instead of a local private key.
+    to the cdp-wallet-service microservice (which owns cdp-sdk).
 
-    CDP manages nonce + gas estimation automatically when those fields are 0 / omitted.
+    This avoids the web3 version conflict between avantis-trader-sdk (web3<7)
+    and cdp-sdk (web3>=7.6.0) by keeping them in separate processes.
     """
-    def __init__(self, provider_url: str, agent_wallet_address: str, cdp_client, async_web3: AsyncWeb3):
+    def __init__(self, provider_url: str, agent_wallet_address: str, async_web3: AsyncWeb3):
         super().__init__(provider_url=provider_url, signer=CdpSigner(agent_wallet_address))
-        self._cdp_wallet  = agent_wallet_address
-        self._cdp         = cdp_client
-        self._async_web3  = async_web3
+        self._cdp_wallet = agent_wallet_address
+        self._async_web3 = async_web3
 
     async def sign_and_get_receipt(self, transaction: dict):
-        from cdp.evm_transaction_types import TransactionRequestEIP1559
-        tx_req = TransactionRequestEIP1559(
+        tx_hash = await _cdp_send_transaction(
+            wallet_address=self._cdp_wallet,
             to=transaction["to"],
             data=transaction.get("data", "0x"),
             value=transaction.get("value", 0),
-            # Omit nonce/gas/fees → CDP auto-estimates
-        )
-        tx_hash = await self._cdp.evm.send_transaction(
-            address=self._cdp_wallet,
-            transaction=tx_req,
-            network="base-mainnet",
         )
         return await self._async_web3.eth.wait_for_transaction_receipt(tx_hash)
 
@@ -125,19 +131,17 @@ def _get_rpc_url() -> str:
 def _build_trader_client(agent_wallet_address: Optional[str] = None) -> TraderClient:
     """
     Return the appropriate TraderClient:
-      - CdpTraderClient  when agent_wallet_address + CDP creds are available
+      - CdpTraderClient  when agent_wallet_address + cdp-wallet-service are configured
       - LocalSigner-backed TraderClient  as fallback (shared AGENT_WALLET_PRIVATE_KEY)
     """
-    rpc_url     = _get_rpc_url()
-    async_web3  = AsyncWeb3(AsyncWeb3.AsyncHTTPProvider(rpc_url, request_kwargs={"timeout": 60}))
+    rpc_url    = _get_rpc_url()
+    async_web3 = AsyncWeb3(AsyncWeb3.AsyncHTTPProvider(rpc_url, request_kwargs={"timeout": 60}))
 
-    cdp = _get_cdp_client()
-    if agent_wallet_address and cdp:
-        print(f"[CDP-Python] using CDP wallet {agent_wallet_address}")
+    if agent_wallet_address and _cdp_service_configured():
+        logger.info(f"[CDP-svc] using CDP wallet {agent_wallet_address}")
         return CdpTraderClient(
             provider_url=rpc_url,
             agent_wallet_address=agent_wallet_address,
-            cdp_client=cdp,
             async_web3=async_web3,
         )
 
@@ -146,7 +150,7 @@ def _build_trader_client(agent_wallet_address: Optional[str] = None) -> TraderCl
     if not private_key:
         raise HTTPException(
             status_code=503,
-            detail="No signing method available: AGENT_WALLET_PRIVATE_KEY not set and CDP creds missing"
+            detail="No signing method available: AGENT_WALLET_PRIVATE_KEY not set and CDP_SERVICE_URL not configured",
         )
     signer = LocalSigner(private_key, async_web3)
     return TraderClient(provider_url=rpc_url, signer=signer)
