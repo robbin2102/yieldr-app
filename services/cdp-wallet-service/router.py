@@ -70,7 +70,7 @@ class SendTransactionRequest(BaseModel):
     to: str                     # Contract / recipient address
     data: str = "0x"            # Encoded calldata
     value: int = 0              # Native token value in wei (0 for USDC ops)
-    network: str = "base-mainnet"
+    network: str = "base"
 
 
 class SendTransactionResponse(BaseModel):

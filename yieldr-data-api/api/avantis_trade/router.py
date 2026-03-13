@@ -50,7 +50,7 @@ async def _cdp_send_transaction(wallet_address: str, to: str, data: str = "0x", 
         "to": to,
         "data": data,
         "value": value,
-        "network": "base-mainnet",
+        "network": "base",
     }
     async with httpx.AsyncClient(timeout=60.0) as client:
         resp = await client.post(
