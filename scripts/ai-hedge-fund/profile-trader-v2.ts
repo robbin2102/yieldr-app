@@ -236,9 +236,8 @@ async function fetchClosedPositions(
 }
 
 // fetchPublicProfile — NEW: Polymarket public profile API
-// 200ms delay before call. All errors caught silently (store nulls on failure).
+// All errors caught silently (store nulls on failure).
 async function fetchPublicProfile(wallet: string): Promise<PublicProfile | null> {
-  await new Promise(r => setTimeout(r, 200));
   try {
     const url = `${API_BASE}/public-profile?address=${wallet}`;
     const response = await fetch(url);
@@ -250,9 +249,8 @@ async function fetchPublicProfile(wallet: string): Promise<PublicProfile | null>
 }
 
 // fetchFirstActivity — NEW: earliest ever activity for dormancy detection
-// 100ms delay. Errors caught silently.
+// Errors caught silently.
 async function fetchFirstActivity(wallet: string): Promise<Activity | null> {
-  await new Promise(r => setTimeout(r, 100));
   try {
     const url = `${API_BASE}/activity?user=${wallet}&limit=1&offset=0&sortBy=TIMESTAMP&sortDirection=ASC`;
     const response = await fetch(url);
@@ -914,29 +912,19 @@ export async function profileTrader(
   const cleanWallet = wallet.toLowerCase();
   const profiledAt = new Date();
 
-  // ── Fetch all data ─────────────────────────────────────────
-  if (verbose) {
-    console.log('\nFetching activities (30d)...');
-  }
-  const activities = await fetchActivities(cleanWallet, 30);
-  if (verbose) console.log(`  Found ${activities.length} activities\n`);
+  // ── Fetch all data in parallel ─────────────────────────────
+  if (verbose) console.log('  Fetching all data in parallel (activities, positions, closed, profile, firstActivity)...');
 
-  if (verbose) console.log('Fetching open positions...');
-  const allOpenPositions = await fetchOpenPositions(cleanWallet);
-  if (verbose) console.log(`  Found ${allOpenPositions.length} positions total\n`);
+  const [activities, allOpenPositions, closedPositions1000, publicProfile, firstEverActivity] =
+    await Promise.all([
+      fetchActivities(cleanWallet, 30),
+      fetchOpenPositions(cleanWallet),
+      fetchClosedPositions(cleanWallet, { limit: 200 }),
+      fetchPublicProfile(cleanWallet),
+      fetchFirstActivity(cleanWallet),
+    ]);
 
-  // Fetch closed positions with limit=1000 for accurate win rate
-  if (verbose) console.log('Fetching last 1000 closed positions (for win rate)...');
-  const closedPositions1000 = await fetchClosedPositions(cleanWallet, { limit: 1000 });
-  if (verbose) console.log(`  Found ${closedPositions1000.length} closed positions\n`);
-
-  // Fetch public profile (200ms delay baked into fetchPublicProfile)
-  if (verbose) console.log('Fetching public profile...');
-  const publicProfile = await fetchPublicProfile(cleanWallet);
-
-  // Fetch first ever activity (100ms delay baked in)
-  if (verbose) console.log('Fetching first ever activity...');
-  const firstEverActivity = await fetchFirstActivity(cleanWallet);
+  if (verbose) console.log(`  activities=${activities.length} openPositions=${allOpenPositions.length} closedPositions=${closedPositions1000.length}`);
 
   // ── Period info ────────────────────────────────────────────
   const lastActivity = activities.length > 0
