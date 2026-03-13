@@ -227,6 +227,11 @@ class CancelLimitRequest(BaseModel):
     agent_wallet_address: Optional[str] = None
 
 
+class CreateWalletRequest(BaseModel):
+    name: str                               # e.g. "yieldr-agent-<user_id>"
+    idempotency_key: str                    # Stable per-user key → same key = same wallet
+
+
 class FundAgentRequest(BaseModel):
     amount: float                           # USDC to transfer
     user_wallet_address: str                # User's connected wallet (sender)
@@ -605,6 +610,54 @@ async def get_fees(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Fee estimation failed: {str(e)}")
+
+
+# ─────────────────────────────────────────────
+# POST /trade/create-wallet
+# Proxies to cdp-wallet-service /evm/create-account
+# ─────────────────────────────────────────────
+
+@router.post("/create-wallet")
+async def create_agent_wallet(
+    body: CreateWalletRequest,
+    _: str = Depends(verify_api_key),
+):
+    """
+    Create (or retrieve) a CDP EVM wallet for an agent.
+    Idempotent — calling with the same idempotency_key returns the same address.
+    Proxies to the cdp-wallet-service microservice.
+    """
+    if not _cdp_service_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="CDP wallet service not configured (CDP_SERVICE_URL / CDP_SERVICE_SECRET missing)",
+        )
+
+    url = f"{settings.cdp_service_url.rstrip('/')}/evm/create-account"
+    logger.info(f"[create-wallet] name={body.name} key={body.idempotency_key}")
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                url,
+                json={"name": body.name, "idempotency_key": body.idempotency_key},
+                headers={"x-cdp-secret": settings.cdp_service_secret},
+            )
+        if resp.status_code != 200:
+            logger.error(f"[create-wallet] CDP svc error {resp.status_code}: {resp.text}")
+            raise HTTPException(
+                status_code=502,
+                detail=f"CDP wallet service error {resp.status_code}: {resp.text}",
+            )
+        data = resp.json()
+        logger.info(f"[create-wallet] address={data.get('address')}")
+        return {"address": data["address"], "name": data["name"]}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[create-wallet] failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Wallet creation failed: {e}")
 
 
 # ─────────────────────────────────────────────
