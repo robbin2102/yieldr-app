@@ -6,9 +6,14 @@ export const runtime = 'nodejs';
 const PYTHON_URL = process.env.PYTHON_SERVICE_URL || 'http://localhost:8001';
 const API_KEY    = process.env.API_KEY || '';
 
-export async function GET(_request: NextRequest) {
+export async function GET(request: NextRequest) {
   try {
-    const res = await fetch(`${PYTHON_URL}/trade/balance`, {
+    const agentWalletAddress = request.nextUrl.searchParams.get('agent_wallet_address');
+    const balanceUrl = agentWalletAddress
+      ? `${PYTHON_URL}/trade/balance?agent_wallet_address=${encodeURIComponent(agentWalletAddress)}`
+      : `${PYTHON_URL}/trade/balance`;
+
+    const res = await fetch(balanceUrl, {
       headers: { 'X-API-Key': API_KEY },
       signal: AbortSignal.timeout(30_000),
     });

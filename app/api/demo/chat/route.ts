@@ -380,6 +380,77 @@ const toolDefinitions: Anthropic.Tool[] = [
   },
 ];
 
+// ─── Agent Trading Execution Tools ───────────────────────────────────────────
+toolDefinitions.push({
+  name: 'get_agent_wallet_balance',
+  description:
+    'Check the agent CDP wallet ETH and USDC balance. Call this BEFORE executing any trade. ' +
+    'ETH is needed for gas fees (minimum 0.001 ETH on Base). USDC is the trade collateral. ' +
+    'If ETH < 0.001, tell user to send ETH to the agent wallet. If USDC < collateral, tell user to fund.',
+  input_schema: {
+    type: 'object' as const,
+    properties: {},
+  },
+});
+
+toolDefinitions.push({
+  name: 'open_trade',
+  description:
+    'Execute a perpetual trade on Avantis (Base). ALWAYS call get_agent_wallet_balance first. ' +
+    'Minimum position size: collateral × leverage >= $100 USDC. ' +
+    'Pair indices: 1=BTC/USD, 2=ETH/USD, 3=SOL/USD, 4=LINK/USD, 5=ARB/USD. ' +
+    'For MARKET orders open_price is not needed. For LIMIT orders open_price is required. ' +
+    'Returns tx_hash, entry_price, trade_index, tp_price, sl_price.',
+  input_schema: {
+    type: 'object' as const,
+    properties: {
+      pair:       { type: 'string',  description: 'Trading pair, e.g. "BTC/USD" or "ETH/USD"' },
+      pair_index: { type: 'number',  description: 'On-chain pair index: 1=BTC/USD, 2=ETH/USD, 3=SOL/USD' },
+      direction:  { type: 'string',  enum: ['LONG', 'SHORT'], description: 'Trade direction' },
+      collateral: { type: 'number',  description: 'Collateral in USDC (e.g. 10 for $10 USDC)' },
+      leverage:   { type: 'number',  description: 'Leverage multiplier (e.g. 10 for 10×). collateral × leverage must be ≥ $100' },
+      tp_pct:     { type: 'number',  description: 'Take-profit % above/below entry (e.g. 4 for 4%)' },
+      sl_pct:     { type: 'number',  description: 'Stop-loss % against entry (e.g. 2.5 for 2.5%)' },
+      order_type: { type: 'string',  enum: ['MARKET', 'LIMIT'], description: 'MARKET executes immediately; LIMIT queues at open_price. Default: MARKET' },
+      open_price: { type: 'number',  description: 'Fill price — required for LIMIT orders only' },
+    },
+    required: ['pair', 'pair_index', 'direction', 'collateral', 'leverage', 'tp_pct', 'sl_pct'],
+  },
+});
+
+toolDefinitions.push({
+  name: 'close_trade',
+  description:
+    'Close an open perpetual position on Avantis. ' +
+    'Call get_avantis_live_positions first to get pair_index and trade_index. ' +
+    'Returns tx_hash, exit_price, pnl.',
+  input_schema: {
+    type: 'object' as const,
+    properties: {
+      pair_index:          { type: 'number', description: 'On-chain pair index (e.g. 1 for BTC/USD)' },
+      trade_index:         { type: 'number', description: 'On-chain trade index (from get_avantis_live_positions)' },
+      collateral_to_close: { type: 'number', description: 'USDC collateral amount to close. Use the full open_collateral value to close the entire position.' },
+    },
+    required: ['pair_index', 'trade_index', 'collateral_to_close'],
+  },
+});
+
+toolDefinitions.push({
+  name: 'cancel_limit_order',
+  description:
+    'Cancel a pending limit order on Avantis. ' +
+    'Call get_avantis_live_positions first to get pair_index and trade_index from pending_orders. ' +
+    'Returns tx_hash on success.',
+  input_schema: {
+    type: 'object' as const,
+    properties: {
+      pair_index:  { type: 'number', description: 'On-chain pair index' },
+      trade_index: { type: 'number', description: 'On-chain trade/order index (from pending_orders in get_avantis_live_positions)' },
+    },
+    required: ['pair_index', 'trade_index'],
+  },
+});
+
 // ─── RSS News tool ───────────────────────────────────────────────────────────
 toolDefinitions.push({
   name: 'get_news_headlines',
@@ -473,6 +544,14 @@ function getToolStatusLabel(name: string, input: any): string {
         ? `Scanning ${src} news for "${input.topics}"...`
         : `Fetching latest ${src} headlines...`;
     }
+    case 'get_agent_wallet_balance':
+      return `Checking agent wallet balance...`;
+    case 'open_trade':
+      return `Executing ${input.direction || ''} ${input.pair || ''} ${input.order_type || 'MARKET'} order...`.trim();
+    case 'close_trade':
+      return `Closing position (pair_index=${input.pair_index}, trade_index=${input.trade_index})...`;
+    case 'cancel_limit_order':
+      return `Cancelling limit order (pair_index=${input.pair_index}, trade_index=${input.trade_index})...`;
     case 'web_search':
       return `Searching the web...`;
     default:
@@ -482,7 +561,7 @@ function getToolStatusLabel(name: string, input: any): string {
 
 // ─── Tool Execution ────────────────────────────────────────────────────────
 
-async function executeTool(name: string, input: any, wallet?: string): Promise<string> {
+async function executeTool(name: string, input: any, wallet?: string, agentCtxId?: string, agentCtxWallet?: string): Promise<string> {
   console.log(`[chat] Executing tool: ${name}`, JSON.stringify(input).slice(0, 200));
   try {
     switch (name) {
@@ -1226,6 +1305,103 @@ async function executeTool(name: string, input: any, wallet?: string): Promise<s
         return JSON.stringify({ error: `Unknown action: ${action}` });
       }
 
+      // ── Agent Trading Execution Tools ────────────────────────────────────────
+      case 'get_agent_wallet_balance': {
+        if (!agentCtxWallet) {
+          return JSON.stringify({ error: 'No agent wallet configured. The agent does not have a CDP wallet yet.' });
+        }
+        const pythonUrl = process.env.PYTHON_SERVICE_URL || 'http://localhost:8001';
+        const apiKey    = process.env.YIELDR_DATA_API_SECRET || process.env.API_KEY || '';
+        const res = await fetch(
+          `${pythonUrl}/trade/balance?agent_wallet_address=${encodeURIComponent(agentCtxWallet)}`,
+          { headers: { 'X-API-Key': apiKey }, signal: AbortSignal.timeout(30_000) }
+        );
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || 'Balance fetch failed');
+        const eth = data.eth_balance ?? 0;
+        const usdc = data.usdc_balance ?? 0;
+        return JSON.stringify({
+          agent_wallet:           agentCtxWallet,
+          eth_balance:            eth,
+          usdc_balance:           usdc,
+          eth_sufficient_for_gas: eth >= 0.001,
+          status: eth < 0.001
+            ? `⚠️ Low ETH: ${eth.toFixed(6)} ETH — send at least 0.001 ETH to ${agentCtxWallet} for gas`
+            : `✓ ETH OK (${eth.toFixed(6)} ETH)`,
+          usdc_note: usdc === 0
+            ? `Agent wallet has no USDC. Fund it before placing trades.`
+            : `${usdc.toFixed(2)} USDC available for trading.`,
+        });
+      }
+
+      case 'open_trade': {
+        if (!agentCtxId) return JSON.stringify({ success: false, error: 'No agent ID in context.' });
+        if (!agentCtxWallet) return JSON.stringify({ success: false, error: 'No agent wallet configured.' });
+        const { pair, pair_index, direction, collateral, leverage, tp_pct, sl_pct, order_type = 'MARKET', open_price } = input;
+        const nextjsUrl    = process.env.NEXTJS_API_URL || 'http://localhost:3000';
+        const internalSec  = process.env.YIELDR_INTERNAL_SECRET || '';
+        const tradeBody: Record<string, any> = {
+          agentId: agentCtxId,
+          userId:  wallet || '',
+          pair, pair_index, direction, collateral, leverage, tp_pct, sl_pct,
+          order_type,
+          createMonitor: true,
+          monitorIntervalSeconds: 300,
+          monitorInstruction: `Monitor ${pair} ${direction} trade opened by ${agentCtxId}. TP at ${tp_pct}%, SL at ${sl_pct}%. Alert if exit conditions are met.`,
+        };
+        if (order_type === 'LIMIT' && open_price != null) tradeBody.open_price = open_price;
+        const res = await fetch(`${nextjsUrl}/api/avantis/execute/open`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(internalSec ? { Authorization: `Bearer ${internalSec}` } : {}),
+          },
+          body: JSON.stringify(tradeBody),
+          signal: AbortSignal.timeout(60_000),
+        });
+        const data = await res.json();
+        if (!res.ok) return JSON.stringify({ success: false, error: data.error || `Trade failed: HTTP ${res.status}` });
+        return JSON.stringify({ success: true, ...data });
+      }
+
+      case 'close_trade': {
+        if (!agentCtxId) return JSON.stringify({ success: false, error: 'No agent ID in context.' });
+        const { pair_index, trade_index, collateral_to_close } = input;
+        const nextjsUrl   = process.env.NEXTJS_API_URL || 'http://localhost:3000';
+        const internalSec = process.env.YIELDR_INTERNAL_SECRET || '';
+        const res = await fetch(`${nextjsUrl}/api/avantis/execute/close`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(internalSec ? { Authorization: `Bearer ${internalSec}` } : {}),
+          },
+          body: JSON.stringify({ agentId: agentCtxId, userId: wallet || '', pair_index, trade_index, collateral_to_close }),
+          signal: AbortSignal.timeout(60_000),
+        });
+        const data = await res.json();
+        if (!res.ok) return JSON.stringify({ success: false, error: data.error || `Close failed: HTTP ${res.status}` });
+        return JSON.stringify({ success: true, ...data });
+      }
+
+      case 'cancel_limit_order': {
+        if (!agentCtxId) return JSON.stringify({ success: false, error: 'No agent ID in context.' });
+        const { pair_index, trade_index } = input;
+        const nextjsUrl   = process.env.NEXTJS_API_URL || 'http://localhost:3000';
+        const internalSec = process.env.YIELDR_INTERNAL_SECRET || '';
+        const res = await fetch(`${nextjsUrl}/api/avantis/execute/cancel-limit`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(internalSec ? { Authorization: `Bearer ${internalSec}` } : {}),
+          },
+          body: JSON.stringify({ agentId: agentCtxId, userId: wallet || '', pair_index, trade_index }),
+          signal: AbortSignal.timeout(60_000),
+        });
+        const data = await res.json();
+        if (!res.ok) return JSON.stringify({ success: false, error: data.error || `Cancel failed: HTTP ${res.status}` });
+        return JSON.stringify({ success: true, ...data });
+      }
+
       default:
         return JSON.stringify({ error: `Unknown tool: ${name}` });
     }
@@ -1270,6 +1446,12 @@ You have access to powerful data tools. USE THEM proactively:
 • get_pm_market — Fetch Polymarket market odds, outcomes, volume, and liquidity. Search by keyword (e.g. "taiwan", "bitcoin etf") or look up by slug/conditionId. Use to check current market prices for any topic.
 • get_pm_user_activity — Fetch recent Polymarket trades (buys/sells/redeems) for any wallet. Filter by market, side, or days back. Use to see what a wallet is actively trading on Polymarket.
 • web_search — Search the web for market news, macro events (native Claude tool)
+
+**Trading Execution (agent CDP wallet — LIVE):**
+• get_agent_wallet_balance — Check agent wallet ETH (gas) and USDC (collateral) balances before trading
+• open_trade — Execute MARKET or LIMIT perpetual order on Avantis (Base). Min $100 position size.
+• close_trade — Close an open Avantis position. Use get_avantis_live_positions first for trade_index.
+• cancel_limit_order — Cancel a pending Avantis limit order.
 
 ---
 
@@ -1343,36 +1525,47 @@ For now, I can walk you through manual execution step-by-step.
 
 ---
 
-## 🚀 Handling Execution Requests
+## 🚀 Trading Execution — LIVE
 
-When users ask to execute trades, place bets, or manage positions:
+You CAN execute perpetual trades directly on Avantis (Base) using the agent's CDP wallet.
 
 DO NOT say:
 • "I cannot execute trades"
 • "I don't have wallet access"
-• "I can't move your funds"
+• "Trading agents launch in beta"
 • Any framing around "copy trading" or "replicating" other traders
 
-INSTEAD position yourself as:
-• An AI trader/portfolio manager that will execute autonomously in beta
-• Top trader data is your research input, not a copy target
+### Pre-Trade Workflow
 
-Beta launch will include:
-• Trading Agents — execute trades autonomously on Avantis (perps) and Limitless/Coinbase (prediction markets) on Base
-• Portfolio Monitoring Agents — track positions, alert on risk levels, suggest rebalancing
+1. Call get_agent_wallet_balance — check ETH and USDC
+   • ETH < 0.001 → tell user: "Send at least 0.001 ETH to [agent_wallet] on Base for gas fees"
+   • USDC < collateral → tell user: "Fund the agent wallet with USDC at [agent_wallet]"
+2. Call get_market_snapshot (or fetch_live_indicator) to validate entry signals
+3. Confirm trade params with user (pair, direction, collateral, leverage, TP%, SL%)
+4. Call open_trade to execute
 
-Example response when user asks to execute:
-"Trading agents launch in beta — I'll be able to execute this position directly on [Avantis/Limitless] for you.
+### Execution Tools Available
 
-For now, here's my recommendation based on my analysis:
+• get_agent_wallet_balance — check ETH (gas) and USDC (collateral) balances
+• open_trade — place market or limit order on Avantis (pair_index: 1=BTC/USD, 2=ETH/USD, 3=SOL/USD)
+• close_trade — close an open position (call get_avantis_live_positions first for trade_index)
+• cancel_limit_order — cancel a pending limit order
 
-📍 Market: [specific market/pair]
-📍 Direction: [LONG/SHORT or YES/NO]
-📍 Size: $XXX (XX% of portfolio)
-📍 Entry: [price/odds]
-📍 Rationale: [1-2 sentences based on your analysis]
+### Minimum Size
 
-Want me to walk you through executing this manually, or save this for when trading agents go live?"
+Position size = collateral × leverage ≥ $100 USDC (Avantis protocol minimum)
+
+### Recommended Trade Format
+
+When proposing a trade, always confirm with the user before calling open_trade:
+
+📍 Pair: BTC/USD (LONG)
+📍 Collateral: $10 USDC | Leverage: 10× | Position: $100
+📍 Entry: MARKET
+📍 TP: +4% | SL: -2.5%
+📍 Agent Wallet: [address] | ETH: [balance] | USDC: [balance]
+
+"Shall I execute this now?"
 
 Always frame top trader data as:
 • "My analysis of top performers shows..."
@@ -1511,16 +1704,13 @@ News monitoring IS supported — use get_news_headlines inside the monitor's eva
 
 ---
 
-## 🚧 Features NOT Available in Demo — NEVER OFFER
+## 🚧 Features NOT Available — NEVER OFFER
 
 These features do NOT exist yet. NEVER offer or suggest them:
 • Telegram or Discord notifications
-• Automated trading or trade execution
-• Portfolio rebalancing
 • SMS or email notifications
-• Any form of automated action
 
-If a user asks about these, say: "That's coming in V1! For now, I can monitor market conditions and alert you in the chat."
+If a user asks about notifications, say: "That's coming in V1! For now, I alert you directly in the chat."
 
 ---
 
@@ -1642,13 +1832,15 @@ Use fields/include params to keep responses lean:
 function buildDynamicUserContext(context: {
   walletAddress: string;
   agentName: string;
+  agentId: string;
+  agentWalletAddress: string;
   positions: any[];
   followedTraders: any[];
   portfolioSummary: any;
   tokens: any[];
   tokensTotalUsd: number;
 }): string {
-  const { walletAddress, agentName, positions, followedTraders, portfolioSummary, tokens, tokensTotalUsd } = context;
+  const { walletAddress, agentName, agentId, agentWalletAddress, positions, followedTraders, portfolioSummary, tokens, tokensTotalUsd } = context;
 
   const positionSummary = positions.length > 0
     ? positions.map(p => {
@@ -1682,6 +1874,8 @@ function buildDynamicUserContext(context: {
 
 User Wallet Address: ${walletAddress}
 Agent Name: ${agentName}
+Agent ID: ${agentId || 'N/A'}
+Agent Wallet (CDP): ${agentWalletAddress || 'Not configured — wallet not yet created'}
 Total Value: ~$${totalPortfolioValue.toFixed(2)}
 Positions: ${portfolioSummary?.positionCount || 0}
 Token Holdings: $${tokensTotalUsd.toFixed(2)} across ${tokens.length} tokens
@@ -1725,6 +1919,8 @@ export async function POST(request: NextRequest) {
     let followedTraders: any[] = [];
     let portfolioSummary: any = {};
     let agentName = 'YieldrAgent';
+    let agentId = '';
+    let agentWalletAddress = '';
     let tokens: any[] = [];
     let tokensTotalUsd = 0;
 
@@ -1736,6 +1932,8 @@ export async function POST(request: NextRequest) {
 
       if (agent) {
         agentName = agent.name || agentName;
+        agentId = agent.agentId || '';
+        agentWalletAddress = agent.agentWalletAddress || '';
         followedTraders = agent.followedTraders || [];
         portfolioSummary = agent.portfolioSummary || {};
         // Use cached tokens from agent (fetched once during onboarding)
@@ -1749,7 +1947,7 @@ export async function POST(request: NextRequest) {
     // Build system message array: static (cached) + dynamic (user context)
     const walletLower = wallet?.toLowerCase() || '';
     const dynamicUserContext = buildDynamicUserContext({
-      walletAddress: walletLower, agentName, positions, followedTraders, portfolioSummary, tokens, tokensTotalUsd,
+      walletAddress: walletLower, agentName, agentId, agentWalletAddress, positions, followedTraders, portfolioSummary, tokens, tokensTotalUsd,
     });
 
     const systemMessage: Anthropic.TextBlockParam[] = [
@@ -1911,7 +2109,7 @@ export async function POST(request: NextRequest) {
                   // Track tool call
                   allToolCalls.push({ name: currentToolName });
                   // Execute the tool
-                  const toolResult = await executeTool(currentToolName, parsedInput, walletLower);
+                  const toolResult = await executeTool(currentToolName, parsedInput, walletLower, agentId, agentWalletAddress);
                   console.log(`[TOKENS] Tool result for "${currentToolName}": ${estimateTokens(toolResult)} est. tokens (${toolResult.length} chars)`);
                   toolResults.push({
                     role: 'user',

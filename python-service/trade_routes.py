@@ -359,6 +359,30 @@ async def execute_open(body: OpenTradeRequest, _: str = Depends(verify_api_key))
         agent_wallet = client.get_signer().get_ethereum_address()
 
     try:
+        # ── Pre-trade checks: USDC collateral + ETH gas ────────────────────────
+        usdc_balance = await client.get_usdc_balance(agent_wallet)
+        if usdc_balance < body.collateral:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Insufficient USDC. Agent wallet has ${usdc_balance:.2f} USDC "
+                    f"but trade requires ${body.collateral:.2f} USDC collateral. "
+                    f"Fund the agent wallet at {agent_wallet}."
+                ),
+            )
+        eth_balance = await client.get_balance(agent_wallet)
+        MIN_ETH_FOR_GAS = 0.0005
+        if eth_balance < MIN_ETH_FOR_GAS:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Insufficient ETH for gas. Agent wallet has {eth_balance:.6f} ETH "
+                    f"(minimum {MIN_ETH_FOR_GAS} ETH required for Base transactions). "
+                    f"Send at least 0.001 ETH to {agent_wallet} on Base network."
+                ),
+            )
+        # ── End pre-trade checks ────────────────────────────────────────────────
+
         pair_index = await client.pairs_cache.get_pair_index(body.pair)
         is_long = body.direction.lower() == "long"
 
