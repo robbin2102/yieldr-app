@@ -38,7 +38,7 @@ export default function TopNav({ activePage }: TopNavProps) {
           onClick={() => router.push('/agents')}
         >Agents</button>
         <button className={`${s.navTab} ${s.disabled}`} title="Coming soon">Traders</button>
-        <button className={`${s.navTab} ${s.disabled}`} title="Coming soon">Funds</button>
+        <button className={s.navTab} onClick={() => router.push('/demo/chat?funds=1')} title="Agent wallet & funds">Funds</button>
       </div>
       <div className={s.topnavRight}>
         <button className={s.getYldr} onClick={() => router.push('/demo/chat')}>+ Get YLDR</button>

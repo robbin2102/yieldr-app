@@ -451,6 +451,25 @@ toolDefinitions.push({
   },
 });
 
+toolDefinitions.push({
+  name: 'withdraw_funds',
+  description:
+    'Withdraw ETH or USDC from the agent CDP wallet to a destination address. ' +
+    'The agent wallet signs and sends autonomously — no user signature needed. ' +
+    'Call get_agent_wallet_balance first to confirm available balance. ' +
+    'Use when the user asks to withdraw, send back, or transfer funds out of the agent wallet. ' +
+    'Default to_address is the user\'s connected wallet unless they specify otherwise.',
+  input_schema: {
+    type: 'object' as const,
+    properties: {
+      amount:     { type: 'number', description: 'Amount to withdraw (e.g. 0.005 for 0.005 ETH or 10 for $10 USDC)' },
+      asset:      { type: 'string', enum: ['ETH', 'USDC'], description: 'Asset to withdraw: ETH (native gas token on Base) or USDC' },
+      to_address: { type: 'string', description: 'Destination wallet address. Use the user\'s connected wallet address unless they specify a different one.' },
+    },
+    required: ['amount', 'asset', 'to_address'],
+  },
+});
+
 // ─── RSS News tool ───────────────────────────────────────────────────────────
 toolDefinitions.push({
   name: 'get_news_headlines',
@@ -552,6 +571,8 @@ function getToolStatusLabel(name: string, input: any): string {
       return `Closing position (pair_index=${input.pair_index}, trade_index=${input.trade_index})...`;
     case 'cancel_limit_order':
       return `Cancelling limit order (pair_index=${input.pair_index}, trade_index=${input.trade_index})...`;
+    case 'withdraw_funds':
+      return `Withdrawing ${input.amount} ${input.asset} from agent wallet...`;
     case 'web_search':
       return `Searching the web...`;
     default:
@@ -1402,6 +1423,26 @@ async function executeTool(name: string, input: any, wallet?: string, agentCtxId
         return JSON.stringify({ success: true, ...data });
       }
 
+      case 'withdraw_funds': {
+        if (!agentCtxId) return JSON.stringify({ success: false, error: 'No agent ID in context.' });
+        if (!agentCtxWallet) return JSON.stringify({ success: false, error: 'No agent wallet configured.' });
+        const { amount, asset, to_address } = input;
+        const nextjsUrl   = process.env.NEXTJS_API_URL || 'http://localhost:3000';
+        const internalSec = process.env.YIELDR_INTERNAL_SECRET || '';
+        const res = await fetch(`${nextjsUrl}/api/avantis/withdraw`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(internalSec ? { Authorization: `Bearer ${internalSec}` } : {}),
+          },
+          body: JSON.stringify({ agentId: agentCtxId, amount, asset, to_address }),
+          signal: AbortSignal.timeout(60_000),
+        });
+        const data = await res.json();
+        if (!res.ok) return JSON.stringify({ success: false, error: data.error || `Withdraw failed: HTTP ${res.status}` });
+        return JSON.stringify({ success: true, ...data });
+      }
+
       default:
         return JSON.stringify({ error: `Unknown tool: ${name}` });
     }
@@ -1452,6 +1493,7 @@ You have access to powerful data tools. USE THEM proactively:
 • open_trade — Execute MARKET or LIMIT perpetual order on Avantis (Base). Min $100 position size.
 • close_trade — Close an open Avantis position. Use get_avantis_live_positions first for trade_index.
 • cancel_limit_order — Cancel a pending Avantis limit order.
+• withdraw_funds — Withdraw ETH or USDC from the agent wallet back to the user's wallet.
 
 ---
 
@@ -1550,6 +1592,15 @@ DO NOT say:
 • open_trade — place market or limit order on Avantis (pair_index: 1=BTC/USD, 2=ETH/USD, 3=SOL/USD)
 • close_trade — close an open position (call get_avantis_live_positions first for trade_index)
 • cancel_limit_order — cancel a pending limit order
+• withdraw_funds — withdraw ETH or USDC from the agent wallet to the user's wallet (or any address they specify)
+
+### Withdraw Workflow
+
+When user asks to withdraw, send back, or recover funds from the agent wallet:
+1. Call get_agent_wallet_balance — confirm what's available
+2. Confirm with user: asset (ETH or USDC), amount, destination (default = their connected wallet)
+3. Call withdraw_funds to execute the on-chain transfer
+4. Report tx_hash and BaseScan link: https://basescan.org/tx/{tx_hash}
 
 ### Minimum Size
 

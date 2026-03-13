@@ -208,6 +208,14 @@ export default function ChatPage() {
   const [yldrInput, setYldrInput] = useState(100);
   const [mobPanelHidden, setMobPanelHidden] = useState(false);
 
+  // Funds modal state
+  const [showFundsModal, setShowFundsModal] = useState(false);
+  const [fundsAgentWallet, setFundsAgentWallet] = useState('');
+  const [fundsEth, setFundsEth] = useState(0);
+  const [fundsUsdc, setFundsUsdc] = useState(0);
+  const [fundsLoading, setFundsLoading] = useState(false);
+  const [fundsCopied, setFundsCopied] = useState(false);
+
   // Credits
   const [creditsUsed, setCreditsUsed] = useState(0);
   const [creditsLoading, setCreditsLoading] = useState(true);
@@ -716,6 +724,33 @@ export default function ChatPage() {
     router.push('/demo');
   }, [disconnect, router]);
 
+  // ── Open Funds modal — fetch agent wallet address + live balance
+  const handleOpenFundsModal = useCallback(async () => {
+    setShowFundsModal(true);
+    setFundsLoading(true);
+    setFundsAgentWallet('');
+    setFundsEth(0);
+    setFundsUsdc(0);
+    try {
+      const wallet = authenticatedWallet || address?.toLowerCase() || '';
+      if (!wallet) return;
+      const agentRes = await fetch(`/api/demo/agents?wallet=${wallet}`);
+      if (!agentRes.ok) return;
+      const agentData = await agentRes.json();
+      const agentWallet: string = agentData.agent?.agentWalletAddress || '';
+      setFundsAgentWallet(agentWallet);
+      if (agentWallet) {
+        const balRes = await fetch(`/api/avantis/balance?agent_wallet_address=${encodeURIComponent(agentWallet)}`);
+        if (balRes.ok) {
+          const bal = await balRes.json();
+          setFundsEth(bal.eth_balance ?? 0);
+          setFundsUsdc(bal.usdc_balance ?? 0);
+        }
+      }
+    } catch {}
+    setFundsLoading(false);
+  }, [authenticatedWallet, address]);
+
   // ── Toggle card expansion
   const toggleCard = (key: string) => {
     setExpandedCards(prev => {
@@ -773,7 +808,7 @@ export default function ChatPage() {
             onClick={() => router.push('/agents')}
           >Agents</button>
           <button className={`${s.navTab} ${s.disabled}`} title="Coming soon">Traders</button>
-          <button className={`${s.navTab} ${s.disabled}`} title="Coming soon">Funds</button>
+          <button className={s.navTab} onClick={handleOpenFundsModal}>Funds</button>
         </div>
         <div className={s.topnavRight}>
           <div className={s.tokenDisplay} onClick={() => setShowYldrModal(true)} title="AI credits used">
@@ -1381,6 +1416,81 @@ export default function ChatPage() {
           </div>
         </div>{/* /rightPanel */}
       </div>{/* /appBody */}
+
+      {/* ═══ FUNDS MODAL ═══ */}
+      {showFundsModal && (
+        <div className={s.modalOverlay} onClick={e => { if (e.target === e.currentTarget) setShowFundsModal(false); }}>
+          <div className={s.modal}>
+            <div className={s.modalHdr}>
+              <div>
+                <div className={s.modalTitle}>Agent Wallet</div>
+                <div className={s.modalSub}>Deposit to fund your agent. Withdraw via chat.</div>
+              </div>
+              <button className={s.modalClose} onClick={() => setShowFundsModal(false)}>✕</button>
+            </div>
+            <div className={s.modalBody}>
+              {fundsLoading ? (
+                <div className={s.fundsLoading}>Loading wallet info...</div>
+              ) : !fundsAgentWallet ? (
+                <div className={s.fundsLoading}>No agent wallet found. Create an agent first.</div>
+              ) : (
+                <>
+                  <div className={s.fundsWalletBlock}>
+                    <div className={s.fundsWalletLabel}>Agent Wallet Address (Base)</div>
+                    <div className={s.fundsWalletRow}>
+                      <span className={s.fundsWalletAddr}>
+                        {fundsAgentWallet.slice(0, 10)}...{fundsAgentWallet.slice(-6)}
+                      </span>
+                      <button
+                        className={s.fundsCopyBtn}
+                        onClick={() => {
+                          navigator.clipboard.writeText(fundsAgentWallet);
+                          setFundsCopied(true);
+                          setTimeout(() => setFundsCopied(false), 2000);
+                        }}
+                      >{fundsCopied ? '✓ Copied' : 'Copy'}</button>
+                    </div>
+                  </div>
+
+                  <div className={s.fundsBalRow}>
+                    <div className={s.fundsBalItem}>
+                      <span className={s.fundsBalLabel}>ETH balance</span>
+                      <span className={`${s.fundsBalVal} ${fundsEth < 0.001 ? s.fundsBalWarn : s.fundsBalOk}`}>
+                        {fundsEth.toFixed(6)} ETH
+                      </span>
+                    </div>
+                    <div className={s.fundsBalItem}>
+                      <span className={s.fundsBalLabel}>USDC balance</span>
+                      <span className={`${s.fundsBalVal} ${fundsUsdc === 0 ? s.fundsBalWarn : s.fundsBalOk}`}>
+                        {fundsUsdc.toFixed(2)} USDC
+                      </span>
+                    </div>
+                  </div>
+
+                  {fundsEth < 0.001 && (
+                    <div className={s.fundsGasWarn}>
+                      ⚠ Send at least 0.001 ETH for gas before trading
+                    </div>
+                  )}
+
+                  <div className={s.fundsInstructions}>
+                    <div className={s.fundsStepTitle}>To deposit:</div>
+                    <ol className={s.fundsStepList}>
+                      <li>Copy the agent wallet address above</li>
+                      <li>Switch MetaMask to <strong>Base</strong> network</li>
+                      <li>Send ETH (gas) and/or USDC to the address</li>
+                    </ol>
+                  </div>
+
+                  <div className={s.fundsWithdrawNote}>
+                    To withdraw, say in chat: <em>"withdraw 0.005 ETH to my wallet"</em> or <em>"send back 10 USDC"</em>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ═══ YLDR MODAL ═══ */}
       {showYldrModal && (

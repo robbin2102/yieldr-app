@@ -238,6 +238,13 @@ class FundAgentRequest(BaseModel):
     agent_wallet_address: Optional[str] = None  # Agent's CDP wallet (funding destination)
 
 
+class WithdrawRequest(BaseModel):
+    amount: float                           # Amount to withdraw
+    asset: str                              # "ETH" | "USDC"
+    to_address: str                         # Destination wallet address
+    agent_wallet_address: Optional[str] = None  # Agent's CDP wallet (source)
+
+
 # ─────────────────────────────────────────────
 # POST /trade/execute-open
 # ─────────────────────────────────────────────
@@ -658,6 +665,113 @@ async def create_agent_wallet(
     except Exception as e:
         logger.error(f"[create-wallet] failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Wallet creation failed: {e}")
+
+
+# ─────────────────────────────────────────────
+# POST /trade/withdraw
+# Agent wallet signs and sends ETH or USDC to a specified address
+# ─────────────────────────────────────────────
+
+async def _send_transaction_any(
+    agent_wallet_address: Optional[str],
+    to: str,
+    data: str = "0x",
+    value: int = 0,
+) -> str:
+    """
+    Send a transaction using the CDP service (preferred) or local private key.
+    Returns the tx hash string.
+    """
+    if agent_wallet_address and _cdp_service_configured():
+        return await _cdp_send_transaction(
+            wallet_address=agent_wallet_address, to=to, data=data, value=value
+        )
+
+    # Fallback: sign with local private key
+    from eth_account import Account
+    private_key = settings.agent_wallet_private_key
+    if not private_key:
+        raise HTTPException(
+            status_code=503,
+            detail="No signing method available: neither CDP service nor AGENT_WALLET_PRIVATE_KEY is configured",
+        )
+    rpc_url = _get_rpc_url()
+    w3 = AsyncWeb3(AsyncWeb3.AsyncHTTPProvider(rpc_url))
+    account = Account.from_key(private_key)
+    nonce = await w3.eth.get_transaction_count(account.address)
+    gas_price = await w3.eth.gas_price
+    tx = {
+        "nonce": nonce,
+        "to": AsyncWeb3.to_checksum_address(to),
+        "value": value,
+        "data": data,
+        "gas": 100_000,
+        "gasPrice": gas_price,
+        "chainId": 8453,
+    }
+    signed = account.sign_transaction(tx)
+    tx_hash = await w3.eth.send_raw_transaction(signed.raw_transaction)
+    return tx_hash.hex()
+
+
+@router.post("/withdraw")
+async def withdraw_from_agent(
+    body: WithdrawRequest,
+    _: str = Depends(verify_api_key),
+):
+    """
+    Withdraw ETH or USDC from the agent CDP wallet to a destination address.
+    The agent wallet signs and broadcasts autonomously (no user signature needed).
+    """
+    from web3 import Web3
+
+    if body.asset.upper() not in ("ETH", "USDC"):
+        raise HTTPException(status_code=400, detail="asset must be ETH or USDC")
+
+    # Resolve agent wallet address
+    if body.agent_wallet_address:
+        agent_wallet = body.agent_wallet_address
+    else:
+        client = _build_trader_client()
+        agent_wallet = client.get_signer().get_ethereum_address()
+
+    to_addr = Web3.to_checksum_address(body.to_address)
+
+    try:
+        if body.asset.upper() == "ETH":
+            amount_wei = int(body.amount * 10 ** 18)
+            tx_hash = await _send_transaction_any(
+                agent_wallet_address=body.agent_wallet_address,
+                to=to_addr,
+                value=amount_wei,
+            )
+        else:  # USDC
+            w3 = Web3(Web3.HTTPProvider(_get_rpc_url()))
+            usdc = w3.eth.contract(
+                address=Web3.to_checksum_address(USDC_BASE_ADDRESS),
+                abi=USDC_TRANSFER_ABI,
+            )
+            amount_units = int(body.amount * 10 ** 6)  # USDC has 6 decimals
+            calldata = usdc.encodeABI(fn_name="transfer", args=[to_addr, amount_units])
+            tx_hash = await _send_transaction_any(
+                agent_wallet_address=body.agent_wallet_address,
+                to=USDC_BASE_ADDRESS,
+                data=calldata,
+            )
+
+        return {
+            "success": True,
+            "tx_hash": tx_hash,
+            "asset": body.asset.upper(),
+            "amount": body.amount,
+            "from_wallet": agent_wallet,
+            "to_address": to_addr,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Withdraw failed: {str(e)}")
 
 
 # ─────────────────────────────────────────────
