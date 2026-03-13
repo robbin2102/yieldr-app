@@ -771,7 +771,8 @@ async def withdraw_from_agent(body: WithdrawRequest, _: str = Depends(verify_api
             tx["maxFeePerGas"] = base_fee * 2 + 1_000_000
             tx["type"] = 2
             signed = Account.sign_transaction(tx, private_key)
-            tx_hash_bytes = await w3.eth.send_raw_transaction(signed.raw_transaction)
+            raw = getattr(signed, "raw_transaction", None) or signed.rawTransaction
+            tx_hash_bytes = await w3.eth.send_raw_transaction(raw)
             receipt = await w3.eth.wait_for_transaction_receipt(tx_hash_bytes, timeout=120)
             tx_hash = receipt.transactionHash.hex()
 
