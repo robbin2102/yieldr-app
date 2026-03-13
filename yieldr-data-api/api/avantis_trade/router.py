@@ -710,7 +710,8 @@ async def _send_transaction_any(
         "chainId": 8453,
     }
     signed = account.sign_transaction(tx)
-    tx_hash = await w3.eth.send_raw_transaction(signed.raw_transaction)
+    raw = getattr(signed, "raw_transaction", None) or signed.rawTransaction
+    tx_hash = await w3.eth.send_raw_transaction(raw)
     return tx_hash.hex()
 
 
