@@ -25,6 +25,9 @@
  *
  *   # Source wallets from polyMarketHolders (top holders per market):
  *   npx tsx scripts/ai-hedge-fund/bulk-profile-ahf.ts --source holders
+ *
+ *   # Resume safely — skip wallets already in DB (order-independent):
+ *   npx tsx scripts/ai-hedge-fund/bulk-profile-ahf.ts --source holders --skip-existing
  */
 
 import dotenv from 'dotenv';
@@ -63,6 +66,7 @@ const OPT = (name: string, fallback: string): string => {
 const CONCURRENCY    = parseInt(OPT('concurrency', '5'));
 const START_OFFSET   = parseInt(OPT('offset', '0'));
 const DAILY_MODE     = FLAG('daily');
+const SKIP_EXISTING  = FLAG('skip-existing');   // skip wallets already profiled in DB
 const SOURCE         = OPT('source', 'mongo');   // 'mongo' | 'leaderboard' | 'holders'
 
 // Inactive threshold for --daily: skip wallets not seen in X days
@@ -227,6 +231,7 @@ async function main() {
   console.log(`  Source:      ${SOURCE}`);
   console.log(`  Concurrency: ${CONCURRENCY} traders`);
   console.log(`  Offset:      ${START_OFFSET}`);
+  console.log(`  Skip existing: ${SKIP_EXISTING}`);
   console.log(`  DB:          ${dbName}`);
   console.log('════════════════════════════════════════════════════════════\n');
 
@@ -249,6 +254,18 @@ async function main() {
   if (START_OFFSET > 0) {
     console.log(`Resuming from offset ${START_OFFSET} (skipping first ${START_OFFSET} wallets)\n`);
     wallets = wallets.slice(START_OFFSET);
+  }
+
+  // Skip wallets already profiled in DB
+  if (SKIP_EXISTING) {
+    console.log('Checking for already-profiled wallets...');
+    const existingDocs = await collection
+      .find({ wallet: { $in: wallets } }, { projection: { wallet: 1 } })
+      .toArray();
+    const existingSet = new Set(existingDocs.map(d => (d.wallet as string).toLowerCase()));
+    const before = wallets.length;
+    wallets = wallets.filter(w => !existingSet.has(w.toLowerCase()));
+    console.log(`  Skipping ${before - wallets.length} already-profiled wallets → ${wallets.length} remaining\n`);
   }
 
   const total = wallets.length;
