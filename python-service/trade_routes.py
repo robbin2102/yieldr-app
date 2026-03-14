@@ -98,12 +98,19 @@ async def _cdp_send_and_receipt(cdp, wallet_address: str, tx: dict) -> Any:
         cdp_tx["maxFeePerGas"]         = _to_hex(tx["gasPrice"])
         cdp_tx["maxPriorityFeePerGas"] = _to_hex(tx["gasPrice"])
 
+    print(f"[cdp_send] Submitting tx to={cdp_tx.get('to')} nonce={cdp_tx.get('nonce')} gas={cdp_tx.get('gas')} wallet={wallet_address}")
     result = cdp.evm.send_transaction(
         address=wallet_address,
         transaction=cdp_tx,
         network="base-mainnet",
     )
-    receipt = await w3.eth.wait_for_transaction_receipt(result.transaction_hash, timeout=120)
+    tx_hash = result.transaction_hash
+    print(f"[cdp_send] Tx submitted: {tx_hash} — waiting for receipt...")
+    receipt = await w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
+    status = getattr(receipt, "status", receipt.get("status") if isinstance(receipt, dict) else None)
+    print(f"[cdp_send] Receipt: hash={tx_hash} status={status} block={getattr(receipt, 'blockNumber', '?')} gasUsed={getattr(receipt, 'gasUsed', '?')}")
+    if status == 0:
+        raise Exception(f"CDP transaction reverted on-chain: {tx_hash}")
     return receipt
 
 
@@ -404,13 +411,20 @@ async def execute_open(body: OpenTradeRequest, _: str = Depends(verify_api_key))
 
         # USDC approval
         allowance = await client.get_usdc_allowance_for_trading(agent_wallet)
+        print(f"[open_trade] USDC allowance for {agent_wallet}: {allowance:.6f} USDC (required: {body.collateral} USDC) using_cdp={using_cdp}")
         if allowance < body.collateral:
             if using_cdp:
                 # Build approval tx and sign via CDP
                 spender = str(client.trade._trading_contract.address)
+                print(f"[open_trade] Allowance insufficient — approving {body.collateral * 10:.2f} USDC for spender={spender}")
                 await _cdp_approve_usdc(_get_cdp_client(), agent_wallet, spender, body.collateral)
+                print(f"[open_trade] USDC approval confirmed")
             else:
+                print(f"[open_trade] Allowance insufficient — approving via local signer")
                 await client.approve_usdc_for_trading(body.collateral * 10)
+                print(f"[open_trade] USDC approval confirmed (local signer)")
+        else:
+            print(f"[open_trade] Allowance sufficient — skipping approval")
 
         trade_input = TradeInput(
             trader=agent_wallet,
@@ -596,10 +610,13 @@ async def execute_update_margin(body: UpdateMarginRequest, _: str = Depends(veri
             raise HTTPException(status_code=400, detail="action must be DEPOSIT or WITHDRAW")
         if body.action.upper() == "DEPOSIT":
             allowance = await client.get_usdc_allowance_for_trading(agent_wallet)
+            print(f"[margin_update] USDC allowance for {agent_wallet}: {allowance:.6f} USDC (required: {body.amount}) using_cdp={using_cdp}")
             if allowance < body.amount:
                 if using_cdp:
                     spender = str(client.trade._trading_contract.address)
+                    print(f"[margin_update] Approving {body.amount * 10:.2f} USDC for spender={spender}")
                     await _cdp_approve_usdc(_get_cdp_client(), agent_wallet, spender, body.amount)
+                    print(f"[margin_update] USDC approval confirmed")
                 else:
                     await client.approve_usdc_for_trading(body.amount * 10)
         tx = await client.trade.build_trade_margin_update_tx(
