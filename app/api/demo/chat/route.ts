@@ -478,9 +478,37 @@ toolDefinitions.push({
   },
 });
 
-// fund_agent and fund_agent_eth are intentionally NOT exposed to the LLM.
-// Deposits are handled manually by the user for the demo period.
-// The tool handler code still exists (cases in executeTool) in case re-enabling is needed.
+toolDefinitions.push({
+  name: 'fund_agent',
+  description:
+    'Deposit USDC from the user\'s connected wallet into the agent CDP wallet. ' +
+    'Call this when the agent wallet needs USDC for trading collateral. ' +
+    'Emits a deposit approval card — the user must click Approve and sign in their wallet. ' +
+    'Call get_agent_wallet_balance first to confirm how much USDC is needed.',
+  input_schema: {
+    type: 'object' as const,
+    properties: {
+      amount: { type: 'number', description: 'Amount of USDC to deposit (e.g. 10 for $10 USDC)' },
+    },
+    required: ['amount'],
+  },
+});
+
+toolDefinitions.push({
+  name: 'fund_agent_eth',
+  description:
+    'Deposit ETH from the user\'s connected wallet into the agent CDP wallet for gas fees. ' +
+    'Call this when agent ETH balance is below 0.0002 ETH (minimum for Base gas). ' +
+    'Emits an ETH deposit approval card — the user must click Approve and sign in their wallet. ' +
+    'Default deposit: 0.001 ETH (enough for ~5 trades).',
+  input_schema: {
+    type: 'object' as const,
+    properties: {
+      amount_eth: { type: 'number', description: 'Amount of ETH to deposit (e.g. 0.001 for 0.001 ETH)' },
+    },
+    required: ['amount_eth'],
+  },
+});
 
 toolDefinitions.push({
   name: 'propose_trade',
