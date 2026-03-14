@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useAccount, useDisconnect, useSendTransaction } from 'wagmi';
+import { useConnectModal } from '@rainbow-me/rainbowkit';
 import { useRouter } from 'next/navigation';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -196,6 +197,7 @@ export default function ChatPage() {
   const { address, isConnected, isReconnecting } = useAccount();
   const { disconnect } = useDisconnect();
   const { sendTransactionAsync } = useSendTransaction();
+  const { openConnectModal } = useConnectModal();
 
   // Auth
   const [authChecking, setAuthChecking] = useState(true);
@@ -801,6 +803,10 @@ export default function ChatPage() {
 
   // ── Execute deposit (called from deposit_request action card)
   const handleDepositApprove = useCallback(async (msgId: string, unsignedTx: { to: string; data: string; value: string; chainId: number }) => {
+    if (!isConnected || isReconnecting) {
+      openConnectModal?.();
+      return;
+    }
     setActionTxLoading(prev => ({ ...prev, [msgId]: true }));
     try {
       const hash = await sendTransactionAsync({
@@ -824,10 +830,14 @@ export default function ChatPage() {
       setActionTxResult(prev => ({ ...prev, [msgId]: { ok: false, error: errMsg } }));
     }
     setActionTxLoading(prev => ({ ...prev, [msgId]: false }));
-  }, [sendTransactionAsync]);
+  }, [sendTransactionAsync, isConnected, isReconnecting, openConnectModal]);
 
   // ── Execute ETH gas deposit (native transfer)
   const handleEthDepositApprove = useCallback(async (msgId: string, unsignedTx: { to: string; data: string; value: string; chainId: number }) => {
+    if (!isConnected || isReconnecting) {
+      openConnectModal?.();
+      return;
+    }
     setActionTxLoading(prev => ({ ...prev, [msgId]: true }));
     try {
       const hash = await sendTransactionAsync({
@@ -850,7 +860,7 @@ export default function ChatPage() {
       setActionTxResult(prev => ({ ...prev, [msgId]: { ok: false, error: errMsg } }));
     }
     setActionTxLoading(prev => ({ ...prev, [msgId]: false }));
-  }, [sendTransactionAsync]);
+  }, [sendTransactionAsync, isConnected, isReconnecting, openConnectModal]);
 
   // ── Approve trade — directly sends execution message without textarea round-trip
   const handleTradeApprove = useCallback((msgId: string, params: any) => {
