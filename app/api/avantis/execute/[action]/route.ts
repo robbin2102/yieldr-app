@@ -12,7 +12,7 @@ function normalizeUrl(url: string) {
   return !url.startsWith('http://') && !url.startsWith('https://') ? `https://${url}` : url;
 }
 const PYTHON_URL       = normalizeUrl(process.env.PYTHON_SERVICE_URL || 'http://localhost:8001');
-const DATA_API_SECRET  = process.env.YIELDR_DATA_API_SECRET || '';
+const DATA_API_SECRET  = process.env.YIELDR_DATA_API_SECRET || process.env.API_KEY || '';
 const INTERNAL_SECRET  = process.env.YIELDR_INTERNAL_SECRET || '';
 
 // Map Next.js action slug → Python endpoint path
