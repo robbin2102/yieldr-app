@@ -803,7 +803,11 @@ export default function ChatPage() {
 
   // ── Execute deposit (called from deposit_request action card)
   const handleDepositApprove = useCallback(async (msgId: string, unsignedTx: { to: string; data: string; value: string; chainId: number }) => {
-    if (!isConnected || isReconnecting) {
+    if (isReconnecting) {
+      setActionTxResult(prev => ({ ...prev, [msgId]: { ok: false, error: 'Wallet is reconnecting — please try again in a moment.' } }));
+      return;
+    }
+    if (!isConnected) {
       openConnectModal?.();
       return;
     }
@@ -834,7 +838,11 @@ export default function ChatPage() {
 
   // ── Execute ETH gas deposit (native transfer)
   const handleEthDepositApprove = useCallback(async (msgId: string, unsignedTx: { to: string; data: string; value: string; chainId: number }) => {
-    if (!isConnected || isReconnecting) {
+    if (isReconnecting) {
+      setActionTxResult(prev => ({ ...prev, [msgId]: { ok: false, error: 'Wallet is reconnecting — please try again in a moment.' } }));
+      return;
+    }
+    if (!isConnected) {
       openConnectModal?.();
       return;
     }
