@@ -746,10 +746,12 @@ export default function ChatPage() {
 
     setIsStreaming(false);
     setToolStatus(null);
-    // Flush buffered action cards now that the agent message is complete
-    if (pendingActionCards.current.length > 0) {
-      setMessages(prev => [...prev, ...pendingActionCards.current]);
-      pendingActionCards.current = [];
+    // Flush buffered action cards — capture into local var FIRST so the setState
+    // callback closes over the snapshot, not the ref (which is cleared immediately after).
+    const cardsToFlush = [...pendingActionCards.current];
+    pendingActionCards.current = [];
+    if (cardsToFlush.length > 0) {
+      setMessages(prev => [...prev, ...cardsToFlush]);
     }
     if (effectiveWallet) fetchCredits(effectiveWallet);
     // Re-poll monitoring after each message (a task may have been created)

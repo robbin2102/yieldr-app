@@ -11,6 +11,12 @@ const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY || '',
 });
 
+// Ensure service URLs always carry a protocol (handles Railway/Render URLs without https://)
+function normalizeUrl(url: string): string {
+  if (!url.startsWith('http://') && !url.startsWith('https://')) return `https://${url}`;
+  return url;
+}
+
 const HYPERLIQUID_API_URL = 'https://api.hyperliquid.xyz/info';
 const POLYMARKET_API_BASE = 'https://data-api.polymarket.com';
 const AVANTIS_API_URL = 'https://yieldr-app-production.up.railway.app/fetch-positions';
@@ -1397,7 +1403,7 @@ async function executeTool(name: string, input: any, wallet?: string, agentCtxId
         if (!agentCtxWallet) {
           return JSON.stringify({ error: 'No agent wallet configured. The agent does not have a CDP wallet yet.' });
         }
-        const pythonUrl = process.env.PYTHON_SERVICE_URL || 'http://localhost:8001';
+        const pythonUrl = normalizeUrl(process.env.PYTHON_SERVICE_URL || 'http://localhost:8001');
         const apiKey    = process.env.YIELDR_DATA_API_SECRET || process.env.API_KEY || '';
         const res = await fetch(
           `${pythonUrl}/trade/balance?agent_wallet_address=${encodeURIComponent(agentCtxWallet)}`,
@@ -1425,7 +1431,7 @@ async function executeTool(name: string, input: any, wallet?: string, agentCtxId
         if (!agentCtxId) return JSON.stringify({ success: false, error: 'No agent ID in context.' });
         if (!agentCtxWallet) return JSON.stringify({ success: false, error: 'No agent wallet configured.' });
         const { pair, pair_index, direction, collateral, leverage, tp_pct, sl_pct, order_type = 'MARKET', open_price } = input;
-        const nextjsUrl    = process.env.NEXTJS_API_URL || 'http://localhost:3000';
+        const nextjsUrl    = normalizeUrl(process.env.NEXTJS_API_URL || 'http://localhost:3000');
         const internalSec  = process.env.YIELDR_INTERNAL_SECRET || '';
         const tradeBody: Record<string, any> = {
           agentId: agentCtxId,
@@ -1454,7 +1460,7 @@ async function executeTool(name: string, input: any, wallet?: string, agentCtxId
       case 'close_trade': {
         if (!agentCtxId) return JSON.stringify({ success: false, error: 'No agent ID in context.' });
         const { pair_index, trade_index, collateral_to_close } = input;
-        const nextjsUrl   = process.env.NEXTJS_API_URL || 'http://localhost:3000';
+        const nextjsUrl   = normalizeUrl(process.env.NEXTJS_API_URL || 'http://localhost:3000');
         const internalSec = process.env.YIELDR_INTERNAL_SECRET || '';
         const res = await fetch(`${nextjsUrl}/api/avantis/execute/close`, {
           method: 'POST',
@@ -1473,7 +1479,7 @@ async function executeTool(name: string, input: any, wallet?: string, agentCtxId
       case 'cancel_limit_order': {
         if (!agentCtxId) return JSON.stringify({ success: false, error: 'No agent ID in context.' });
         const { pair_index, trade_index } = input;
-        const nextjsUrl   = process.env.NEXTJS_API_URL || 'http://localhost:3000';
+        const nextjsUrl   = normalizeUrl(process.env.NEXTJS_API_URL || 'http://localhost:3000');
         const internalSec = process.env.YIELDR_INTERNAL_SECRET || '';
         const res = await fetch(`${nextjsUrl}/api/avantis/execute/cancel-limit`, {
           method: 'POST',
@@ -1493,7 +1499,7 @@ async function executeTool(name: string, input: any, wallet?: string, agentCtxId
         if (!agentCtxId) return JSON.stringify({ success: false, error: 'No agent ID in context.' });
         if (!agentCtxWallet) return JSON.stringify({ success: false, error: 'No agent wallet configured.' });
         const { amount, asset, to_address } = input;
-        const nextjsUrl   = process.env.NEXTJS_API_URL || 'http://localhost:3000';
+        const nextjsUrl   = normalizeUrl(process.env.NEXTJS_API_URL || 'http://localhost:3000');
         const internalSec = process.env.YIELDR_INTERNAL_SECRET || '';
         const res = await fetch(`${nextjsUrl}/api/avantis/withdraw`, {
           method: 'POST',
@@ -1514,7 +1520,7 @@ async function executeTool(name: string, input: any, wallet?: string, agentCtxId
         const userWallet = wallet || '';
         if (!userWallet) return JSON.stringify({ success: false, error: 'No user wallet in context.' });
         const { amount } = input;
-        const nextjsUrl   = process.env.NEXTJS_API_URL || 'http://localhost:3000';
+        const nextjsUrl   = normalizeUrl(process.env.NEXTJS_API_URL || 'http://localhost:3000');
         const internalSec = process.env.YIELDR_INTERNAL_SECRET || '';
         const res = await fetch(`${nextjsUrl}/api/avantis/fund`, {
           method: 'POST',
