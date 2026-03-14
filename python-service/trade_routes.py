@@ -355,6 +355,7 @@ MIN_POSITION_SIZE_USDC = 100.0  # Avantis protocol minimum
 
 @router.post("/execute-open")
 async def execute_open(body: OpenTradeRequest, _: str = Depends(verify_api_key)):
+    print(f"[execute_open] ── REQUEST RECEIVED ── pair={body.pair} direction={body.direction} collateral={body.collateral} leverage={body.leverage} agent_wallet={body.agent_wallet_address} order_type={body.order_type}")
     position_size = body.collateral * body.leverage
     if position_size < MIN_POSITION_SIZE_USDC:
         raise HTTPException(

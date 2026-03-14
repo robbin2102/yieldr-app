@@ -1444,6 +1444,7 @@ async function executeTool(name: string, input: any, wallet?: string, agentCtxId
         if (!agentCtxId) return JSON.stringify({ success: false, error: 'No agent ID in context.' });
         if (!agentCtxWallet) return JSON.stringify({ success: false, error: 'No agent wallet configured.' });
         const { pair, pair_index, direction, collateral, leverage, tp_pct, sl_pct, order_type = 'MARKET', open_price } = input;
+        console.log(`[open_trade] ── ENTER ── pair=${pair} direction=${direction} collateral=${collateral} leverage=${leverage} wallet=${agentCtxWallet} agentId=${agentCtxId}`);
 
         // ── Preflight: hard balance gate — no silent bypass ──────────────────
         {
@@ -1451,12 +1452,14 @@ async function executeTool(name: string, input: any, wallet?: string, agentCtxId
           try {
             const balUrl = normalizeUrl(process.env.PYTHON_SERVICE_URL || 'http://localhost:8001');
             const balKey = process.env.YIELDR_DATA_API_SECRET || process.env.API_KEY || '';
+            console.log(`[open_trade] balance preflight: GET ${balUrl}/trade/balance wallet=${agentCtxWallet}`);
             const balRes = await fetch(
               `${balUrl}/trade/balance?agent_wallet_address=${encodeURIComponent(agentCtxWallet)}`,
               { headers: { 'X-API-Key': balKey }, signal: AbortSignal.timeout(15_000) }
             );
             if (balRes.ok) {
               rawBalanceResponse = await balRes.text();
+              console.log(`[open_trade] balance preflight OK: ${rawBalanceResponse.slice(0, 200)}`);
             } else {
               console.warn(`[open_trade] balance preflight HTTP ${balRes.status} — hard gate blocking trade`);
             }
@@ -1464,7 +1467,9 @@ async function executeTool(name: string, input: any, wallet?: string, agentCtxId
             console.warn(`[open_trade] balance preflight fetch failed: ${balErr.message} — hard gate blocking trade`);
           }
           const gate = validateBalanceForTrade(rawBalanceResponse, collateral);
+          console.log(`[open_trade] balance gate: allowed=${gate.allowed} status=${gate.classifiedResult.status} rawLen=${rawBalanceResponse?.length ?? 'null'}`);
           if (!gate.allowed) {
+            console.warn(`[open_trade] BLOCKED by balance gate: ${gate.classifiedResult.classifiedMessage.slice(0, 300)}`);
             return gate.classifiedResult.classifiedMessage;
           }
         }
@@ -1472,6 +1477,7 @@ async function executeTool(name: string, input: any, wallet?: string, agentCtxId
 
         const nextjsUrl    = normalizeUrl(process.env.NEXTJS_API_URL || 'http://localhost:3000');
         const internalSec  = process.env.YIELDR_INTERNAL_SECRET || '';
+        console.log(`[open_trade] calling execute/open → ${nextjsUrl}/api/avantis/execute/open (internalSec set=${!!internalSec})`);
         const tradeBody: Record<string, any> = {
           agentId: agentCtxId,
           userId:  wallet || '',
@@ -1491,8 +1497,13 @@ async function executeTool(name: string, input: any, wallet?: string, agentCtxId
           body: JSON.stringify(tradeBody),
           signal: AbortSignal.timeout(60_000),
         });
+        console.log(`[open_trade] execute/open response: HTTP ${res.status}`);
         const data = await res.json();
-        if (!res.ok) return JSON.stringify({ success: false, error: data.error || `Trade failed: HTTP ${res.status}` });
+        if (!res.ok) {
+          console.error(`[open_trade] execute/open FAILED: HTTP ${res.status} error="${data.error}" body=${JSON.stringify(data).slice(0, 300)}`);
+          return JSON.stringify({ success: false, error: data.error || `Trade failed: HTTP ${res.status}` });
+        }
+        console.log(`[open_trade] execute/open SUCCESS: tx_hash=${data.tx_hash ?? data.trade?.tx_hash ?? 'none'}`);
         return JSON.stringify({ success: true, ...data });
       }
 
