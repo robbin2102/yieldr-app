@@ -478,37 +478,9 @@ toolDefinitions.push({
   },
 });
 
-toolDefinitions.push({
-  name: 'fund_agent',
-  description:
-    'Generate a USDC deposit transaction for the user to approve in their wallet. ' +
-    'Call when the agent wallet needs USDC collateral for trading. ' +
-    'This displays a transaction approval card in the UI — the user must click Approve and sign with MetaMask/RainbowKit. ' +
-    'Call get_agent_wallet_balance first. If ETH is also low, call fund_agent_eth BEFORE this tool.',
-  input_schema: {
-    type: 'object' as const,
-    properties: {
-      amount: { type: 'number', description: 'Amount of USDC to deposit into the agent wallet (e.g. 20 for $20 USDC)' },
-    },
-    required: ['amount'],
-  },
-});
-
-toolDefinitions.push({
-  name: 'fund_agent_eth',
-  description:
-    'Generate an ETH deposit card for the user to approve in their wallet — used when the agent wallet has insufficient ETH for gas. ' +
-    'This displays a native ETH transfer card in the UI (no ERC20 approval needed). ' +
-    'Call this BEFORE fund_agent when ETH balance is below 0.0002. ' +
-    'Use 0.0002 ETH as the minimum amount. If the user specifies a different amount, use exactly that amount.',
-  input_schema: {
-    type: 'object' as const,
-    properties: {
-      amount_eth: { type: 'number', description: 'Amount of ETH to send to the agent wallet (e.g. 0.0005)' },
-    },
-    required: ['amount_eth'],
-  },
-});
+// fund_agent and fund_agent_eth are intentionally NOT exposed to the LLM.
+// Deposits are handled manually by the user for the demo period.
+// The tool handler code still exists (cases in executeTool) in case re-enabling is needed.
 
 toolDefinitions.push({
   name: 'propose_trade',
@@ -1405,12 +1377,18 @@ async function executeTool(name: string, input: any, wallet?: string, agentCtxId
         }
         const pythonUrl = normalizeUrl(process.env.PYTHON_SERVICE_URL || 'http://localhost:8001');
         const apiKey    = process.env.YIELDR_DATA_API_SECRET || process.env.API_KEY || '';
+        if (!apiKey) console.warn('[balance] WARNING: no API key set (YIELDR_DATA_API_SECRET / API_KEY)');
         const res = await fetch(
           `${pythonUrl}/trade/balance?agent_wallet_address=${encodeURIComponent(agentCtxWallet)}`,
           { headers: { 'X-API-Key': apiKey }, signal: AbortSignal.timeout(30_000) }
         );
+        if (!res.ok) {
+          let detail = `HTTP ${res.status}`;
+          try { const e = await res.json(); detail = e.detail || e.error || detail; } catch {}
+          console.error(`[balance] fetch failed: ${detail} — url=${pythonUrl}, key_set=${!!apiKey}`);
+          throw new Error(`Balance fetch failed (${detail}). Check PYTHON_SERVICE_URL and YIELDR_DATA_API_SECRET env vars.`);
+        }
         const data = await res.json();
-        if (!res.ok) throw new Error(data.detail || 'Balance fetch failed');
         const eth = data.eth_balance ?? 0;
         const usdc = data.usdc_balance ?? 0;
         return JSON.stringify({
@@ -1431,6 +1409,32 @@ async function executeTool(name: string, input: any, wallet?: string, agentCtxId
         if (!agentCtxId) return JSON.stringify({ success: false, error: 'No agent ID in context.' });
         if (!agentCtxWallet) return JSON.stringify({ success: false, error: 'No agent wallet configured.' });
         const { pair, pair_index, direction, collateral, leverage, tp_pct, sl_pct, order_type = 'MARKET', open_price } = input;
+
+        // ── Preflight: verify USDC balance before touching the chain ─────────
+        try {
+          const balUrl = normalizeUrl(process.env.PYTHON_SERVICE_URL || 'http://localhost:8001');
+          const balKey = process.env.YIELDR_DATA_API_SECRET || process.env.API_KEY || '';
+          const balRes = await fetch(
+            `${balUrl}/trade/balance?agent_wallet_address=${encodeURIComponent(agentCtxWallet)}`,
+            { headers: { 'X-API-Key': balKey }, signal: AbortSignal.timeout(15_000) }
+          );
+          if (balRes.ok) {
+            const bal = await balRes.json();
+            const usdcAvail = bal.usdc_balance ?? 0;
+            if (usdcAvail < collateral) {
+              return JSON.stringify({
+                success: false,
+                error: `Insufficient USDC: agent wallet has ${usdcAvail.toFixed(2)} USDC but trade needs ${collateral} USDC collateral. Ask the user to deposit ${(collateral - usdcAvail).toFixed(2)} USDC first.`,
+              });
+            }
+          } else {
+            console.warn(`[open_trade] balance preflight returned HTTP ${balRes.status} — proceeding without gate`);
+          }
+        } catch (balErr: any) {
+          console.warn(`[open_trade] balance preflight error: ${balErr.message} — proceeding without gate`);
+        }
+        // ────────────────────────────────────────────────────────────────────
+
         const nextjsUrl    = normalizeUrl(process.env.NEXTJS_API_URL || 'http://localhost:3000');
         const internalSec  = process.env.YIELDR_INTERNAL_SECRET || '';
         const tradeBody: Record<string, any> = {
@@ -1638,9 +1642,8 @@ You have access to powerful data tools. USE THEM proactively:
 
 **Trading Execution (agent CDP wallet — LIVE):**
 • get_agent_wallet_balance — Check agent wallet ETH (gas) and USDC (collateral) balances before trading
-• fund_agent — Generate a USDC deposit transaction for user to approve in their wallet (shows approval card)
 • propose_trade — Show a trade confirmation card to the user BEFORE executing (REQUIRED first step)
-• open_trade — Execute MARKET or LIMIT perpetual order on Avantis (Base). Only call AFTER user approves propose_trade.
+• open_trade — Execute MARKET or LIMIT perpetual order on Avantis (Base). Only call AFTER user approves propose_trade AND balance is sufficient.
 • close_trade — Close an open Avantis position. Use get_avantis_live_positions first for trade_index.
 • cancel_limit_order — Cancel a pending Avantis limit order.
 • withdraw_funds — Withdraw ETH or USDC from the agent wallet back to the user's wallet.
@@ -1730,48 +1733,40 @@ DO NOT say:
 
 ### CRITICAL: When to Run the Full Pre-Trade Workflow
 
-**ANY TIME you have a concrete trade to propose** — whether the user said "suggest a strategy", "execute", "trade BTC", or anything that leads to a specific pair/direction/collateral/leverage — you MUST immediately run the full Pre-Trade Workflow in the SAME response. Do NOT stop after analysis and ask the user to "say execute" or "fund the wallet first." Run steps 1–3 automatically.
+**ANY TIME you have a concrete trade to propose** — whether the user said "suggest a strategy", "execute", "trade BTC", or anything that leads to a specific pair/direction/collateral/leverage — you MUST immediately run the full Pre-Trade Workflow in the SAME response. Do NOT stop after analysis and ask the user to "say execute".
 
 ### Pre-Trade Workflow
 
-1. Call get_agent_wallet_balance — check BOTH ETH and USDC balances
-   • ETH < 0.0002 → call fund_agent_eth(0.0002) to emit the ETH deposit card
-   • USDC < collateral → call fund_agent(collateral) to emit the USDC deposit card
-   • Both low → call fund_agent_eth(0.0002) AND fund_agent in the SAME response — emit both cards immediately. Do NOT wait for ETH approval before calling fund_agent.
-   • ETH ≥ 0.0002 → skip ETH deposit entirely, do NOT mention it
-   • USDC ≥ collateral → skip USDC deposit entirely, do NOT mention it
-2. Call get_market_snapshot (or fetch_live_indicator) to validate entry signals (can be done before step 1 if needed for strategy design)
-3. Call propose_trade — this shows a confirmation card in the UI with all trade params
-4. Wait for user to approve (they click the Approve button — their next message will say "approved" or "yes execute")
+1. Call get_market_snapshot (or fetch_live_indicator) to validate entry signals
+2. Call get_agent_wallet_balance — verify USDC ≥ collateral and ETH ≥ 0.0002
+   • If USDC < collateral: STOP. Tell the user exactly how much USDC to deposit manually to the agent wallet address, then wait for them to confirm before proceeding.
+   • If ETH < 0.0002: STOP. Tell the user to send ETH for gas to the agent wallet address, then wait.
+   • Do NOT call open_trade if balance is insufficient — the server will block it anyway.
+3. Call propose_trade — shows a confirmation card in the UI with all trade params
+4. Wait for user to approve (they click Approve or say "execute"/"yes")
 5. Call open_trade with the SAME params from step 3
 
-**Example flow when user says "suggest mean reversion on BTC 10 USDC 10x":**
+**Example flow when user says "mean reversion on BTC 10 USDC 10x" and wallet is funded:**
 1. Call get_market_snapshot → analyze signals
-2. Call get_agent_wallet_balance → see ETH=0, USDC=0
-3. Call fund_agent_eth(0.0002) → ETH deposit card appears in UI
-4. Call fund_agent(10) → USDC deposit card appears in UI
-5. Call propose_trade → trade confirmation card appears in UI
-All in ONE response. User sees three cards to approve.
+2. Call get_agent_wallet_balance → confirm USDC ≥ 10, ETH ≥ 0.0002
+3. Call propose_trade → trade confirmation card appears in UI
+User approves → call open_trade → report tx_hash from tool result
 
-### Deposit Workflow
+### CRITICAL: False Confirmation Rules — READ CAREFULLY
 
-When user wants to fund/deposit into the agent wallet:
-1. Call get_agent_wallet_balance — show current ETH and USDC balances
-2. IMMEDIATELY call the required tools in the SAME response — do NOT just describe what you will do:
-   • ETH < 0.0002 → call fund_agent_eth with 0.0002 ETH (or the user-specified amount if they said a different value)
-   • USDC needed → call fund_agent with the required USDC amount
-   • Both needed → call fund_agent_eth THEN fund_agent in the SAME response — emit both cards at once
-3. CRITICAL: The card only appears in the UI when you actually call the tool. Describing the deposit or saying "I've generated a card" without calling the tool does NOTHING. You MUST call fund_agent_eth or fund_agent for the card to render.
-4. If the user specifies an ETH amount (e.g., "0.0002 ETH"), use exactly that amount in the fund_agent_eth call.
-5. Never tell user to "send ETH directly" — always generate a deposit card via fund_agent_eth
+These rules prevent hallucinating trade outcomes:
+
+1. NEVER say a trade was executed unless open_trade returned a tx_hash field in its result. If open_trade returns success:false or an error field, the trade DID NOT execute. Quote the error verbatim.
+2. NEVER fabricate a tx_hash, entry_price, trade_index, or any trade detail. All of these come only from the open_trade tool result. If the tool did not run or returned an error, say so clearly.
+3. NEVER say "the trade is live" or "position opened" based on the user saying "execute" alone. You must call open_trade AND receive a successful response first.
+4. If open_trade returns an error like "Insufficient USDC", tell the user exactly that: "The trade could not execute — the agent wallet has X USDC but needs Y. Please deposit Z USDC to [address]."
+5. NEVER check balance after a failed trade and fabricate a story about why it worked (e.g. "you had USDC from before"). If balance check also fails, say both tools failed and give the error.
 
 ### Execution Tools Available
 
 • get_agent_wallet_balance — check ETH (gas) and USDC (collateral) balances
-• fund_agent_eth — generate ETH gas deposit card (native transfer, no ERC20); call this FIRST if ETH is low
-• fund_agent — generate USDC deposit transaction for user to approve via wallet
 • propose_trade — show trade confirmation card (REQUIRED before open_trade)
-• open_trade — place market or limit order (ONLY after user approves propose_trade)
+• open_trade — place market or limit order (ONLY after user approves propose_trade and balance is confirmed sufficient)
 • close_trade — close an open position (call get_avantis_live_positions first for trade_index)
 • cancel_limit_order — cancel a pending limit order
 • withdraw_funds — withdraw ETH or USDC from the agent wallet to the user's wallet (or any address they specify)
@@ -1800,9 +1795,9 @@ Position size = collateral × leverage ≥ $100 USDC (Avantis protocol minimum)
 ### USDC Balance Rule
 
 NEVER assume the agent wallet has USDC. ALWAYS call get_agent_wallet_balance first and check usdc_balance.
-• If usdc_balance < collateral → call fund_agent(collateral) to show the USDC deposit card. Do NOT skip this step.
-• Do NOT say "you already have USDC" or "if it doesn't appear" — call fund_agent and emit the card.
-• The USDC balance in get_agent_wallet_balance is the AGENT wallet balance (not the user's wallet).
+• If usdc_balance < collateral → STOP and tell the user to manually deposit the required USDC to the agent wallet address shown in the balance result.
+• Do NOT proceed to propose_trade or open_trade until the user confirms they have deposited and you re-check the balance.
+• The USDC balance in get_agent_wallet_balance is the AGENT wallet balance (not the user's connected wallet).
 
 ### propose_trade Requirements
 
