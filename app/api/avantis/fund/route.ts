@@ -9,7 +9,7 @@ function normalizeUrl(url: string) {
   return !url.startsWith('http://') && !url.startsWith('https://') ? `https://${url}` : url;
 }
 const PYTHON_URL = normalizeUrl(process.env.PYTHON_SERVICE_URL || 'http://localhost:8001');
-const API_KEY    = process.env.API_KEY || '';
+const API_KEY    = process.env.YIELDR_DATA_API_SECRET || process.env.API_KEY || '';
 
 // POST /api/avantis/fund
 // Body: { agentId: string, amount: number, user_wallet_address: string }

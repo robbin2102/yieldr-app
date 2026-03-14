@@ -3,8 +3,11 @@ import { NextRequest, NextResponse } from 'next/server';
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
-const PYTHON_URL = process.env.PYTHON_SERVICE_URL || 'http://localhost:8001';
-const API_KEY    = process.env.API_KEY || '';
+function normalizeUrl(url: string) {
+  return !url.startsWith('http://') && !url.startsWith('https://') ? `https://${url}` : url;
+}
+const PYTHON_URL = normalizeUrl(process.env.PYTHON_SERVICE_URL || 'http://localhost:8001');
+const API_KEY    = process.env.YIELDR_DATA_API_SECRET || process.env.API_KEY || '';
 
 export async function GET(request: NextRequest) {
   try {
