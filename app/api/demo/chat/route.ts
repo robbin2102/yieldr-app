@@ -2252,9 +2252,14 @@ export async function POST(request: NextRequest) {
           // Agentic loop: keep calling Claude until it stops using tools
           let currentMessages = [...anthropicMessages];
           let maxIterations = 5; // safety limit
+          // When true, next API call forces at least one tool invocation
+          let forceToolUse = false;
+          // Track text accumulated only in the current iteration (for hallucination detection)
+          let iterationText = '';
 
           while (maxIterations > 0) {
             maxIterations--;
+            iterationText = '';
 
             const response = await callClaudeWithRetry(() =>
               anthropic.messages.create({
@@ -2263,9 +2268,12 @@ export async function POST(request: NextRequest) {
                 system: systemMessage,
                 messages: currentMessages,
                 tools: allTools,
+                // Force tool use when agent described actions without calling tools
+                ...(forceToolUse ? { tool_choice: { type: 'any' as const } } : {}),
                 stream: true,
               })
             );
+            forceToolUse = false; // reset after use
 
             let currentToolUseId = '';
             let currentToolName = '';
@@ -2317,6 +2325,7 @@ export async function POST(request: NextRequest) {
               } else if (event.type === 'content_block_delta') {
                 if (event.delta.type === 'text_delta') {
                   fullResponse += event.delta.text;
+                  iterationText += event.delta.text;
                   const chunk = JSON.stringify({ type: 'text', text: event.delta.text }) + '\n';
                   controller.enqueue(encoder.encode(chunk));
                 } else if (event.delta.type === 'input_json_delta') {
@@ -2361,8 +2370,37 @@ export async function POST(request: NextRequest) {
               }
             }
 
-            // If no tool calls, we're done
-            if (!hasToolUse) break;
+            // If no tool calls, check if the agent described trading actions without calling tools
+            if (!hasToolUse) {
+              const textLower = iterationText.toLowerCase();
+              // Keywords that indicate the agent was trying to execute trading/deposit actions
+              const executionKeywords = [
+                'deposit card', 'funding card', 'fund_agent', 'eth deposit', 'usdc deposit',
+                'checking wallet', 'agent wallet status', 'wallet balance', 'running the full workflow',
+                'generating deposit', 'full workflow', 'i\'ll execute', 'executing the strategy',
+                'deposit approval', 'approve both', 'approve the deposit',
+              ];
+              const tradingToolNames = ['get_agent_wallet_balance', 'fund_agent_eth', 'fund_agent', 'propose_trade', 'open_trade'];
+              const describedExecution = executionKeywords.some(kw => textLower.includes(kw));
+              const noTradingToolsCalled = !allToolCalls.some(t => tradingToolNames.includes(t.name));
+
+              if (describedExecution && noTradingToolsCalled && maxIterations > 0) {
+                // Agent hallucinated tool calls — described the workflow without invoking tools.
+                // Force a new iteration with tool_choice: any so tools are actually called.
+                console.log('[chat] Hallucination detected: agent described trading actions without calling tools. Forcing tool invocation.');
+                currentMessages = [
+                  ...currentMessages,
+                  { role: 'assistant' as const, content: iterationText },
+                  {
+                    role: 'user' as const,
+                    content: 'You described the workflow but did not call any tools. Call get_agent_wallet_balance now, then call fund_agent_eth and fund_agent if balances are insufficient, then call propose_trade. Do not generate text — invoke the tools.',
+                  },
+                ];
+                forceToolUse = true;
+                continue;
+              }
+              break;
+            }
 
             // Add assistant message with tool calls + tool results, then loop
             currentMessages = [
