@@ -384,9 +384,11 @@ const toolDefinitions: Anthropic.Tool[] = [
 toolDefinitions.push({
   name: 'get_agent_wallet_balance',
   description:
-    'Check the agent CDP wallet ETH and USDC balance. Call this BEFORE executing any trade. ' +
+    'Check the agent CDP wallet ETH and USDC balance. Call this BEFORE executing any trade or generating deposit cards. ' +
     'ETH is needed for gas fees (minimum 0.0002 ETH on Base). USDC is the trade collateral. ' +
-    'If ETH < 0.0002, call fund_agent_eth to show an ETH deposit card. If USDC < collateral, call fund_agent. Always fix ETH first.',
+    'After checking: if ETH < 0.0002 call fund_agent_eth; if USDC < required collateral call fund_agent. ' +
+    'If ETH >= 0.0002, skip gas deposit — do NOT suggest ETH deposit when gas is sufficient. ' +
+    'Both cards can be emitted in the same response — call both tools without waiting for user approval.',
   input_schema: {
     type: 'object' as const,
     properties: {},
@@ -492,7 +494,7 @@ toolDefinitions.push({
     'Generate an ETH deposit card for the user to approve in their wallet — used when the agent wallet has insufficient ETH for gas. ' +
     'This displays a native ETH transfer card in the UI (no ERC20 approval needed). ' +
     'Call this BEFORE fund_agent when ETH balance is below 0.0002. ' +
-    'Recommended amount: 0.0005 ETH (covers multiple trades).',
+    'Use 0.0002 ETH as the minimum amount. If the user specifies a different amount, use exactly that amount.',
   input_schema: {
     type: 'object' as const,
     properties: {
@@ -1717,10 +1719,11 @@ DO NOT say:
 
 ### Pre-Trade Workflow
 
-1. Call get_agent_wallet_balance — check BOTH ETH and USDC
-   • ETH < 0.0002 → call fund_agent_eth(0.0005) FIRST to show an ETH deposit card. Do NOT proceed to USDC or trade until user approves ETH deposit.
+1. Call get_agent_wallet_balance — check BOTH ETH and USDC balances
+   • ETH < 0.0002 → call fund_agent_eth(0.0002) FIRST to show an ETH deposit card
    • USDC < collateral → call fund_agent to generate a USDC deposit approval card
-   • Both low → call fund_agent_eth first, then fund_agent — show ETH card before USDC card
+   • Both low → call fund_agent_eth(0.0002) AND fund_agent in the SAME response — emit both cards immediately. Do NOT wait for ETH approval before calling fund_agent.
+   • ETH ≥ 0.0002 → skip ETH deposit entirely, proceed to check USDC
 2. Call get_market_snapshot (or fetch_live_indicator) to validate entry signals
 3. Call propose_trade — this shows a confirmation card in the UI with all trade params
 4. Wait for user to approve (they click the Approve button — their next message will say "approved" or "yes execute")
@@ -1730,9 +1733,12 @@ DO NOT say:
 
 When user wants to fund/deposit into the agent wallet:
 1. Call get_agent_wallet_balance — show current ETH and USDC balances
-2. If ETH is low, call fund_agent_eth first — this shows a native ETH transfer card (no ERC20 approval)
-3. If USDC is needed, call fund_agent — this shows a USDC approval card
-4. Always show ETH deposit card BEFORE USDC deposit card if both are needed
+2. IMMEDIATELY call the required tools in the SAME response — do NOT just describe what you will do:
+   • ETH < 0.0002 → call fund_agent_eth with 0.0002 ETH (or the user-specified amount if they said a different value)
+   • USDC needed → call fund_agent with the required USDC amount
+   • Both needed → call fund_agent_eth THEN fund_agent in the SAME response — emit both cards at once
+3. CRITICAL: The card only appears in the UI when you actually call the tool. Describing the deposit or saying "I've generated a card" without calling the tool does NOTHING. You MUST call fund_agent_eth or fund_agent for the card to render.
+4. If the user specifies an ETH amount (e.g., "0.0002 ETH"), use exactly that amount in the fund_agent_eth call.
 5. Never tell user to "send ETH directly" — always generate a deposit card via fund_agent_eth
 
 ### Execution Tools Available
