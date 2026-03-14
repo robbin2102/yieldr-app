@@ -414,8 +414,9 @@ async def execute_open(body: OpenTradeRequest, _: str = Depends(verify_api_key))
         print(f"[open_trade] USDC allowance for {agent_wallet}: {allowance:.6f} USDC (required: {body.collateral} USDC) using_cdp={using_cdp}")
         if allowance < body.collateral:
             if using_cdp:
-                # Build approval tx and sign via CDP
-                spender = str(client.trade._trading_contract.address)
+                # TradingStorage is the contract that pulls USDC — must match what
+                # get_usdc_allowance_for_trading checks against.
+                spender = str(client.contracts["TradingStorage"].address)
                 print(f"[open_trade] Allowance insufficient — approving {body.collateral * 10:.2f} USDC for spender={spender}")
                 await _cdp_approve_usdc(_get_cdp_client(), agent_wallet, spender, body.collateral)
                 print(f"[open_trade] USDC approval confirmed")
@@ -613,7 +614,7 @@ async def execute_update_margin(body: UpdateMarginRequest, _: str = Depends(veri
             print(f"[margin_update] USDC allowance for {agent_wallet}: {allowance:.6f} USDC (required: {body.amount}) using_cdp={using_cdp}")
             if allowance < body.amount:
                 if using_cdp:
-                    spender = str(client.trade._trading_contract.address)
+                    spender = str(client.contracts["TradingStorage"].address)
                     print(f"[margin_update] Approving {body.amount * 10:.2f} USDC for spender={spender}")
                     await _cdp_approve_usdc(_get_cdp_client(), agent_wallet, spender, body.amount)
                     print(f"[margin_update] USDC approval confirmed")
