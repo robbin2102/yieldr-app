@@ -1669,6 +1669,32 @@
 }
 
 /* Trade card specific */
+.tradeCardSection {
+  margin-bottom: 10px;
+}
+.tradeCardSectionTitle {
+  font-size: 0.58rem;
+  color: var(--t3);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 700;
+  margin-bottom: 6px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+.tradeCardConditions { margin-bottom: 2px; }
+.tradeCardCondLabel {
+  font-size: 0.55rem;
+  color: var(--t3);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 3px;
+}
+.tradeCardCond {
+  font-size: 0.62rem;
+  color: var(--t2);
+  line-height: 1.5;
+}
 .tradeCardGrid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);

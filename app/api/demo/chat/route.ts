@@ -509,22 +509,24 @@ toolDefinitions.push({
   description:
     'Propose a perpetual trade for user confirmation BEFORE executing. ' +
     'ALWAYS call this INSTEAD OF open_trade when presenting a trade to the user. ' +
-    'Shows a trade confirmation card in the UI. ' +
+    'Shows a trade confirmation card in the UI with entry/exit conditions and execution details. ' +
     'After the user clicks Approve, THEN call open_trade with the SAME parameters. ' +
     'Do NOT call open_trade without calling propose_trade first (except when re-executing after user approval).',
   input_schema: {
     type: 'object' as const,
     properties: {
-      pair:       { type: 'string',  description: 'Trading pair, e.g. "BTC/USD" or "ETH/USD"' },
-      pair_index: { type: 'number',  description: 'On-chain pair index: 1=BTC/USD, 2=ETH/USD, 3=SOL/USD' },
-      direction:  { type: 'string',  enum: ['LONG', 'SHORT'], description: 'Trade direction' },
-      collateral: { type: 'number',  description: 'Collateral in USDC' },
-      leverage:   { type: 'number',  description: 'Leverage multiplier' },
-      tp_pct:     { type: 'number',  description: 'Take-profit percentage' },
-      sl_pct:     { type: 'number',  description: 'Stop-loss percentage' },
-      order_type: { type: 'string',  enum: ['MARKET', 'LIMIT'], description: 'Order type. Default: MARKET' },
-      open_price: { type: 'number',  description: 'Fill price for LIMIT orders only' },
-      rationale:  { type: 'string',  description: 'Brief reason for this trade shown on the confirmation card' },
+      pair:             { type: 'string',  description: 'Trading pair, e.g. "BTC/USD" or "ETH/USD"' },
+      pair_index:       { type: 'number',  description: 'On-chain pair index: 1=BTC/USD, 2=ETH/USD, 3=SOL/USD' },
+      direction:        { type: 'string',  enum: ['LONG', 'SHORT'], description: 'Trade direction' },
+      collateral:       { type: 'number',  description: 'Collateral in USDC' },
+      leverage:         { type: 'number',  description: 'Leverage multiplier' },
+      tp_pct:           { type: 'number',  description: 'Take-profit percentage' },
+      sl_pct:           { type: 'number',  description: 'Stop-loss percentage' },
+      order_type:       { type: 'string',  enum: ['MARKET', 'LIMIT'], description: 'Order type. Default: MARKET' },
+      open_price:       { type: 'number',  description: 'Fill price for LIMIT orders only' },
+      rationale:        { type: 'string',  description: 'Brief reason for this trade shown on the confirmation card' },
+      entry_conditions: { type: 'array', items: { type: 'string' }, description: 'List of entry signal conditions (e.g. ["RSI < 35", "Stoch RSI < 25", "Price below EMA-21"])' },
+      exit_conditions:  { type: 'array', items: { type: 'string' }, description: 'List of exit/TP/SL conditions (e.g. ["TP: +3.5% → EMA-21 resistance", "SL: -2% → below swing low"])' },
     },
     required: ['pair', 'pair_index', 'direction', 'collateral', 'leverage', 'tp_pct', 'sl_pct'],
   },
@@ -1565,7 +1567,7 @@ async function executeTool(name: string, input: any, wallet?: string, agentCtxId
       }
 
       case 'propose_trade': {
-        const { pair, pair_index, direction, collateral, leverage, tp_pct, sl_pct, order_type = 'MARKET', open_price, rationale } = input;
+        const { pair, pair_index, direction, collateral, leverage, tp_pct, sl_pct, order_type = 'MARKET', open_price, rationale, entry_conditions, exit_conditions } = input;
         const position_size = collateral * leverage;
         const tradeParams = { pair, pair_index, direction, collateral, leverage, tp_pct, sl_pct, order_type, ...(open_price != null ? { open_price } : {}) };
         // Emit trade_approval event to frontend
@@ -1574,6 +1576,8 @@ async function executeTool(name: string, input: any, wallet?: string, agentCtxId
           params: tradeParams,
           rationale: rationale || '',
           position_size,
+          entry_conditions: entry_conditions || [],
+          exit_conditions: exit_conditions || [],
         });
         return JSON.stringify({
           status: 'pending_approval',
@@ -1786,6 +1790,20 @@ When user asks to withdraw, send back, or recover funds from the agent wallet:
 ### Minimum Size
 
 Position size = collateral × leverage ≥ $100 USDC (Avantis protocol minimum)
+
+### USDC Balance Rule
+
+NEVER assume the agent wallet has USDC. ALWAYS call get_agent_wallet_balance first and check usdc_balance.
+• If usdc_balance < collateral → call fund_agent(collateral) to show the USDC deposit card. Do NOT skip this step.
+• Do NOT say "you already have USDC" or "if it doesn't appear" — call fund_agent and emit the card.
+• The USDC balance in get_agent_wallet_balance is the AGENT wallet balance (not the user's wallet).
+
+### propose_trade Requirements
+
+ALWAYS include entry_conditions and exit_conditions arrays in every propose_trade call:
+• entry_conditions: list each signal that triggered the entry (e.g. "RSI 40.8 — neutral, room to climb", "Stoch RSI 19.4 — oversold ✅", "Price below EMA-21 ✅", "Funding -0.004% — shorts paying longs ✅")
+• exit_conditions: list TP and SL conditions with context (e.g. "TP +3.5% → $73,118 — EMA-21 resistance", "SL -2% → $69,232 — below swing low", "Emergency exit: RSI > 70 or funding flips > +0.05%")
+These appear on the trade card so the user can see the full strategy rationale before approving.
 
 ### Recommended Trade Format
 

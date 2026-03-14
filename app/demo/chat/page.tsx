@@ -251,6 +251,8 @@ export default function ChatPage() {
   const [toolStatus, setToolStatus] = useState<string | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  // Buffers action cards emitted during streaming; flushed to messages after stream ends
+  const pendingActionCards = useRef<ChatMessage[]>([]);
 
   // Sessions
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -649,17 +651,20 @@ export default function ChatPage() {
   }, [hasEarlierMessages, loadEarlierMessages, loadingEarlier]);
 
   // ── Send message
-  const handleSend = useCallback(async () => {
-    const text = inputValue.trim();
+  const handleSend = useCallback(async (overrideText?: string) => {
+    const text = (overrideText !== undefined ? overrideText : inputValue).trim();
     if (!text || isStreaming || creditsExceeded || !effectiveWallet) return;
-    setInputValue('');
-    if (textareaRef.current) textareaRef.current.style.height = 'auto';
+    if (overrideText === undefined) {
+      setInputValue('');
+      if (textareaRef.current) textareaRef.current.style.height = 'auto';
+    }
 
     const now = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
     const userMsg: ChatMessage = { id: Date.now().toString(), role: 'user', content: text, time: now };
     const agentMsgId = (Date.now() + 1).toString();
 
     setMessages(prev => [...prev, userMsg, { id: agentMsgId, role: 'agent', content: '', time: now }]);
+    pendingActionCards.current = []; // reset card buffer for this request
     setIsStreaming(true);
 
     const apiMessages = [...messages, userMsg]
@@ -704,35 +709,33 @@ export default function ChatPage() {
             } else if (parsed.type === 'error') {
               setMessages(prev => prev.map(m => m.id === agentMsgId ? { ...m, content: m.content || `Error: ${parsed.error}` } : m));
             } else if (parsed.type === 'deposit_request') {
-              const actionId = `deposit-${Date.now()}`;
-              setMessages(prev => [...prev, {
-                id: actionId,
+              // Buffer — add after streaming ends so cards appear below the complete agent message
+              pendingActionCards.current.push({
+                id: `deposit-${Date.now()}`,
                 role: 'action',
                 content: '',
                 time: now,
                 actionType: 'deposit_request',
                 actionData: { amount: parsed.amount, agent_wallet: parsed.agent_wallet, unsigned_tx: parsed.unsigned_tx },
-              }]);
+              });
             } else if (parsed.type === 'deposit_eth_request') {
-              const actionId = `deposit-eth-${Date.now()}`;
-              setMessages(prev => [...prev, {
-                id: actionId,
+              pendingActionCards.current.push({
+                id: `deposit-eth-${Date.now()}`,
                 role: 'action',
                 content: '',
                 time: now,
                 actionType: 'deposit_eth_request',
                 actionData: { amount_eth: parsed.amount_eth, agent_wallet: parsed.agent_wallet, unsigned_tx: parsed.unsigned_tx },
-              }]);
+              });
             } else if (parsed.type === 'trade_approval') {
-              const actionId = `trade-${Date.now()}`;
-              setMessages(prev => [...prev, {
-                id: actionId,
+              pendingActionCards.current.push({
+                id: `trade-${Date.now()}`,
                 role: 'action',
                 content: '',
                 time: now,
                 actionType: 'trade_approval',
-                actionData: { params: parsed.params, rationale: parsed.rationale, position_size: parsed.position_size },
-              }]);
+                actionData: { params: parsed.params, rationale: parsed.rationale, position_size: parsed.position_size, entry_conditions: parsed.entry_conditions || [], exit_conditions: parsed.exit_conditions || [] },
+              });
             }
           } catch {}
         }
@@ -743,6 +746,11 @@ export default function ChatPage() {
 
     setIsStreaming(false);
     setToolStatus(null);
+    // Flush buffered action cards now that the agent message is complete
+    if (pendingActionCards.current.length > 0) {
+      setMessages(prev => [...prev, ...pendingActionCards.current]);
+      pendingActionCards.current = [];
+    }
     if (effectiveWallet) fetchCredits(effectiveWallet);
     // Re-poll monitoring after each message (a task may have been created)
     if (effectiveWallet) {
@@ -842,13 +850,12 @@ export default function ChatPage() {
     setActionTxLoading(prev => ({ ...prev, [msgId]: false }));
   }, [sendTransactionAsync]);
 
-  // ── Approve trade — pre-fills textarea so user presses Enter to confirm
+  // ── Approve trade — directly sends execution message without textarea round-trip
   const handleTradeApprove = useCallback((msgId: string, params: any) => {
     setMessages(prev => prev.map(m => m.id === msgId ? { ...m, actionDone: true } : m));
     const summary = `${params.direction} ${params.pair} — $${params.collateral} USDC × ${params.leverage}x, TP ${params.tp_pct}%, SL ${params.sl_pct}%`;
-    setInputValue(`Yes, execute the proposed trade: ${summary}`);
-    textareaRef.current?.focus();
-  }, []);
+    handleSend(`Yes, execute the proposed trade: ${summary}`);
+  }, [handleSend]);
 
   // ── Cancel trade — pre-fills textarea
   const handleTradeCancel = useCallback((msgId: string) => {
@@ -1538,30 +1545,60 @@ export default function ChatPage() {
                 }
 
                 if (msg.actionType === 'trade_approval') {
-                  const { params, rationale, position_size } = msg.actionData || {};
+                  const { params, rationale, position_size, entry_conditions, exit_conditions } = msg.actionData || {};
                   const p = params || {};
                   const isLong = p.direction === 'LONG';
+                  const hasConditions = (entry_conditions?.length > 0) || (exit_conditions?.length > 0);
                   return (
                     <div key={msg.id} className={s.actionCard}>
                       <div className={s.actionCardHdr}>
                         <span className={s.actionCardIcon}>{isLong ? '📈' : '📉'}</span>
                         <span className={s.actionCardTitle}>Trade Proposal — {p.direction} {p.pair}</span>
                       </div>
-                      <div className={s.tradeCardGrid}>
-                        <div className={s.tradeCardItem}><span className={s.tradeCardLbl}>Collateral</span><span className={s.tradeCardVal}>${p.collateral} USDC</span></div>
-                        <div className={s.tradeCardItem}><span className={s.tradeCardLbl}>Leverage</span><span className={s.tradeCardVal}>{p.leverage}×</span></div>
-                        <div className={s.tradeCardItem}><span className={s.tradeCardLbl}>Position</span><span className={s.tradeCardVal}>${position_size}</span></div>
-                        <div className={s.tradeCardItem}><span className={s.tradeCardLbl}>Type</span><span className={s.tradeCardVal}>{p.order_type || 'MARKET'}</span></div>
-                        <div className={s.tradeCardItem}><span className={s.tradeCardLbl}>Take Profit</span><span className={s.tradeCardVal} style={{color:'#00C805'}}>+{p.tp_pct}%</span></div>
-                        <div className={s.tradeCardItem}><span className={s.tradeCardLbl}>Stop Loss</span><span className={s.tradeCardVal} style={{color:'#FF3B3B'}}>-{p.sl_pct}%</span></div>
+
+                      {/* Section 1: Strategy Conditions */}
+                      {hasConditions && (
+                        <div className={s.tradeCardSection}>
+                          <div className={s.tradeCardSectionTitle}>📋 Strategy Conditions</div>
+                          {entry_conditions?.length > 0 && (
+                            <div className={s.tradeCardConditions}>
+                              <div className={s.tradeCardCondLabel}>Entry signals:</div>
+                              {entry_conditions.map((c: string, i: number) => (
+                                <div key={i} className={s.tradeCardCond}>• {c}</div>
+                              ))}
+                            </div>
+                          )}
+                          {exit_conditions?.length > 0 && (
+                            <div className={s.tradeCardConditions} style={{marginTop: 4}}>
+                              <div className={s.tradeCardCondLabel}>Exit rules:</div>
+                              {exit_conditions.map((c: string, i: number) => (
+                                <div key={i} className={s.tradeCardCond}>• {c}</div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Section 2: Execution Details */}
+                      <div className={s.tradeCardSection}>
+                        <div className={s.tradeCardSectionTitle}>⚡ Position Execution</div>
+                        <div className={s.tradeCardGrid}>
+                          <div className={s.tradeCardItem}><span className={s.tradeCardLbl}>Collateral</span><span className={s.tradeCardVal}>${p.collateral} USDC</span></div>
+                          <div className={s.tradeCardItem}><span className={s.tradeCardLbl}>Leverage</span><span className={s.tradeCardVal}>{p.leverage}×</span></div>
+                          <div className={s.tradeCardItem}><span className={s.tradeCardLbl}>Position</span><span className={s.tradeCardVal}>${position_size}</span></div>
+                          <div className={s.tradeCardItem}><span className={s.tradeCardLbl}>Type</span><span className={s.tradeCardVal}>{p.order_type || 'MARKET'}</span></div>
+                          <div className={s.tradeCardItem}><span className={s.tradeCardLbl}>Take Profit</span><span className={s.tradeCardVal} style={{color:'#00C805'}}>+{p.tp_pct}%</span></div>
+                          <div className={s.tradeCardItem}><span className={s.tradeCardLbl}>Stop Loss</span><span className={s.tradeCardVal} style={{color:'#FF3B3B'}}>-{p.sl_pct}%</span></div>
+                        </div>
+                        {rationale && <div className={s.actionCardMeta} style={{marginTop: 6}}>{rationale}</div>}
                       </div>
-                      {rationale && <div className={s.actionCardMeta} style={{marginTop: 6}}>{rationale}</div>}
+
                       {msg.actionDone ? (
                         <div className={s.actionCardDone}>Response sent — waiting for agent...</div>
                       ) : (
                         <div className={s.tradeCardBtns}>
                           <button className={s.tradeApproveBtn} onClick={() => handleTradeApprove(msg.id, p)}>
-                            ✓ Approve Trade
+                            ✓ Approve &amp; Execute
                           </button>
                           <button className={s.tradeCancelBtn} onClick={() => handleTradeCancel(msg.id)}>
                             ✕ Cancel
