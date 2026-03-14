@@ -28,10 +28,10 @@ export default function LaunchingPage() {
   const [logs, setLogs] = useState<LogStep[]>([
     { id: 1, text: 'Initializing agent', status: 'pending', visible: false },
     { id: 2, text: 'Connecting wallet', status: 'pending', visible: false },
-    { id: 3, text: 'Creating agent wallet', status: 'pending', visible: false },
-    { id: 4, text: 'Scanning positions', status: 'pending', visible: false },
-    { id: 5, text: 'Detecting tokens', status: 'pending', visible: false },
-    { id: 6, text: 'Following top traders', status: 'pending', visible: false },
+    { id: 3, text: 'Scanning positions', status: 'pending', visible: false },
+    { id: 4, text: 'Detecting tokens', status: 'pending', visible: false },
+    { id: 5, text: 'Following top traders', status: 'pending', visible: false },
+    { id: 6, text: 'Creating agent wallet', status: 'pending', visible: false },
   ]);
 
   const [portfolioValue, setPortfolioValue] = useState(0);
@@ -236,21 +236,12 @@ export default function LaunchingPage() {
       completeStep(2, shortWallet);
       setProgress(25);
 
-      // Step 3: Create agent + provision CDP wallet (real API call)
+      // Kick off agent creation in background (needed before savePositions + follow-traders)
+      const agentPromise = createAgent(address);
+
+      // Step 3: Scan positions (real API calls — runs concurrently with agent creation)
       await new Promise(r => setTimeout(r, 200));
       startStep(3);
-      const agentWalletAddress = await createAgent(address);
-      if (agentWalletAddress) {
-        const shortAgentWallet = `${agentWalletAddress.slice(0, 10)}...${agentWalletAddress.slice(-6)}`;
-        completeStep(3, `Wallet: ${shortAgentWallet}`, true);
-      } else {
-        completeStep(3, 'Agent created — wallet pending CDP setup');
-      }
-      setProgress(45);
-
-      // Step 4: Scan positions (real API calls)
-      await new Promise(r => setTimeout(r, 200));
-      startStep(4);
       const posData = await scanPositions(address);
       const parts: string[] = [];
       const perpCount = posData.counts.avantis + posData.counts.hyperliquid;
@@ -258,15 +249,16 @@ export default function LaunchingPage() {
       if (posData.counts.lp > 0) parts.push(`${posData.counts.lp} LP positions`);
       if (posData.counts.polymarket > 0) parts.push(`${posData.counts.polymarket} prediction positions`);
       const posDetail = parts.length > 0 ? `Found ${parts.join(' + ')}` : 'No positions found';
-      completeStep(4, posDetail, perpCount > 0 || posData.counts.polymarket > 0);
-      setProgress(65);
+      completeStep(3, posDetail, perpCount > 0 || posData.counts.polymarket > 0);
+      setProgress(45);
 
-      // Persist scanned positions to agent record
+      // Await agent creation before persisting positions (agent must exist in DB)
+      const agentWalletAddress = await agentPromise;
       await savePositions(address, posData);
 
-      // Step 5: Detect tokens across chains
+      // Step 4: Detect tokens across chains
       await new Promise(r => setTimeout(r, 200));
-      startStep(5);
+      startStep(4);
       let tokenDetail = 'No tokens found';
       let tokenTotalUsd = 0;
       let tokenList: any[] = [];
@@ -299,12 +291,12 @@ export default function LaunchingPage() {
       } catch (e) {
         console.error('Token scan failed:', e);
       }
-      completeStep(5, tokenDetail, tokenTotalUsd > 0);
-      setProgress(85);
+      completeStep(4, tokenDetail, tokenTotalUsd > 0);
+      setProgress(65);
 
-      // Step 6: Follow top traders (real API call)
+      // Step 5: Follow top traders (real API call)
       await new Promise(r => setTimeout(r, 200));
-      startStep(6);
+      startStep(5);
       let followDetail = 'No traders found';
       try {
         const followRes = await fetch('/api/demo/agents/follow-traders', {
@@ -322,7 +314,19 @@ export default function LaunchingPage() {
       } catch (e) {
         console.error('Follow traders failed:', e);
       }
-      completeStep(6, followDetail, true);
+      completeStep(5, followDetail, true);
+      setProgress(85);
+
+      // Step 6: Show agent wallet result (creation already completed above)
+      await new Promise(r => setTimeout(r, 200));
+      startStep(6);
+      await new Promise(r => setTimeout(r, 400));
+      if (agentWalletAddress) {
+        const shortAgentWallet = `${agentWalletAddress.slice(0, 10)}...${agentWalletAddress.slice(-6)}`;
+        completeStep(6, `Wallet: ${shortAgentWallet}`, true);
+      } else {
+        completeStep(6, 'Agent created — wallet pending CDP setup');
+      }
       setProgress(100);
 
       // Show discovery
