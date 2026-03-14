@@ -265,7 +265,14 @@ export function classifyToolResult(toolName: string, rawResult: string): Classif
     return { toolName, status, classifiedMessage: msg, rawData: data };
   }
 
-  // 1. Try to parse JSON
+  // 1. Check for raw network error strings before attempting JSON parse
+  if (/fetch failed|econnrefused|etimedout|enotfound|socket hang up|network.*error|service.*unavailable/i.test(rawResult)) {
+    console.warn(`[toolResultInterpreter] NETWORK_FAIL for tool "${toolName}" (raw string): ${rawResult.slice(0, 200)}`);
+    const msg = buildClassifiedMessage(toolName, 'NETWORK_FAIL', undefined, rawResult.slice(0, 200));
+    return { toolName, status: 'NETWORK_FAIL', errorDetail: rawResult.slice(0, 200), classifiedMessage: msg };
+  }
+
+  // 2. Try to parse JSON
   let data: Record<string, any>;
   try {
     data = JSON.parse(rawResult);
@@ -275,7 +282,7 @@ export function classifyToolResult(toolName: string, rawResult: string): Classif
     return { toolName, status: 'PARSE_FAIL', classifiedMessage: msg };
   }
 
-  // 2. Check for explicit failure
+  // 3. Check for explicit failure
   if (data.success === false || data.error) {
     const errorStr = String(data.error || 'Unknown error');
     const status = classifyError(errorStr);
@@ -290,7 +297,7 @@ export function classifyToolResult(toolName: string, rawResult: string): Classif
     return { toolName, status, errorDetail: errorStr, classifiedMessage: msg, rawData: data };
   }
 
-  // 3. Backend claims success — verify tx_hash
+  // 4. Backend claims success — verify tx_hash
   if (data.success === true || (!data.error && !data.success)) {
     const txHash = extractTxHash(data);
 
@@ -306,7 +313,7 @@ export function classifyToolResult(toolName: string, rawResult: string): Classif
     }
   }
 
-  // 4. Fallthrough — unrecognised shape
+  // 5. Fallthrough — unrecognised shape
   const status: ExecutionStatus = 'UNKNOWN_ERROR';
   const errorDetail = `Unrecognised response shape: ${rawResult.slice(0, 200)}`;
   console.warn(`[toolResultInterpreter] UNKNOWN_ERROR for tool "${toolName}": ${errorDetail}`);
