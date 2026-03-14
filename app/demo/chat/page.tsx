@@ -870,11 +870,10 @@ export default function ChatPage() {
     setActionTxLoading(prev => ({ ...prev, [msgId]: false }));
   }, [sendTransactionAsync, isConnected, isReconnecting, openConnectModal]);
 
-  // ── Approve trade — directly sends execution message without textarea round-trip
+  // ── Approve trade — sends full params JSON so Claude can call open_trade directly
   const handleTradeApprove = useCallback((msgId: string, params: any) => {
     setMessages(prev => prev.map(m => m.id === msgId ? { ...m, actionDone: true } : m));
-    const summary = `${params.direction} ${params.pair} — $${params.collateral} USDC × ${params.leverage}x, TP ${params.tp_pct}%, SL ${params.sl_pct}%`;
-    handleSend(`Yes, execute the proposed trade: ${summary}`);
+    handleSend(`TRADE_APPROVED:${JSON.stringify(params)}`);
   }, [handleSend]);
 
   // ── Cancel trade — pre-fills textarea

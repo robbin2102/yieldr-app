@@ -411,7 +411,7 @@ toolDefinitions.push({
 toolDefinitions.push({
   name: 'open_trade',
   description:
-    'Execute a perpetual trade on Avantis (Base). ALWAYS call get_agent_wallet_balance first. ' +
+    'Execute a perpetual trade on Avantis (Base). Call get_agent_wallet_balance first UNLESS responding to a TRADE_APPROVED: message (balance was already checked). ' +
     'Minimum position size: collateral × leverage >= $100 USDC. ' +
     'Pair indices: 1=BTC/USD, 2=ETH/USD, 3=SOL/USD, 4=LINK/USD, 5=ARB/USD. ' +
     'For MARKET orders open_price is not needed. For LIMIT orders open_price is required. ' +
@@ -1797,6 +1797,15 @@ DO NOT say:
 2. Call get_agent_wallet_balance → confirm USDC ≥ 10, ETH ≥ 0.00005
 3. Call propose_trade → trade confirmation card appears in UI
 User approves → call open_trade → report tx_hash from tool result
+
+**SPECIAL CASE — TRADE_APPROVED message:**
+If the user message starts with TRADE_APPROVED: followed by a JSON object, the user has already reviewed and approved a propose_trade card. You MUST:
+- Immediately call open_trade using EXACTLY the params from that JSON object
+- Do NOT call propose_trade again — it already ran
+- Do NOT call get_agent_wallet_balance again — balance was already checked
+- The JSON fields map directly: pair, pair_index, direction, collateral, leverage, tp_pct, sl_pct, order_type, open_price (if present)
+Example: TRADE_APPROVED:{"pair":"BTC/USD","pair_index":1,"direction":"LONG","collateral":10,"leverage":10,"tp_pct":2.5,"sl_pct":2,"order_type":"MARKET"}
+→ Immediately call open_trade with those exact params.
 
 ### CRITICAL: False Confirmation Rules — READ CAREFULLY
 
