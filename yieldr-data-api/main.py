@@ -165,7 +165,7 @@ async def fetch_positions(request: FetchPositionsRequest):
 app.include_router(spot_router, prefix="/api/v1", tags=["Spot Wallet Scanning"])
 app.include_router(trending_router, prefix="/api/v1/trending", tags=["Trending Tokens"])
 app.include_router(trader_router, prefix="/api/v1/trader", tags=["Top Traders"])
-app.include_router(avantis_trade_router, prefix="/api/v1/trade", tags=["Avantis Trade Execution"])
+app.include_router(avantis_trade_router, prefix="/trade", tags=["Avantis Trade Execution"])
 
 
 if __name__ == "__main__":
