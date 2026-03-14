@@ -22,6 +22,9 @@
  *
  *   # Source wallets from Polymarket leaderboard instead of DB:
  *   npx tsx scripts/ai-hedge-fund/bulk-profile-ahf.ts --source leaderboard
+ *
+ *   # Source wallets from polyMarketHolders (top holders per market):
+ *   npx tsx scripts/ai-hedge-fund/bulk-profile-ahf.ts --source holders
  */
 
 import dotenv from 'dotenv';
@@ -60,7 +63,7 @@ const OPT = (name: string, fallback: string): string => {
 const CONCURRENCY    = parseInt(OPT('concurrency', '5'));
 const START_OFFSET   = parseInt(OPT('offset', '0'));
 const DAILY_MODE     = FLAG('daily');
-const SOURCE         = OPT('source', 'mongo');   // 'mongo' | 'leaderboard'
+const SOURCE         = OPT('source', 'mongo');   // 'mongo' | 'leaderboard' | 'holders'
 
 // Inactive threshold for --daily: skip wallets not seen in X days
 const SKIP_INACTIVE_DAYS = 30;
@@ -137,6 +140,16 @@ async function walletsFromLeaderboard(): Promise<string[]> {
   }
 
   return wallets;
+}
+
+async function walletsFromHolders(db: import('mongodb').Db): Promise<string[]> {
+  console.log('Fetching unique wallets from polyMarketHolders...');
+  const wallets = await db
+    .collection('polyMarketHolders')
+    .distinct('holders.proxyWallet') as string[];
+  const unique = wallets.filter(Boolean).map(w => w.toLowerCase());
+  console.log(`  Found ${unique.length} unique wallets across all markets`);
+  return unique;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -226,6 +239,8 @@ async function main() {
   let wallets: string[];
   if (SOURCE === 'leaderboard') {
     wallets = await walletsFromLeaderboard();
+  } else if (SOURCE === 'holders') {
+    wallets = await walletsFromHolders(db);
   } else {
     wallets = await walletsFromMongo(collection);
   }
