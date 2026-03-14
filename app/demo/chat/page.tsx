@@ -51,7 +51,7 @@ interface ChatMessage {
   role: 'agent' | 'user' | 'action';
   content: string;
   time: string;
-  actionType?: 'deposit_request' | 'trade_approval';
+  actionType?: 'deposit_request' | 'deposit_eth_request' | 'trade_approval';
   actionData?: any;
   actionDone?: boolean; // true after user approves/cancels
 }
@@ -713,6 +713,16 @@ export default function ChatPage() {
                 actionType: 'deposit_request',
                 actionData: { amount: parsed.amount, agent_wallet: parsed.agent_wallet, unsigned_tx: parsed.unsigned_tx },
               }]);
+            } else if (parsed.type === 'deposit_eth_request') {
+              const actionId = `deposit-eth-${Date.now()}`;
+              setMessages(prev => [...prev, {
+                id: actionId,
+                role: 'action',
+                content: '',
+                time: now,
+                actionType: 'deposit_eth_request',
+                actionData: { amount_eth: parsed.amount_eth, agent_wallet: parsed.agent_wallet, unsigned_tx: parsed.unsigned_tx },
+              }]);
             } else if (parsed.type === 'trade_approval') {
               const actionId = `trade-${Date.now()}`;
               setMessages(prev => [...prev, {
@@ -797,6 +807,32 @@ export default function ChatPage() {
         id: `deposit-success-${Date.now()}`,
         role: 'agent',
         content: `Deposit submitted — [View on BaseScan](https://basescan.org/tx/${hash})\n\nYour USDC is on its way to the agent wallet. This usually confirms in ~5 seconds on Base.`,
+        time: now,
+      }]);
+    } catch (err: any) {
+      const errMsg = err?.shortMessage || err?.message || 'Transaction rejected';
+      setActionTxResult(prev => ({ ...prev, [msgId]: { ok: false, error: errMsg } }));
+    }
+    setActionTxLoading(prev => ({ ...prev, [msgId]: false }));
+  }, [sendTransactionAsync]);
+
+  // ── Execute ETH gas deposit (native transfer)
+  const handleEthDepositApprove = useCallback(async (msgId: string, unsignedTx: { to: string; data: string; value: string; chainId: number }) => {
+    setActionTxLoading(prev => ({ ...prev, [msgId]: true }));
+    try {
+      const hash = await sendTransactionAsync({
+        to: unsignedTx.to as `0x${string}`,
+        data: unsignedTx.data as `0x${string}`,
+        value: BigInt(unsignedTx.value),
+        chainId: unsignedTx.chainId,
+      });
+      setActionTxResult(prev => ({ ...prev, [msgId]: { ok: true, hash } }));
+      setMessages(prev => prev.map(m => m.id === msgId ? { ...m, actionDone: true } : m));
+      const now = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+      setMessages(prev => [...prev, {
+        id: `eth-deposit-success-${Date.now()}`,
+        role: 'agent',
+        content: `ETH deposit submitted — [View on BaseScan](https://basescan.org/tx/${hash})\n\nGas is on its way to the agent wallet. Usually confirms in ~5 seconds on Base.`,
         time: now,
       }]);
     } catch (err: any) {
@@ -1417,6 +1453,48 @@ export default function ChatPage() {
                 const txState = actionTxResult[msg.id];
                 const txLoading = actionTxLoading[msg.id];
 
+                if (msg.actionType === 'deposit_eth_request') {
+                  const { amount_eth, agent_wallet, unsigned_tx } = msg.actionData || {};
+                  return (
+                    <div key={msg.id} className={s.actionCard}>
+                      <div className={s.actionCardHdr}>
+                        <span className={s.actionCardIcon}>⛽</span>
+                        <span className={s.actionCardTitle}>Deposit {amount_eth} ETH for Gas</span>
+                      </div>
+                      <div className={s.actionCardMeta}>
+                        To: <span className={s.actionCardAddr}>{agent_wallet ? `${agent_wallet.slice(0,10)}...${agent_wallet.slice(-6)}` : '—'}</span>
+                        &nbsp;·&nbsp;Network: Base
+                      </div>
+                      {txState?.ok ? (
+                        <div className={s.actionCardSuccess}>
+                          ✓ ETH deposit submitted — <a href={`https://basescan.org/tx/${txState.hash}`} target="_blank" rel="noopener noreferrer">View on BaseScan</a>
+                        </div>
+                      ) : txState?.error ? (
+                        <>
+                          <div className={s.actionCardError}>{txState.error}</div>
+                          <button
+                            className={s.actionCardBtn}
+                            onClick={() => { setActionTxResult(prev => { const n = { ...prev }; delete n[msg.id]; return n; }); handleEthDepositApprove(msg.id, unsigned_tx); }}
+                            disabled={txLoading}
+                          >
+                            {txLoading ? 'Approving...' : 'Retry — Send ETH'}
+                          </button>
+                        </>
+                      ) : msg.actionDone ? (
+                        <div className={s.actionCardDone}>ETH deposit approved</div>
+                      ) : (
+                        <button
+                          className={s.actionCardBtn}
+                          onClick={() => handleEthDepositApprove(msg.id, unsigned_tx)}
+                          disabled={txLoading}
+                        >
+                          {txLoading ? 'Approving...' : `Approve — Send ${amount_eth} ETH`}
+                        </button>
+                      )}
+                    </div>
+                  );
+                }
+
                 if (msg.actionType === 'deposit_request') {
                   const { amount, agent_wallet, unsigned_tx } = msg.actionData || {};
                   return (
@@ -1434,7 +1512,16 @@ export default function ChatPage() {
                           ✓ Deposit submitted — <a href={`https://basescan.org/tx/${txState.hash}`} target="_blank" rel="noopener noreferrer">View on BaseScan</a>
                         </div>
                       ) : txState?.error ? (
-                        <div className={s.actionCardError}>{txState.error}</div>
+                        <>
+                          <div className={s.actionCardError}>{txState.error}</div>
+                          <button
+                            className={s.actionCardBtn}
+                            onClick={() => { setActionTxResult(prev => { const n = { ...prev }; delete n[msg.id]; return n; }); handleDepositApprove(msg.id, unsigned_tx); }}
+                            disabled={txLoading}
+                          >
+                            {txLoading ? 'Approving...' : 'Retry — Send USDC'}
+                          </button>
+                        </>
                       ) : msg.actionDone ? (
                         <div className={s.actionCardDone}>Deposit approved</div>
                       ) : (

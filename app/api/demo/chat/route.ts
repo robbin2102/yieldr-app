@@ -386,7 +386,7 @@ toolDefinitions.push({
   description:
     'Check the agent CDP wallet ETH and USDC balance. Call this BEFORE executing any trade. ' +
     'ETH is needed for gas fees (minimum 0.0002 ETH on Base). USDC is the trade collateral. ' +
-    'If ETH < 0.0002, tell user to send ETH to the agent wallet. If USDC < collateral, call fund_agent.',
+    'If ETH < 0.0002, call fund_agent_eth to show an ETH deposit card. If USDC < collateral, call fund_agent. Always fix ETH first.',
   input_schema: {
     type: 'object' as const,
     properties: {},
@@ -474,16 +474,31 @@ toolDefinitions.push({
   name: 'fund_agent',
   description:
     'Generate a USDC deposit transaction for the user to approve in their wallet. ' +
-    'Call when the user wants to deposit USDC into the agent wallet. ' +
+    'Call when the agent wallet needs USDC collateral for trading. ' +
     'This displays a transaction approval card in the UI — the user must click Approve and sign with MetaMask/RainbowKit. ' +
-    'For ETH gas deposits, just display the agent wallet address and tell user to send ETH directly. ' +
-    'Call get_agent_wallet_balance first to show current balance context.',
+    'Call get_agent_wallet_balance first. If ETH is also low, call fund_agent_eth BEFORE this tool.',
   input_schema: {
     type: 'object' as const,
     properties: {
       amount: { type: 'number', description: 'Amount of USDC to deposit into the agent wallet (e.g. 20 for $20 USDC)' },
     },
     required: ['amount'],
+  },
+});
+
+toolDefinitions.push({
+  name: 'fund_agent_eth',
+  description:
+    'Generate an ETH deposit card for the user to approve in their wallet — used when the agent wallet has insufficient ETH for gas. ' +
+    'This displays a native ETH transfer card in the UI (no ERC20 approval needed). ' +
+    'Call this BEFORE fund_agent when ETH balance is below 0.0002. ' +
+    'Recommended amount: 0.0005 ETH (covers multiple trades).',
+  input_schema: {
+    type: 'object' as const,
+    properties: {
+      amount_eth: { type: 'number', description: 'Amount of ETH to send to the agent wallet (e.g. 0.0005)' },
+    },
+    required: ['amount_eth'],
   },
 });
 
@@ -1523,6 +1538,30 @@ async function executeTool(name: string, input: any, wallet?: string, agentCtxId
         });
       }
 
+      case 'fund_agent_eth': {
+        if (!agentCtxWallet) return JSON.stringify({ success: false, error: 'No agent wallet configured.' });
+        const { amount_eth } = input;
+        const weiAmount = BigInt(Math.round(amount_eth * 1e18));
+        // Emit deposit_eth_request — native ETH transfer, no ERC20 calldata needed
+        emitToStream?.({
+          type: 'deposit_eth_request',
+          amount_eth,
+          agent_wallet: agentCtxWallet,
+          unsigned_tx: {
+            to: agentCtxWallet,
+            data: '0x',
+            value: `0x${weiAmount.toString(16)}`,
+            chainId: 8453,
+          },
+        });
+        return JSON.stringify({
+          success: true,
+          status: 'awaiting_user_approval',
+          message: `An ETH gas deposit card for ${amount_eth} ETH has been shown. The user must click Approve and sign in their wallet to send ETH to the agent.`,
+          agent_wallet: agentCtxWallet,
+        });
+      }
+
       case 'propose_trade': {
         const { pair, pair_index, direction, collateral, leverage, tp_pct, sl_pct, order_type = 'MARKET', open_price, rationale } = input;
         const position_size = collateral * leverage;
@@ -1678,9 +1717,10 @@ DO NOT say:
 
 ### Pre-Trade Workflow
 
-1. Call get_agent_wallet_balance — check ETH and USDC
-   • ETH < 0.0002 → tell user: "Send at least 0.0002 ETH to [agent_wallet] on Base for gas fees"
-   • USDC < collateral → call fund_agent to generate a deposit approval card (user signs in their wallet)
+1. Call get_agent_wallet_balance — check BOTH ETH and USDC
+   • ETH < 0.0002 → call fund_agent_eth(0.0005) FIRST to show an ETH deposit card. Do NOT proceed to USDC or trade until user approves ETH deposit.
+   • USDC < collateral → call fund_agent to generate a USDC deposit approval card
+   • Both low → call fund_agent_eth first, then fund_agent — show ETH card before USDC card
 2. Call get_market_snapshot (or fetch_live_indicator) to validate entry signals
 3. Call propose_trade — this shows a confirmation card in the UI with all trade params
 4. Wait for user to approve (they click the Approve button — their next message will say "approved" or "yes execute")
@@ -1688,16 +1728,17 @@ DO NOT say:
 
 ### Deposit Workflow
 
-When user wants to fund/deposit USDC into the agent wallet:
-1. Call get_agent_wallet_balance — show current balances
-2. Ask: how much USDC to deposit?
-3. Call fund_agent with the amount — this generates a signed transaction card in the UI
-4. Tell user: "An approval card has appeared — click Approve to sign the USDC transfer to your agent wallet"
-5. For ETH gas top-up: just display the agent wallet address and say "Send at least 0.0002 ETH on Base"
+When user wants to fund/deposit into the agent wallet:
+1. Call get_agent_wallet_balance — show current ETH and USDC balances
+2. If ETH is low, call fund_agent_eth first — this shows a native ETH transfer card (no ERC20 approval)
+3. If USDC is needed, call fund_agent — this shows a USDC approval card
+4. Always show ETH deposit card BEFORE USDC deposit card if both are needed
+5. Never tell user to "send ETH directly" — always generate a deposit card via fund_agent_eth
 
 ### Execution Tools Available
 
 • get_agent_wallet_balance — check ETH (gas) and USDC (collateral) balances
+• fund_agent_eth — generate ETH gas deposit card (native transfer, no ERC20); call this FIRST if ETH is low
 • fund_agent — generate USDC deposit transaction for user to approve via wallet
 • propose_trade — show trade confirmation card (REQUIRED before open_trade)
 • open_trade — place market or limit order (ONLY after user approves propose_trade)
