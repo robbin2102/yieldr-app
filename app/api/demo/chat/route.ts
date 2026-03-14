@@ -385,8 +385,8 @@ toolDefinitions.push({
   name: 'get_agent_wallet_balance',
   description:
     'Check the agent CDP wallet ETH and USDC balance. Call this BEFORE executing any trade. ' +
-    'ETH is needed for gas fees (minimum 0.001 ETH on Base). USDC is the trade collateral. ' +
-    'If ETH < 0.001, tell user to send ETH to the agent wallet. If USDC < collateral, tell user to fund.',
+    'ETH is needed for gas fees (minimum 0.0002 ETH on Base). USDC is the trade collateral. ' +
+    'If ETH < 0.0002, tell user to send ETH to the agent wallet. If USDC < collateral, call fund_agent.',
   input_schema: {
     type: 'object' as const,
     properties: {},
@@ -467,6 +467,49 @@ toolDefinitions.push({
       to_address: { type: 'string', description: 'Destination wallet address. Use the user\'s connected wallet address unless they specify a different one.' },
     },
     required: ['amount', 'asset', 'to_address'],
+  },
+});
+
+toolDefinitions.push({
+  name: 'fund_agent',
+  description:
+    'Generate a USDC deposit transaction for the user to approve in their wallet. ' +
+    'Call when the user wants to deposit USDC into the agent wallet. ' +
+    'This displays a transaction approval card in the UI — the user must click Approve and sign with MetaMask/RainbowKit. ' +
+    'For ETH gas deposits, just display the agent wallet address and tell user to send ETH directly. ' +
+    'Call get_agent_wallet_balance first to show current balance context.',
+  input_schema: {
+    type: 'object' as const,
+    properties: {
+      amount: { type: 'number', description: 'Amount of USDC to deposit into the agent wallet (e.g. 20 for $20 USDC)' },
+    },
+    required: ['amount'],
+  },
+});
+
+toolDefinitions.push({
+  name: 'propose_trade',
+  description:
+    'Propose a perpetual trade for user confirmation BEFORE executing. ' +
+    'ALWAYS call this INSTEAD OF open_trade when presenting a trade to the user. ' +
+    'Shows a trade confirmation card in the UI. ' +
+    'After the user clicks Approve, THEN call open_trade with the SAME parameters. ' +
+    'Do NOT call open_trade without calling propose_trade first (except when re-executing after user approval).',
+  input_schema: {
+    type: 'object' as const,
+    properties: {
+      pair:       { type: 'string',  description: 'Trading pair, e.g. "BTC/USD" or "ETH/USD"' },
+      pair_index: { type: 'number',  description: 'On-chain pair index: 1=BTC/USD, 2=ETH/USD, 3=SOL/USD' },
+      direction:  { type: 'string',  enum: ['LONG', 'SHORT'], description: 'Trade direction' },
+      collateral: { type: 'number',  description: 'Collateral in USDC' },
+      leverage:   { type: 'number',  description: 'Leverage multiplier' },
+      tp_pct:     { type: 'number',  description: 'Take-profit percentage' },
+      sl_pct:     { type: 'number',  description: 'Stop-loss percentage' },
+      order_type: { type: 'string',  enum: ['MARKET', 'LIMIT'], description: 'Order type. Default: MARKET' },
+      open_price: { type: 'number',  description: 'Fill price for LIMIT orders only' },
+      rationale:  { type: 'string',  description: 'Brief reason for this trade shown on the confirmation card' },
+    },
+    required: ['pair', 'pair_index', 'direction', 'collateral', 'leverage', 'tp_pct', 'sl_pct'],
   },
 });
 
@@ -573,6 +616,10 @@ function getToolStatusLabel(name: string, input: any): string {
       return `Cancelling limit order (pair_index=${input.pair_index}, trade_index=${input.trade_index})...`;
     case 'withdraw_funds':
       return `Withdrawing ${input.amount} ${input.asset} from agent wallet...`;
+    case 'fund_agent':
+      return `Preparing $${input.amount} USDC deposit transaction...`;
+    case 'propose_trade':
+      return `Preparing ${input.direction || ''} ${input.pair || ''} trade proposal...`.trim();
     case 'web_search':
       return `Searching the web...`;
     default:
@@ -582,7 +629,7 @@ function getToolStatusLabel(name: string, input: any): string {
 
 // ─── Tool Execution ────────────────────────────────────────────────────────
 
-async function executeTool(name: string, input: any, wallet?: string, agentCtxId?: string, agentCtxWallet?: string): Promise<string> {
+async function executeTool(name: string, input: any, wallet?: string, agentCtxId?: string, agentCtxWallet?: string, emitToStream?: (event: any) => void): Promise<string> {
   console.log(`[chat] Executing tool: ${name}`, JSON.stringify(input).slice(0, 200));
   try {
     switch (name) {
@@ -1345,9 +1392,9 @@ async function executeTool(name: string, input: any, wallet?: string, agentCtxId
           agent_wallet:           agentCtxWallet,
           eth_balance:            eth,
           usdc_balance:           usdc,
-          eth_sufficient_for_gas: eth >= 0.001,
-          status: eth < 0.001
-            ? `⚠️ Low ETH: ${eth.toFixed(6)} ETH — send at least 0.001 ETH to ${agentCtxWallet} for gas`
+          eth_sufficient_for_gas: eth >= 0.0002,
+          status: eth < 0.0002
+            ? `⚠️ Low ETH: ${eth.toFixed(6)} ETH — send at least 0.0002 ETH to ${agentCtxWallet} for gas`
             : `✓ ETH OK (${eth.toFixed(6)} ETH)`,
           usdc_note: usdc === 0
             ? `Agent wallet has no USDC. Fund it before placing trades.`
@@ -1443,6 +1490,56 @@ async function executeTool(name: string, input: any, wallet?: string, agentCtxId
         return JSON.stringify({ success: true, ...data });
       }
 
+      case 'fund_agent': {
+        if (!agentCtxId) return JSON.stringify({ success: false, error: 'No agent ID in context.' });
+        const userWallet = wallet || '';
+        if (!userWallet) return JSON.stringify({ success: false, error: 'No user wallet in context.' });
+        const { amount } = input;
+        const nextjsUrl   = process.env.NEXTJS_API_URL || 'http://localhost:3000';
+        const internalSec = process.env.YIELDR_INTERNAL_SECRET || '';
+        const res = await fetch(`${nextjsUrl}/api/avantis/fund`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(internalSec ? { Authorization: `Bearer ${internalSec}` } : {}),
+          },
+          body: JSON.stringify({ agentId: agentCtxId, amount, user_wallet_address: userWallet }),
+          signal: AbortSignal.timeout(30_000),
+        });
+        const data = await res.json();
+        if (!res.ok) return JSON.stringify({ success: false, error: data.error || `Fund request failed: HTTP ${res.status}` });
+        // Emit deposit_request event to frontend for user to approve via wagmi
+        emitToStream?.({
+          type: 'deposit_request',
+          amount,
+          agent_wallet: data.agent_wallet,
+          unsigned_tx: data.unsigned_tx,
+        });
+        return JSON.stringify({
+          success: true,
+          status: 'awaiting_user_approval',
+          message: `A deposit approval card for ${amount} USDC has been shown. The user must click Approve and sign in their wallet.`,
+          agent_wallet: data.agent_wallet,
+        });
+      }
+
+      case 'propose_trade': {
+        const { pair, pair_index, direction, collateral, leverage, tp_pct, sl_pct, order_type = 'MARKET', open_price, rationale } = input;
+        const position_size = collateral * leverage;
+        const tradeParams = { pair, pair_index, direction, collateral, leverage, tp_pct, sl_pct, order_type, ...(open_price != null ? { open_price } : {}) };
+        // Emit trade_approval event to frontend
+        emitToStream?.({
+          type: 'trade_approval',
+          params: tradeParams,
+          rationale: rationale || '',
+          position_size,
+        });
+        return JSON.stringify({
+          status: 'pending_approval',
+          message: `Trade proposal displayed to user: ${direction} ${pair} — ${collateral} USDC × ${leverage}x = $${position_size} position, TP: ${tp_pct}%, SL: ${sl_pct}%, order: ${order_type}. Waiting for user to click Approve or Cancel.`,
+        });
+      }
+
       default:
         return JSON.stringify({ error: `Unknown tool: ${name}` });
     }
@@ -1490,7 +1587,9 @@ You have access to powerful data tools. USE THEM proactively:
 
 **Trading Execution (agent CDP wallet — LIVE):**
 • get_agent_wallet_balance — Check agent wallet ETH (gas) and USDC (collateral) balances before trading
-• open_trade — Execute MARKET or LIMIT perpetual order on Avantis (Base). Min $100 position size.
+• fund_agent — Generate a USDC deposit transaction for user to approve in their wallet (shows approval card)
+• propose_trade — Show a trade confirmation card to the user BEFORE executing (REQUIRED first step)
+• open_trade — Execute MARKET or LIMIT perpetual order on Avantis (Base). Only call AFTER user approves propose_trade.
 • close_trade — Close an open Avantis position. Use get_avantis_live_positions first for trade_index.
 • cancel_limit_order — Cancel a pending Avantis limit order.
 • withdraw_funds — Withdraw ETH or USDC from the agent wallet back to the user's wallet.
@@ -1580,21 +1679,42 @@ DO NOT say:
 ### Pre-Trade Workflow
 
 1. Call get_agent_wallet_balance — check ETH and USDC
-   • ETH < 0.001 → tell user: "Send at least 0.001 ETH to [agent_wallet] on Base for gas fees"
-   • USDC < collateral → tell user: "Fund the agent wallet with USDC at [agent_wallet]"
+   • ETH < 0.0002 → tell user: "Send at least 0.0002 ETH to [agent_wallet] on Base for gas fees"
+   • USDC < collateral → call fund_agent to generate a deposit approval card (user signs in their wallet)
 2. Call get_market_snapshot (or fetch_live_indicator) to validate entry signals
-3. Confirm trade params with user (pair, direction, collateral, leverage, TP%, SL%)
-4. Call open_trade to execute
+3. Call propose_trade — this shows a confirmation card in the UI with all trade params
+4. Wait for user to approve (they click the Approve button — their next message will say "approved" or "yes execute")
+5. Call open_trade with the SAME params from step 3
+
+### Deposit Workflow
+
+When user wants to fund/deposit USDC into the agent wallet:
+1. Call get_agent_wallet_balance — show current balances
+2. Ask: how much USDC to deposit?
+3. Call fund_agent with the amount — this generates a signed transaction card in the UI
+4. Tell user: "An approval card has appeared — click Approve to sign the USDC transfer to your agent wallet"
+5. For ETH gas top-up: just display the agent wallet address and say "Send at least 0.0002 ETH on Base"
 
 ### Execution Tools Available
 
 • get_agent_wallet_balance — check ETH (gas) and USDC (collateral) balances
-• open_trade — place market or limit order on Avantis (pair_index: 1=BTC/USD, 2=ETH/USD, 3=SOL/USD)
+• fund_agent — generate USDC deposit transaction for user to approve via wallet
+• propose_trade — show trade confirmation card (REQUIRED before open_trade)
+• open_trade — place market or limit order (ONLY after user approves propose_trade)
 • close_trade — close an open position (call get_avantis_live_positions first for trade_index)
 • cancel_limit_order — cancel a pending limit order
 • withdraw_funds — withdraw ETH or USDC from the agent wallet to the user's wallet (or any address they specify)
 
-### Withdraw Workflow
+### Auto-Monitoring After Trade Open
+
+ALWAYS call manage_monitoring immediately after a successful open_trade. Build the monitoring task using the strategy signals from the trade setup:
+• action: "create"
+• intervalSeconds: 900 (default 15 minutes)
+• tools: use get_market_snapshot for the pair's symbol with relevant signals (RSI, funding_rate, MACD based on strategy)
+• monitorInstruction: watch for TP/SL conditions and signal exits specific to the trade direction and strategy used
+This gives the user live monitoring without them having to ask.
+
+### Withdraw / Send-Back Workflow
 
 When user asks to withdraw, send back, or recover funds from the agent wallet:
 1. Call get_agent_wallet_balance — confirm what's available
@@ -2159,8 +2279,9 @@ export async function POST(request: NextRequest) {
 
                   // Track tool call
                   allToolCalls.push({ name: currentToolName });
-                  // Execute the tool
-                  const toolResult = await executeTool(currentToolName, parsedInput, walletLower, agentId, agentWalletAddress);
+                  // Execute the tool (emitToStream lets tools push special events to the frontend)
+                  const emitToStream = (event: any) => controller.enqueue(encoder.encode(JSON.stringify(event) + '\n'));
+                  const toolResult = await executeTool(currentToolName, parsedInput, walletLower, agentId, agentWalletAddress, emitToStream);
                   console.log(`[TOKENS] Tool result for "${currentToolName}": ${estimateTokens(toolResult)} est. tokens (${toolResult.length} chars)`);
                   toolResults.push({
                     role: 'user',

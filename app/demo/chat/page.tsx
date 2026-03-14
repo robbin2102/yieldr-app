@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { useAccount, useDisconnect } from 'wagmi';
+import { useAccount, useDisconnect, useSendTransaction } from 'wagmi';
 import { useRouter } from 'next/navigation';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -48,9 +48,12 @@ interface FollowedTrader {
 
 interface ChatMessage {
   id: string;
-  role: 'agent' | 'user';
+  role: 'agent' | 'user' | 'action';
   content: string;
   time: string;
+  actionType?: 'deposit_request' | 'trade_approval';
+  actionData?: any;
+  actionDone?: boolean; // true after user approves/cancels
 }
 
 interface TokenBalance {
@@ -192,6 +195,7 @@ export default function ChatPage() {
   const router = useRouter();
   const { address, isConnected, isReconnecting } = useAccount();
   const { disconnect } = useDisconnect();
+  const { sendTransactionAsync } = useSendTransaction();
 
   // Auth
   const [authChecking, setAuthChecking] = useState(true);
@@ -215,6 +219,10 @@ export default function ChatPage() {
   const [fundsUsdc, setFundsUsdc] = useState(0);
   const [fundsLoading, setFundsLoading] = useState(false);
   const [fundsCopied, setFundsCopied] = useState(false);
+
+  // Action card state (deposit approval, trade approval)
+  const [actionTxLoading, setActionTxLoading] = useState<Record<string, boolean>>({});
+  const [actionTxResult, setActionTxResult] = useState<Record<string, { ok: boolean; hash?: string; error?: string }>>({});
 
   // Credits
   const [creditsUsed, setCreditsUsed] = useState(0);
@@ -655,7 +663,7 @@ export default function ChatPage() {
     setIsStreaming(true);
 
     const apiMessages = [...messages, userMsg]
-      .filter(m => m.content.trim())
+      .filter(m => m.content.trim() && m.role !== 'action')
       .map(m => ({ role: m.role, content: m.content }));
 
     try {
@@ -695,6 +703,26 @@ export default function ChatPage() {
               loadChatSessions();
             } else if (parsed.type === 'error') {
               setMessages(prev => prev.map(m => m.id === agentMsgId ? { ...m, content: m.content || `Error: ${parsed.error}` } : m));
+            } else if (parsed.type === 'deposit_request') {
+              const actionId = `deposit-${Date.now()}`;
+              setMessages(prev => [...prev, {
+                id: actionId,
+                role: 'action',
+                content: '',
+                time: now,
+                actionType: 'deposit_request',
+                actionData: { amount: parsed.amount, agent_wallet: parsed.agent_wallet, unsigned_tx: parsed.unsigned_tx },
+              }]);
+            } else if (parsed.type === 'trade_approval') {
+              const actionId = `trade-${Date.now()}`;
+              setMessages(prev => [...prev, {
+                id: actionId,
+                role: 'action',
+                content: '',
+                time: now,
+                actionType: 'trade_approval',
+                actionData: { params: parsed.params, rationale: parsed.rationale, position_size: parsed.position_size },
+              }]);
             }
           } catch {}
         }
@@ -750,6 +778,48 @@ export default function ChatPage() {
     } catch {}
     setFundsLoading(false);
   }, [authenticatedWallet, address]);
+
+  // ── Execute deposit (called from deposit_request action card)
+  const handleDepositApprove = useCallback(async (msgId: string, unsignedTx: { to: string; data: string; value: string; chainId: number }) => {
+    setActionTxLoading(prev => ({ ...prev, [msgId]: true }));
+    try {
+      const hash = await sendTransactionAsync({
+        to: unsignedTx.to as `0x${string}`,
+        data: unsignedTx.data as `0x${string}`,
+        value: BigInt(0),
+        chainId: unsignedTx.chainId,
+      });
+      setActionTxResult(prev => ({ ...prev, [msgId]: { ok: true, hash } }));
+      setMessages(prev => prev.map(m => m.id === msgId ? { ...m, actionDone: true } : m));
+      // Insert success message into chat
+      const now = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+      setMessages(prev => [...prev, {
+        id: `deposit-success-${Date.now()}`,
+        role: 'agent',
+        content: `Deposit submitted — [View on BaseScan](https://basescan.org/tx/${hash})\n\nYour USDC is on its way to the agent wallet. This usually confirms in ~5 seconds on Base.`,
+        time: now,
+      }]);
+    } catch (err: any) {
+      const errMsg = err?.shortMessage || err?.message || 'Transaction rejected';
+      setActionTxResult(prev => ({ ...prev, [msgId]: { ok: false, error: errMsg } }));
+    }
+    setActionTxLoading(prev => ({ ...prev, [msgId]: false }));
+  }, [sendTransactionAsync]);
+
+  // ── Approve trade — pre-fills textarea so user presses Enter to confirm
+  const handleTradeApprove = useCallback((msgId: string, params: any) => {
+    setMessages(prev => prev.map(m => m.id === msgId ? { ...m, actionDone: true } : m));
+    const summary = `${params.direction} ${params.pair} — $${params.collateral} USDC × ${params.leverage}x, TP ${params.tp_pct}%, SL ${params.sl_pct}%`;
+    setInputValue(`Yes, execute the proposed trade: ${summary}`);
+    textareaRef.current?.focus();
+  }, []);
+
+  // ── Cancel trade — pre-fills textarea
+  const handleTradeCancel = useCallback((msgId: string) => {
+    setMessages(prev => prev.map(m => m.id === msgId ? { ...m, actionDone: true } : m));
+    setInputValue('Cancel the proposed trade, I changed my mind.');
+    textareaRef.current?.focus();
+  }, []);
 
   // ── Toggle card expansion
   const toggleCard = (key: string) => {
@@ -1342,6 +1412,82 @@ export default function ChatPage() {
               const isEmpty = !msg.content.trim();
               const isLastAgent = isAgent && i === messages.length - 1;
 
+              // ── Action cards (deposit / trade approval)
+              if (msg.role === 'action') {
+                const txState = actionTxResult[msg.id];
+                const txLoading = actionTxLoading[msg.id];
+
+                if (msg.actionType === 'deposit_request') {
+                  const { amount, agent_wallet, unsigned_tx } = msg.actionData || {};
+                  return (
+                    <div key={msg.id} className={s.actionCard}>
+                      <div className={s.actionCardHdr}>
+                        <span className={s.actionCardIcon}>💳</span>
+                        <span className={s.actionCardTitle}>Deposit {amount} USDC to Agent Wallet</span>
+                      </div>
+                      <div className={s.actionCardMeta}>
+                        To: <span className={s.actionCardAddr}>{agent_wallet ? `${agent_wallet.slice(0,10)}...${agent_wallet.slice(-6)}` : '—'}</span>
+                        &nbsp;·&nbsp;Network: Base
+                      </div>
+                      {txState?.ok ? (
+                        <div className={s.actionCardSuccess}>
+                          ✓ Deposit submitted — <a href={`https://basescan.org/tx/${txState.hash}`} target="_blank" rel="noopener noreferrer">View on BaseScan</a>
+                        </div>
+                      ) : txState?.error ? (
+                        <div className={s.actionCardError}>{txState.error}</div>
+                      ) : msg.actionDone ? (
+                        <div className={s.actionCardDone}>Deposit approved</div>
+                      ) : (
+                        <button
+                          className={s.actionCardBtn}
+                          onClick={() => handleDepositApprove(msg.id, unsigned_tx)}
+                          disabled={txLoading}
+                        >
+                          {txLoading ? 'Approving...' : `Approve — Send ${amount} USDC`}
+                        </button>
+                      )}
+                    </div>
+                  );
+                }
+
+                if (msg.actionType === 'trade_approval') {
+                  const { params, rationale, position_size } = msg.actionData || {};
+                  const p = params || {};
+                  const isLong = p.direction === 'LONG';
+                  return (
+                    <div key={msg.id} className={s.actionCard}>
+                      <div className={s.actionCardHdr}>
+                        <span className={s.actionCardIcon}>{isLong ? '📈' : '📉'}</span>
+                        <span className={s.actionCardTitle}>Trade Proposal — {p.direction} {p.pair}</span>
+                      </div>
+                      <div className={s.tradeCardGrid}>
+                        <div className={s.tradeCardItem}><span className={s.tradeCardLbl}>Collateral</span><span className={s.tradeCardVal}>${p.collateral} USDC</span></div>
+                        <div className={s.tradeCardItem}><span className={s.tradeCardLbl}>Leverage</span><span className={s.tradeCardVal}>{p.leverage}×</span></div>
+                        <div className={s.tradeCardItem}><span className={s.tradeCardLbl}>Position</span><span className={s.tradeCardVal}>${position_size}</span></div>
+                        <div className={s.tradeCardItem}><span className={s.tradeCardLbl}>Type</span><span className={s.tradeCardVal}>{p.order_type || 'MARKET'}</span></div>
+                        <div className={s.tradeCardItem}><span className={s.tradeCardLbl}>Take Profit</span><span className={s.tradeCardVal} style={{color:'#00C805'}}>+{p.tp_pct}%</span></div>
+                        <div className={s.tradeCardItem}><span className={s.tradeCardLbl}>Stop Loss</span><span className={s.tradeCardVal} style={{color:'#FF3B3B'}}>-{p.sl_pct}%</span></div>
+                      </div>
+                      {rationale && <div className={s.actionCardMeta} style={{marginTop: 6}}>{rationale}</div>}
+                      {msg.actionDone ? (
+                        <div className={s.actionCardDone}>Response sent — waiting for agent...</div>
+                      ) : (
+                        <div className={s.tradeCardBtns}>
+                          <button className={s.tradeApproveBtn} onClick={() => handleTradeApprove(msg.id, p)}>
+                            ✓ Approve Trade
+                          </button>
+                          <button className={s.tradeCancelBtn} onClick={() => handleTradeCancel(msg.id)}>
+                            ✕ Cancel
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  );
+                }
+
+                return null;
+              }
+
               return (
                 <div key={msg.id} className={s.msg}>
                   <div className={s.msgHdr}>
@@ -1467,9 +1613,9 @@ export default function ChatPage() {
                     </div>
                   </div>
 
-                  {fundsEth < 0.001 && (
+                  {fundsEth < 0.0002 && (
                     <div className={s.fundsGasWarn}>
-                      ⚠ Send at least 0.001 ETH for gas before trading
+                      ⚠ Send at least 0.0002 ETH for gas before trading
                     </div>
                   )}
 

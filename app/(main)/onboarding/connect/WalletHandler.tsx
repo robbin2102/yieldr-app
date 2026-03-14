@@ -32,14 +32,15 @@ export default function WalletHandler() {
 
       if (walletCheckData.inUse) {
         console.log('⚠️ Wallet already in use by:', walletCheckData.owner?.username);
-        
+
         // Check if it's the same user reconnecting
         const existingUsername = walletCheckData.owner?.username;
-        
+
         if (existingUsername) {
-          console.log('✅ Existing user reconnecting');
+          console.log('✅ Existing user reconnecting — redirecting to terminal');
           localStorage.setItem('managerUsername', existingUsername);
-          window.location.href = `/manager/dashboard.html?username=${existingUsername}`;
+          localStorage.setItem('yieldr_auth_wallet', walletAddress.toLowerCase());
+          window.location.href = '/demo/chat';
           return;
         }
       }
@@ -82,16 +83,18 @@ export default function WalletHandler() {
             const profileData = await profileResponse.json();
             if (profileData.success && profileData.data?.username) {
               const username = profileData.data.username;
-              console.log('✅ Profile found, redirecting to dashboard');
+              console.log('✅ Profile found, redirecting to terminal');
               localStorage.setItem('managerUsername', username);
-              window.location.href = `/manager/dashboard.html?username=${username}`;
+              localStorage.setItem('yieldr_auth_wallet', walletAddress.toLowerCase());
+              window.location.href = '/demo/chat';
               return;
             }
           }
 
-          // Profile incomplete, continue with onboarding
-          console.log('➡️ Profile incomplete, continuing onboarding');
-          window.location.href = '/onboarding/profile.html';
+          // Profile incomplete, continue with onboarding → new terminal
+          console.log('➡️ Profile incomplete, redirecting to terminal');
+          localStorage.setItem('yieldr_auth_wallet', walletAddress.toLowerCase());
+          window.location.href = '/demo/chat';
           return;
         }
 
@@ -116,14 +119,16 @@ export default function WalletHandler() {
             const username = profileData.data.username;
             console.log('✅ Profile found:', username);
             localStorage.setItem('managerUsername', username);
-            console.log('➡️ Redirecting to dashboard');
-            window.location.href = `/manager/dashboard.html?username=${username}`;
+            localStorage.setItem('yieldr_auth_wallet', walletAddress.toLowerCase());
+            console.log('➡️ Redirecting to terminal');
+            window.location.href = '/demo/chat';
             return;
           }
         }
-        
-        console.log('➡️ Profile incomplete');
-        window.location.href = '/onboarding/profile.html';
+
+        console.log('➡️ Profile incomplete, redirecting to terminal');
+        localStorage.setItem('yieldr_auth_wallet', walletAddress.toLowerCase());
+        window.location.href = '/demo/chat';
       } else {
         console.log('➡️ Non-manager user');
         window.location.href = '/';
