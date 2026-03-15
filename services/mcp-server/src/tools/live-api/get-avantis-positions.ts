@@ -5,7 +5,9 @@
 
 import { z } from 'zod';
 
-const AVANTIS_API_URL = 'https://yieldr-app-production.up.railway.app/fetch-positions';
+const AVANTIS_API_URL = process.env.YIELDR_APP_URL
+  ? `${process.env.YIELDR_APP_URL.replace(/\/$/, '')}/fetch-positions`
+  : 'https://yieldr-app-production.up.railway.app/fetch-positions';
 const BASE_RPC_URL = process.env.BASE_RPC_URL || 'https://mainnet.base.org';
 
 export const getAvantisPositionsSchema = z.object({
