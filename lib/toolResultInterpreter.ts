@@ -57,7 +57,9 @@ export const EXECUTION_TOOLS = new Set([
 const TX_HASH_REGEX = /^0x[a-fA-F0-9]{64}$/;
 
 function extractTxHash(data: Record<string, any>): string | undefined {
-  // Check multiple field names backends use
+  // Check multiple field names backends use.
+  // The Next.js execute/open route wraps Python's result under a "trade" key:
+  //   { success: true, trade: { tx_hash: "0x...", ... }, tradeSetupId: "..." }
   const candidates = [
     data.tx_hash,
     data.txHash,
@@ -67,6 +69,11 @@ function extractTxHash(data: Record<string, any>): string | undefined {
     data.data?.tx_hash,
     data.data?.txHash,
     data.data?.transactionHash,
+    // Nested under "trade" key (execute/open, execute/close Next.js proxy response)
+    data.trade?.tx_hash,
+    data.trade?.txHash,
+    data.trade?.transactionHash,
+    data.trade?.hash,
   ];
   for (const c of candidates) {
     if (typeof c === 'string' && TX_HASH_REGEX.test(c)) return c;
@@ -118,15 +125,18 @@ function buildClassifiedMessage(
   const header = `[TOOL_RESULT_CLASSIFIED]\nTool: ${toolName}\nStatus: ${status}`;
 
   switch (status) {
-    case 'CONFIRMED':
+    case 'CONFIRMED': {
+      // Flatten the nested "trade" wrapper if present so the agent sees all trade fields directly
+      const tradeData = rawData?.trade ?? rawData;
       return [
         header,
         `Transaction verified on-chain. Hash: ${txHash}`,
         `You MAY report success to the user. Use ONLY this exact hash: ${txHash}`,
         `Do NOT add any other hash, amount, or trade detail not present in the tool result below.`,
-        rawData ? `Result: ${JSON.stringify(rawData)}` : '',
+        tradeData ? `Result: ${JSON.stringify(tradeData)}` : '',
         `[/TOOL_RESULT_CLASSIFIED]`,
       ].filter(Boolean).join('\n');
+    }
 
     case 'INSUFFICIENT_FUNDS': {
       const usdc = rawData?.usdc_balance ?? rawData?.available ?? 'unknown';

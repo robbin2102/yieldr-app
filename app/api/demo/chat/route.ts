@@ -1813,10 +1813,16 @@ User approves → call open_trade → report tx_hash from tool result
 If the user message starts with TRADE_APPROVED: followed by a JSON object, the user has already reviewed and approved a propose_trade card. You MUST:
 - Immediately call open_trade using EXACTLY the params from that JSON object
 - Do NOT call propose_trade again — it already ran
-- Do NOT call get_agent_wallet_balance again — balance was already checked
+- Do NOT call get_agent_wallet_balance again before the first attempt — balance was already checked
 - The JSON fields map directly: pair, pair_index, direction, collateral, leverage, tp_pct, sl_pct, order_type, open_price (if present)
 Example: TRADE_APPROVED:{"pair":"BTC/USD","pair_index":1,"direction":"LONG","collateral":10,"leverage":10,"tp_pct":2.5,"sl_pct":2,"order_type":"MARKET"}
 → Immediately call open_trade with those exact params.
+
+**If open_trade fails after TRADE_APPROVED:**
+- Call get_agent_wallet_balance to get the current balance
+- Report the exact error and current balance to the user
+- If INSUFFICIENT_FUNDS: call fund_agent to show deposit card for the deficit amount. State exactly how much to deposit and to which wallet address.
+- Do NOT call open_trade again until the user has taken action (deposited, fixed the error) and you have re-verified the balance via get_agent_wallet_balance.
 
 ### CRITICAL: False Confirmation Rules — READ CAREFULLY
 
@@ -1825,8 +1831,11 @@ These rules prevent hallucinating trade outcomes:
 1. NEVER say a trade was executed unless open_trade returned a tx_hash field in its result. If open_trade returns success:false or an error field, the trade DID NOT execute. Quote the error verbatim.
 2. NEVER fabricate a tx_hash, entry_price, trade_index, or any trade detail. All of these come only from the open_trade tool result. If the tool did not run or returned an error, say so clearly.
 3. NEVER say "the trade is live" or "position opened" based on the user saying "execute" alone. You must call open_trade AND receive a successful response first.
-4. If open_trade returns an error like "Insufficient USDC", tell the user exactly that: "The trade could not execute — the agent wallet has X USDC but needs Y. Please deposit Z USDC to [address]."
-5. NEVER check balance after a failed trade and fabricate a story about why it worked (e.g. "you had USDC from before"). If balance check also fails, say both tools failed and give the error.
+4. If open_trade returns an error like "Insufficient USDC", tell the user exactly that: "The trade could not execute — the agent wallet has X USDC but needs Y." Then call fund_agent to show a deposit card for the required amount.
+5. NEVER check balance after a failed trade and fabricate a story about why it worked. If balance check also fails, say both tools failed and give the error.
+6. NEVER retry open_trade for the same error without user action in between. If open_trade returns INSUFFICIENT_FUNDS twice in a row, STOP and tell the user what to deposit. Do NOT call open_trade a third time.
+7. NEVER describe "calling open_trade now..." or "executing trade..." in text without actually making the tool call. If you write those words, you MUST also call the tool. If the tool cannot be called, explain why instead of narrating a fake execution.
+8. Same rules apply to withdraw_funds and close_trade — never report tx_hash, success, or "funds sent" without a real tool result containing a confirmed tx_hash.
 
 ### Execution Tools Available
 
@@ -1852,7 +1861,9 @@ When user asks to withdraw, send back, or recover funds from the agent wallet:
 1. Call get_agent_wallet_balance — confirm what's available
 2. Confirm with user: asset (ETH or USDC), amount, destination (default = their connected wallet)
 3. Call withdraw_funds to execute the on-chain transfer
-4. Report tx_hash and BaseScan link: https://basescan.org/tx/{tx_hash}
+4. ONLY report success and tx_hash if withdraw_funds tool result contains a confirmed tx_hash. Never fabricate a tx_hash.
+5. Report tx_hash and BaseScan link: https://basescan.org/tx/{tx_hash}
+6. If withdraw_funds returns an error, report the exact error. Do NOT retry without user instruction.
 
 ### Minimum Size
 
@@ -2515,10 +2526,19 @@ export async function POST(request: NextRequest) {
               const textLower = iterationText.toLowerCase();
               // Keywords that indicate the agent was trying to execute trading/deposit actions
               const executionKeywords = [
+                // deposit/fund patterns
                 'deposit card', 'funding card', 'fund_agent', 'eth deposit', 'usdc deposit',
                 'checking wallet', 'agent wallet status', 'wallet balance', 'running the full workflow',
                 'generating deposit', 'full workflow', 'i\'ll execute', 'executing the strategy',
                 'deposit approval', 'approve both', 'approve the deposit',
+                // trade execution narration (agent describes calling tool without doing it)
+                'executing now', 'executing trade', 'executing the trade', 'calling open_trade',
+                'placing the trade', 'placing order', 'opening position', 'opening the position',
+                'calling close_trade', 'closing position', 'closing the position',
+                'calling withdraw', 'withdrawing', 'sending back funds', 'funds sent',
+                'withdrawal complete', 'funds withdrawn', 'successfully withdrawn',
+                'trade executed', 'position opened', 'order placed', 'order confirmed',
+                'trade confirmed', 'successfully executed', 'successfully opened',
               ];
               const tradingToolNames = ['get_agent_wallet_balance', 'fund_agent_eth', 'fund_agent', 'propose_trade', 'open_trade', 'close_trade', 'withdraw_funds', 'cancel_limit_order'];
               const describedExecution = executionKeywords.some(kw => textLower.includes(kw));
@@ -2533,7 +2553,7 @@ export async function POST(request: NextRequest) {
                   { role: 'assistant' as const, content: iterationText },
                   {
                     role: 'user' as const,
-                    content: 'You described the workflow but did not call any tools. Call get_agent_wallet_balance now, then call fund_agent_eth and fund_agent if balances are insufficient, then call propose_trade. Do not generate text — invoke the tools.',
+                    content: 'SYSTEM: You described a trading or withdrawal action in text but did not call any tools. This is a hallucination. You MUST call the actual tool now — do not generate more text. If you intended to call open_trade, call it. If you intended to call withdraw_funds, call it. If you intended to call close_trade, call it. Do not narrate what you are doing — just invoke the tool.',
                   },
                 ];
                 forceToolUse = true;
