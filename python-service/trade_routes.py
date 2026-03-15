@@ -169,24 +169,40 @@ async def _cdp_send_and_receipt(cdp, wallet_address: str, tx: dict) -> Any:
 async def _cdp_approve_usdc(cdp, wallet_address: str, spender: str, amount: float):
     """Approve the Avantis trading contract to spend USDC on behalf of the agent wallet."""
     w3_sync = Web3(Web3.HTTPProvider(_get_rpc_url()))
+    w3_async = AsyncWeb3(AsyncWeb3.AsyncHTTPProvider(_get_rpc_url()))
     usdc = w3_sync.eth.contract(
         address=Web3.to_checksum_address(USDC_BASE_ADDRESS),
         abi=USDC_APPROVE_ABI,
     )
-    # Approve 10× the required amount to avoid repeated approvals
-    amount_wei = int(amount * 10 * 1e6)
+    # Approve a fixed large amount (10 000 USDC) so the allowance isn't depleted
+    # across multiple trades (previous 10× collateral approach exhausted after ~10 trades)
+    APPROVE_AMOUNT_USDC = 10_000.0
+    amount_wei = int(APPROVE_AMOUNT_USDC * 1e6)
     data = usdc.encodeABI(fn_name="approve", args=[
         Web3.to_checksum_address(spender),
         amount_wei,
     ])
+    # Fetch Base mainnet gas price and add a buffer so the tx is always included
+    base_fee = await w3_async.eth.gas_price
+    max_fee = int(base_fee * 1.5) + 1_000_000  # 50% buffer + 0.001 gwei floor
     approve_tx = {
-        "to":    USDC_BASE_ADDRESS,
-        "data":  data,
-        "value": 0,
-        "nonce": await _fresh_nonce(wallet_address),
-        "gas":   100_000,
+        "to":           USDC_BASE_ADDRESS,
+        "data":         data,
+        "value":        0,
+        "nonce":        await _fresh_nonce(wallet_address),
+        "gas":          100_000,
+        "maxFeePerGas": max_fee,
+        "maxPriorityFeePerGas": 1_000_000,
     }
     await _cdp_send_and_receipt(cdp, wallet_address, approve_tx)
+    # Verify the allowance was actually set on-chain
+    post_allowance = await _usdc_allowance(wallet_address, spender)
+    if post_allowance < amount:
+        raise HTTPException(
+            status_code=500,
+            detail=f"USDC approval tx landed but on-chain allowance ({post_allowance:.4f}) is still below required ({amount:.4f}). Check spender address: {spender}",
+        )
+    print(f"[open_trade] USDC approval verified: allowance={post_allowance:.4f} USDC for spender={spender}")
 
 
 # ─────────────────────────────────────────────

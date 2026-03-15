@@ -2551,10 +2551,10 @@ export async function POST(request: NextRequest) {
               const noExecutionToolsCalled = !allToolCalls.some(t => executionToolNames.includes(t.name));
               const fabricatedHashInNarration = TX_HASH_IN_TEXT && noExecutionToolsCalled;
 
-              if ((describedExecution || fabricatedHashInNarration) && noTradingToolsCalled && maxIterations > 0) {
-                // Agent hallucinated tool calls — described the workflow without invoking tools.
-                // Force a new iteration with tool_choice: any so tools are actually called.
-                console.log(`[chat] Hallucination detected: ${fabricatedHashInNarration ? 'fabricated tx_hash in text without calling execution tool' : 'agent described trading actions without calling tools'}. Forcing tool invocation.`);
+              if (((describedExecution && noExecutionToolsCalled) || fabricatedHashInNarration) && maxIterations > 0) {
+                // Agent hallucinated execution — narrated a trade/withdrawal or fabricated a tx_hash without calling the tool.
+                // Use noExecutionToolsCalled (not noTradingToolsCalled) so this fires even if balance/propose were already called.
+                console.log(`[chat] Hallucination detected: ${fabricatedHashInNarration ? 'fabricated tx_hash in text without calling execution tool' : 'agent described trading actions without calling execution tool'}. Forcing tool invocation.`);
                 currentMessages = [
                   ...currentMessages,
                   { role: 'assistant' as const, content: iterationText },
