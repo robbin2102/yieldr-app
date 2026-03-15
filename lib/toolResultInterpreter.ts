@@ -159,7 +159,7 @@ function buildClassifiedMessage(
         header,
         `Agent wallet has insufficient ETH for gas.`,
         `Do NOT report success. Do NOT fabricate a tx_hash.`,
-        `Tell the user: the agent wallet needs at least 0.00005 ETH for gas on Base. Provide the agent wallet address and ask them to send ETH.`,
+        `Tell the user: the agent wallet needs at least 0.001 ETH for gas on Base (covers Avantis execution fee + gas). Provide the agent wallet address and ask them to send ETH.`,
         `Error: ${errorDetail}`,
         `[/TOOL_RESULT_CLASSIFIED]`,
       ].join('\n');
@@ -341,7 +341,7 @@ export interface BalanceGateResult {
 export function validateBalanceForTrade(
   rawBalanceResponse: string | null,
   requiredUsdc: number,
-  minEth: number = 0.00005,
+  minEth: number = 0.001,
   toolName: string = 'open_trade',
 ): BalanceGateResult {
   // If fetch failed entirely
@@ -518,7 +518,7 @@ function buildHallucinationOverride(result: ClassifiedResult): string {
       return `The ${result.toolName} could not execute — the agent wallet has insufficient USDC. ${result.errorDetail || ''} Please deposit the required amount to the agent wallet address and try again.`;
 
     case 'LOW_GAS':
-      return `The ${result.toolName} could not execute — the agent wallet needs more ETH for gas on Base. Please send at least 0.00005 ETH to the agent wallet address and try again.`;
+      return `The ${result.toolName} could not execute — the agent wallet needs more ETH for gas on Base. Please send at least 0.001 ETH to the agent wallet address and try again.`;
 
     case 'CONTRACT_REVERT':
       return `The ${result.toolName} failed — the transaction was reverted on-chain. No funds were moved. ${result.errorDetail || ''} Please check position limits or try again.`;

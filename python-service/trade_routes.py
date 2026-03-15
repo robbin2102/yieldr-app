@@ -445,14 +445,13 @@ async def execute_open(body: OpenTradeRequest, _: str = Depends(verify_api_key))
                     f"Fund the agent wallet at {agent_wallet}."
                 ),
             )
-        MIN_ETH_FOR_GAS = 0.0002
+        MIN_ETH_FOR_GAS = 0.001
         if eth_balance < MIN_ETH_FOR_GAS:
             raise HTTPException(
                 status_code=400,
                 detail=(
-                    f"Insufficient ETH for gas. Agent wallet has {eth_balance:.6f} ETH "
-                    f"(minimum {MIN_ETH_FOR_GAS} ETH required for Base transactions). "
-                    f"Send at least 0.0002 ETH to {agent_wallet} on Base network."
+                    f"Agent wallet {agent_wallet} has insufficient ETH ({eth_balance:.6f} ETH). "
+                    f"Fund with ≥{MIN_ETH_FOR_GAS} ETH to cover the Avantis execution fee and gas costs."
                 ),
             )
         # ── End pre-trade checks ────────────────────────────────────────────────

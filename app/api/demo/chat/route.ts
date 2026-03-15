@@ -398,9 +398,9 @@ toolDefinitions.push({
   name: 'get_agent_wallet_balance',
   description:
     'Check the agent CDP wallet ETH and USDC balance. Call this BEFORE executing any trade or generating deposit cards. ' +
-    'ETH is needed for gas fees (minimum 0.00005 ETH on Base). USDC is the trade collateral. ' +
-    'After checking: if ETH < 0.00005 call fund_agent_eth; if USDC < required collateral call fund_agent. ' +
-    'If ETH >= 0.00005, skip gas deposit — do NOT suggest ETH deposit when gas is sufficient. ' +
+    'ETH is needed for gas fees (minimum 0.001 ETH on Base for Avantis execution fee + gas). USDC is the trade collateral. ' +
+    'After checking: if ETH < 0.001 call fund_agent_eth; if USDC < required collateral call fund_agent. ' +
+    'If ETH >= 0.001, skip gas deposit — do NOT suggest ETH deposit when gas is sufficient. ' +
     'Both cards can be emitted in the same response — call both tools without waiting for user approval.',
   input_schema: {
     type: 'object' as const,
@@ -505,7 +505,7 @@ toolDefinitions.push({
   name: 'fund_agent_eth',
   description:
     'Deposit ETH from the user\'s connected wallet into the agent CDP wallet for gas fees. ' +
-    'Call this when agent ETH balance is below 0.00005 ETH (minimum for Base gas). ' +
+    'Call this when agent ETH balance is below 0.001 ETH (minimum for Avantis execution fee + Base gas). ' +
     'Emits an ETH deposit approval card — the user must click Approve and sign in their wallet. ' +
     'Default deposit: 0.001 ETH (enough for ~5 trades).',
   input_schema: {
@@ -1430,9 +1430,9 @@ async function executeTool(name: string, input: any, wallet?: string, agentCtxId
           agent_wallet:           agentCtxWallet,
           eth_balance:            eth,
           usdc_balance:           usdc,
-          eth_sufficient_for_gas: eth >= 0.00005,
-          status: eth < 0.00005
-            ? `⚠️ Low ETH: ${eth.toFixed(6)} ETH — send at least 0.00005 ETH to ${agentCtxWallet} for gas`
+          eth_sufficient_for_gas: eth >= 0.001,
+          status: eth < 0.001
+            ? `⚠️ Low ETH: ${eth.toFixed(6)} ETH — send at least 0.001 ETH to ${agentCtxWallet} for gas`
             : `✓ ETH OK (${eth.toFixed(6)} ETH)`,
           usdc_note: usdc === 0
             ? `Agent wallet has no USDC. Fund it before placing trades.`
@@ -1798,14 +1798,14 @@ DO NOT say:
 
 1. Call get_market_snapshot (or fetch_live_indicator) to validate entry signals
 2. Call get_agent_wallet_balance — show the user current ETH and USDC balances.
-   The server enforces a hard balance gate inside open_trade. If the gate blocks the trade you will receive a [TOOL_RESULT_CLASSIFIED] message — follow its instructions exactly. Do NOT re-attempt open_trade until the user has deposited funds and confirmed. Minimum gas required: 0.00005 ETH.
+   The server enforces a hard balance gate inside open_trade. If the gate blocks the trade you will receive a [TOOL_RESULT_CLASSIFIED] message — follow its instructions exactly. Do NOT re-attempt open_trade until the user has deposited funds and confirmed. Minimum gas required: 0.001 ETH.
 3. Call propose_trade — shows a confirmation card in the UI with all trade params
 4. Wait for user to approve (they click Approve or say "execute"/"yes")
 5. Call open_trade with the SAME params from step 3
 
 **Example flow when user says "mean reversion on BTC 10 USDC 10x" and wallet is funded:**
 1. Call get_market_snapshot → analyze signals
-2. Call get_agent_wallet_balance → confirm USDC ≥ 10, ETH ≥ 0.00005
+2. Call get_agent_wallet_balance → confirm USDC ≥ 10, ETH ≥ 0.001
 3. Call propose_trade → trade confirmation card appears in UI
 User approves → call open_trade → report tx_hash from tool result
 
@@ -2048,7 +2048,7 @@ Every execution tool result (open_trade, close_trade, withdraw_funds, cancel_lim
 |---|---|---|
 | CONFIRMED | tx_hash verified on-chain | Report success using ONLY the exact hash provided |
 | INSUFFICIENT_FUNDS | Not enough USDC | Tell user the exact deficit and agent wallet address — do NOT proceed |
-| LOW_GAS | Not enough ETH for gas | Tell user to send ≥0.00005 ETH to agent wallet — do NOT proceed |
+| LOW_GAS | Not enough ETH for gas | Tell user to send ≥0.001 ETH to agent wallet — do NOT proceed |
 | CONTRACT_REVERT | On-chain tx reverted | Tell user trade failed on-chain — do NOT report success |
 | APPROVAL_REQUIRED | USDC not approved | Tell user approval is needed — do NOT proceed |
 | SLIPPAGE_EXCEEDED | Price moved | Suggest limit order or retry — do NOT report success |
