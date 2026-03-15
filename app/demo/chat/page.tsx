@@ -703,6 +703,9 @@ export default function ChatPage() {
             if (parsed.type === 'text') {
               setToolStatus(null);
               setMessages(prev => prev.map(m => m.id === agentMsgId ? { ...m, content: m.content + parsed.text } : m));
+            } else if (parsed.type === 'hallucination_correction') {
+              // Wipe any fabricated content already streamed so the correction replaces it
+              setMessages(prev => prev.map(m => m.id === agentMsgId ? { ...m, content: '' } : m));
             } else if (parsed.type === 'tool_status') {
               setToolStatus(parsed.status);
             } else if (parsed.type === 'session') {

@@ -1836,6 +1836,7 @@ These rules prevent hallucinating trade outcomes:
 6. NEVER retry open_trade for the same error without user action in between. If open_trade returns INSUFFICIENT_FUNDS twice in a row, STOP and tell the user what to deposit. Do NOT call open_trade a third time.
 7. NEVER describe "calling open_trade now..." or "executing trade..." in text without actually making the tool call. If you write those words, you MUST also call the tool. If the tool cannot be called, explain why instead of narrating a fake execution.
 8. Same rules apply to withdraw_funds and close_trade — never report tx_hash, success, or "funds sent" without a real tool result containing a confirmed tx_hash.
+9. NEVER include a 0x transaction hash (0x followed by 64 hex characters) anywhere in your response text unless it came from a [TOOL_RESULT_CLASSIFIED] block with status=CONFIRMED. Do NOT "show" a hash while narrating what you are about to do. Do NOT include a hash as a placeholder, example, or progress indicator. If you are about to call a tool, call it immediately — never include a hash before the tool result exists.
 
 ### Execution Tools Available
 
@@ -2061,6 +2062,7 @@ Every execution tool result (open_trade, close_trade, withdraw_funds, cancel_lim
 ### Absolute rules for classified messages
 • NEVER override a non-CONFIRMED status with success language
 • NEVER fabricate a tx_hash. The only valid hash is the one in a CONFIRMED message
+• NEVER include any 0x64-char hash in your response text before a tool has been called and returned a CONFIRMED result — not as a placeholder, not as a preview, not as an example
 • NEVER use balance or position data from earlier in the conversation to argue that a failed operation actually succeeded
 • If status is CONFIRMED, use the hash EXACTLY as provided — do not shorten, alter, or omit it
 
@@ -2541,13 +2543,18 @@ export async function POST(request: NextRequest) {
                 'trade confirmed', 'successfully executed', 'successfully opened',
               ];
               const tradingToolNames = ['get_agent_wallet_balance', 'fund_agent_eth', 'fund_agent', 'propose_trade', 'open_trade', 'close_trade', 'withdraw_funds', 'cancel_limit_order'];
+              const executionToolNames = ['open_trade', 'close_trade', 'withdraw_funds', 'cancel_limit_order'];
               const describedExecution = executionKeywords.some(kw => textLower.includes(kw));
               const noTradingToolsCalled = !allToolCalls.some(t => tradingToolNames.includes(t.name));
+              // Also catch fabricated tx_hashes: if Claude put a 0x...64-char hash in text without calling an execution tool
+              const TX_HASH_IN_TEXT = /0x[a-fA-F0-9]{64}/.test(iterationText);
+              const noExecutionToolsCalled = !allToolCalls.some(t => executionToolNames.includes(t.name));
+              const fabricatedHashInNarration = TX_HASH_IN_TEXT && noExecutionToolsCalled;
 
-              if (describedExecution && noTradingToolsCalled && maxIterations > 0) {
+              if ((describedExecution || fabricatedHashInNarration) && noTradingToolsCalled && maxIterations > 0) {
                 // Agent hallucinated tool calls — described the workflow without invoking tools.
                 // Force a new iteration with tool_choice: any so tools are actually called.
-                console.log('[chat] Hallucination detected: agent described trading actions without calling tools. Forcing tool invocation.');
+                console.log(`[chat] Hallucination detected: ${fabricatedHashInNarration ? 'fabricated tx_hash in text without calling execution tool' : 'agent described trading actions without calling tools'}. Forcing tool invocation.`);
                 currentMessages = [
                   ...currentMessages,
                   { role: 'assistant' as const, content: iterationText },

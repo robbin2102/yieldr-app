@@ -469,28 +469,42 @@ export function detectPostResponseHallucination(
 ): string | null {
   const responseLower = responseText.toLowerCase();
 
+  // Collect all hashes that are legitimately confirmed
+  const confirmedHashes = classifiedResults
+    .filter(r => r.status === 'CONFIRMED' && r.txHash)
+    .map(r => r.txHash!.toLowerCase());
+
+  // All 64-char hex hashes mentioned anywhere in the response
+  const mentionedHashes = (responseText.match(ANY_TX_HASH_REGEX) || [])
+    .filter(h => TX_HASH_REGEX.test(h));
+
+  // Any hash in the response that isn't from a CONFIRMED tool result is fabricated
+  const fabricatedHashes = mentionedHashes.filter(h => !confirmedHashes.includes(h.toLowerCase()));
+
+  if (fabricatedHashes.length > 0) {
+    // Find the first non-CONFIRMED result to build a contextual override message
+    const failedResult = classifiedResults.find(r => r.status !== 'CONFIRMED');
+    console.warn(
+      `[toolResultInterpreter] POST-RESPONSE HALLUCINATION DETECTED: fabricated tx_hash(es) found — ` +
+      `${fabricatedHashes.join(', ')} not in confirmed set [${confirmedHashes.join(', ')}]`,
+    );
+    if (failedResult) {
+      return buildHallucinationOverride(failedResult);
+    }
+    // All tools CONFIRMED but extra hashes appeared — still flag
+    return 'Warning: Response contained unverified transaction hashes. Please verify any transaction on Basescan before assuming it completed.';
+  }
+
+  // Check for success language when a tool actually failed
   for (const result of classifiedResults) {
-    if (result.status === 'CONFIRMED') continue; // legitimate success — skip
+    if (result.status === 'CONFIRMED') continue;
 
-    // Check if Claude asserted success despite a non-CONFIRMED result
     const assertedSuccess = SUCCESS_PHRASES.some(phrase => responseLower.includes(phrase));
-
-    // Check if Claude invented a tx_hash not present in any CONFIRMED result
-    const confirmedHashes = classifiedResults
-      .filter(r => r.status === 'CONFIRMED' && r.txHash)
-      .map(r => r.txHash!.toLowerCase());
-
-    const mentionedHashes = (responseText.match(ANY_TX_HASH_REGEX) || [])
-      .filter(h => TX_HASH_REGEX.test(h));
-
-    const fabricatedHash = mentionedHashes.some(h => !confirmedHashes.includes(h.toLowerCase()));
-
-    if (assertedSuccess || fabricatedHash) {
+    if (assertedSuccess) {
       console.warn(
         `[toolResultInterpreter] POST-RESPONSE HALLUCINATION DETECTED for tool "${result.toolName}" (status=${result.status}). ` +
-        `assertedSuccess=${assertedSuccess}, fabricatedHash=${fabricatedHash}`,
+        `assertedSuccess=true`,
       );
-
       return buildHallucinationOverride(result);
     }
   }
