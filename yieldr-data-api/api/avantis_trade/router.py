@@ -10,6 +10,7 @@ Signing strategy (per-agent CDP wallets):
   - Otherwise falls back to shared LocalSigner (AGENT_WALLET_PRIVATE_KEY).
 """
 
+import asyncio
 import logging
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
@@ -128,32 +129,53 @@ def _get_rpc_url() -> str:
     return rpc
 
 
-def _build_trader_client(agent_wallet_address: Optional[str] = None) -> TraderClient:
+async def _build_trader_client(agent_wallet_address: Optional[str] = None) -> TraderClient:
     """
     Return the appropriate TraderClient:
       - CdpTraderClient  when agent_wallet_address + cdp-wallet-service are configured
       - LocalSigner-backed TraderClient  as fallback (shared AGENT_WALLET_PRIVATE_KEY)
+
+    The avantis_trader_sdk TraderClient.__init__ makes a synchronous chain_id RPC call,
+    which blocks the event loop. We run it in a thread with a 15s timeout so a dead or
+    unreachable RPC endpoint fails fast instead of hanging for 60s.
     """
     rpc_url    = _get_rpc_url()
-    async_web3 = AsyncWeb3(AsyncWeb3.AsyncHTTPProvider(rpc_url, request_kwargs={"timeout": 60}))
+    async_web3 = AsyncWeb3(AsyncWeb3.AsyncHTTPProvider(rpc_url, request_kwargs={"timeout": 30}))
 
-    if agent_wallet_address and _cdp_service_configured():
-        logger.info(f"[CDP-svc] using CDP wallet {agent_wallet_address}")
-        return CdpTraderClient(
-            provider_url=rpc_url,
-            agent_wallet_address=agent_wallet_address,
-            async_web3=async_web3,
+    try:
+        if agent_wallet_address and _cdp_service_configured():
+            logger.info(f"[CDP-svc] using CDP wallet {agent_wallet_address}")
+            client = await asyncio.wait_for(
+                asyncio.to_thread(
+                    lambda: CdpTraderClient(
+                        provider_url=rpc_url,
+                        agent_wallet_address=agent_wallet_address,
+                        async_web3=async_web3,
+                    )
+                ),
+                timeout=15,
+            )
+            return client
+
+        # Fallback — shared EOA wallet
+        private_key = settings.agent_wallet_private_key
+        if not private_key:
+            raise HTTPException(
+                status_code=503,
+                detail="No signing method available: AGENT_WALLET_PRIVATE_KEY not set and CDP_SERVICE_URL not configured",
+            )
+        signer = LocalSigner(private_key, async_web3)
+        client = await asyncio.wait_for(
+            asyncio.to_thread(lambda: TraderClient(provider_url=rpc_url, signer=signer)),
+            timeout=15,
         )
+        return client
 
-    # Fallback — shared EOA wallet
-    private_key = settings.agent_wallet_private_key
-    if not private_key:
+    except asyncio.TimeoutError:
         raise HTTPException(
             status_code=503,
-            detail="No signing method available: AGENT_WALLET_PRIVATE_KEY not set and CDP_SERVICE_URL not configured",
+            detail="RPC connection timed out — QuickNode unreachable. Try again shortly.",
         )
-    signer = LocalSigner(private_key, async_web3)
-    return TraderClient(provider_url=rpc_url, signer=signer)
 
 
 def _serialize_receipt(receipt) -> dict:
@@ -258,7 +280,7 @@ async def execute_open(
     Open a perp trade on Avantis. Agent wallet signs autonomously.
     Returns tx receipt + trade details.
     """
-    client = _build_trader_client(body.agent_wallet_address)
+    client = await _build_trader_client(body.agent_wallet_address)
     agent_wallet = client.get_signer().get_ethereum_address()
 
     try:
@@ -352,7 +374,7 @@ async def execute_close(
     _: str = Depends(verify_api_key),
 ):
     """Close an open trade. Full close = pass full collateral amount."""
-    client = _build_trader_client(body.agent_wallet_address)
+    client = await _build_trader_client(body.agent_wallet_address)
     agent_wallet = client.get_signer().get_ethereum_address()
 
     try:
@@ -389,7 +411,7 @@ async def execute_update_tp_sl(
     _: str = Depends(verify_api_key),
 ):
     """Update take profit and stop loss prices on an open trade."""
-    client = _build_trader_client(body.agent_wallet_address)
+    client = await _build_trader_client(body.agent_wallet_address)
     agent_wallet = client.get_signer().get_ethereum_address()
 
     try:
@@ -426,7 +448,7 @@ async def execute_update_margin(
     _: str = Depends(verify_api_key),
 ):
     """Deposit or withdraw collateral from an open trade."""
-    client = _build_trader_client(body.agent_wallet_address)
+    client = await _build_trader_client(body.agent_wallet_address)
     agent_wallet = client.get_signer().get_ethereum_address()
 
     try:
@@ -474,7 +496,7 @@ async def execute_cancel_limit(
     _: str = Depends(verify_api_key),
 ):
     """Cancel a pending limit or stop-limit order."""
-    client = _build_trader_client(body.agent_wallet_address)
+    client = await _build_trader_client(body.agent_wallet_address)
     agent_wallet = client.get_signer().get_ethereum_address()
 
     try:
@@ -508,7 +530,7 @@ async def get_positions(
     _: str = Depends(verify_api_key),
 ):
     """Fetch all open trades and pending limit orders for the agent wallet."""
-    client = _build_trader_client(agent_wallet_address)
+    client = await _build_trader_client(agent_wallet_address)
     agent_wallet = client.get_signer().get_ethereum_address()
 
     try:
@@ -536,7 +558,7 @@ async def get_balance(
     _: str = Depends(verify_api_key),
 ):
     """Return USDC balance and ETH balance of the agent wallet."""
-    client = _build_trader_client(agent_wallet_address)
+    client = await _build_trader_client(agent_wallet_address)
     agent_wallet = client.get_signer().get_ethereum_address()
 
     try:
@@ -574,7 +596,7 @@ async def get_fees(
     Estimate opening fee and loss protection for a prospective trade.
     Use this before execution to show the user the cost breakdown.
     """
-    client = _build_trader_client(agent_wallet_address)
+    client = await _build_trader_client(agent_wallet_address)
     agent_wallet = client.get_signer().get_ethereum_address()
 
     try:
@@ -733,7 +755,7 @@ async def withdraw_from_agent(
     if body.agent_wallet_address:
         agent_wallet = body.agent_wallet_address
     else:
-        client = _build_trader_client()
+        client = await _build_trader_client()
         agent_wallet = client.get_signer().get_ethereum_address()
 
     to_addr = Web3.to_checksum_address(body.to_address)
@@ -814,7 +836,7 @@ async def fund_agent(
     if body.agent_wallet_address:
         agent_wallet = Web3.to_checksum_address(body.agent_wallet_address)
     else:
-        client = _build_trader_client()
+        client = await _build_trader_client()
         agent_wallet = client.get_signer().get_ethereum_address()
 
     try:
