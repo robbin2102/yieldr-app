@@ -15,11 +15,27 @@ Environment variables required:
 """
 
 import os
+import ssl
 import logging
 from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 
 load_dotenv("../../.env.local")  # local dev only; Railway uses actual env vars
+
+# Nixpacks Python containers often don't wire up CA certificates to the path
+# that Python's ssl module expects, causing aiohttp to fail SSL handshakes
+# with "ssl:default [None]". Point ssl to certifi's bundled CA store so the
+# CDP SDK (which uses aiohttp internally) can reach api.cdp.coinbase.com.
+try:
+    import certifi
+    _ca_bundle = certifi.where()
+    os.environ.setdefault("SSL_CERT_FILE", _ca_bundle)
+    os.environ.setdefault("REQUESTS_CA_BUNDLE", _ca_bundle)
+    # Also patch the default HTTPS context used by aiohttp / httpx / requests
+    ssl._create_default_https_context = lambda: ssl.create_default_context(cafile=_ca_bundle)
+    logging.getLogger("cdp-wallet-service").info(f"[ssl] Using certifi CA bundle: {_ca_bundle}")
+except ImportError:
+    pass  # certifi not installed; rely on system certs
 
 from fastapi import FastAPI
 from router import router

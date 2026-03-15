@@ -6,6 +6,13 @@ import Agent from '@/models/Agent';
 import ChatSession from '@/models/ChatSession';
 import { trackUsage, TokenUsageData } from '@/lib/tokenTracking';
 import { fetchNews, formatArticlesForLLM } from '@/lib/rss';
+import {
+  classifyToolResult,
+  validateBalanceForTrade,
+  detectPostResponseHallucination,
+  EXECUTION_TOOLS,
+  type ClassifiedResult,
+} from '@/lib/toolResultInterpreter';
 
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY || '',
@@ -391,9 +398,9 @@ toolDefinitions.push({
   name: 'get_agent_wallet_balance',
   description:
     'Check the agent CDP wallet ETH and USDC balance. Call this BEFORE executing any trade or generating deposit cards. ' +
-    'ETH is needed for gas fees (minimum 0.0002 ETH on Base). USDC is the trade collateral. ' +
-    'After checking: if ETH < 0.0002 call fund_agent_eth; if USDC < required collateral call fund_agent. ' +
-    'If ETH >= 0.0002, skip gas deposit — do NOT suggest ETH deposit when gas is sufficient. ' +
+    'ETH is needed for gas fees (minimum 0.00005 ETH on Base). USDC is the trade collateral. ' +
+    'After checking: if ETH < 0.00005 call fund_agent_eth; if USDC < required collateral call fund_agent. ' +
+    'If ETH >= 0.00005, skip gas deposit — do NOT suggest ETH deposit when gas is sufficient. ' +
     'Both cards can be emitted in the same response — call both tools without waiting for user approval.',
   input_schema: {
     type: 'object' as const,
@@ -404,7 +411,7 @@ toolDefinitions.push({
 toolDefinitions.push({
   name: 'open_trade',
   description:
-    'Execute a perpetual trade on Avantis (Base). ALWAYS call get_agent_wallet_balance first. ' +
+    'Execute a perpetual trade on Avantis (Base). Call get_agent_wallet_balance first UNLESS responding to a TRADE_APPROVED: message (balance was already checked). ' +
     'Minimum position size: collateral × leverage >= $100 USDC. ' +
     'Pair indices: 1=BTC/USD, 2=ETH/USD, 3=SOL/USD, 4=LINK/USD, 5=ARB/USD. ' +
     'For MARKET orders open_price is not needed. For LIMIT orders open_price is required. ' +
@@ -498,7 +505,7 @@ toolDefinitions.push({
   name: 'fund_agent_eth',
   description:
     'Deposit ETH from the user\'s connected wallet into the agent CDP wallet for gas fees. ' +
-    'Call this when agent ETH balance is below 0.0002 ETH (minimum for Base gas). ' +
+    'Call this when agent ETH balance is below 0.00005 ETH (minimum for Base gas). ' +
     'Emits an ETH deposit approval card — the user must click Approve and sign in their wallet. ' +
     'Default deposit: 0.001 ETH (enough for ~5 trades).',
   input_schema: {
@@ -1423,9 +1430,9 @@ async function executeTool(name: string, input: any, wallet?: string, agentCtxId
           agent_wallet:           agentCtxWallet,
           eth_balance:            eth,
           usdc_balance:           usdc,
-          eth_sufficient_for_gas: eth >= 0.0002,
-          status: eth < 0.0002
-            ? `⚠️ Low ETH: ${eth.toFixed(6)} ETH — send at least 0.0002 ETH to ${agentCtxWallet} for gas`
+          eth_sufficient_for_gas: eth >= 0.00005,
+          status: eth < 0.00005
+            ? `⚠️ Low ETH: ${eth.toFixed(6)} ETH — send at least 0.00005 ETH to ${agentCtxWallet} for gas`
             : `✓ ETH OK (${eth.toFixed(6)} ETH)`,
           usdc_note: usdc === 0
             ? `Agent wallet has no USDC. Fund it before placing trades.`
@@ -1437,34 +1444,40 @@ async function executeTool(name: string, input: any, wallet?: string, agentCtxId
         if (!agentCtxId) return JSON.stringify({ success: false, error: 'No agent ID in context.' });
         if (!agentCtxWallet) return JSON.stringify({ success: false, error: 'No agent wallet configured.' });
         const { pair, pair_index, direction, collateral, leverage, tp_pct, sl_pct, order_type = 'MARKET', open_price } = input;
+        console.log(`[open_trade] ── ENTER ── pair=${pair} direction=${direction} collateral=${collateral} leverage=${leverage} wallet=${agentCtxWallet} agentId=${agentCtxId}`);
 
-        // ── Preflight: verify USDC balance before touching the chain ─────────
-        try {
-          const balUrl = normalizeUrl(process.env.PYTHON_SERVICE_URL || 'http://localhost:8001');
-          const balKey = process.env.YIELDR_DATA_API_SECRET || process.env.API_KEY || '';
-          const balRes = await fetch(
-            `${balUrl}/trade/balance?agent_wallet_address=${encodeURIComponent(agentCtxWallet)}`,
-            { headers: { 'X-API-Key': balKey }, signal: AbortSignal.timeout(15_000) }
-          );
-          if (balRes.ok) {
-            const bal = await balRes.json();
-            const usdcAvail = bal.usdc_balance ?? 0;
-            if (usdcAvail < collateral) {
-              return JSON.stringify({
-                success: false,
-                error: `Insufficient USDC: agent wallet has ${usdcAvail.toFixed(2)} USDC but trade needs ${collateral} USDC collateral. Ask the user to deposit ${(collateral - usdcAvail).toFixed(2)} USDC first.`,
-              });
+        // ── Preflight: hard balance gate — no silent bypass ──────────────────
+        {
+          let rawBalanceResponse: string | null = null;
+          try {
+            const balUrl = normalizeUrl(process.env.PYTHON_SERVICE_URL || 'http://localhost:8001');
+            const balKey = process.env.YIELDR_DATA_API_SECRET || process.env.API_KEY || '';
+            console.log(`[open_trade] balance preflight: GET ${balUrl}/trade/balance wallet=${agentCtxWallet}`);
+            const balRes = await fetch(
+              `${balUrl}/trade/balance?agent_wallet_address=${encodeURIComponent(agentCtxWallet)}`,
+              { headers: { 'X-API-Key': balKey }, signal: AbortSignal.timeout(15_000) }
+            );
+            if (balRes.ok) {
+              rawBalanceResponse = await balRes.text();
+              console.log(`[open_trade] balance preflight OK: ${rawBalanceResponse.slice(0, 200)}`);
+            } else {
+              console.warn(`[open_trade] balance preflight HTTP ${balRes.status} — hard gate blocking trade`);
             }
-          } else {
-            console.warn(`[open_trade] balance preflight returned HTTP ${balRes.status} — proceeding without gate`);
+          } catch (balErr: any) {
+            console.warn(`[open_trade] balance preflight fetch failed: ${balErr.message} — hard gate blocking trade`);
           }
-        } catch (balErr: any) {
-          console.warn(`[open_trade] balance preflight error: ${balErr.message} — proceeding without gate`);
+          const gate = validateBalanceForTrade(rawBalanceResponse, collateral);
+          console.log(`[open_trade] balance gate: allowed=${gate.allowed} status=${gate.classifiedResult.status} rawLen=${rawBalanceResponse?.length ?? 'null'}`);
+          if (!gate.allowed) {
+            console.warn(`[open_trade] BLOCKED by balance gate: ${gate.classifiedResult.classifiedMessage.slice(0, 300)}`);
+            return gate.classifiedResult.classifiedMessage;
+          }
         }
         // ────────────────────────────────────────────────────────────────────
 
         const nextjsUrl    = normalizeUrl(process.env.NEXTJS_API_URL || 'http://localhost:3000');
         const internalSec  = process.env.YIELDR_INTERNAL_SECRET || '';
+        console.log(`[open_trade] calling execute/open → ${nextjsUrl}/api/avantis/execute/open (internalSec set=${!!internalSec})`);
         const tradeBody: Record<string, any> = {
           agentId: agentCtxId,
           userId:  wallet || '',
@@ -1484,8 +1497,13 @@ async function executeTool(name: string, input: any, wallet?: string, agentCtxId
           body: JSON.stringify(tradeBody),
           signal: AbortSignal.timeout(60_000),
         });
+        console.log(`[open_trade] execute/open response: HTTP ${res.status}`);
         const data = await res.json();
-        if (!res.ok) return JSON.stringify({ success: false, error: data.error || `Trade failed: HTTP ${res.status}` });
+        if (!res.ok) {
+          console.error(`[open_trade] execute/open FAILED: HTTP ${res.status} error="${data.error}" body=${JSON.stringify(data).slice(0, 300)}`);
+          return JSON.stringify({ success: false, error: data.error || `Trade failed: HTTP ${res.status}` });
+        }
+        console.log(`[open_trade] execute/open SUCCESS: tx_hash=${data.tx_hash ?? data.trade?.tx_hash ?? 'none'}`);
         return JSON.stringify({ success: true, ...data });
       }
 
@@ -1635,13 +1653,27 @@ async function executeTool(name: string, input: any, wallet?: string, agentCtxId
 // ─── System Prompt ─────────────────────────────────────────────────────────
 
 // Static system prompt (cached) — agent instructions, rules — NO dynamic content
-const STATIC_SYSTEM_PROMPT = `You are an AI trading and investment agent on the Yieldr platform.
+const STATIC_SYSTEM_PROMPT = `You are an AI trading and investment agent on the Yieldr platform operating in two distinct modes simultaneously.
 
-You serve two roles:
+## 🧠 Your Two Roles
 
-1. TRADING ADVISOR — Help active traders analyze positions, compare with top performers, understand market context, and optimize entries/exits.
+**Role 1 — Quant Analyst**
+You discover, monitor, and synthesise alpha across perpetual and prediction markets. This includes:
+• Scanning top performer data across Hyperliquid, Avantis, and Polymarket
+• Identifying positioning patterns, funding rate anomalies, and market structure setups
+• Building allocation plans and diversified portfolio strategies grounded in live data
+• Monitoring conditions and alerting users when thresholds are crossed
+• Framing all insights as data-driven analysis, never as personal financial advice
 
-2. PORTFOLIO MANAGER — Help investors discover alpha by finding top traders across platforms, building allocation plans, constructing diversified portfolios, and suggesting execution paths.
+**Role 2 — Senior Trader**
+You execute trade strategies directly on-chain using the agent's CDP wallet on Avantis (Base). This includes:
+• Opening, managing, and closing perpetual positions on Avantis
+• Placing and cancelling limit orders
+• Running the full pre-trade workflow (signal validation → balance verification → proposal → execution)
+• Withdrawing funds from the agent wallet back to the user
+You execute when: (a) your own analysis produces a high-conviction setup, or (b) the user instructs you to trade a specific strategy. In both cases you run the full pre-trade workflow immediately — you do not ask the user to say "execute" as a second step.
+
+**The two roles work together:** Discovery → Analysis → Execution is a single continuous workflow. When your Quant Analyst role surfaces a setup, your Senior Trader role evaluates whether to act. If the setup is actionable and the user is engaged, run the pre-trade workflow in the same response.
 
 ---
 
@@ -1743,8 +1775,7 @@ Diversification: [High/Medium/Low]
 Risk Level: [Low/Medium/High]
 
 ⚡ EXECUTION
-Trading agents launch in beta — I'll execute directly on Base protocols (Avantis for perps, Limitless for prediction markets).
-For now, I can walk you through manual execution step-by-step.
+I can execute this portfolio plan directly on Avantis (Base) using the agent wallet. Say "execute" or "run this" and I'll run the full pre-trade workflow immediately.
 
 ---
 
@@ -1766,19 +1797,32 @@ DO NOT say:
 ### Pre-Trade Workflow
 
 1. Call get_market_snapshot (or fetch_live_indicator) to validate entry signals
-2. Call get_agent_wallet_balance — verify USDC ≥ collateral and ETH ≥ 0.0002
-   • If USDC < collateral: STOP. Tell the user exactly how much USDC to deposit manually to the agent wallet address, then wait for them to confirm before proceeding.
-   • If ETH < 0.0002: STOP. Tell the user to send ETH for gas to the agent wallet address, then wait.
-   • Do NOT call open_trade if balance is insufficient — the server will block it anyway.
+2. Call get_agent_wallet_balance — show the user current ETH and USDC balances.
+   The server enforces a hard balance gate inside open_trade. If the gate blocks the trade you will receive a [TOOL_RESULT_CLASSIFIED] message — follow its instructions exactly. Do NOT re-attempt open_trade until the user has deposited funds and confirmed. Minimum gas required: 0.00005 ETH.
 3. Call propose_trade — shows a confirmation card in the UI with all trade params
 4. Wait for user to approve (they click Approve or say "execute"/"yes")
 5. Call open_trade with the SAME params from step 3
 
 **Example flow when user says "mean reversion on BTC 10 USDC 10x" and wallet is funded:**
 1. Call get_market_snapshot → analyze signals
-2. Call get_agent_wallet_balance → confirm USDC ≥ 10, ETH ≥ 0.0002
+2. Call get_agent_wallet_balance → confirm USDC ≥ 10, ETH ≥ 0.00005
 3. Call propose_trade → trade confirmation card appears in UI
 User approves → call open_trade → report tx_hash from tool result
+
+**SPECIAL CASE — TRADE_APPROVED message:**
+If the user message starts with TRADE_APPROVED: followed by a JSON object, the user has already reviewed and approved a propose_trade card. You MUST:
+- Immediately call open_trade using EXACTLY the params from that JSON object
+- Do NOT call propose_trade again — it already ran
+- Do NOT call get_agent_wallet_balance again before the first attempt — balance was already checked
+- The JSON fields map directly: pair, pair_index, direction, collateral, leverage, tp_pct, sl_pct, order_type, open_price (if present)
+Example: TRADE_APPROVED:{"pair":"BTC/USD","pair_index":1,"direction":"LONG","collateral":10,"leverage":10,"tp_pct":2.5,"sl_pct":2,"order_type":"MARKET"}
+→ Immediately call open_trade with those exact params.
+
+**If open_trade fails after TRADE_APPROVED:**
+- Call get_agent_wallet_balance to get the current balance
+- Report the exact error and current balance to the user
+- If INSUFFICIENT_FUNDS: call fund_agent to show deposit card for the deficit amount. State exactly how much to deposit and to which wallet address.
+- Do NOT call open_trade again until the user has taken action (deposited, fixed the error) and you have re-verified the balance via get_agent_wallet_balance.
 
 ### CRITICAL: False Confirmation Rules — READ CAREFULLY
 
@@ -1787,8 +1831,11 @@ These rules prevent hallucinating trade outcomes:
 1. NEVER say a trade was executed unless open_trade returned a tx_hash field in its result. If open_trade returns success:false or an error field, the trade DID NOT execute. Quote the error verbatim.
 2. NEVER fabricate a tx_hash, entry_price, trade_index, or any trade detail. All of these come only from the open_trade tool result. If the tool did not run or returned an error, say so clearly.
 3. NEVER say "the trade is live" or "position opened" based on the user saying "execute" alone. You must call open_trade AND receive a successful response first.
-4. If open_trade returns an error like "Insufficient USDC", tell the user exactly that: "The trade could not execute — the agent wallet has X USDC but needs Y. Please deposit Z USDC to [address]."
-5. NEVER check balance after a failed trade and fabricate a story about why it worked (e.g. "you had USDC from before"). If balance check also fails, say both tools failed and give the error.
+4. If open_trade returns an error like "Insufficient USDC", tell the user exactly that: "The trade could not execute — the agent wallet has X USDC but needs Y." Then call fund_agent to show a deposit card for the required amount.
+5. NEVER check balance after a failed trade and fabricate a story about why it worked. If balance check also fails, say both tools failed and give the error.
+6. NEVER retry open_trade for the same error without user action in between. If open_trade returns INSUFFICIENT_FUNDS twice in a row, STOP and tell the user what to deposit. Do NOT call open_trade a third time.
+7. NEVER describe "calling open_trade now..." or "executing trade..." in text without actually making the tool call. If you write those words, you MUST also call the tool. If the tool cannot be called, explain why instead of narrating a fake execution.
+8. Same rules apply to withdraw_funds and close_trade — never report tx_hash, success, or "funds sent" without a real tool result containing a confirmed tx_hash.
 
 ### Execution Tools Available
 
@@ -1814,7 +1861,9 @@ When user asks to withdraw, send back, or recover funds from the agent wallet:
 1. Call get_agent_wallet_balance — confirm what's available
 2. Confirm with user: asset (ETH or USDC), amount, destination (default = their connected wallet)
 3. Call withdraw_funds to execute the on-chain transfer
-4. Report tx_hash and BaseScan link: https://basescan.org/tx/{tx_hash}
+4. ONLY report success and tx_hash if withdraw_funds tool result contains a confirmed tx_hash. Never fabricate a tx_hash.
+5. Report tx_hash and BaseScan link: https://basescan.org/tx/{tx_hash}
+6. If withdraw_funds returns an error, report the exact error. Do NOT retry without user instruction.
 
 ### Minimum Size
 
@@ -1903,6 +1952,11 @@ These phrases are banned in ALL responses:
 • "Allocation to [trader name]" — allocate to ASSETS/MARKETS, never to traders
 • "I cannot execute" / "I don't have access" / "I can't trade"
 • "Not financial advice" / "Do your own research" / "DYOR"
+• "Trading agents launch in beta" — execution is LIVE
+• "Trade executed" / "Position opened" / "Order confirmed" / "Trade is live" — unless [TOOL_RESULT_CLASSIFIED] status is CONFIRMED
+• "Withdrawal complete" / "Funds withdrawn" / "Successfully withdrawn" — unless [TOOL_RESULT_CLASSIFIED] status is CONFIRMED
+• "Order cancelled" / "Cancelled successfully" / "Position closed" — unless [TOOL_RESULT_CLASSIFIED] status is CONFIRMED
+• Any 0x... transaction hash that did not come from a CONFIRMED [TOOL_RESULT_CLASSIFIED] message
 
 If you catch yourself about to use any of these, rephrase immediately.
 
@@ -1983,6 +2037,35 @@ News monitoring IS supported — use get_news_headlines inside the monitor's eva
 
 ---
 
+## 🔐 [TOOL_RESULT_CLASSIFIED] Messages — MANDATORY READING
+
+Every execution tool result (open_trade, close_trade, withdraw_funds, cancel_limit_order) arrives pre-classified by the server as a [TOOL_RESULT_CLASSIFIED] block. You MUST follow the embedded instructions exactly.
+
+### Status meanings and required actions
+
+| Status | Meaning | Required action |
+|---|---|---|
+| CONFIRMED | tx_hash verified on-chain | Report success using ONLY the exact hash provided |
+| INSUFFICIENT_FUNDS | Not enough USDC | Tell user the exact deficit and agent wallet address — do NOT proceed |
+| LOW_GAS | Not enough ETH for gas | Tell user to send ≥0.00005 ETH to agent wallet — do NOT proceed |
+| CONTRACT_REVERT | On-chain tx reverted | Tell user trade failed on-chain — do NOT report success |
+| APPROVAL_REQUIRED | USDC not approved | Tell user approval is needed — do NOT proceed |
+| SLIPPAGE_EXCEEDED | Price moved | Suggest limit order or retry — do NOT report success |
+| POSITION_NOT_FOUND | Wrong trade index | Call get_avantis_live_positions to refresh — do NOT proceed |
+| ALREADY_CLOSED | Already done | Tell user position/order no longer exists |
+| NETWORK_FAIL | Service unreachable | Tell user to retry — do NOT use any prior context as a substitute |
+| PARSE_FAIL | Bad response shape | Tell user to check Basescan — on-chain state is unknown |
+| SUSPICIOUS | success=true but no tx_hash | Do NOT report success — ask user to verify on Basescan |
+| UNKNOWN_ERROR | Unrecognised error | Report the error verbatim — do NOT report success |
+
+### Absolute rules for classified messages
+• NEVER override a non-CONFIRMED status with success language
+• NEVER fabricate a tx_hash. The only valid hash is the one in a CONFIRMED message
+• NEVER use balance or position data from earlier in the conversation to argue that a failed operation actually succeeded
+• If status is CONFIRMED, use the hash EXACTLY as provided — do not shorten, alter, or omit it
+
+---
+
 ## 🚧 Features NOT Available — NEVER OFFER
 
 These features do NOT exist yet. NEVER offer or suggest them:
@@ -2009,12 +2092,18 @@ Never project returns without supporting data. Never extrapolate short timeframe
 
 ## 🔄 Tool Failure Handling
 
-If a tool call fails or returns an error:
+**For non-execution tools** (get_market_snapshot, get_top_perp_traders, get_hl_live_positions, etc.):
 1. Retry ONCE silently (do not tell the user about the retry)
-2. If still failing, use whatever context you already have to give a partial answer
-3. Say "I couldn't pull live [X] data right now — here's what I can tell you from [available context]"
+2. If still failing, say "I couldn't pull live [X] data right now" and offer to retry when the service recovers
+3. You may use data fetched earlier in the conversation if it is recent and clearly labelled as such
 4. Never ask the user to provide data that your tools should fetch
 5. Never show raw error messages to the user
+
+**For execution tools** (open_trade, close_trade, withdraw_funds, cancel_limit_order):
+1. You will receive a [TOOL_RESULT_CLASSIFIED] message instead of raw JSON — follow its instructions exactly and completely
+2. If the status is anything other than CONFIRMED: STOP. Tell the user what failed using the information in the classified message. Do NOT proceed with the workflow. Do NOT use balance or position data from earlier in the conversation as a substitute.
+3. Never claim a transaction succeeded unless the classified status is CONFIRMED with a valid tx_hash
+4. Never fabricate or guess a tx_hash, entry price, trade index, or any on-chain detail
 
 ---
 
@@ -2294,6 +2383,8 @@ export async function POST(request: NextRequest) {
         let totalInputTokens = 0;
         let totalOutputTokens = 0;
         const allToolCalls: { name: string }[] = [];
+        // Tracks classified results for all execution tools called this request
+        const allClassifiedResults: ClassifiedResult[] = [];
         const modelUsed = 'claude-sonnet-4-5-20250929';
         try {
           // Agentic loop: keep calling Claude until it stops using tools
@@ -2398,7 +2489,20 @@ export async function POST(request: NextRequest) {
                   allToolCalls.push({ name: currentToolName });
                   // Execute the tool (emitToStream lets tools push special events to the frontend)
                   const emitToStream = (event: any) => controller.enqueue(encoder.encode(JSON.stringify(event) + '\n'));
-                  const toolResult = await executeTool(currentToolName, parsedInput, walletLower, agentId, agentWalletAddress, emitToStream);
+                  const rawToolResult = await executeTool(currentToolName, parsedInput, walletLower, agentId, agentWalletAddress, emitToStream);
+
+                  // Classify execution tool results — Claude receives the classified message,
+                  // never the raw JSON. Non-execution tools pass through unchanged.
+                  let toolResult: string;
+                  if (EXECUTION_TOOLS.has(currentToolName)) {
+                    const classified = classifyToolResult(currentToolName, rawToolResult);
+                    allClassifiedResults.push(classified);
+                    toolResult = classified.classifiedMessage;
+                    console.log(`[toolResultInterpreter] ${currentToolName} → ${classified.status}`);
+                  } else {
+                    toolResult = rawToolResult;
+                  }
+
                   console.log(`[TOKENS] Tool result for "${currentToolName}": ${estimateTokens(toolResult)} est. tokens (${toolResult.length} chars)`);
                   toolResults.push({
                     role: 'user',
@@ -2422,12 +2526,21 @@ export async function POST(request: NextRequest) {
               const textLower = iterationText.toLowerCase();
               // Keywords that indicate the agent was trying to execute trading/deposit actions
               const executionKeywords = [
+                // deposit/fund patterns
                 'deposit card', 'funding card', 'fund_agent', 'eth deposit', 'usdc deposit',
                 'checking wallet', 'agent wallet status', 'wallet balance', 'running the full workflow',
                 'generating deposit', 'full workflow', 'i\'ll execute', 'executing the strategy',
                 'deposit approval', 'approve both', 'approve the deposit',
+                // trade execution narration (agent describes calling tool without doing it)
+                'executing now', 'executing trade', 'executing the trade', 'calling open_trade',
+                'placing the trade', 'placing order', 'opening position', 'opening the position',
+                'calling close_trade', 'closing position', 'closing the position',
+                'calling withdraw', 'withdrawing', 'sending back funds', 'funds sent',
+                'withdrawal complete', 'funds withdrawn', 'successfully withdrawn',
+                'trade executed', 'position opened', 'order placed', 'order confirmed',
+                'trade confirmed', 'successfully executed', 'successfully opened',
               ];
-              const tradingToolNames = ['get_agent_wallet_balance', 'fund_agent_eth', 'fund_agent', 'propose_trade', 'open_trade'];
+              const tradingToolNames = ['get_agent_wallet_balance', 'fund_agent_eth', 'fund_agent', 'propose_trade', 'open_trade', 'close_trade', 'withdraw_funds', 'cancel_limit_order'];
               const describedExecution = executionKeywords.some(kw => textLower.includes(kw));
               const noTradingToolsCalled = !allToolCalls.some(t => tradingToolNames.includes(t.name));
 
@@ -2440,7 +2553,7 @@ export async function POST(request: NextRequest) {
                   { role: 'assistant' as const, content: iterationText },
                   {
                     role: 'user' as const,
-                    content: 'You described the workflow but did not call any tools. Call get_agent_wallet_balance now, then call fund_agent_eth and fund_agent if balances are insufficient, then call propose_trade. Do not generate text — invoke the tools.',
+                    content: 'SYSTEM: You described a trading or withdrawal action in text but did not call any tools. This is a hallucination. You MUST call the actual tool now — do not generate more text. If you intended to call open_trade, call it. If you intended to call withdraw_funds, call it. If you intended to call close_trade, call it. Do not narrate what you are doing — just invoke the tool.',
                   },
                 ];
                 forceToolUse = true;
@@ -2455,6 +2568,22 @@ export async function POST(request: NextRequest) {
               { role: 'assistant', content: contentBlocks },
               ...toolResults,
             ];
+          }
+
+          // Post-response hallucination detection: catches "called tool, got error, reported success"
+          if (allClassifiedResults.length > 0 && fullResponse) {
+            const hallucinationOverride = detectPostResponseHallucination(allClassifiedResults, fullResponse);
+            if (hallucinationOverride) {
+              console.warn('[chat] Post-response hallucination detected — replacing response');
+              // Stream the correction to the frontend
+              controller.enqueue(encoder.encode(
+                JSON.stringify({ type: 'hallucination_correction', original_length: fullResponse.length }) + '\n'
+              ));
+              controller.enqueue(encoder.encode(
+                JSON.stringify({ type: 'text', text: '\n\n⚠️ ' + hallucinationOverride }) + '\n'
+              ));
+              fullResponse = hallucinationOverride;
+            }
           }
 
           // Save messages to chat session

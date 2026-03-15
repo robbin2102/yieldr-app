@@ -7,6 +7,7 @@ Signing strategy (in priority order):
   2. Local EOA fallback  — AGENT_WALLET_PRIVATE_KEY (legacy / testing)
 """
 
+import asyncio
 import os
 from typing import Optional, Any
 from fastapi import APIRouter, Depends, HTTPException, Header
@@ -27,6 +28,57 @@ USDC_APPROVE_ABI = [{
     "inputs": [{"name": "spender", "type": "address"}, {"name": "amount", "type": "uint256"}],
     "outputs": [{"name": "", "type": "bool"}],
 }]
+
+# ABI fragments for direct on-chain reads — avoids SDK balance/allowance bugs
+ERC20_READ_ABI = [
+    {
+        "name": "balanceOf",
+        "type": "function",
+        "stateMutability": "view",
+        "inputs": [{"name": "account", "type": "address"}],
+        "outputs": [{"name": "", "type": "uint256"}],
+    },
+    {
+        "name": "allowance",
+        "type": "function",
+        "stateMutability": "view",
+        "inputs": [{"name": "owner", "type": "address"}, {"name": "spender", "type": "address"}],
+        "outputs": [{"name": "", "type": "uint256"}],
+    },
+]
+USDC_DECIMALS = 1_000_000  # USDC has 6 decimals
+
+
+async def _usdc_balance(wallet: str) -> float:
+    """Read raw on-chain USDC ERC-20 balance for wallet. Never uses the SDK."""
+    w3 = AsyncWeb3(AsyncWeb3.AsyncHTTPProvider(_get_rpc_url()))
+    contract = w3.eth.contract(
+        address=Web3.to_checksum_address(USDC_BASE_ADDRESS),
+        abi=ERC20_READ_ABI,
+    )
+    raw = await contract.functions.balanceOf(Web3.to_checksum_address(wallet)).call()
+    return raw / USDC_DECIMALS
+
+
+async def _eth_balance(wallet: str) -> float:
+    """Read raw on-chain ETH balance for wallet."""
+    w3 = AsyncWeb3(AsyncWeb3.AsyncHTTPProvider(_get_rpc_url()))
+    raw = await w3.eth.get_balance(Web3.to_checksum_address(wallet))
+    return raw / 1e18
+
+
+async def _usdc_allowance(owner: str, spender: str) -> float:
+    """Read on-chain USDC allowance for owner→spender."""
+    w3 = AsyncWeb3(AsyncWeb3.AsyncHTTPProvider(_get_rpc_url()))
+    contract = w3.eth.contract(
+        address=Web3.to_checksum_address(USDC_BASE_ADDRESS),
+        abi=ERC20_READ_ABI,
+    )
+    raw = await contract.functions.allowance(
+        Web3.to_checksum_address(owner),
+        Web3.to_checksum_address(spender),
+    ).call()
+    return raw / USDC_DECIMALS
 
 # ─────────────────────────────────────────────
 # Auth — simple API key header check
@@ -98,12 +150,19 @@ async def _cdp_send_and_receipt(cdp, wallet_address: str, tx: dict) -> Any:
         cdp_tx["maxFeePerGas"]         = _to_hex(tx["gasPrice"])
         cdp_tx["maxPriorityFeePerGas"] = _to_hex(tx["gasPrice"])
 
+    print(f"[cdp_send] Submitting tx to={cdp_tx.get('to')} nonce={cdp_tx.get('nonce')} gas={cdp_tx.get('gas')} wallet={wallet_address}")
     result = cdp.evm.send_transaction(
         address=wallet_address,
         transaction=cdp_tx,
         network="base-mainnet",
     )
-    receipt = await w3.eth.wait_for_transaction_receipt(result.transaction_hash, timeout=120)
+    tx_hash = result.transaction_hash
+    print(f"[cdp_send] Tx submitted: {tx_hash} — waiting for receipt...")
+    receipt = await w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
+    status = getattr(receipt, "status", receipt.get("status") if isinstance(receipt, dict) else None)
+    print(f"[cdp_send] Receipt: hash={tx_hash} status={status} block={getattr(receipt, 'blockNumber', '?')} gasUsed={getattr(receipt, 'gasUsed', '?')}")
+    if status == 0:
+        raise Exception(f"CDP transaction reverted on-chain: {tx_hash}")
     return receipt
 
 
@@ -253,8 +312,10 @@ async def get_balance(
         client = _build_trader_client()
         agent_wallet = client.get_signer().get_ethereum_address()
     try:
-        usdc_balance = await client.get_usdc_balance(agent_wallet)
-        eth_balance = await client.get_balance(agent_wallet)
+        usdc_balance, eth_balance = await asyncio.gather(
+            _usdc_balance(agent_wallet),
+            _eth_balance(agent_wallet),
+        )
         return {
             "agent_wallet": agent_wallet,
             "usdc_balance": usdc_balance,
@@ -348,6 +409,7 @@ MIN_POSITION_SIZE_USDC = 100.0  # Avantis protocol minimum
 
 @router.post("/execute-open")
 async def execute_open(body: OpenTradeRequest, _: str = Depends(verify_api_key)):
+    print(f"[execute_open] ── REQUEST RECEIVED ── pair={body.pair} direction={body.direction} collateral={body.collateral} leverage={body.leverage} agent_wallet={body.agent_wallet_address} order_type={body.order_type}")
     position_size = body.collateral * body.leverage
     if position_size < MIN_POSITION_SIZE_USDC:
         raise HTTPException(
@@ -367,17 +429,22 @@ async def execute_open(body: OpenTradeRequest, _: str = Depends(verify_api_key))
 
     try:
         # ── Pre-trade checks: USDC collateral + ETH gas ────────────────────────
-        usdc_balance = await client.get_usdc_balance(agent_wallet)
+        # Use direct web3 calls — avoids SDK get_usdc_balance returning stale/zero
+        usdc_balance, eth_balance = await asyncio.gather(
+            _usdc_balance(agent_wallet),
+            _eth_balance(agent_wallet),
+        )
+        print(f"[execute_open] wallet balances: usdc={usdc_balance:.6f} eth={eth_balance:.8f}")
         if usdc_balance < body.collateral:
             raise HTTPException(
                 status_code=400,
                 detail=(
                     f"Insufficient USDC. Agent wallet has ${usdc_balance:.2f} USDC "
                     f"but trade requires ${body.collateral:.2f} USDC collateral. "
+                    f"Deficit: ${body.collateral - usdc_balance:.2f} USDC. "
                     f"Fund the agent wallet at {agent_wallet}."
                 ),
             )
-        eth_balance = await client.get_balance(agent_wallet)
         MIN_ETH_FOR_GAS = 0.0002
         if eth_balance < MIN_ETH_FOR_GAS:
             raise HTTPException(
@@ -402,15 +469,31 @@ async def execute_open(body: OpenTradeRequest, _: str = Depends(verify_api_key))
         tp_price = tp_sl_base * (1 + body.tp_pct / 100) if is_long else tp_sl_base * (1 - body.tp_pct / 100)
         sl_price = tp_sl_base * (1 - body.sl_pct / 100) if is_long else tp_sl_base * (1 + body.sl_pct / 100)
 
-        # USDC approval
-        allowance = await client.get_usdc_allowance_for_trading(agent_wallet)
+        # USDC approval — check allowance via direct web3, then approve if needed
+        spender: Optional[str] = None
+        try:
+            spender = str(client.contracts["TradingStorage"].address)
+        except Exception:
+            pass
+
+        if spender:
+            allowance = await _usdc_allowance(agent_wallet, spender)
+        else:
+            allowance = 0.0  # Can't read allowance without spender — force approval
+
+        print(f"[open_trade] USDC allowance for {agent_wallet}: {allowance:.6f} USDC (required: {body.collateral} USDC) spender={spender} using_cdp={using_cdp}")
         if allowance < body.collateral:
             if using_cdp:
-                # Build approval tx and sign via CDP
-                spender = str(client.trade._trading_contract.address)
-                await _cdp_approve_usdc(_get_cdp_client(), agent_wallet, spender, body.collateral)
+                effective_spender = spender or str(client.contracts["TradingStorage"].address)
+                print(f"[open_trade] Allowance insufficient — approving {body.collateral * 10:.2f} USDC for spender={effective_spender}")
+                await _cdp_approve_usdc(_get_cdp_client(), agent_wallet, effective_spender, body.collateral)
+                print(f"[open_trade] USDC approval confirmed")
             else:
+                print(f"[open_trade] Allowance insufficient — approving via local signer")
                 await client.approve_usdc_for_trading(body.collateral * 10)
+                print(f"[open_trade] USDC approval confirmed (local signer)")
+        else:
+            print(f"[open_trade] Allowance sufficient — skipping approval")
 
         trade_input = TradeInput(
             trader=agent_wallet,
@@ -596,10 +679,13 @@ async def execute_update_margin(body: UpdateMarginRequest, _: str = Depends(veri
             raise HTTPException(status_code=400, detail="action must be DEPOSIT or WITHDRAW")
         if body.action.upper() == "DEPOSIT":
             allowance = await client.get_usdc_allowance_for_trading(agent_wallet)
+            print(f"[margin_update] USDC allowance for {agent_wallet}: {allowance:.6f} USDC (required: {body.amount}) using_cdp={using_cdp}")
             if allowance < body.amount:
                 if using_cdp:
-                    spender = str(client.trade._trading_contract.address)
+                    spender = str(client.contracts["TradingStorage"].address)
+                    print(f"[margin_update] Approving {body.amount * 10:.2f} USDC for spender={spender}")
                     await _cdp_approve_usdc(_get_cdp_client(), agent_wallet, spender, body.amount)
+                    print(f"[margin_update] USDC approval confirmed")
                 else:
                     await client.approve_usdc_for_trading(body.amount * 10)
         tx = await client.trade.build_trade_margin_update_tx(
