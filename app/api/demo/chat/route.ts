@@ -2555,6 +2555,12 @@ export async function POST(request: NextRequest) {
                 // Agent hallucinated execution — narrated a trade/withdrawal or fabricated a tx_hash without calling the tool.
                 // Use noExecutionToolsCalled (not noTradingToolsCalled) so this fires even if balance/propose were already called.
                 console.log(`[chat] Hallucination detected: ${fabricatedHashInNarration ? 'fabricated tx_hash in text without calling execution tool' : 'agent described trading actions without calling execution tool'}. Forcing tool invocation.`);
+                // Tell the frontend to wipe the fake text it already streamed — the real tool result will follow.
+                controller.enqueue(encoder.encode(
+                  JSON.stringify({ type: 'hallucination_correction' }) + '\n'
+                ));
+                // Reset fullResponse so the real content replaces the hallucinated text in DB
+                fullResponse = '';
                 currentMessages = [
                   ...currentMessages,
                   { role: 'assistant' as const, content: iterationText },
