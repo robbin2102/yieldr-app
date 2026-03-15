@@ -54,7 +54,8 @@ async function getDirect(endpoint, params, retries = 5) {
         catch (err) {
             if (attempt === retries - 1)
                 throw err;
-            logger_1.logger.warn('TAAPI', `${endpoint} attempt ${attempt + 1} failed: ${err.message}, retrying...`);
+            const cause = err.cause ? ` (cause: ${err.cause?.message ?? err.cause})` : '';
+            logger_1.logger.warn('TAAPI', `${endpoint} attempt ${attempt + 1} failed: ${err.message}${cause}, retrying...`);
             await sleep(2000 * (attempt + 1));
         }
     }
@@ -83,7 +84,8 @@ async function postBulk(body, retries = 5) {
         catch (err) {
             if (attempt === retries - 1)
                 throw err;
-            logger_1.logger.warn('TAAPI', `Attempt ${attempt + 1} failed: ${err.message}, retrying...`);
+            const cause = err.cause ? ` (cause: ${err.cause?.message ?? err.cause})` : '';
+            logger_1.logger.warn('TAAPI', `Attempt ${attempt + 1} failed: ${err.message}${cause}, retrying...`);
             await sleep(2000 * (attempt + 1));
         }
     }
