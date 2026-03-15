@@ -484,48 +484,40 @@ async def execute_open(body: OpenTradeRequest, _: str = Depends(verify_api_key))
         tp_price = tp_sl_base * (1 + body.tp_pct / 100) if is_long else tp_sl_base * (1 - body.tp_pct / 100)
         sl_price = tp_sl_base * (1 - body.sl_pct / 100) if is_long else tp_sl_base * (1 + body.sl_pct / 100)
 
-        # USDC approval — check allowance and approve if needed.
-        # IMPORTANT: the spender must be the TRADING contract (0x44914408...), NOT TradingStorage.
-        # build_trade_open_tx targets Trading.openTrade(), which calls USDC.transferFrom with
-        # msg.sender = Trading contract. TradingStorage is only a state store and does not pull USDC.
-        # The SDK's approve_usdc_for_trading() uses TradingStorage which is WRONG for the current
-        # contract architecture — we always approve the Trading contract directly.
-        spender: Optional[str] = None
+        # USDC approval — approve BOTH Trading and TradingStorage contracts.
+        # We can't determine from source which contract actually calls USDC.transferFrom
+        # inside openTrade(), so we approve both. This is belt-and-suspenders:
+        # whichever one is the actual msg.sender in the ERC20 call will have allowance.
+        cdp_client_for_approval = _get_cdp_client() if using_cdp else None
+        _approval_targets = []
         try:
-            spender = str(client.contracts["Trading"].address)
-            print(f"[open_trade] USDC spender = Trading contract: {spender}")
-        except Exception as spender_err:
-            print(f"[open_trade] WARNING: could not resolve Trading contract address: {spender_err}")
+            _approval_targets.append(("Trading",        str(client.contracts["Trading"].address)))
+        except Exception as _e:
+            print(f"[open_trade] WARNING: cannot resolve Trading address: {_e}")
+        try:
+            _approval_targets.append(("TradingStorage", str(client.contracts["TradingStorage"].address)))
+        except Exception as _e:
+            print(f"[open_trade] WARNING: cannot resolve TradingStorage address: {_e}")
 
-        if spender:
-            allowance = await _usdc_allowance(agent_wallet, spender)
-            print(f"[open_trade] On-chain USDC allowance for Trading: {allowance:.6f} USDC | required: {body.collateral} USDC | wallet={agent_wallet}")
-        else:
-            allowance = 0.0  # Can't read allowance without spender — force approval
-            print(f"[open_trade] Spender unknown — setting allowance=0 to force approval")
-
-        if allowance < body.collateral:
-            print(f"[open_trade] Allowance {allowance:.6f} < collateral {body.collateral} — triggering approval | using_cdp={using_cdp}")
-            if using_cdp:
-                if not spender:
-                    raise HTTPException(status_code=500, detail="Cannot approve USDC: Trading contract address unavailable")
-                print(f"[open_trade] CDP approve: 10000 USDC for Trading={spender} wallet={agent_wallet}")
-                await _cdp_approve_usdc(_get_cdp_client(), agent_wallet, spender, body.collateral)
-                # Verify allowance on-chain after approval
-                post_allowance = await _usdc_allowance(agent_wallet, spender)
-                print(f"[open_trade] Post-approval allowance: {post_allowance:.6f} USDC for Trading={spender}")
-                if post_allowance < body.collateral:
-                    raise HTTPException(status_code=500, detail=f"USDC approval did not take effect: post-approval allowance={post_allowance:.6f} for Trading={spender}")
-                print(f"[open_trade] USDC approval confirmed: allowance={post_allowance:.6f}")
+        for _spender_name, _spender_addr in _approval_targets:
+            _allowance = await _usdc_allowance(agent_wallet, _spender_addr)
+            print(f"[open_trade] allowance[{_spender_name}]={_allowance:.4f} USDC (need {body.collateral})")
+            if _allowance < body.collateral:
+                print(f"[open_trade] approving {_spender_name}={_spender_addr} for 10000 USDC | using_cdp={using_cdp}")
+                if using_cdp and cdp_client_for_approval:
+                    await _cdp_approve_usdc(cdp_client_for_approval, agent_wallet, _spender_addr, body.collateral)
+                    _post = await _usdc_allowance(agent_wallet, _spender_addr)
+                    print(f"[open_trade] {_spender_name} post-approval allowance={_post:.4f} USDC")
+                    if _post < body.collateral:
+                        raise HTTPException(
+                            status_code=500,
+                            detail=f"USDC approval to {_spender_name}={_spender_addr} did not take effect (post={_post:.4f})",
+                        )
+                else:
+                    await client.write_contract("USDC", "approve", _spender_addr, int(10_000 * 1e6))
+                    print(f"[open_trade] {_spender_name} approved via local signer")
             else:
-                # Local signer path: approve Trading directly instead of going through SDK helper
-                # (SDK's approve_usdc_for_trading() incorrectly uses TradingStorage)
-                trading_address = spender or str(client.contracts["Trading"].address)
-                print(f"[open_trade] Local signer approve Trading={trading_address}")
-                await client.write_contract("USDC", "approve", trading_address, int(10_000 * 1e6))
-                print(f"[open_trade] USDC approval confirmed (local signer)")
-        else:
-            print(f"[open_trade] Allowance sufficient ({allowance:.6f} >= {body.collateral}) — skipping approval")
+                print(f"[open_trade] {_spender_name} allowance OK — skipping")
 
         trade_input = TradeInput(
             trader=agent_wallet,
