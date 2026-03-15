@@ -5,8 +5,12 @@
 
 import { z } from 'zod';
 
+function normalizeBase(url: string) {
+  const u = url.replace(/\/$/, '');
+  return u.startsWith('http://') || u.startsWith('https://') ? u : `https://${u}`;
+}
 const AVANTIS_API_URL = process.env.YIELDR_APP_URL
-  ? `${process.env.YIELDR_APP_URL.replace(/\/$/, '')}/fetch-positions`
+  ? `${normalizeBase(process.env.YIELDR_APP_URL)}/fetch-positions`
   : 'https://yieldr-app-production.up.railway.app/fetch-positions';
 const BASE_RPC_URL = process.env.BASE_RPC_URL || 'https://mainnet.base.org';
 
