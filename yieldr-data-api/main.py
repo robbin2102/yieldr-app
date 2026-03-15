@@ -27,6 +27,10 @@ async def lifespan(app: FastAPI):
     # Startup
     print("🚀 Starting Yieldr Data Services API...")
     await connect_db()
+    cdp_url = settings.cdp_service_url
+    cdp_secret = settings.cdp_service_secret
+    print(f"[startup] CDP_SERVICE_URL={'SET (' + cdp_url + ')' if cdp_url else 'NOT SET'}")
+    print(f"[startup] CDP_SERVICE_SECRET={'SET (len=' + str(len(cdp_secret)) + ')' if cdp_secret else 'NOT SET'}")
     print("✅ Application ready")
 
     yield
