@@ -297,16 +297,33 @@ async def execute_open(
         tp_price = entry_price * (1 + body.tp_pct / 100) if is_long else entry_price * (1 - body.tp_pct / 100)
         sl_price = entry_price * (1 - body.sl_pct / 100) if is_long else entry_price * (1 + body.sl_pct / 100)
 
+        # 2b. Verify the agent wallet has ETH for the execution fee + gas.
+        #     Avantis openTrade is payable and requires ~0.001 ETH minimum.
+        eth_balance = await client.get_balance(agent_wallet)
+        if eth_balance < 0.001:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Agent wallet {agent_wallet} has insufficient ETH "
+                    f"({eth_balance:.6f} ETH). Fund with ≥0.001 ETH to cover "
+                    f"the Avantis execution fee and gas costs."
+                ),
+            )
+
         # 3. Check and approve USDC allowance if needed
         allowance = await client.get_usdc_allowance_for_trading(agent_wallet)
         if allowance < body.collateral:
             await client.approve_usdc_for_trading(body.collateral * 10)
 
         # 4. Build TradeInput
+        # positionSizeUSDC (alias: collateral_in_trade) and initialPosToken are
+        # on-chain uint256 values in raw USDC units (6 decimals). $10 USDC = 10_000_000.
+        collateral_raw = int(body.collateral * 10 ** 6)
         trade_input = TradeInput(
             trader=agent_wallet,
             pair_index=pair_index,
-            collateral_in_trade=body.collateral,
+            open_collateral=collateral_raw,    # initialPosToken
+            collateral_in_trade=collateral_raw,  # positionSizeUSDC
             is_long=is_long,
             leverage=body.leverage,
             tp=tp_price,
@@ -610,10 +627,12 @@ async def get_fees(
         )
 
         # Build a TradeInput for loss protection calculation
+        collateral_raw = int(collateral * 10 ** 6)
         trade_input = TradeInput(
             trader=agent_wallet,
             pair_index=pair_index,
-            collateral_in_trade=collateral,
+            open_collateral=collateral_raw,
+            collateral_in_trade=collateral_raw,
             is_long=is_long,
             leverage=leverage,
             tp=0.0001,  # Placeholder — only needed for loss protection calc
