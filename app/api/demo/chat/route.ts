@@ -1811,18 +1811,29 @@ User approves → call open_trade → report tx_hash from tool result
 
 **SPECIAL CASE — TRADE_APPROVED message:**
 If the user message starts with TRADE_APPROVED: followed by a JSON object, the user has already reviewed and approved a propose_trade card. You MUST:
-- Immediately call open_trade using EXACTLY the params from that JSON object
+- Call open_trade IMMEDIATELY as your FIRST action — emit NO text before the tool call
+- Do NOT write "Executing...", "Placing order...", "⚡", or any other text before calling open_trade
 - Do NOT call propose_trade again — it already ran
 - Do NOT call get_agent_wallet_balance again before the first attempt — balance was already checked
 - The JSON fields map directly: pair, pair_index, direction, collateral, leverage, tp_pct, sl_pct, order_type, open_price (if present)
 Example: TRADE_APPROVED:{"pair":"BTC/USD","pair_index":1,"direction":"LONG","collateral":10,"leverage":10,"tp_pct":2.5,"sl_pct":2,"order_type":"MARKET"}
-→ Immediately call open_trade with those exact params.
+→ Call open_trade with those exact params. No text before the tool call.
 
 **If open_trade fails after TRADE_APPROVED:**
 - Call get_agent_wallet_balance to get the current balance
 - Report the exact error and current balance to the user
 - If INSUFFICIENT_FUNDS: call fund_agent to show deposit card for the deficit amount. State exactly how much to deposit and to which wallet address.
 - Do NOT call open_trade again until the user has taken action (deposited, fixed the error) and you have re-verified the balance via get_agent_wallet_balance.
+
+### CRITICAL: Silent Execution Rule
+
+When the user's message signals a transaction (trade open, trade close, withdraw, deposit, cancel order, retry):
+**Call the tool IMMEDIATELY — emit zero text before the tool call.**
+Do NOT write "Executing now...", "Placing order...", "Let me do that...", "⚡ ...", a status update, a summary, a plan, or any other text before invoking the tool.
+The correct sequence is: receive user message → call tool → receive tool result → THEN write a response.
+Any text written before the tool call is a hallucination and will be discarded.
+
+This rule overrides every other instruction about explaining your reasoning or confirming parameters — when the action is clear, just call the tool.
 
 ### CRITICAL: False Confirmation Rules — READ CAREFULLY
 
@@ -2392,8 +2403,81 @@ export async function POST(request: NextRequest) {
           // Agentic loop: keep calling Claude until it stops using tools
           let currentMessages = [...anthropicMessages];
           let maxIterations = 5; // safety limit
-          // When true, next API call forces at least one tool invocation
-          let forceToolUse = false;
+
+          // Detect execution-intent messages and force tool use from the very first iteration.
+          // This prevents the LLM from generating a text-only "narration" response before
+          // calling the tool (which causes the fake-text hallucination the user sees).
+          // Without this, forceToolUse only activates in iteration 2 (after the hallucination
+          // detector fires), by which point the fake text was already streamed.
+          const lastMsgText = typeof lastUserMessage?.content === 'string'
+            ? lastUserMessage.content
+            : Array.isArray(lastUserMessage?.content)
+              ? lastUserMessage.content.map((b: any) => (b.text ?? '')).join(' ')
+              : '';
+          // Any message matching these patterns means the user wants an on-chain action right now.
+          // Patterns are intentionally NOT ^-anchored so they catch phrasings like
+          // "lets execute", "deposit confirmed, now execute", "close my position", etc.
+          // Keep patterns specific enough to avoid false positives on informational questions.
+          const EXECUTION_TRIGGER_PATTERNS = [
+            // Trade card approval (always explicit)
+            /TRADE_APPROVED:/i,
+
+            // Retry / proceed / confirm execution
+            /\btry\s+again\b/i,           // "try again", "let's try again"
+            /\bretry\b/i,                 // "retry", "retry the trade"
+            /\bgo\s+ahead\b/i,            // "go ahead"
+            /\bproceed\b/i,               // "proceed", "proceed with the trade"
+            /\bdo\s+it\b/i,               // "do it", "just do it"
+            /\bgo\s+for\s+it\b/i,         // "go for it"
+            /\byes[,!]?\s*(execute|proceed|open|close|trade|withdraw|deposit|go|do)/i,
+
+            // Execute (the most common verb users type)
+            /\bexecute\b/i,               // "execute", "let's execute", "please execute"
+
+            // Trade open
+            /\bplace\s+(the\s+|a\s+|my\s+)?order\b/i,
+            /\bplace\s+(the\s+|a\s+)?trade\b/i,
+            /\bopen\s+(the\s+|a\s+|my\s+)?(trade|position|order)\b/i,
+            /\bstart\s+(the\s+)?(trade|position)\b/i,
+            /\benter\s+(the\s+)?(trade|position|market)\b/i,
+            /\b(let'?s?\s+)?trade\s+(now|it)\b/i,
+
+            // Trade close
+            /\bclose\s+(the\s+|my\s+|this\s+)?(trade|position|order)\b/i,
+            /\bclose\s+(it|now|out)\b/i,
+            /\bexit\s+(the\s+|my\s+|this\s+)?(trade|position)\b/i,
+            /\bexit\s+(now|it)\b/i,
+
+            // Cancel limit order
+            /\bcancel\s+(the\s+|my\s+)?(limit\s+)?order\b/i,
+            /\bcancel\s+(it|now)\b/i,
+
+            // Withdraw / send funds out
+            /\bwithdraw\b/i,              // "withdraw", "withdraw funds", "withdraw 10 usdc"
+            /\bsend\s+back\b/i,           // "send back my funds"
+            /\bsend\s+(my\s+)?(eth|usdc|funds|money)\b/i,
+            /\btransfer\s+(back|funds|eth|usdc|out)\b/i,
+            /\bpull\s+(out|funds|my\s+funds)\b/i,
+            /\bget\s+my\s+(eth|usdc|funds|money)\s+back\b/i,
+            /\breclaim\b/i,
+
+            // Deposit / fund agent — user saying funds are sent and wants to continue
+            /\bdeposit\s+(confirmed|done|complete|sent|successful|went\s+through)\b/i,
+            /\b(i('?ve?)?|just)\s+deposited\b/i,
+            /\bdeposit(ed|ing)?\s+(eth|usdc|funds)\b/i,
+            /\bsent\s+(the\s+)?(eth|usdc|funds)\b/i,
+            /\bfund(ed|ing)?\s+(the\s+)?(agent|wallet)\b/i,
+            /\btransferred\s+(the\s+)?(eth|usdc|funds)\b/i,
+
+            // Generic "now" + action shorthand after a setup
+            /\bnow\s+(execute|trade|open|close|withdraw|deposit|proceed)\b/i,
+            /\b(do|make|run)\s+(the\s+)?(trade|transaction|trx|tx|swap|withdrawal|deposit)\b/i,
+          ];
+          let forceToolUse = EXECUTION_TRIGGER_PATTERNS.some(p => p.test(lastMsgText.trim()));
+          if (forceToolUse) {
+            console.log(`[chat] Execution-intent message detected — starting with forceToolUse=true to prevent hallucination`);
+          }
+
           // Track text accumulated only in the current iteration (for hallucination detection)
           let iterationText = '';
 
