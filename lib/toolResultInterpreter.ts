@@ -159,7 +159,7 @@ function buildClassifiedMessage(
         header,
         `Agent wallet has insufficient ETH for gas.`,
         `Do NOT report success. Do NOT fabricate a tx_hash.`,
-        `Tell the user: the agent wallet needs at least 0.00005 ETH for gas on Base. Provide the agent wallet address and ask them to send ETH.`,
+        `Tell the user: the agent wallet needs at least 0.001 ETH for gas on Base (covers Avantis execution fee + gas). Provide the agent wallet address and ask them to send ETH.`,
         `Error: ${errorDetail}`,
         `[/TOOL_RESULT_CLASSIFIED]`,
       ].join('\n');
@@ -341,7 +341,7 @@ export interface BalanceGateResult {
 export function validateBalanceForTrade(
   rawBalanceResponse: string | null,
   requiredUsdc: number,
-  minEth: number = 0.00005,
+  minEth: number = 0.001,
   toolName: string = 'open_trade',
 ): BalanceGateResult {
   // If fetch failed entirely
@@ -469,28 +469,42 @@ export function detectPostResponseHallucination(
 ): string | null {
   const responseLower = responseText.toLowerCase();
 
+  // Collect all hashes that are legitimately confirmed
+  const confirmedHashes = classifiedResults
+    .filter(r => r.status === 'CONFIRMED' && r.txHash)
+    .map(r => r.txHash!.toLowerCase());
+
+  // All 64-char hex hashes mentioned anywhere in the response
+  const mentionedHashes = (responseText.match(ANY_TX_HASH_REGEX) || [])
+    .filter(h => TX_HASH_REGEX.test(h));
+
+  // Any hash in the response that isn't from a CONFIRMED tool result is fabricated
+  const fabricatedHashes = mentionedHashes.filter(h => !confirmedHashes.includes(h.toLowerCase()));
+
+  if (fabricatedHashes.length > 0) {
+    // Find the first non-CONFIRMED result to build a contextual override message
+    const failedResult = classifiedResults.find(r => r.status !== 'CONFIRMED');
+    console.warn(
+      `[toolResultInterpreter] POST-RESPONSE HALLUCINATION DETECTED: fabricated tx_hash(es) found — ` +
+      `${fabricatedHashes.join(', ')} not in confirmed set [${confirmedHashes.join(', ')}]`,
+    );
+    if (failedResult) {
+      return buildHallucinationOverride(failedResult);
+    }
+    // All tools CONFIRMED but extra hashes appeared — still flag
+    return 'Warning: Response contained unverified transaction hashes. Please verify any transaction on Basescan before assuming it completed.';
+  }
+
+  // Check for success language when a tool actually failed
   for (const result of classifiedResults) {
-    if (result.status === 'CONFIRMED') continue; // legitimate success — skip
+    if (result.status === 'CONFIRMED') continue;
 
-    // Check if Claude asserted success despite a non-CONFIRMED result
     const assertedSuccess = SUCCESS_PHRASES.some(phrase => responseLower.includes(phrase));
-
-    // Check if Claude invented a tx_hash not present in any CONFIRMED result
-    const confirmedHashes = classifiedResults
-      .filter(r => r.status === 'CONFIRMED' && r.txHash)
-      .map(r => r.txHash!.toLowerCase());
-
-    const mentionedHashes = (responseText.match(ANY_TX_HASH_REGEX) || [])
-      .filter(h => TX_HASH_REGEX.test(h));
-
-    const fabricatedHash = mentionedHashes.some(h => !confirmedHashes.includes(h.toLowerCase()));
-
-    if (assertedSuccess || fabricatedHash) {
+    if (assertedSuccess) {
       console.warn(
         `[toolResultInterpreter] POST-RESPONSE HALLUCINATION DETECTED for tool "${result.toolName}" (status=${result.status}). ` +
-        `assertedSuccess=${assertedSuccess}, fabricatedHash=${fabricatedHash}`,
+        `assertedSuccess=true`,
       );
-
       return buildHallucinationOverride(result);
     }
   }
@@ -504,7 +518,7 @@ function buildHallucinationOverride(result: ClassifiedResult): string {
       return `The ${result.toolName} could not execute — the agent wallet has insufficient USDC. ${result.errorDetail || ''} Please deposit the required amount to the agent wallet address and try again.`;
 
     case 'LOW_GAS':
-      return `The ${result.toolName} could not execute — the agent wallet needs more ETH for gas on Base. Please send at least 0.00005 ETH to the agent wallet address and try again.`;
+      return `The ${result.toolName} could not execute — the agent wallet needs more ETH for gas on Base. Please send at least 0.001 ETH to the agent wallet address and try again.`;
 
     case 'CONTRACT_REVERT':
       return `The ${result.toolName} failed — the transaction was reverted on-chain. No funds were moved. ${result.errorDetail || ''} Please check position limits or try again.`;

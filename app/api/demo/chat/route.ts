@@ -398,9 +398,9 @@ toolDefinitions.push({
   name: 'get_agent_wallet_balance',
   description:
     'Check the agent CDP wallet ETH and USDC balance. Call this BEFORE executing any trade or generating deposit cards. ' +
-    'ETH is needed for gas fees (minimum 0.00005 ETH on Base). USDC is the trade collateral. ' +
-    'After checking: if ETH < 0.00005 call fund_agent_eth; if USDC < required collateral call fund_agent. ' +
-    'If ETH >= 0.00005, skip gas deposit — do NOT suggest ETH deposit when gas is sufficient. ' +
+    'ETH is needed for gas fees (minimum 0.001 ETH on Base for Avantis execution fee + gas). USDC is the trade collateral. ' +
+    'After checking: if ETH < 0.001 call fund_agent_eth; if USDC < required collateral call fund_agent. ' +
+    'If ETH >= 0.001, skip gas deposit — do NOT suggest ETH deposit when gas is sufficient. ' +
     'Both cards can be emitted in the same response — call both tools without waiting for user approval.',
   input_schema: {
     type: 'object' as const,
@@ -505,7 +505,7 @@ toolDefinitions.push({
   name: 'fund_agent_eth',
   description:
     'Deposit ETH from the user\'s connected wallet into the agent CDP wallet for gas fees. ' +
-    'Call this when agent ETH balance is below 0.00005 ETH (minimum for Base gas). ' +
+    'Call this when agent ETH balance is below 0.001 ETH (minimum for Avantis execution fee + Base gas). ' +
     'Emits an ETH deposit approval card — the user must click Approve and sign in their wallet. ' +
     'Default deposit: 0.001 ETH (enough for ~5 trades).',
   input_schema: {
@@ -1430,9 +1430,9 @@ async function executeTool(name: string, input: any, wallet?: string, agentCtxId
           agent_wallet:           agentCtxWallet,
           eth_balance:            eth,
           usdc_balance:           usdc,
-          eth_sufficient_for_gas: eth >= 0.00005,
-          status: eth < 0.00005
-            ? `⚠️ Low ETH: ${eth.toFixed(6)} ETH — send at least 0.00005 ETH to ${agentCtxWallet} for gas`
+          eth_sufficient_for_gas: eth >= 0.001,
+          status: eth < 0.001
+            ? `⚠️ Low ETH: ${eth.toFixed(6)} ETH — send at least 0.001 ETH to ${agentCtxWallet} for gas`
             : `✓ ETH OK (${eth.toFixed(6)} ETH)`,
           usdc_note: usdc === 0
             ? `Agent wallet has no USDC. Fund it before placing trades.`
@@ -1798,14 +1798,14 @@ DO NOT say:
 
 1. Call get_market_snapshot (or fetch_live_indicator) to validate entry signals
 2. Call get_agent_wallet_balance — show the user current ETH and USDC balances.
-   The server enforces a hard balance gate inside open_trade. If the gate blocks the trade you will receive a [TOOL_RESULT_CLASSIFIED] message — follow its instructions exactly. Do NOT re-attempt open_trade until the user has deposited funds and confirmed. Minimum gas required: 0.00005 ETH.
+   The server enforces a hard balance gate inside open_trade. If the gate blocks the trade you will receive a [TOOL_RESULT_CLASSIFIED] message — follow its instructions exactly. Do NOT re-attempt open_trade until the user has deposited funds and confirmed. Minimum gas required: 0.001 ETH.
 3. Call propose_trade — shows a confirmation card in the UI with all trade params
 4. Wait for user to approve (they click Approve or say "execute"/"yes")
 5. Call open_trade with the SAME params from step 3
 
 **Example flow when user says "mean reversion on BTC 10 USDC 10x" and wallet is funded:**
 1. Call get_market_snapshot → analyze signals
-2. Call get_agent_wallet_balance → confirm USDC ≥ 10, ETH ≥ 0.00005
+2. Call get_agent_wallet_balance → confirm USDC ≥ 10, ETH ≥ 0.001
 3. Call propose_trade → trade confirmation card appears in UI
 User approves → call open_trade → report tx_hash from tool result
 
@@ -1836,6 +1836,7 @@ These rules prevent hallucinating trade outcomes:
 6. NEVER retry open_trade for the same error without user action in between. If open_trade returns INSUFFICIENT_FUNDS twice in a row, STOP and tell the user what to deposit. Do NOT call open_trade a third time.
 7. NEVER describe "calling open_trade now..." or "executing trade..." in text without actually making the tool call. If you write those words, you MUST also call the tool. If the tool cannot be called, explain why instead of narrating a fake execution.
 8. Same rules apply to withdraw_funds and close_trade — never report tx_hash, success, or "funds sent" without a real tool result containing a confirmed tx_hash.
+9. NEVER include a 0x transaction hash (0x followed by 64 hex characters) anywhere in your response text unless it came from a [TOOL_RESULT_CLASSIFIED] block with status=CONFIRMED. Do NOT "show" a hash while narrating what you are about to do. Do NOT include a hash as a placeholder, example, or progress indicator. If you are about to call a tool, call it immediately — never include a hash before the tool result exists.
 
 ### Execution Tools Available
 
@@ -2047,7 +2048,7 @@ Every execution tool result (open_trade, close_trade, withdraw_funds, cancel_lim
 |---|---|---|
 | CONFIRMED | tx_hash verified on-chain | Report success using ONLY the exact hash provided |
 | INSUFFICIENT_FUNDS | Not enough USDC | Tell user the exact deficit and agent wallet address — do NOT proceed |
-| LOW_GAS | Not enough ETH for gas | Tell user to send ≥0.00005 ETH to agent wallet — do NOT proceed |
+| LOW_GAS | Not enough ETH for gas | Tell user to send ≥0.001 ETH to agent wallet — do NOT proceed |
 | CONTRACT_REVERT | On-chain tx reverted | Tell user trade failed on-chain — do NOT report success |
 | APPROVAL_REQUIRED | USDC not approved | Tell user approval is needed — do NOT proceed |
 | SLIPPAGE_EXCEEDED | Price moved | Suggest limit order or retry — do NOT report success |
@@ -2061,6 +2062,7 @@ Every execution tool result (open_trade, close_trade, withdraw_funds, cancel_lim
 ### Absolute rules for classified messages
 • NEVER override a non-CONFIRMED status with success language
 • NEVER fabricate a tx_hash. The only valid hash is the one in a CONFIRMED message
+• NEVER include any 0x64-char hash in your response text before a tool has been called and returned a CONFIRMED result — not as a placeholder, not as a preview, not as an example
 • NEVER use balance or position data from earlier in the conversation to argue that a failed operation actually succeeded
 • If status is CONFIRMED, use the hash EXACTLY as provided — do not shorten, alter, or omit it
 
@@ -2541,13 +2543,18 @@ export async function POST(request: NextRequest) {
                 'trade confirmed', 'successfully executed', 'successfully opened',
               ];
               const tradingToolNames = ['get_agent_wallet_balance', 'fund_agent_eth', 'fund_agent', 'propose_trade', 'open_trade', 'close_trade', 'withdraw_funds', 'cancel_limit_order'];
+              const executionToolNames = ['open_trade', 'close_trade', 'withdraw_funds', 'cancel_limit_order'];
               const describedExecution = executionKeywords.some(kw => textLower.includes(kw));
               const noTradingToolsCalled = !allToolCalls.some(t => tradingToolNames.includes(t.name));
+              // Also catch fabricated tx_hashes: if Claude put a 0x...64-char hash in text without calling an execution tool
+              const TX_HASH_IN_TEXT = /0x[a-fA-F0-9]{64}/.test(iterationText);
+              const noExecutionToolsCalled = !allToolCalls.some(t => executionToolNames.includes(t.name));
+              const fabricatedHashInNarration = TX_HASH_IN_TEXT && noExecutionToolsCalled;
 
-              if (describedExecution && noTradingToolsCalled && maxIterations > 0) {
-                // Agent hallucinated tool calls — described the workflow without invoking tools.
-                // Force a new iteration with tool_choice: any so tools are actually called.
-                console.log('[chat] Hallucination detected: agent described trading actions without calling tools. Forcing tool invocation.');
+              if (((describedExecution && noExecutionToolsCalled) || fabricatedHashInNarration) && maxIterations > 0) {
+                // Agent hallucinated execution — narrated a trade/withdrawal or fabricated a tx_hash without calling the tool.
+                // Use noExecutionToolsCalled (not noTradingToolsCalled) so this fires even if balance/propose were already called.
+                console.log(`[chat] Hallucination detected: ${fabricatedHashInNarration ? 'fabricated tx_hash in text without calling execution tool' : 'agent described trading actions without calling execution tool'}. Forcing tool invocation.`);
                 currentMessages = [
                   ...currentMessages,
                   { role: 'assistant' as const, content: iterationText },
