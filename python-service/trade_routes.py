@@ -560,8 +560,9 @@ async def execute_open(body: OpenTradeRequest, _: str = Depends(verify_api_key))
         sl_price = tp_sl_base * (1 - body.sl_pct / 100) if is_long else tp_sl_base * (1 + body.sl_pct / 100)
 
         # ── USDC Approval ───────────────────────────────────────────────────────
-        # Approve BOTH Trading and TradingStorage contracts (belt-and-suspenders:
-        # we can't know which one calls USDC.transferFrom inside openTrade()).
+        # Always re-approve BOTH Trading and TradingStorage unconditionally.
+        # Skipping based on cached allowance caused stale-state failures where
+        # eth_estimateGas reverted despite a seemingly sufficient allowance.
         _approval_targets = []
         try:
             _approval_targets.append(("Trading",        str(client.contracts["Trading"].address)))
@@ -577,23 +578,18 @@ async def execute_open(body: OpenTradeRequest, _: str = Depends(verify_api_key))
 
         for _spender_name, _spender_addr in _approval_targets:
             _allowance = await _usdc_allowance(agent_wallet, _spender_addr)
-            print(f"[execute_open] allowance[{_spender_name}={_spender_addr}]={_allowance:.4f} USDC (need {body.collateral}) using_cdp={using_cdp}")
-            if _allowance < body.collateral:
-                print(f"[execute_open] approving {_spender_name}={_spender_addr} for 10000 USDC")
-                if using_cdp:
-                    await _cdp_svc_approve_usdc(agent_wallet, _spender_addr, body.collateral)
-                else:
-                    await client.write_contract("USDC", "approve", _spender_addr, int(10_000 * 1e6))
-                    # Verify the approval landed before proceeding
-                    _post = await _usdc_allowance(agent_wallet, _spender_addr)
-                    print(f"[execute_open] {_spender_name} post-approval allowance={_post:.4f} USDC (local signer)")
-                    if _post < body.collateral:
-                        raise HTTPException(
-                            status_code=500,
-                            detail=f"USDC approval to {_spender_name}={_spender_addr} did not take effect (post={_post:.4f}). Check AGENT_WALLET_PRIVATE_KEY.",
-                        )
+            print(f"[execute_open] allowance[{_spender_name}={_spender_addr}]={_allowance:.4f} USDC (need {body.collateral}) using_cdp={using_cdp} → forcing re-approval")
+            if using_cdp:
+                await _cdp_svc_approve_usdc(agent_wallet, _spender_addr, body.collateral)
             else:
-                print(f"[execute_open] {_spender_name} allowance OK — skipping approval")
+                await client.write_contract("USDC", "approve", _spender_addr, int(10_000 * 1e6))
+                _post = await _usdc_allowance(agent_wallet, _spender_addr)
+                print(f"[execute_open] {_spender_name} post-approval allowance={_post:.4f} USDC (local signer)")
+                if _post < body.collateral:
+                    raise HTTPException(
+                        status_code=500,
+                        detail=f"USDC approval to {_spender_name}={_spender_addr} did not take effect (post={_post:.4f}). Check AGENT_WALLET_PRIVATE_KEY.",
+                    )
         # ── End USDC Approval ───────────────────────────────────────────────────
 
         trade_input = TradeInput(

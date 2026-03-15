@@ -1,8 +1,13 @@
+import sys
+import os
+# Force unbuffered stdout so Railway captures all print() logs immediately
+os.environ.setdefault("PYTHONUNBUFFERED", "1")
+sys.stdout.reconfigure(line_buffering=True)
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import asyncio
-import os
 from pathlib import Path
 from dotenv import load_dotenv
 from web3 import Web3
