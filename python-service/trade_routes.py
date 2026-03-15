@@ -20,13 +20,15 @@ from fastapi import APIRouter, Depends, HTTPException, Header
 from pydantic import BaseModel
 from web3 import AsyncWeb3, Web3
 
-# Use stderr so logs appear in Railway alongside uvicorn output
+# Attach a dedicated stderr handler so logs appear regardless of uvicorn's
+# root-logger configuration (basicConfig is a no-op once uvicorn runs).
 log = logging.getLogger("trade_routes")
-logging.basicConfig(
-    stream=sys.stderr,
-    level=logging.DEBUG,
-    format="%(asctime)s [%(name)s] %(levelname)s %(message)s",
-)
+log.setLevel(logging.DEBUG)
+_handler = logging.StreamHandler(sys.stderr)
+_handler.setLevel(logging.DEBUG)
+_handler.setFormatter(logging.Formatter("%(asctime)s [trade_routes] %(levelname)s %(message)s"))
+log.addHandler(_handler)
+log.propagate = False
 
 from avantis_trader_sdk import TraderClient
 from avantis_trader_sdk.types import TradeInput, TradeInputOrderType, MarginUpdateType
