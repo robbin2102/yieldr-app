@@ -1836,7 +1836,7 @@ These rules prevent hallucinating trade outcomes:
 6. NEVER retry open_trade for the same error without user action in between. If open_trade returns INSUFFICIENT_FUNDS twice in a row, STOP and tell the user what to deposit. Do NOT call open_trade a third time.
 7. NEVER describe "calling open_trade now..." or "executing trade..." in text without actually making the tool call. If you write those words, you MUST also call the tool. If the tool cannot be called, explain why instead of narrating a fake execution.
 8. Same rules apply to withdraw_funds and close_trade — never report tx_hash, success, or "funds sent" without a real tool result containing a confirmed tx_hash.
-9. NEVER include a 0x transaction hash (0x followed by 64 hex characters) anywhere in your response text unless it came from a [TOOL_RESULT_CLASSIFIED] block with status=CONFIRMED. Do NOT "show" a hash while narrating what you are about to do. Do NOT include a hash as a placeholder, example, or progress indicator. If you are about to call a tool, call it immediately — never include a hash before the tool result exists.
+9. ABSOLUTE RULE — TX HASH: A transaction hash (0x followed by exactly 64 hex characters) MUST NEVER appear in your response text unless it was provided in a [TOOL_RESULT_CLASSIFIED] block with Status: CONFIRMED. Zero exceptions. Do NOT pre-generate a hash, show one as a placeholder, narrate one while "executing", or include one before the tool result exists. The ONLY valid sequence is: call open_trade → receive CONFIRMED result → report the hash from that result. Any text you write BEFORE calling the tool must not contain any 0x hex string of 40+ characters. If you feel compelled to show a hash, that means you have not called the tool yet — call it immediately instead.
 
 ### Execution Tools Available
 
@@ -2577,19 +2577,13 @@ export async function POST(request: NextRequest) {
             ];
           }
 
-          // Post-response hallucination detection: catches "called tool, got error, reported success"
+          // Post-response hallucination detection: log only — do NOT replace streamed content.
+          // Replacing causes bad UX: user sees content appear then get swapped out.
+          // Prevention is handled upstream via the classified message Claude receives and the system prompt rules.
           if (allClassifiedResults.length > 0 && fullResponse) {
             const hallucinationOverride = detectPostResponseHallucination(allClassifiedResults, fullResponse);
             if (hallucinationOverride) {
-              console.warn('[chat] Post-response hallucination detected — replacing response');
-              // Stream the correction to the frontend
-              controller.enqueue(encoder.encode(
-                JSON.stringify({ type: 'hallucination_correction', original_length: fullResponse.length }) + '\n'
-              ));
-              controller.enqueue(encoder.encode(
-                JSON.stringify({ type: 'text', text: '\n\n⚠️ ' + hallucinationOverride }) + '\n'
-              ));
-              fullResponse = hallucinationOverride;
+              console.warn('[chat] Post-response hallucination detected (logged only, not replacing streamed content)');
             }
           }
 
