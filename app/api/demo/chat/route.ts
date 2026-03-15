@@ -2392,8 +2392,32 @@ export async function POST(request: NextRequest) {
           // Agentic loop: keep calling Claude until it stops using tools
           let currentMessages = [...anthropicMessages];
           let maxIterations = 5; // safety limit
-          // When true, next API call forces at least one tool invocation
-          let forceToolUse = false;
+
+          // Detect execution-intent messages and force tool use from the very first iteration.
+          // This prevents the LLM from generating a text-only "narration" response before
+          // calling the tool (which causes the fake-text hallucination the user sees).
+          // Without this, forceToolUse only activates in iteration 2 (after the hallucination
+          // detector fires), by which point the fake text was already streamed.
+          const lastMsgText = typeof lastUserMessage?.content === 'string'
+            ? lastUserMessage.content
+            : Array.isArray(lastUserMessage?.content)
+              ? lastUserMessage.content.map((b: any) => (b.text ?? '')).join(' ')
+              : '';
+          const EXECUTION_TRIGGER_PATTERNS = [
+            /^TRADE_APPROVED:/i,            // User approved a trade card
+            /^try\s*again/i,               // User retrying an execution
+            /^execute/i,                   // "execute", "execute trade", etc.
+            /^place.*order/i,              // "place the order"
+            /^open.*trade/i,               // "open the trade"
+            /^close.*trade/i,              // "close the trade"
+            /^cancel.*order/i,             // "cancel the order"
+            /^withdraw/i,                  // "withdraw funds"
+          ];
+          let forceToolUse = EXECUTION_TRIGGER_PATTERNS.some(p => p.test(lastMsgText.trim()));
+          if (forceToolUse) {
+            console.log(`[chat] Execution-intent message detected — starting with forceToolUse=true to prevent hallucination`);
+          }
+
           // Track text accumulated only in the current iteration (for hallucination detection)
           let iterationText = '';
 
