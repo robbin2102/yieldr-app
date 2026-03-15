@@ -56,7 +56,8 @@ async function getDirect(endpoint: string, params: Record<string, string | numbe
       return await res.json();
     } catch (err: any) {
       if (attempt === retries - 1) throw err;
-      logger.warn('TAAPI', `${endpoint} attempt ${attempt + 1} failed: ${err.message}, retrying...`);
+      const cause = err.cause ? ` (cause: ${err.cause?.message ?? err.cause})` : '';
+      logger.warn('TAAPI', `${endpoint} attempt ${attempt + 1} failed: ${err.message}${cause}, retrying...`);
       await sleep(2000 * (attempt + 1));
     }
   }
@@ -84,7 +85,8 @@ async function postBulk(body: object, retries = 5): Promise<any> {
       return await res.json();
     } catch (err: any) {
       if (attempt === retries - 1) throw err;
-      logger.warn('TAAPI', `Attempt ${attempt + 1} failed: ${err.message}, retrying...`);
+      const cause = err.cause ? ` (cause: ${err.cause?.message ?? err.cause})` : '';
+      logger.warn('TAAPI', `Attempt ${attempt + 1} failed: ${err.message}${cause}, retrying...`);
       await sleep(2000 * (attempt + 1));
     }
   }
