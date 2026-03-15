@@ -3,8 +3,11 @@ Avantis Trade Execution Routes
 Mounted at /trade/* in the python-service.
 
 Signing strategy (in priority order):
-  1. CDP Agentic Wallet  — if agent_wallet_address is passed AND CDP env vars are set
-  2. Local EOA fallback  — AGENT_WALLET_PRIVATE_KEY (legacy / testing)
+  1. CDP Wallet Service (HTTP)  — if agent_wallet_address is passed AND
+                                   CDP_SERVICE_URL + CDP_SERVICE_SECRET env vars are set.
+                                   Delegates signing to the cdp-wallet-service microservice,
+                                   keeping the cdp-sdk dependency isolated there.
+  2. Local EOA fallback         — AGENT_WALLET_PRIVATE_KEY (legacy / testing)
 """
 
 import asyncio
@@ -108,101 +111,164 @@ async def _fresh_nonce(wallet: str) -> int:
 
 
 # ─────────────────────────────────────────────
-# CDP signing helpers
+# CDP Wallet Service — HTTP signing helpers
+# ─────────────────────────────────────────────
+# Delegates tx signing to the cdp-wallet-service microservice so that
+# cdp-sdk (which requires web3>=7) stays isolated from avantis-trader-sdk
+# (which requires web3<7).  Requires env vars:
+#   CDP_SERVICE_URL    — e.g. http://cdp-wallet-service.railway.internal:8080
+#   CDP_SERVICE_SECRET — shared intra-service secret
 # ─────────────────────────────────────────────
 
-def _get_cdp_client():
-    """Return a CDP CdpClient if env vars are configured, else None."""
-    try:
-        from cdp import CdpClient  # pip install cdp-sdk
-    except ImportError:
-        return None
-    key_id     = os.getenv("CDP_API_KEY_ID", "")
-    key_secret = os.getenv("CDP_API_KEY_SECRET", "")
-    wallet_sec = os.getenv("CDP_WALLET_SECRET", "")
-    if not all([key_id, key_secret, wallet_sec]):
-        return None
-    return CdpClient(api_key_id=key_id, api_key_secret=key_secret, wallet_secret=wallet_sec)
+def _cdp_service_url() -> str:
+    return os.getenv("CDP_SERVICE_URL", "").rstrip("/")
+
+def _cdp_service_secret() -> str:
+    return os.getenv("CDP_SERVICE_SECRET", "")
+
+def _cdp_service_configured() -> bool:
+    configured = bool(_cdp_service_url() and _cdp_service_secret())
+    if not configured:
+        missing = []
+        if not _cdp_service_url():
+            missing.append("CDP_SERVICE_URL")
+        if not _cdp_service_secret():
+            missing.append("CDP_SERVICE_SECRET")
+        print(f"[CDP-svc] NOT configured — missing env vars: {missing}")
+    return configured
 
 
-async def _cdp_send_and_receipt(cdp, wallet_address: str, tx: dict) -> Any:
-    """Sign + broadcast a tx via CDP and wait for receipt."""
-    w3 = AsyncWeb3(AsyncWeb3.AsyncHTTPProvider(_get_rpc_url()))
-
-    # Normalise tx fields to hex strings expected by CDP EIP-1559 format
-    def _to_hex(v) -> str:
-        if isinstance(v, int):
-            return hex(v)
-        return str(v)
-
-    cdp_tx = {
-        "to":    tx.get("to"),
-        "data":  tx.get("data", "0x") or "0x",
-        "value": _to_hex(tx.get("value", 0)),
-        "nonce": tx.get("nonce"),
-        "gas":   _to_hex(tx.get("gas", 500_000)),
+async def _cdp_svc_send_transaction(wallet_address: str, to: str, data: str = "0x", value: int = 0) -> str:
+    """
+    Delegate transaction signing + broadcast to cdp-wallet-service.
+    Returns the tx_hash string (0x...).
+    CDP service auto-estimates nonce and gas fees.
+    """
+    import httpx
+    url = f"{_cdp_service_url()}/evm/send-transaction"
+    payload = {
+        "wallet_address": wallet_address,
+        "to": to,
+        "data": data,
+        "value": value,
+        "network": "base",
     }
-    # EIP-1559 fee fields (prefer maxFeePerGas; fall back to gasPrice)
-    if "maxFeePerGas" in tx:
-        cdp_tx["maxFeePerGas"]         = _to_hex(tx["maxFeePerGas"])
-        cdp_tx["maxPriorityFeePerGas"] = _to_hex(tx.get("maxPriorityFeePerGas", 1_000_000))
-    elif "gasPrice" in tx:
-        cdp_tx["maxFeePerGas"]         = _to_hex(tx["gasPrice"])
-        cdp_tx["maxPriorityFeePerGas"] = _to_hex(tx["gasPrice"])
-
-    print(f"[cdp_send] Submitting tx to={cdp_tx.get('to')} nonce={cdp_tx.get('nonce')} gas={cdp_tx.get('gas')} wallet={wallet_address}")
-    result = cdp.evm.send_transaction(
-        address=wallet_address,
-        transaction=cdp_tx,
-        network="base-mainnet",
-    )
-    tx_hash = result.transaction_hash
-    print(f"[cdp_send] Tx submitted: {tx_hash} — waiting for receipt...")
-    receipt = await w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
-    status = getattr(receipt, "status", receipt.get("status") if isinstance(receipt, dict) else None)
-    print(f"[cdp_send] Receipt: hash={tx_hash} status={status} block={getattr(receipt, 'blockNumber', '?')} gasUsed={getattr(receipt, 'gasUsed', '?')}")
-    if status == 0:
-        raise Exception(f"CDP transaction reverted on-chain: {tx_hash}")
-    return receipt
+    print(f"[CDP-svc] send_transaction → {url} wallet={wallet_address} to={to}")
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        resp = await client.post(
+            url,
+            json=payload,
+            headers={"x-cdp-secret": _cdp_service_secret()},
+        )
+    if resp.status_code != 200:
+        raise HTTPException(
+            status_code=502,
+            detail=f"CDP wallet service error {resp.status_code}: {resp.text}",
+        )
+    tx_hash = resp.json()["tx_hash"]
+    print(f"[CDP-svc] tx submitted: {tx_hash}")
+    return tx_hash
 
 
-async def _cdp_approve_usdc(cdp, wallet_address: str, spender: str, amount: float):
-    """Approve the Avantis trading contract to spend USDC on behalf of the agent wallet."""
+async def _cdp_svc_approve_usdc(wallet_address: str, spender: str, required_amount: float):
+    """
+    Approve the Avantis trading contract to spend USDC on behalf of the agent wallet,
+    signing via cdp-wallet-service.  Approves a fixed 10 000 USDC so the allowance
+    isn't depleted after a few trades.
+    Verifies the allowance is set on-chain before returning.
+    """
     w3_sync = Web3(Web3.HTTPProvider(_get_rpc_url()))
-    w3_async = AsyncWeb3(AsyncWeb3.AsyncHTTPProvider(_get_rpc_url()))
     usdc = w3_sync.eth.contract(
         address=Web3.to_checksum_address(USDC_BASE_ADDRESS),
         abi=USDC_APPROVE_ABI,
     )
-    # Approve a fixed large amount (10 000 USDC) so the allowance isn't depleted
-    # across multiple trades (previous 10× collateral approach exhausted after ~10 trades)
     APPROVE_AMOUNT_USDC = 10_000.0
     amount_wei = int(APPROVE_AMOUNT_USDC * 1e6)
     data = usdc.encodeABI(fn_name="approve", args=[
         Web3.to_checksum_address(spender),
         amount_wei,
     ])
-    # Fetch Base mainnet gas price and add a buffer so the tx is always included
-    base_fee = await w3_async.eth.gas_price
-    max_fee = int(base_fee * 1.5) + 1_000_000  # 50% buffer + 0.001 gwei floor
-    approve_tx = {
-        "to":           USDC_BASE_ADDRESS,
-        "data":         data,
-        "value":        0,
-        "nonce":        await _fresh_nonce(wallet_address),
-        "gas":          100_000,
-        "maxFeePerGas": max_fee,
-        "maxPriorityFeePerGas": 1_000_000,
-    }
-    await _cdp_send_and_receipt(cdp, wallet_address, approve_tx)
-    # Verify the allowance was actually set on-chain
-    post_allowance = await _usdc_allowance(wallet_address, spender)
-    if post_allowance < amount:
+    print(f"[CDP-svc] approving 10000 USDC for wallet={wallet_address} spender={spender}")
+    tx_hash = await _cdp_svc_send_transaction(
+        wallet_address=wallet_address,
+        to=USDC_BASE_ADDRESS,
+        data=data,
+        value=0,
+    )
+    # Wait for the approval tx to be mined before proceeding to the trade
+    w3_async = AsyncWeb3(AsyncWeb3.AsyncHTTPProvider(_get_rpc_url()))
+    receipt = await w3_async.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
+    status = getattr(receipt, "status", None)
+    if status == 0:
         raise HTTPException(
             status_code=500,
-            detail=f"USDC approval tx landed but on-chain allowance ({post_allowance:.4f}) is still below required ({amount:.4f}). Check spender address: {spender}",
+            detail=f"USDC approval tx reverted on-chain: {tx_hash}",
         )
-    print(f"[open_trade] USDC approval verified: allowance={post_allowance:.4f} USDC for spender={spender}")
+    # Verify allowance is actually set
+    post_allowance = await _usdc_allowance(wallet_address, spender)
+    print(f"[CDP-svc] post-approval allowance={post_allowance:.4f} USDC for spender={spender}")
+    if post_allowance < required_amount:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                f"USDC approval tx landed but on-chain allowance ({post_allowance:.4f}) "
+                f"is still below required ({required_amount:.4f}). Check spender address: {spender}"
+            ),
+        )
+
+
+# ─────────────────────────────────────────────
+# CDP Signer stub (satisfies avantis-trader-sdk BaseSigner interface)
+# ─────────────────────────────────────────────
+
+try:
+    from avantis_trader_sdk.signers.base import BaseSigner as _BaseSigner
+    _HAS_BASE_SIGNER = True
+except ImportError:
+    _HAS_BASE_SIGNER = False
+    _BaseSigner = object  # fallback — CdpSigner still works for address lookup
+
+
+class CdpSigner(_BaseSigner):
+    """
+    Minimal signer adapter so avantis-trader-sdk accepts our CDP wallet address.
+    sign_transaction() is intentionally unused — CdpTraderClient overrides
+    sign_and_get_receipt() to delegate to cdp-wallet-service via HTTP.
+    """
+    def __init__(self, wallet_address: str):
+        self._address = wallet_address
+
+    def get_ethereum_address(self) -> str:
+        return self._address
+
+    async def sign_transaction(self, transaction):
+        raise NotImplementedError("Signing is delegated to cdp-wallet-service")
+
+
+# ─────────────────────────────────────────────
+# CdpTraderClient — trade building via SDK, signing via cdp-wallet-service
+# ─────────────────────────────────────────────
+
+class CdpTraderClient(TraderClient):
+    """
+    Extends avantis-trader-sdk TraderClient so that sign_and_get_receipt()
+    routes to the cdp-wallet-service microservice instead of signing locally.
+    All trade-building (build_trade_open_tx etc.) still uses the SDK.
+    """
+    def __init__(self, provider_url: str, agent_wallet_address: str):
+        super().__init__(provider_url=provider_url, signer=CdpSigner(agent_wallet_address))
+        self._cdp_wallet = agent_wallet_address
+        self._w3_async = AsyncWeb3(AsyncWeb3.AsyncHTTPProvider(provider_url))
+
+    async def sign_and_get_receipt(self, transaction: dict):
+        tx_hash = await _cdp_svc_send_transaction(
+            wallet_address=self._cdp_wallet,
+            to=transaction["to"],
+            data=transaction.get("data", "0x"),
+            value=transaction.get("value", 0),
+        )
+        print(f"[CdpTraderClient] waiting for receipt: {tx_hash}")
+        return await self._w3_async.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
 
 
 # ─────────────────────────────────────────────
@@ -227,13 +293,14 @@ def _build_readonly_client() -> TraderClient:
 
 
 async def _sign_and_get_receipt(tx: dict, agent_wallet_address: Optional[str]) -> Any:
-    """Route signing to CDP or local signer depending on what's configured."""
-    if agent_wallet_address:
-        cdp = _get_cdp_client()
-        if cdp:
-            return await _cdp_send_and_receipt(cdp, agent_wallet_address, tx)
-        # CDP vars missing — fall through to local signer with a warning
-        print(f"[WARN] agent_wallet_address supplied but CDP env vars not set; falling back to local signer")
+    """Route signing to CDP service or local signer depending on what's configured."""
+    if agent_wallet_address and _cdp_service_configured():
+        return await _cdp_svc_send_transaction(
+            wallet_address=agent_wallet_address,
+            to=tx["to"],
+            data=tx.get("data", "0x"),
+            value=tx.get("value", 0),
+        )
     client = _build_trader_client()
     return await client.sign_and_get_receipt(tx)
 
@@ -426,6 +493,7 @@ MIN_POSITION_SIZE_USDC = 100.0  # Avantis protocol minimum
 @router.post("/execute-open")
 async def execute_open(body: OpenTradeRequest, _: str = Depends(verify_api_key)):
     print(f"[execute_open] ── REQUEST RECEIVED ── pair={body.pair} direction={body.direction} collateral={body.collateral} leverage={body.leverage} agent_wallet={body.agent_wallet_address} order_type={body.order_type}")
+
     position_size = body.collateral * body.leverage
     if position_size < MIN_POSITION_SIZE_USDC:
         raise HTTPException(
@@ -434,18 +502,25 @@ async def execute_open(body: OpenTradeRequest, _: str = Depends(verify_api_key))
                    f"Increase collateral or leverage (e.g. collateral=10, leverage=10 → $100).",
         )
 
-    # Resolve wallet: CDP per-agent wallet if provided, else local signer
-    using_cdp = bool(body.agent_wallet_address and _get_cdp_client())
+    # ── Resolve signing strategy ────────────────────────────────────────────────
+    # Priority: CDP wallet service (HTTP) > local EOA fallback
+    using_cdp = bool(body.agent_wallet_address and _cdp_service_configured())
+    print(f"[execute_open] using_cdp={using_cdp} cdp_service_url={_cdp_service_url() or 'NOT SET'}")
+
     if using_cdp:
-        client = _build_readonly_client()
         agent_wallet = Web3.to_checksum_address(body.agent_wallet_address)
+        # CdpTraderClient handles trade building AND routes sign_and_get_receipt to CDP service
+        client = CdpTraderClient(provider_url=_get_rpc_url(), agent_wallet_address=agent_wallet)
     else:
+        if body.agent_wallet_address:
+            print(f"[execute_open] WARN: agent_wallet_address={body.agent_wallet_address} provided but CDP_SERVICE_URL/CDP_SERVICE_SECRET not set — falling back to local signer")
         client = _build_trader_client()
         agent_wallet = client.get_signer().get_ethereum_address()
 
+    print(f"[execute_open] agent_wallet resolved to: {agent_wallet}")
+
     try:
         # ── Pre-trade checks: USDC collateral + ETH gas ────────────────────────
-        # Use direct web3 calls — avoids SDK get_usdc_balance returning stale/zero
         usdc_balance, eth_balance = await asyncio.gather(
             _usdc_balance(agent_wallet),
             _eth_balance(agent_wallet),
@@ -484,40 +559,42 @@ async def execute_open(body: OpenTradeRequest, _: str = Depends(verify_api_key))
         tp_price = tp_sl_base * (1 + body.tp_pct / 100) if is_long else tp_sl_base * (1 - body.tp_pct / 100)
         sl_price = tp_sl_base * (1 - body.sl_pct / 100) if is_long else tp_sl_base * (1 + body.sl_pct / 100)
 
-        # USDC approval — approve BOTH Trading and TradingStorage contracts.
-        # We can't determine from source which contract actually calls USDC.transferFrom
-        # inside openTrade(), so we approve both. This is belt-and-suspenders:
-        # whichever one is the actual msg.sender in the ERC20 call will have allowance.
-        cdp_client_for_approval = _get_cdp_client() if using_cdp else None
+        # ── USDC Approval ───────────────────────────────────────────────────────
+        # Approve BOTH Trading and TradingStorage contracts (belt-and-suspenders:
+        # we can't know which one calls USDC.transferFrom inside openTrade()).
         _approval_targets = []
         try:
             _approval_targets.append(("Trading",        str(client.contracts["Trading"].address)))
         except Exception as _e:
-            print(f"[open_trade] WARNING: cannot resolve Trading address: {_e}")
+            print(f"[execute_open] WARNING: cannot resolve Trading contract address: {_e}")
         try:
             _approval_targets.append(("TradingStorage", str(client.contracts["TradingStorage"].address)))
         except Exception as _e:
-            print(f"[open_trade] WARNING: cannot resolve TradingStorage address: {_e}")
+            print(f"[execute_open] WARNING: cannot resolve TradingStorage contract address: {_e}")
+
+        if not _approval_targets:
+            print(f"[execute_open] WARNING: no approval targets resolved — trade may fail with allowance error")
 
         for _spender_name, _spender_addr in _approval_targets:
             _allowance = await _usdc_allowance(agent_wallet, _spender_addr)
-            print(f"[open_trade] allowance[{_spender_name}]={_allowance:.4f} USDC (need {body.collateral})")
+            print(f"[execute_open] allowance[{_spender_name}={_spender_addr}]={_allowance:.4f} USDC (need {body.collateral}) using_cdp={using_cdp}")
             if _allowance < body.collateral:
-                print(f"[open_trade] approving {_spender_name}={_spender_addr} for 10000 USDC | using_cdp={using_cdp}")
-                if using_cdp and cdp_client_for_approval:
-                    await _cdp_approve_usdc(cdp_client_for_approval, agent_wallet, _spender_addr, body.collateral)
+                print(f"[execute_open] approving {_spender_name}={_spender_addr} for 10000 USDC")
+                if using_cdp:
+                    await _cdp_svc_approve_usdc(agent_wallet, _spender_addr, body.collateral)
+                else:
+                    await client.write_contract("USDC", "approve", _spender_addr, int(10_000 * 1e6))
+                    # Verify the approval landed before proceeding
                     _post = await _usdc_allowance(agent_wallet, _spender_addr)
-                    print(f"[open_trade] {_spender_name} post-approval allowance={_post:.4f} USDC")
+                    print(f"[execute_open] {_spender_name} post-approval allowance={_post:.4f} USDC (local signer)")
                     if _post < body.collateral:
                         raise HTTPException(
                             status_code=500,
-                            detail=f"USDC approval to {_spender_name}={_spender_addr} did not take effect (post={_post:.4f})",
+                            detail=f"USDC approval to {_spender_name}={_spender_addr} did not take effect (post={_post:.4f}). Check AGENT_WALLET_PRIVATE_KEY.",
                         )
-                else:
-                    await client.write_contract("USDC", "approve", _spender_addr, int(10_000 * 1e6))
-                    print(f"[open_trade] {_spender_name} approved via local signer")
             else:
-                print(f"[open_trade] {_spender_name} allowance OK — skipping")
+                print(f"[execute_open] {_spender_name} allowance OK — skipping approval")
+        # ── End USDC Approval ───────────────────────────────────────────────────
 
         trade_input = TradeInput(
             trader=agent_wallet,
@@ -545,7 +622,7 @@ async def execute_open(body: OpenTradeRequest, _: str = Depends(verify_api_key))
 
         tx = await client.trade.build_trade_open_tx(trade_input, order_type, slippage_percentage=1)
         tx["nonce"] = await _fresh_nonce(agent_wallet)
-        receipt = await _sign_and_get_receipt(tx, body.agent_wallet_address)
+        receipt = await client.sign_and_get_receipt(tx)
 
         return {
             "success": True,
@@ -582,9 +659,10 @@ async def execute_open(body: OpenTradeRequest, _: str = Depends(verify_api_key))
 
 @router.post("/execute-close")
 async def execute_close(body: CloseTradeRequest, _: str = Depends(verify_api_key)):
-    if body.agent_wallet_address and _get_cdp_client():
-        client = _build_readonly_client()
+    using_cdp = bool(body.agent_wallet_address and _cdp_service_configured())
+    if using_cdp:
         agent_wallet = Web3.to_checksum_address(body.agent_wallet_address)
+        client = CdpTraderClient(provider_url=_get_rpc_url(), agent_wallet_address=agent_wallet)
     else:
         client = _build_trader_client()
         agent_wallet = client.get_signer().get_ethereum_address()
@@ -633,7 +711,7 @@ async def execute_close(body: CloseTradeRequest, _: str = Depends(verify_api_key
             trader=agent_wallet,
         )
         tx["nonce"] = await _fresh_nonce(agent_wallet)
-        receipt = await _sign_and_get_receipt(tx, body.agent_wallet_address)
+        receipt = await client.sign_and_get_receipt(tx)
         return {
             "success": True,
             "tx_hash": receipt.transactionHash.hex(),
@@ -659,9 +737,10 @@ async def execute_close(body: CloseTradeRequest, _: str = Depends(verify_api_key
 
 @router.post("/execute-update-tp-sl")
 async def execute_update_tp_sl(body: UpdateTpSlRequest, _: str = Depends(verify_api_key)):
-    if body.agent_wallet_address and _get_cdp_client():
-        client = _build_readonly_client()
+    using_cdp = bool(body.agent_wallet_address and _cdp_service_configured())
+    if using_cdp:
         agent_wallet = Web3.to_checksum_address(body.agent_wallet_address)
+        client = CdpTraderClient(provider_url=_get_rpc_url(), agent_wallet_address=agent_wallet)
     else:
         client = _build_trader_client()
         agent_wallet = client.get_signer().get_ethereum_address()
@@ -674,7 +753,7 @@ async def execute_update_tp_sl(body: UpdateTpSlRequest, _: str = Depends(verify_
             trader=agent_wallet,
         )
         tx["nonce"] = await _fresh_nonce(agent_wallet)
-        receipt = await _sign_and_get_receipt(tx, body.agent_wallet_address)
+        receipt = await client.sign_and_get_receipt(tx)
         return {
             "success": True,
             "tx_hash": receipt.transactionHash.hex(),
@@ -694,10 +773,10 @@ async def execute_update_tp_sl(body: UpdateTpSlRequest, _: str = Depends(verify_
 
 @router.post("/execute-update-margin")
 async def execute_update_margin(body: UpdateMarginRequest, _: str = Depends(verify_api_key)):
-    using_cdp = bool(body.agent_wallet_address and _get_cdp_client())
+    using_cdp = bool(body.agent_wallet_address and _cdp_service_configured())
     if using_cdp:
-        client = _build_readonly_client()
         agent_wallet = Web3.to_checksum_address(body.agent_wallet_address)
+        client = CdpTraderClient(provider_url=_get_rpc_url(), agent_wallet_address=agent_wallet)
     else:
         client = _build_trader_client()
         agent_wallet = client.get_signer().get_ethereum_address()
@@ -710,9 +789,8 @@ async def execute_update_margin(body: UpdateMarginRequest, _: str = Depends(veri
             if allowance < body.amount:
                 if using_cdp:
                     spender = str(client.contracts["TradingStorage"].address)
-                    print(f"[margin_update] Approving {body.amount * 10:.2f} USDC for spender={spender}")
-                    await _cdp_approve_usdc(_get_cdp_client(), agent_wallet, spender, body.amount)
-                    print(f"[margin_update] USDC approval confirmed")
+                    print(f"[margin_update] Approving 10000 USDC for spender={spender} via CDP service")
+                    await _cdp_svc_approve_usdc(agent_wallet, spender, body.amount)
                 else:
                     await client.approve_usdc_for_trading(body.amount * 10)
         tx = await client.trade.build_trade_margin_update_tx(
@@ -723,7 +801,7 @@ async def execute_update_margin(body: UpdateMarginRequest, _: str = Depends(veri
             collateral_change=body.amount,
         )
         tx["nonce"] = await _fresh_nonce(agent_wallet)
-        receipt = await _sign_and_get_receipt(tx, body.agent_wallet_address)
+        receipt = await client.sign_and_get_receipt(tx)
         return {
             "success": True,
             "tx_hash": receipt.transactionHash.hex(),
@@ -743,9 +821,10 @@ async def execute_update_margin(body: UpdateMarginRequest, _: str = Depends(veri
 
 @router.post("/execute-cancel-limit")
 async def execute_cancel_limit(body: CancelLimitRequest, _: str = Depends(verify_api_key)):
-    if body.agent_wallet_address and _get_cdp_client():
-        client = _build_readonly_client()
+    using_cdp = bool(body.agent_wallet_address and _cdp_service_configured())
+    if using_cdp:
         agent_wallet = Web3.to_checksum_address(body.agent_wallet_address)
+        client = CdpTraderClient(provider_url=_get_rpc_url(), agent_wallet_address=agent_wallet)
     else:
         client = _build_trader_client()
         agent_wallet = client.get_signer().get_ethereum_address()
@@ -756,7 +835,7 @@ async def execute_cancel_limit(body: CancelLimitRequest, _: str = Depends(verify
             trader=agent_wallet,
         )
         tx["nonce"] = await _fresh_nonce(agent_wallet)
-        receipt = await _sign_and_get_receipt(tx, body.agent_wallet_address)
+        receipt = await client.sign_and_get_receipt(tx)
         return {
             "success": True,
             "tx_hash": receipt.transactionHash.hex(),
@@ -827,8 +906,7 @@ async def withdraw_from_agent(body: WithdrawRequest, _: str = Depends(verify_api
     if body.asset.upper() not in ("ETH", "USDC"):
         raise HTTPException(status_code=400, detail="asset must be ETH or USDC")
 
-    cdp = _get_cdp_client()
-    using_cdp = bool(body.agent_wallet_address and cdp)
+    using_cdp = bool(body.agent_wallet_address and _cdp_service_configured())
 
     if using_cdp:
         agent_wallet = Web3.to_checksum_address(body.agent_wallet_address)
@@ -840,18 +918,43 @@ async def withdraw_from_agent(body: WithdrawRequest, _: str = Depends(verify_api
 
     try:
         w3 = AsyncWeb3(AsyncWeb3.AsyncHTTPProvider(_get_rpc_url()))
-        nonce = await _fresh_nonce(agent_wallet)
 
         if body.asset.upper() == "ETH":
-            amount_wei = int(body.amount * 10 ** 18)
-            tx = {
-                "to": to_addr,
-                "value": amount_wei,
-                "data": "0x",
-                "nonce": nonce,
-                "gas": 21_000,
-                "chainId": 8453,
-            }
+            if using_cdp:
+                amount_wei = int(body.amount * 10 ** 18)
+                tx_hash = await _cdp_svc_send_transaction(
+                    wallet_address=agent_wallet,
+                    to=to_addr,
+                    data="0x",
+                    value=amount_wei,
+                )
+                receipt = await w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
+                tx_hash_str = tx_hash
+            else:
+                from eth_account import Account
+                private_key = os.getenv("AGENT_WALLET_PRIVATE_KEY", "").strip().strip('"').strip("'")
+                if not private_key.startswith("0x"):
+                    private_key = "0x" + private_key
+                amount_wei = int(body.amount * 10 ** 18)
+                fee_data = await w3.eth.get_block("latest")
+                base_fee = fee_data.get("baseFeePerGas", 1_000_000_000)
+                nonce = await _fresh_nonce(agent_wallet)
+                tx = {
+                    "to": to_addr,
+                    "value": amount_wei,
+                    "data": "0x",
+                    "nonce": nonce,
+                    "gas": 21_000,
+                    "maxPriorityFeePerGas": 1_000_000,
+                    "maxFeePerGas": base_fee * 2 + 1_000_000,
+                    "type": 2,
+                    "chainId": 8453,
+                }
+                signed = Account.sign_transaction(tx, private_key)
+                raw = getattr(signed, "raw_transaction", None) or signed.rawTransaction
+                tx_hash_bytes = await w3.eth.send_raw_transaction(raw)
+                receipt = await w3.eth.wait_for_transaction_receipt(tx_hash_bytes, timeout=120)
+                tx_hash_str = receipt.transactionHash.hex()
         else:  # USDC
             w3_sync = Web3(Web3.HTTPProvider(_get_rpc_url()))
             usdc = w3_sync.eth.contract(
@@ -860,38 +963,43 @@ async def withdraw_from_agent(body: WithdrawRequest, _: str = Depends(verify_api
             )
             amount_units = int(body.amount * 10 ** 6)
             calldata = usdc.encodeABI(fn_name="transfer", args=[to_addr, amount_units])
-            tx = {
-                "to": USDC_BASE_ADDRESS,
-                "value": 0,
-                "data": calldata,
-                "nonce": nonce,
-                "gas": 100_000,
-                "chainId": 8453,
-            }
-
-        if using_cdp:
-            receipt = await _cdp_send_and_receipt(cdp, agent_wallet, tx)
-            tx_hash = receipt.transactionHash.hex()
-        else:
-            # local EOA: sign with private key directly
-            from eth_account import Account
-            private_key = os.getenv("AGENT_WALLET_PRIVATE_KEY", "").strip().strip('"').strip("'")
-            if not private_key.startswith("0x"):
-                private_key = "0x" + private_key
-            fee_data = await w3.eth.get_block("latest")
-            base_fee = fee_data.get("baseFeePerGas", 1_000_000_000)
-            tx["maxPriorityFeePerGas"] = 1_000_000
-            tx["maxFeePerGas"] = base_fee * 2 + 1_000_000
-            tx["type"] = 2
-            signed = Account.sign_transaction(tx, private_key)
-            raw = getattr(signed, "raw_transaction", None) or signed.rawTransaction
-            tx_hash_bytes = await w3.eth.send_raw_transaction(raw)
-            receipt = await w3.eth.wait_for_transaction_receipt(tx_hash_bytes, timeout=120)
-            tx_hash = receipt.transactionHash.hex()
+            if using_cdp:
+                tx_hash = await _cdp_svc_send_transaction(
+                    wallet_address=agent_wallet,
+                    to=USDC_BASE_ADDRESS,
+                    data=calldata,
+                    value=0,
+                )
+                receipt = await w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
+                tx_hash_str = tx_hash
+            else:
+                from eth_account import Account
+                private_key = os.getenv("AGENT_WALLET_PRIVATE_KEY", "").strip().strip('"').strip("'")
+                if not private_key.startswith("0x"):
+                    private_key = "0x" + private_key
+                fee_data = await w3.eth.get_block("latest")
+                base_fee = fee_data.get("baseFeePerGas", 1_000_000_000)
+                nonce = await _fresh_nonce(agent_wallet)
+                tx = {
+                    "to": USDC_BASE_ADDRESS,
+                    "value": 0,
+                    "data": calldata,
+                    "nonce": nonce,
+                    "gas": 100_000,
+                    "maxPriorityFeePerGas": 1_000_000,
+                    "maxFeePerGas": base_fee * 2 + 1_000_000,
+                    "type": 2,
+                    "chainId": 8453,
+                }
+                signed = Account.sign_transaction(tx, private_key)
+                raw = getattr(signed, "raw_transaction", None) or signed.rawTransaction
+                tx_hash_bytes = await w3.eth.send_raw_transaction(raw)
+                receipt = await w3.eth.wait_for_transaction_receipt(tx_hash_bytes, timeout=120)
+                tx_hash_str = receipt.transactionHash.hex()
 
         return {
             "success": True,
-            "tx_hash": tx_hash,
+            "tx_hash": tx_hash_str,
             "asset": body.asset.upper(),
             "amount": body.amount,
             "from": agent_wallet,
