@@ -92,11 +92,13 @@ function classifyError(errorStr: string): ExecutionStatus {
   if (/insufficient eth|not enough eth|low gas|gas.*insufficient|eth.*gas|gas.*limit/i.test(e))
     return 'LOW_GAS';
 
-  if (/revert|execution reverted|vm exception|call_exception|transaction failed on.chain/i.test(e))
-    return 'CONTRACT_REVERT';
-
+  // Check APPROVAL_REQUIRED before CONTRACT_REVERT — "ERC20: transfer amount exceeds allowance" contains
+  // "execution reverted" as a prefix, but the root cause is missing allowance, not a generic revert.
   if (/approve|allowance|erc20.*transfer.*amount.*exceeds|not approved/i.test(e))
     return 'APPROVAL_REQUIRED';
+
+  if (/revert|execution reverted|vm exception|call_exception|transaction failed on.chain/i.test(e))
+    return 'CONTRACT_REVERT';
 
   if (/slippage|price moved|price impact|acceptable price|max slippage/i.test(e))
     return 'SLIPPAGE_EXCEEDED';
@@ -123,6 +125,8 @@ function buildClassifiedMessage(
   rawData?: Record<string, any>,
 ): string {
   const header = `[TOOL_RESULT_CLASSIFIED]\nTool: ${toolName}\nStatus: ${status}`;
+  // Strip raw hex blobs from error detail so Claude receives clean human-readable errors
+  const cleanError = stripHexFromError(errorDetail);
 
   switch (status) {
     case 'CONFIRMED': {
@@ -149,7 +153,7 @@ function buildClassifiedMessage(
         `Available: $${usdc} USDC | Required: $${needed} USDC | Deficit: $${deficit} USDC`,
         `Do NOT report success. Do NOT fabricate a tx_hash.`,
         `Tell the user: the trade could not execute because the agent wallet needs $${deficit} more USDC. Provide the agent wallet address and ask them to deposit.`,
-        `Error: ${errorDetail}`,
+        `Error: ${cleanError}`,
         `[/TOOL_RESULT_CLASSIFIED]`,
       ].join('\n');
     }
@@ -160,7 +164,7 @@ function buildClassifiedMessage(
         `Agent wallet has insufficient ETH for gas.`,
         `Do NOT report success. Do NOT fabricate a tx_hash.`,
         `Tell the user: the agent wallet needs at least 0.001 ETH for gas on Base (covers Avantis execution fee + gas). Provide the agent wallet address and ask them to send ETH.`,
-        `Error: ${errorDetail}`,
+        `Error: ${cleanError}`,
         `[/TOOL_RESULT_CLASSIFIED]`,
       ].join('\n');
 
@@ -170,17 +174,17 @@ function buildClassifiedMessage(
         `The on-chain transaction was reverted by the contract.`,
         `Do NOT report success. Do NOT fabricate a tx_hash.`,
         `Tell the user the trade failed due to a contract revert. Suggest checking position size, leverage limits, or pair availability.`,
-        `Error: ${errorDetail}`,
+        `Error: ${cleanError}`,
         `[/TOOL_RESULT_CLASSIFIED]`,
       ].join('\n');
 
     case 'APPROVAL_REQUIRED':
       return [
         header,
-        `The agent wallet has not approved the protocol to spend USDC.`,
+        `The trade failed because the USDC allowance was insufficient despite auto-approval. The spender contract may have changed or the approval did not land correctly.`,
         `Do NOT report success. Do NOT fabricate a tx_hash.`,
-        `Tell the user the agent wallet needs to approve USDC spending on Avantis before this trade can execute.`,
-        `Error: ${errorDetail}`,
+        `Tell the user the trade failed due to a USDC allowance issue. The service attempted to approve automatically but it did not take effect. Advise them to try again — the next attempt will re-approve.`,
+        `Error: ${cleanError}`,
         `[/TOOL_RESULT_CLASSIFIED]`,
       ].join('\n');
 
@@ -190,7 +194,7 @@ function buildClassifiedMessage(
         `The trade failed because price moved beyond the acceptable slippage tolerance.`,
         `Do NOT report success. Do NOT fabricate a tx_hash.`,
         `Tell the user the market moved too fast. They may retry with a wider slippage tolerance or a limit order.`,
-        `Error: ${errorDetail}`,
+        `Error: ${cleanError}`,
         `[/TOOL_RESULT_CLASSIFIED]`,
       ].join('\n');
 
@@ -200,7 +204,7 @@ function buildClassifiedMessage(
         `No open position was found at the specified trade index.`,
         `Do NOT report success. Do NOT fabricate a tx_hash.`,
         `Tell the user the position may have already been closed or the trade index is wrong. Call get_avantis_live_positions to refresh.`,
-        `Error: ${errorDetail}`,
+        `Error: ${cleanError}`,
         `[/TOOL_RESULT_CLASSIFIED]`,
       ].join('\n');
 
@@ -210,7 +214,7 @@ function buildClassifiedMessage(
         `The position or order is already closed or cancelled.`,
         `Do NOT report success. Do NOT fabricate a tx_hash.`,
         `Tell the user this position or order no longer exists.`,
-        `Error: ${errorDetail}`,
+        `Error: ${cleanError}`,
         `[/TOOL_RESULT_CLASSIFIED]`,
       ].join('\n');
 
@@ -221,7 +225,7 @@ function buildClassifiedMessage(
         `Do NOT proceed. Do NOT use balance or position data from earlier in this conversation.`,
         `Do NOT fabricate a tx_hash or claim the operation succeeded.`,
         `Tell the user the service is temporarily unavailable and ask them to retry in a moment.`,
-        `Error: ${errorDetail}`,
+        `Error: ${cleanError}`,
         `[/TOOL_RESULT_CLASSIFIED]`,
       ].join('\n');
 
@@ -251,7 +255,7 @@ function buildClassifiedMessage(
         `The execution tool returned an unrecognised error.`,
         `Do NOT report success. Do NOT fabricate a tx_hash.`,
         `Tell the user the operation failed and share the error below so they can decide next steps.`,
-        `Error: ${errorDetail}`,
+        `Error: ${cleanError}`,
         `[/TOOL_RESULT_CLASSIFIED]`,
       ].join('\n');
   }
@@ -512,16 +516,29 @@ export function detectPostResponseHallucination(
   return null; // no hallucination detected
 }
 
+/** Strip hex-encoded ABI revert data from error strings so users never see raw 0x blobs. */
+function stripHexFromError(errorDetail: string | undefined): string {
+  if (!errorDetail) return '';
+  return errorDetail
+    // Remove trailing hex blob like ", '0x08c379a0...'" or " 0x08c379a0..."
+    .replace(/,?\s*'0x[a-fA-F0-9]{8,}'/g, '')
+    .replace(/\s+0x[a-fA-F0-9]{40,}/g, '')
+    // Unwrap tuple format: ('execution reverted: ...', ...) → execution reverted: ...
+    .replace(/^\(+'?(.*?)'?,.*\)$/s, '$1')
+    .trim();
+}
+
 function buildHallucinationOverride(result: ClassifiedResult): string {
+  const err = stripHexFromError(result.errorDetail);
   switch (result.status) {
     case 'INSUFFICIENT_FUNDS':
-      return `The ${result.toolName} could not execute — the agent wallet has insufficient USDC. ${result.errorDetail || ''} Please deposit the required amount to the agent wallet address and try again.`;
+      return `The ${result.toolName} could not execute — the agent wallet has insufficient USDC. ${err} Please deposit the required amount to the agent wallet address and try again.`;
 
     case 'LOW_GAS':
       return `The ${result.toolName} could not execute — the agent wallet needs more ETH for gas on Base. Please send at least 0.001 ETH to the agent wallet address and try again.`;
 
     case 'CONTRACT_REVERT':
-      return `The ${result.toolName} failed — the transaction was reverted on-chain. No funds were moved. ${result.errorDetail || ''} Please check position limits or try again.`;
+      return `The ${result.toolName} failed — the transaction was reverted on-chain. No funds were moved. ${err} Please check position size, leverage limits, or pair availability.`;
 
     case 'NETWORK_FAIL':
       return `The execution service is currently unreachable. No on-chain action was taken. Please try again in a moment.`;
@@ -530,7 +547,7 @@ function buildHallucinationOverride(result: ClassifiedResult): string {
       return `The execution service returned an ambiguous response — no transaction hash was confirmed. Please check your wallet or Basescan before assuming the operation completed.`;
 
     case 'APPROVAL_REQUIRED':
-      return `The ${result.toolName} could not execute — the agent wallet needs to approve USDC spending on Avantis first. ${result.errorDetail || ''}`;
+      return `The ${result.toolName} could not execute — the agent wallet USDC allowance is insufficient. The service attempted to approve automatically but the trade still failed. ${err} Please try again or contact support.`;
 
     case 'SLIPPAGE_EXCEEDED':
       return `The ${result.toolName} failed — price moved beyond the slippage tolerance. No position was opened. You may retry with a limit order or wider slippage setting.`;
@@ -542,6 +559,6 @@ function buildHallucinationOverride(result: ClassifiedResult): string {
       return `The position or order targeted by ${result.toolName} is already closed or cancelled.`;
 
     default:
-      return `The ${result.toolName} returned an error and could not complete. ${result.errorDetail || 'No transaction was confirmed.'} Please try again or contact support.`;
+      return `The ${result.toolName} returned an error and could not complete. ${err || 'No transaction was confirmed.'} Please try again or contact support.`;
   }
 }
