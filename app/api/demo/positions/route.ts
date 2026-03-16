@@ -8,8 +8,8 @@ const BASE_RPC_URL = process.env.QUICKNODE_BASE_RPC_URL || process.env.BASE_RPC_
 
 /**
  * GET /api/demo/positions?wallet=0x...
- * Returns active agent positions from MongoDB.
- * Frontend polls this every 30s when positions are open.
+ * Returns active + recently closed agent positions from MongoDB.
+ * Frontend uses this for immediate reads (after open/close events).
  */
 export async function GET(request: NextRequest) {
   const wallet = request.nextUrl.searchParams.get('wallet');
@@ -18,11 +18,16 @@ export async function GET(request: NextRequest) {
   }
 
   await connectDB();
+  // Return active positions + positions closed in the last 24h
+  const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
   const positions = await Position.find({
     walletAddress: wallet.toLowerCase(),
     agentWallet: BANKR_WALLET_ADDRESS.toLowerCase(),
-    status: 'active',
-  }).sort({ createdAt: -1 }).lean();
+    $or: [
+      { status: 'active' },
+      { status: 'closed', updatedAt: { $gte: oneDayAgo } },
+    ],
+  }).sort({ status: 1, createdAt: -1 }).lean(); // active first, then closed
 
   return NextResponse.json({ positions, agentWallet: BANKR_WALLET_ADDRESS });
 }

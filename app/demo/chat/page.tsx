@@ -130,6 +130,7 @@ function formatPnl(v: number | undefined): string {
   const abs = Math.abs(v);
   const sign = v >= 0 ? '+' : '-';
   if (abs >= 1000) return `${sign}$${(abs / 1000).toFixed(1)}K`;
+  if (abs < 10) return `${sign}$${abs.toFixed(2)}`;
   return `${sign}$${abs.toFixed(0)}`;
 }
 
@@ -421,7 +422,9 @@ export default function ChatPage() {
         const d = await res.json();
         const positions = d.positions || [];
         setAgentPositions(positions);
-        if (positions.length === 0) setPositionPollingActive(false);
+        // Auto-stop polling only when no ACTIVE positions remain
+        const hasActive = positions.some((p: any) => p.status === 'active');
+        if (!hasActive) setPositionPollingActive(false);
       }
     } catch (err) {
       console.error('[position-poll] DB fetch error:', err);
@@ -436,7 +439,8 @@ export default function ChatPage() {
         const d = await res.json();
         const positions = d.positions || [];
         setAgentPositions(positions);
-        if (positions.length === 0) setPositionPollingActive(false);
+        const hasActive = positions.some((p: any) => p.status === 'active');
+        if (!hasActive) setPositionPollingActive(false);
       }
     } catch (err) {
       console.error('[position-poll] sync error:', err);
@@ -1154,7 +1158,10 @@ export default function ChatPage() {
                     <div className={s.sectionDivider}>
                       <span className={`${s.sdDot} ${s.perp}`}></span>
                       Agent Positions
-                      <span className={s.sdCount}>{agentPositions.length} open</span>
+                      <span className={s.sdCount}>
+                        {agentPositions.filter(p => p.status === 'active').length} open
+                        {agentPositions.filter(p => p.status === 'closed').length > 0 && ` · ${agentPositions.filter(p => p.status === 'closed').length} closed`}
+                      </span>
                       {positionPollingActive && (
                         <span className={s.sdCount} style={{ marginLeft: 'auto', opacity: 0.6, fontSize: '10px', fontFamily: 'monospace' }}>
                           ⟳ {Math.floor(positionCountdown / 60)}:{String(positionCountdown % 60).padStart(2, '0')}
@@ -1179,9 +1186,10 @@ export default function ChatPage() {
                         const lastAlert = getLastAlertForPosition(pair);
                         const isLong = (pos.direction || '').toUpperCase().includes('LONG');
                         const pnlPos = (pos.pnl || 0) >= 0;
+                        const isClosed = pos.status === 'closed';
 
                         return (
-                          <div key={key} className={s.posCard} id={`card-agent-${symbol}`}>
+                          <div key={key} className={s.posCard} id={`card-agent-${symbol}`} style={isClosed ? { opacity: 0.55 } : undefined}>
                             <div className={s.posHeader} onClick={() => toggleCard(key)}>
                               <div className={s.posAssetWrap}>
                                 <span className={s.posAsset}>{symbol}</span>
@@ -1189,6 +1197,15 @@ export default function ChatPage() {
                                   {isLong ? 'LONG' : 'SHORT'}{pos.leverage ? ` ${pos.leverage}×` : ''}
                                 </span>
                                 <span className={s.posVenue}>Avantis</span>
+                                <span style={{
+                                  fontSize: '9px',
+                                  fontWeight: 600,
+                                  letterSpacing: '0.5px',
+                                  padding: '1px 5px',
+                                  borderRadius: '3px',
+                                  background: isClosed ? 'rgba(255,80,80,0.15)' : 'rgba(0,212,170,0.15)',
+                                  color: isClosed ? '#ff5050' : '#00d4aa',
+                                }}>{isClosed ? 'CLOSED' : 'OPEN'}</span>
                                 {alertDotType && (
                                   <span className={`${s.posAlertDot} ${s.visible} ${s[alertDotType]}`}></span>
                                 )}
