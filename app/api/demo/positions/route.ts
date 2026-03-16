@@ -18,16 +18,12 @@ export async function GET(request: NextRequest) {
   }
 
   await connectDB();
-  // Return active positions + positions closed in the last 24h
-  const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  // Return only active positions — closed positions are hidden
   const positions = await Position.find({
     walletAddress: wallet.toLowerCase(),
     agentWallet: BANKR_WALLET_ADDRESS.toLowerCase(),
-    $or: [
-      { status: 'active' },
-      { status: 'closed', updatedAt: { $gte: oneDayAgo } },
-    ],
-  }).sort({ status: 1, createdAt: -1 }).lean(); // active first, then closed
+    status: 'active',
+  }).sort({ createdAt: -1 }).lean();
 
   return NextResponse.json({ positions, agentWallet: BANKR_WALLET_ADDRESS });
 }
