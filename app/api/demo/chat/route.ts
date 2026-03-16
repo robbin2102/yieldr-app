@@ -1407,10 +1407,9 @@ async function executeTool(name: string, input: any, wallet?: string, agentCtxId
 
       // ── Agent Trading Execution Tools ────────────────────────────────────────
       case 'get_agent_wallet_balance': {
-        // Use static trade wallet if configured (bankr wallet); fall back to CDP wallet
-        const tradeWallet = process.env.STATIC_TRADE_WALLET_ADDRESS || agentCtxWallet;
+        const tradeWallet = process.env.STATIC_TRADE_WALLET_ADDRESS;
         if (!tradeWallet) {
-          return JSON.stringify({ error: 'No trade wallet configured. Set STATIC_TRADE_WALLET_ADDRESS or create an agent CDP wallet.' });
+          return JSON.stringify({ error: 'STATIC_TRADE_WALLET_ADDRESS is not configured.' });
         }
         const pythonUrl = normalizeUrl(process.env.PYTHON_SERVICE_URL || 'http://localhost:8001');
         const apiKey    = process.env.YIELDR_DATA_API_SECRET || process.env.API_KEY || '';
@@ -1444,9 +1443,8 @@ async function executeTool(name: string, input: any, wallet?: string, agentCtxId
 
       case 'open_trade': {
         if (!agentCtxId) return JSON.stringify({ success: false, error: 'No agent ID in context.' });
-        // Use static trade wallet if configured (bankr wallet); fall back to CDP wallet
-        const tradeWalletForOpen = process.env.STATIC_TRADE_WALLET_ADDRESS || agentCtxWallet;
-        if (!tradeWalletForOpen) return JSON.stringify({ success: false, error: 'No trade wallet configured.' });
+        const tradeWalletForOpen = process.env.STATIC_TRADE_WALLET_ADDRESS;
+        if (!tradeWalletForOpen) return JSON.stringify({ success: false, error: 'STATIC_TRADE_WALLET_ADDRESS is not configured.' });
         const { pair, pair_index, direction, collateral, leverage, tp_pct, sl_pct, order_type = 'MARKET', open_price } = input;
         console.log(`[open_trade] ── ENTER ── pair=${pair} direction=${direction} collateral=${collateral} leverage=${leverage} wallet=${tradeWalletForOpen} agentId=${agentCtxId}`);
 
@@ -2261,7 +2259,7 @@ User Wallet Address: ${walletAddress}
 Agent Name: ${agentName}
 Agent ID: ${agentId || 'N/A'}
 Agent Wallet (CDP): ${agentWalletAddress || 'Not configured — wallet not yet created'}
-Trade Execution Wallet: ${process.env.STATIC_TRADE_WALLET_ADDRESS || agentWalletAddress || 'Not configured'}
+Trade Execution Wallet: ${process.env.STATIC_TRADE_WALLET_ADDRESS || 'Not configured (set STATIC_TRADE_WALLET_ADDRESS)'}
 Total Value: ~$${totalPortfolioValue.toFixed(2)}
 Positions: ${portfolioSummary?.positionCount || 0}
 Token Holdings: $${tokensTotalUsd.toFixed(2)} across ${tokens.length} tokens
