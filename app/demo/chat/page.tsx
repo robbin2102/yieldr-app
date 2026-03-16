@@ -1263,14 +1263,18 @@ export default function ChatPage() {
                   </>
                 )}
 
-                {/* Perpetuals */}
+                {/* Perpetuals — only show positions with meaningful PnL (> $0.10) */}
+                {(() => {
+                  const activePerpPositions = perpPositions.filter(p => Math.abs(p.pnl || 0) > 0.1);
+                  return (
+                    <>
                 <div className={s.sectionDivider}>
                   <span className={`${s.sdDot} ${s.perp}`}></span>
                   Perpetuals
-                  <span className={s.sdCount}>{perpPositions.length} open</span>
+                  <span className={s.sdCount}>{activePerpPositions.length} open</span>
                 </div>
 
-                {perpPositions.length === 0 ? (
+                {activePerpPositions.length === 0 ? (
                   <div className={s.emptyState}>
                     <div className={s.emptyIcon}>📊</div>
                     <div className={s.emptyTitle}>No perpetual positions found</div>
@@ -1279,7 +1283,7 @@ export default function ChatPage() {
                     </div>
                   </div>
                 ) : (
-                  perpPositions.map((pos, i) => {
+                  activePerpPositions.map((pos, i) => {
                     const key = `perp-${i}`;
                     const isExpanded = expandedCards.has(key);
                     const pair = pos.pair || '—';
@@ -1372,6 +1376,9 @@ export default function ChatPage() {
                     );
                   })
                 )}
+                    </>
+                  );
+                })()}
 
                 {/* Predictions */}
                 <div className={s.sectionDivider}>
