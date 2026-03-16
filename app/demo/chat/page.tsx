@@ -1958,7 +1958,7 @@ export default function ChatPage() {
               />
               <button
                 className={s.chatSendBtn}
-                onClick={handleSend}
+                onClick={() => handleSend()}
                 disabled={isStreaming || creditsExceeded}
               >↑</button>
             </div>
