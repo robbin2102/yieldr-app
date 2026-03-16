@@ -38,12 +38,13 @@ const BASE_RPC_URL = process.env.QUICKNODE_BASE_RPC_URL || process.env.BASE_RPC_
 const BANKR_API_BASE = 'https://api.bankr.bot';
 const BANKR_WALLET_ADDRESS = '0xcdc44ffda057aca49bb9c8b7d54de212742729c7';
 const USDC_BASE_ADDRESS = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
+const BANKR_API_KEY = process.env.BANKR_API_KEY ?? '';
 
 /** Submit a natural-language prompt to Bankr and poll until complete (max 60 × 2 s = 2 min). */
 async function submitBankrPrompt(prompt: string): Promise<{ success: boolean; response?: string; status: string }> {
-  const apiKey = process.env.BANKR_API_KEY || '';
-  if (!apiKey) throw new Error('Bankr authentication issue (BANKR_API_KEY is not configured)');
-  console.log(`[bankr] Using API key: ${apiKey.slice(0, 6)}...${apiKey.slice(-4)} (len=${apiKey.length})`);
+  if (!BANKR_API_KEY) throw new Error('Bankr authentication issue (BANKR_API_KEY is not configured)');
+  console.log(`[bankr] Using API key: ${BANKR_API_KEY.slice(0, 6)}...${BANKR_API_KEY.slice(-4)} (len=${BANKR_API_KEY.length})`);
+  const apiKey = BANKR_API_KEY;
   const submitRes = await fetch(`${BANKR_API_BASE}/agent/prompt`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-API-Key': apiKey },
@@ -1460,7 +1461,7 @@ async function executeTool(name: string, input: any, wallet?: string, agentCtxId
       // REVERT POINT: restore CDP/Railway code from git history (commit 0a9f445 / 418a27e).
       case 'get_agent_wallet_balance': {
         // Use Bankr REST API to get balances for the Bankr agent wallet
-        const apiKey = process.env.BANKR_API_KEY || '';
+        const apiKey = BANKR_API_KEY;
         console.log(`[balance] Fetching Bankr wallet balances from ${BANKR_API_BASE}/agent/balances?chains=base`);
         const res = await fetch(`${BANKR_API_BASE}/agent/balances?chains=base`, {
           headers: { 'X-API-Key': apiKey },
@@ -1535,7 +1536,7 @@ async function executeTool(name: string, input: any, wallet?: string, agentCtxId
         // BANKR MIGRATION: Withdraw via Bankr /agent/submit REST endpoint (synchronous, returns tx hash).
         // ETH: native transfer. USDC: ERC20 transfer(address,uint256) calldata.
         const { amount, asset, to_address } = input;
-        const apiKey = process.env.BANKR_API_KEY || '';
+        const apiKey = BANKR_API_KEY;
         let transaction: Record<string, any>;
 
         if (asset === 'ETH') {
