@@ -130,6 +130,7 @@ function formatPnl(v: number | undefined): string {
   const abs = Math.abs(v);
   const sign = v >= 0 ? '+' : '-';
   if (abs >= 1000) return `${sign}$${(abs / 1000).toFixed(1)}K`;
+  if (abs < 10) return `${sign}$${abs.toFixed(2)}`;
   return `${sign}$${abs.toFixed(0)}`;
 }
 
@@ -243,6 +244,14 @@ export default function ChatPage() {
   const [monitoringAlerts, setMonitoringAlerts] = useState<MonitoringAlertUI[]>([]);
   const [unreadAlerts, setUnreadAlerts] = useState(0);
   const [expandedAlerts, setExpandedAlerts] = useState<Set<string>>(new Set());
+
+  // Agent position polling (5 min cycle, starts on position_opened, stops when no active positions)
+  const POSITION_POLL_INTERVAL = 300; // 5 minutes in seconds
+  const [agentPositions, setAgentPositions] = useState<PerpPosition[]>([]);
+  const [positionPollingActive, setPositionPollingActive] = useState(false);
+  const [positionCountdown, setPositionCountdown] = useState(POSITION_POLL_INTERVAL);
+  const positionPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const positionCountdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Ticker state
 
@@ -403,6 +412,95 @@ export default function ChatPage() {
     }, 30000);
     return () => clearInterval(iv);
   }, [mounted, effectiveWallet, fetchMonitoring, fetchAlerts]);
+
+  // ── Agent position polling (5 min cycle)
+  // Read positions from DB (fast, no chain sync)
+  const fetchAgentPositionsFromDB = useCallback(async (wallet: string) => {
+    try {
+      const res = await fetch(`/api/demo/positions?wallet=${wallet}`);
+      if (res.ok) {
+        const d = await res.json();
+        const positions = d.positions || [];
+        setAgentPositions(positions);
+        if (positions.length === 0) setPositionPollingActive(false);
+      }
+    } catch (err) {
+      console.error('[position-poll] DB fetch error:', err);
+    }
+  }, []);
+
+  // Sync with chain then read (slower, used for periodic refresh)
+  const syncAgentPositions = useCallback(async (wallet: string) => {
+    try {
+      const res = await fetch(`/api/demo/positions?wallet=${wallet}`, { method: 'POST' });
+      if (res.ok) {
+        const d = await res.json();
+        const positions = d.positions || [];
+        setAgentPositions(positions);
+        if (positions.length === 0) setPositionPollingActive(false);
+      }
+    } catch (err) {
+      console.error('[position-poll] sync error:', err);
+    }
+  }, []);
+
+  const startPositionPolling = useCallback(() => {
+    if (positionPollingActive) return; // already running
+    setPositionPollingActive(true);
+    setPositionCountdown(POSITION_POLL_INTERVAL);
+  }, [positionPollingActive]);
+
+  const stopPositionPolling = useCallback(() => {
+    setPositionPollingActive(false);
+    setAgentPositions([]);
+    setPositionCountdown(POSITION_POLL_INTERVAL);
+  }, []);
+
+  // Manage the polling interval and countdown timer
+  useEffect(() => {
+    // Clear any existing intervals
+    if (positionPollRef.current) { clearInterval(positionPollRef.current); positionPollRef.current = null; }
+    if (positionCountdownRef.current) { clearInterval(positionCountdownRef.current); positionCountdownRef.current = null; }
+
+    if (!positionPollingActive || !effectiveWallet) return;
+
+    // Initial fetch from DB (fast — shows position saved by open_trade)
+    fetchAgentPositionsFromDB(effectiveWallet);
+
+    // Countdown timer (ticks every 1s)
+    positionCountdownRef.current = setInterval(() => {
+      setPositionCountdown(prev => {
+        if (prev <= 1) return POSITION_POLL_INTERVAL; // reset after reaching 0
+        return prev - 1;
+      });
+    }, 1000);
+
+    // Periodic chain sync every 5 minutes (updates PnL, current price, etc.)
+    positionPollRef.current = setInterval(() => {
+      syncAgentPositions(effectiveWallet);
+      setPositionCountdown(POSITION_POLL_INTERVAL); // reset countdown
+    }, POSITION_POLL_INTERVAL * 1000);
+
+    return () => {
+      if (positionPollRef.current) clearInterval(positionPollRef.current);
+      if (positionCountdownRef.current) clearInterval(positionCountdownRef.current);
+    };
+  }, [positionPollingActive, effectiveWallet, fetchAgentPositionsFromDB, syncAgentPositions]);
+
+  // Check on mount if there are already active agent positions → resume polling
+  useEffect(() => {
+    if (!mounted || !effectiveWallet) return;
+    fetch(`/api/demo/positions?wallet=${effectiveWallet}`)
+      .then(r => r.json())
+      .then(d => {
+        const positions = d.positions || [];
+        if (positions.length > 0) {
+          setAgentPositions(positions);
+          setPositionPollingActive(true);
+        }
+      })
+      .catch(() => {});
+  }, [mounted, effectiveWallet]);
 
   // ── Ticker rotation
   const activeTasks = monitoringTasks.filter(t => t.status === 'active');
@@ -708,6 +806,8 @@ export default function ChatPage() {
               setMessages(prev => prev.map(m => m.id === agentMsgId ? { ...m, content: '' } : m));
             } else if (parsed.type === 'tool_status') {
               setToolStatus(parsed.status);
+            } else if (parsed.type === 'agent_activity') {
+              setToolStatus(parsed.message);
             } else if (parsed.type === 'session') {
               setSessionId(parsed.sessionId);
               loadChatSessions();
@@ -741,6 +841,14 @@ export default function ChatPage() {
                 actionType: 'trade_approval',
                 actionData: { params: parsed.params, rationale: parsed.rationale, position_size: parsed.position_size, entry_conditions: parsed.entry_conditions || [], exit_conditions: parsed.exit_conditions || [] },
               });
+            } else if (parsed.type === 'position_opened') {
+              // Trade executed — start 5m position polling cycle
+              startPositionPolling();
+              // Immediate fetch from DB to show the just-saved position
+              if (effectiveWallet) fetchAgentPositionsFromDB(effectiveWallet);
+            } else if (parsed.type === 'position_closed') {
+              // Position closed — refresh from DB, polling auto-stops when 0 positions
+              if (effectiveWallet) fetchAgentPositionsFromDB(effectiveWallet);
             }
           } catch {}
         }
@@ -766,7 +874,7 @@ export default function ChatPage() {
         fetchAlerts(effectiveWallet);
       }, 2000);
     }
-  }, [inputValue, isStreaming, creditsExceeded, messages, effectiveWallet, sessionId, loadChatSessions, fetchCredits, fetchMonitoring, fetchAlerts]);
+  }, [inputValue, isStreaming, creditsExceeded, messages, effectiveWallet, sessionId, loadChatSessions, fetchCredits, fetchMonitoring, fetchAlerts, startPositionPolling, fetchAgentPositionsFromDB]);
 
   // ── Logout
   const handleLogout = useCallback(() => {
@@ -960,6 +1068,34 @@ export default function ChatPage() {
         </div>
       </nav>
 
+      {/* ═══ DEMO BANNER ═══ */}
+      <div style={{
+        background: 'linear-gradient(90deg, #1a1a2e 0%, #16213e 50%, #1a1a2e 100%)',
+        borderBottom: '1px solid rgba(0, 212, 170, 0.2)',
+        padding: '6px 16px',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: '8px',
+        fontSize: '12px',
+        color: 'rgba(255,255,255,0.7)',
+        letterSpacing: '0.3px',
+      }}>
+        <span style={{ color: '#00d4aa', fontWeight: 600 }}>DEMO</span>
+        <span style={{ opacity: 0.4 }}>|</span>
+        <span>This terminal is for demo purposes only. Full version launching soon.</span>
+        <span style={{
+          marginLeft: '8px',
+          background: 'rgba(0, 212, 170, 0.15)',
+          color: '#00d4aa',
+          padding: '2px 8px',
+          borderRadius: '4px',
+          fontSize: '10px',
+          fontWeight: 600,
+          letterSpacing: '0.5px',
+        }}>BETA COMING SOON</span>
+      </div>
+
       {/* ═══ APP BODY ═══ */}
       <div className={s.appBody}>
 
@@ -1013,14 +1149,132 @@ export default function ChatPage() {
             {/* ══ POSITIONS TAB ══ */}
             {activeLeftTab === 'positions' && (
               <>
-                {/* Perpetuals */}
+                {/* Agent Positions (Bankr wallet) */}
+                {(agentPositions.length > 0 || positionPollingActive) && (
+                  <>
+                    <div className={s.sectionDivider}>
+                      <span className={`${s.sdDot} ${s.perp}`}></span>
+                      Agent Positions
+                      <span className={s.sdCount}>{agentPositions.length} open</span>
+                      {positionPollingActive && (
+                        <span className={s.sdCount} style={{ marginLeft: 'auto', opacity: 0.6, fontSize: '10px', fontFamily: 'monospace' }}>
+                          ⟳ {Math.floor(positionCountdown / 60)}:{String(positionCountdown % 60).padStart(2, '0')}
+                        </span>
+                      )}
+                    </div>
+
+                    {agentPositions.length === 0 ? (
+                      <div className={s.emptyState}>
+                        <div className={s.emptyIcon}>⏳</div>
+                        <div className={s.emptyTitle}>Waiting for position data...</div>
+                        <div className={s.emptyText}>Position was just opened. Data refreshes every 5 minutes.</div>
+                      </div>
+                    ) : (
+                      agentPositions.map((pos, i) => {
+                        const key = `agent-${i}`;
+                        const isExpanded = expandedCards.has(key);
+                        const pair = pos.pair || '—';
+                        const symbol = normaliseSymbol(pair);
+                        const pills = getPillsForPosition(pair);
+                        const alertDotType = hasUnreadAlertForPosition(pair);
+                        const lastAlert = getLastAlertForPosition(pair);
+                        const isLong = (pos.direction || '').toUpperCase().includes('LONG');
+                        const pnlPos = (pos.pnl || 0) >= 0;
+                        return (
+                          <div key={key} className={s.posCard} id={`card-agent-${symbol}`}>
+                            <div className={s.posHeader} onClick={() => toggleCard(key)}>
+                              <div className={s.posAssetWrap}>
+                                <span className={s.posAsset}>{symbol}</span>
+                                <span className={`${s.posTag} ${isLong ? s.long : s.short}`}>
+                                  {isLong ? 'LONG' : 'SHORT'}{pos.leverage ? ` ${pos.leverage}×` : ''}
+                                </span>
+                                <span className={s.posVenue}>Avantis</span>
+                                {alertDotType && (
+                                  <span className={`${s.posAlertDot} ${s.visible} ${s[alertDotType]}`}></span>
+                                )}
+                              </div>
+                              <div className={s.posPnlWrap}>
+                                <div className={`${s.posPnl} ${pnlPos ? s.g : s.r}`}>{formatPnl(pos.pnl)}</div>
+                                <div className={`${s.posPnlSub} ${pnlPos ? s.g : s.r}`}>{formatPct(pos.roi)}</div>
+                              </div>
+                              <span className={`${s.chevron} ${isExpanded ? s.open : ''}`}>▾</span>
+                            </div>
+
+                            {pills.length > 0 && (
+                              <div className={s.pillsRow}>
+                                {pills.map((p, pi) => (
+                                  <span key={pi} className={`${s.sigPill} ${s[p.color] ?? ''}`}>{p.label}</span>
+                                ))}
+                              </div>
+                            )}
+
+                            <div className={`${s.posStats} ${s.perpStats}`}>
+                              <div className={s.psItem}>
+                                <div className={s.psLbl}>Entry</div>
+                                <div className={s.psVal}>{formatPrice(pos.entryPrice)}</div>
+                              </div>
+                              <div className={s.psItem}>
+                                <div className={s.psLbl}>Mark</div>
+                                <div className={s.psVal}>{formatPrice(pos.currentPrice)}</div>
+                              </div>
+                              <div className={s.psItem}>
+                                <div className={s.psLbl}>Size</div>
+                                <div className={s.psVal}>{formatUsd(pos.positionSize || pos.margin)}</div>
+                              </div>
+                              <div className={s.psItem}>
+                                <div className={s.psLbl}>Margin</div>
+                                <div className={s.psVal}>{formatUsd(pos.margin)}</div>
+                              </div>
+                            </div>
+
+                            {/* Expanded signal detail */}
+                            <div className={`${s.signalBlock} ${isExpanded ? s.open : ''}`}>
+                              {lastAlert ? (
+                                <div className={s.signalItem}>
+                                  <span className={`${s.sigDot} ${lastAlert.severity === 'critical' ? s.r : lastAlert.severity === 'warning' ? s.y : s.g}`}></span>
+                                  <div className={s.sigBody}>
+                                    <div className={s.sigTop}><span className={s.sigName}>{lastAlert.title}</span></div>
+                                    <div className={s.sigNote}>{lastAlert.message}</div>
+                                  </div>
+                                  <span className={s.sigTime}>{timeAgo(lastAlert.createdAt)}</span>
+                                </div>
+                              ) : pills.length > 0 ? (
+                                <div className={s.signalItem}>
+                                  <span className={`${s.sigDot} ${s.b}`}></span>
+                                  <div className={s.sigBody}>
+                                    <div className={s.sigTop}><span className={s.sigName}>Monitoring active</span></div>
+                                    <div className={s.sigNote}>Agent monitoring this position with strategy signals.</div>
+                                  </div>
+                                </div>
+                              ) : (
+                                <div className={s.signalItem}>
+                                  <span className={`${s.sigDot} ${s.n}`}></span>
+                                  <div className={s.sigBody}>
+                                    <div className={s.sigTop}><span className={s.sigName}>Monitor pending</span></div>
+                                    <div className={s.sigNote}>Agent should create a monitoring task for this trade shortly.</div>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
+                  </>
+                )}
+
+                {/* Perpetuals — only show positions with meaningful PnL (> $0.10) */}
+                {(() => {
+                  const activePerpPositions = perpPositions.filter(p => Math.abs(p.pnl || 0) > 0.1);
+                  return (
+                    <>
                 <div className={s.sectionDivider}>
                   <span className={`${s.sdDot} ${s.perp}`}></span>
                   Perpetuals
-                  <span className={s.sdCount}>{perpPositions.length} open</span>
+                  <span className={s.sdCount}>{activePerpPositions.length} open</span>
                 </div>
 
-                {perpPositions.length === 0 ? (
+                {activePerpPositions.length === 0 ? (
                   <div className={s.emptyState}>
                     <div className={s.emptyIcon}>📊</div>
                     <div className={s.emptyTitle}>No perpetual positions found</div>
@@ -1029,7 +1283,7 @@ export default function ChatPage() {
                     </div>
                   </div>
                 ) : (
-                  perpPositions.map((pos, i) => {
+                  activePerpPositions.map((pos, i) => {
                     const key = `perp-${i}`;
                     const isExpanded = expandedCards.has(key);
                     const pair = pos.pair || '—';
@@ -1122,6 +1376,9 @@ export default function ChatPage() {
                     );
                   })
                 )}
+                    </>
+                  );
+                })()}
 
                 {/* Predictions */}
                 <div className={s.sectionDivider}>

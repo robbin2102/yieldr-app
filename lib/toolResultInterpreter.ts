@@ -43,11 +43,16 @@ export interface ClassifiedResult {
 
 // Execution tools that must go through the classifier.
 // Read tools (get_market_snapshot, get_top_perp_traders, etc.) pass through unchanged.
+//
+// NOTE (Bankr migration 2026-03-16): open_trade, close_trade, cancel_limit_order, withdraw_funds
+// have been removed from this set. These tools now route through the Bankr API which returns
+// clean natural language responses directly. No classification layer is needed — Claude receives
+// the raw Bankr response string (e.g. "shorted $10 of BTC/USD on avantis: • tx: 0x...").
+// fund_agent and fund_agent_eth remain classified since they emit frontend deposit events.
+//
+// To REVERT to CDP/Railway execution: add 'open_trade', 'close_trade', 'cancel_limit_order',
+// 'withdraw_funds' back to this set, and restore the tool handlers in app/api/demo/chat/route.ts.
 export const EXECUTION_TOOLS = new Set([
-  'open_trade',
-  'close_trade',
-  'cancel_limit_order',
-  'withdraw_funds',
   'fund_agent',
   'fund_agent_eth',
 ]);
