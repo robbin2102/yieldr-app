@@ -529,7 +529,7 @@ function stripHexFromError(errorDetail: string | undefined): string {
     .replace(/,?\s*'0x[a-fA-F0-9]{8,}'/g, '')
     .replace(/\s+0x[a-fA-F0-9]{40,}/g, '')
     // Unwrap tuple format: ('execution reverted: ...', ...) → execution reverted: ...
-    .replace(/^\(+'?(.*?)'?,.*\)$/s, '$1')
+    .replace(/^\(+'?(.*?)'?,.*\)$/, '$1')
     .trim();
 }
 
