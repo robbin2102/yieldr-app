@@ -8,11 +8,11 @@ import { trackUsage, TokenUsageData } from '@/lib/tokenTracking';
 import { fetchNews, formatArticlesForLLM } from '@/lib/rss';
 import {
   classifyToolResult,
-  validateBalanceForTrade,
   detectPostResponseHallucination,
   EXECUTION_TOOLS,
   type ClassifiedResult,
 } from '@/lib/toolResultInterpreter';
+// Note: validateBalanceForTrade removed — Bankr handles balance/allowance checks internally.
 
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY || '',
@@ -28,6 +28,42 @@ const HYPERLIQUID_API_URL = 'https://api.hyperliquid.xyz/info';
 const POLYMARKET_API_BASE = 'https://data-api.polymarket.com';
 const AVANTIS_API_URL = 'https://yieldr-app-production.up.railway.app/fetch-positions';
 const BASE_RPC_URL = process.env.QUICKNODE_BASE_RPC_URL || process.env.BASE_RPC_URL || 'https://mainnet.base.org';
+
+// ─── Bankr API (replaces CDP wallet + Railway Python execution layer) ─────────
+// MIGRATION NOTE (2026-03-16): All trade execution now routes through Bankr API.
+// The old CDP wallet address was 0xe7b76A90d2fA937a380176F360EcDB2F17087452.
+// The old Railway Python service handled ERC20 approval + on-chain tx signing.
+// Bankr handles all of this internally — no allowance checks, no gas management needed.
+// To REVERT: restore CDP/Railway handlers in executeTool() and re-add trade tools to EXECUTION_TOOLS.
+const BANKR_API_BASE = 'https://api.bankr.bot';
+const BANKR_WALLET_ADDRESS = '0xcdc44ffda057aca49bb9c8b7d54de212742729c7';
+const USDC_BASE_ADDRESS = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
+
+/** Submit a natural-language prompt to Bankr and poll until complete (max 60 × 2 s = 2 min). */
+async function submitBankrPrompt(prompt: string): Promise<{ success: boolean; response?: string; status: string }> {
+  const apiKey = process.env.BANKR_API_KEY || '';
+  const submitRes = await fetch(`${BANKR_API_BASE}/agent/prompt`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-API-Key': apiKey },
+    body: JSON.stringify({ prompt }),
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!submitRes.ok) throw new Error(`Bankr prompt submit failed: HTTP ${submitRes.status}`);
+  const { jobId } = await submitRes.json();
+  // Poll
+  for (let i = 0; i < 60; i++) {
+    await new Promise(r => setTimeout(r, 2000));
+    const pollRes = await fetch(`${BANKR_API_BASE}/agent/job/${jobId}`, {
+      headers: { 'X-API-Key': apiKey },
+      signal: AbortSignal.timeout(10_000),
+    });
+    const job = await pollRes.json();
+    if (job.status !== 'pending' && job.status !== 'processing') {
+      return { success: job.status === 'completed', response: job.response, status: job.status };
+    }
+  }
+  return { success: false, response: 'Bankr job timed out after 2 minutes.', status: 'timeout' };
+}
 
 // ─── Position Cache (30 second TTL) ──────────────────────────────────────────
 interface CachedPosition {
@@ -397,10 +433,9 @@ const toolDefinitions: Anthropic.Tool[] = [
 toolDefinitions.push({
   name: 'get_agent_wallet_balance',
   description:
-    'Check the agent CDP wallet ETH and USDC balance. Call this BEFORE executing any trade or generating deposit cards. ' +
-    'ETH is needed for gas fees (minimum 0.001 ETH on Base for Avantis execution fee + gas). USDC is the trade collateral. ' +
-    'After checking: if ETH < 0.001 call fund_agent_eth; if USDC < required collateral call fund_agent. ' +
-    'If ETH >= 0.001, skip gas deposit — do NOT suggest ETH deposit when gas is sufficient. ' +
+    'Check the Bankr agent wallet ETH and USDC balance. Call this BEFORE executing any trade or generating deposit cards. ' +
+    'Bankr handles gas internally, but USDC is needed as trade collateral. ' +
+    'After checking: if USDC < required collateral call fund_agent. ' +
     'Both cards can be emitted in the same response — call both tools without waiting for user approval.',
   input_schema: {
     type: 'object' as const,
@@ -411,11 +446,11 @@ toolDefinitions.push({
 toolDefinitions.push({
   name: 'open_trade',
   description:
-    'Execute a perpetual trade on Avantis (Base). Call get_agent_wallet_balance first UNLESS responding to a TRADE_APPROVED: message (balance was already checked). ' +
+    'Execute a perpetual trade on Avantis (Base) via Bankr API. Call get_agent_wallet_balance first UNLESS responding to a TRADE_APPROVED: message (balance was already checked). ' +
     'Minimum position size: collateral × leverage >= $100 USDC. ' +
     'Pair indices: 1=BTC/USD, 2=ETH/USD, 3=SOL/USD, 4=LINK/USD, 5=ARB/USD. ' +
     'For MARKET orders open_price is not needed. For LIMIT orders open_price is required. ' +
-    'Returns tx_hash, entry_price, trade_index, tp_price, sl_price.',
+    'Returns a natural-language confirmation with entry price, leverage, TP/SL, and tx hash.',
   input_schema: {
     type: 'object' as const,
     properties: {
@@ -469,8 +504,8 @@ toolDefinitions.push({
 toolDefinitions.push({
   name: 'withdraw_funds',
   description:
-    'Withdraw ETH or USDC from the agent CDP wallet to a destination address. ' +
-    'The agent wallet signs and sends autonomously — no user signature needed. ' +
+    'Withdraw ETH or USDC from the Bankr agent wallet to a destination address. ' +
+    'Bankr signs and sends autonomously — no user signature needed. ' +
     'Call get_agent_wallet_balance first to confirm available balance. ' +
     'Use when the user asks to withdraw, send back, or transfer funds out of the agent wallet. ' +
     'Default to_address is the user\'s connected wallet unless they specify otherwise.',
@@ -488,7 +523,7 @@ toolDefinitions.push({
 toolDefinitions.push({
   name: 'fund_agent',
   description:
-    'Deposit USDC from the user\'s connected wallet into the agent CDP wallet. ' +
+    'Deposit USDC from the user\'s connected wallet into the Bankr agent wallet. ' +
     'Call this when the agent wallet needs USDC for trading collateral. ' +
     'Emits a deposit approval card — the user must click Approve and sign in their wallet. ' +
     'Call get_agent_wallet_balance first to confirm how much USDC is needed.',
@@ -504,10 +539,10 @@ toolDefinitions.push({
 toolDefinitions.push({
   name: 'fund_agent_eth',
   description:
-    'Deposit ETH from the user\'s connected wallet into the agent CDP wallet for gas fees. ' +
-    'Call this when agent ETH balance is below 0.001 ETH (minimum for Avantis execution fee + Base gas). ' +
+    'Deposit ETH from the user\'s connected wallet into the Bankr agent wallet. ' +
+    'Bankr manages gas internally, but a small ETH reserve is useful as a buffer. ' +
     'Emits an ETH deposit approval card — the user must click Approve and sign in their wallet. ' +
-    'Default deposit: 0.001 ETH (enough for ~5 trades).',
+    'Default deposit: 0.001 ETH.',
   input_schema: {
     type: 'object' as const,
     properties: {
@@ -902,6 +937,14 @@ async function executeTool(name: string, input: any, wallet?: string, agentCtxId
       }
       case 'get_avantis_live_positions': {
         const { walletAddress, limit = 10 } = input;
+        // BANKR MIGRATION: If querying the Bankr agent wallet, use Bankr prompt API.
+        // For all other wallets (copy trading / analytics), use the Railway fetch-positions API.
+        if (walletAddress?.toLowerCase() === BANKR_WALLET_ADDRESS.toLowerCase()) {
+          console.log(`[get_avantis_live_positions] Bankr wallet detected — using Bankr prompt API`);
+          const job = await submitBankrPrompt('show my Avantis positions');
+          return JSON.stringify({ source: 'bankr', response: job.response, success: job.success });
+        }
+        // Other wallets: use Railway fetch-positions API
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 30000);
         try {
@@ -1405,212 +1448,172 @@ async function executeTool(name: string, input: any, wallet?: string, agentCtxId
         return JSON.stringify({ error: `Unknown action: ${action}` });
       }
 
-      // ── Agent Trading Execution Tools ────────────────────────────────────────
+      // ── Agent Trading Execution Tools (Bankr API) ──────────────────────────
+      // MIGRATION NOTE (2026-03-16): These tools now route through Bankr API instead of
+      // the CDP wallet + Railway Python service. Bankr handles gas, allowances, and signing
+      // internally. The static Bankr wallet address is BANKR_WALLET_ADDRESS.
+      // REVERT POINT: restore CDP/Railway code from git history (commit 0a9f445 / 418a27e).
       case 'get_agent_wallet_balance': {
-        const tradeWallet = process.env.STATIC_TRADE_WALLET_ADDRESS;
-        if (!tradeWallet) {
-          return JSON.stringify({ error: 'STATIC_TRADE_WALLET_ADDRESS is not configured.' });
-        }
-        const pythonUrl = normalizeUrl(process.env.PYTHON_SERVICE_URL || 'http://localhost:8001');
-        const apiKey    = process.env.YIELDR_DATA_API_SECRET || process.env.API_KEY || '';
-        if (!apiKey) console.warn('[balance] WARNING: no API key set (YIELDR_DATA_API_SECRET / API_KEY)');
-        const res = await fetch(
-          `${pythonUrl}/trade/balance?agent_wallet_address=${encodeURIComponent(tradeWallet)}`,
-          { headers: { 'X-API-Key': apiKey }, signal: AbortSignal.timeout(30_000) }
-        );
+        // Use Bankr REST API to get balances for the Bankr agent wallet
+        const apiKey = process.env.BANKR_API_KEY || '';
+        console.log(`[balance] Fetching Bankr wallet balances from ${BANKR_API_BASE}/agent/balances?chains=base`);
+        const res = await fetch(`${BANKR_API_BASE}/agent/balances?chains=base`, {
+          headers: { 'X-API-Key': apiKey },
+          signal: AbortSignal.timeout(15_000),
+        });
         if (!res.ok) {
           let detail = `HTTP ${res.status}`;
-          try { const e = await res.json(); detail = e.detail || e.error || detail; } catch {}
-          console.error(`[balance] fetch failed: ${detail} — url=${pythonUrl}, key_set=${!!apiKey}`);
-          throw new Error(`Balance fetch failed (${detail}). Check PYTHON_SERVICE_URL and YIELDR_DATA_API_SECRET env vars.`);
+          try { const e = await res.json(); detail = e.error || detail; } catch {}
+          throw new Error(`Bankr balance API failed: ${detail}`);
         }
         const data = await res.json();
-        const eth = data.eth_balance ?? 0;
-        const usdc = data.usdc_balance ?? 0;
+        const baseBalances = data.balances?.base;
+        const ethBalance = parseFloat(baseBalances?.nativeBalance || '0');
+        const usdcToken = (baseBalances?.tokenBalances || []).find(
+          (t: any) => t.address?.toLowerCase() === USDC_BASE_ADDRESS.toLowerCase()
+        );
+        const usdcBalance = parseFloat(usdcToken?.token?.balance || '0');
+        console.log(`[balance] Bankr wallet: ${ethBalance.toFixed(6)} ETH, ${usdcBalance.toFixed(2)} USDC`);
         return JSON.stringify({
-          agent_wallet:           tradeWallet,
-          eth_balance:            eth,
-          usdc_balance:           usdc,
-          eth_sufficient_for_gas: eth >= 0.001,
-          status: eth < 0.001
-            ? `⚠️ Low ETH: ${eth.toFixed(6)} ETH — send at least 0.001 ETH to ${tradeWallet} for gas`
-            : `✓ ETH OK (${eth.toFixed(6)} ETH)`,
-          usdc_note: usdc === 0
+          agent_wallet:           BANKR_WALLET_ADDRESS,
+          eth_balance:            ethBalance,
+          usdc_balance:           usdcBalance,
+          eth_sufficient_for_gas: true, // Bankr manages gas internally
+          status:   `✓ Bankr wallet: ${ethBalance.toFixed(6)} ETH, ${usdcBalance.toFixed(2)} USDC`,
+          usdc_note: usdcBalance === 0
             ? `Agent wallet has no USDC. Fund it before placing trades.`
-            : `${usdc.toFixed(2)} USDC available for trading.`,
+            : `${usdcBalance.toFixed(2)} USDC available for trading.`,
         });
       }
 
       case 'open_trade': {
-        if (!agentCtxId) return JSON.stringify({ success: false, error: 'No agent ID in context.' });
-        const tradeWalletForOpen = process.env.STATIC_TRADE_WALLET_ADDRESS;
-        if (!tradeWalletForOpen) return JSON.stringify({ success: false, error: 'STATIC_TRADE_WALLET_ADDRESS is not configured.' });
-        const { pair, pair_index, direction, collateral, leverage, tp_pct, sl_pct, order_type = 'MARKET', open_price } = input;
-        console.log(`[open_trade] ── ENTER ── pair=${pair} direction=${direction} collateral=${collateral} leverage=${leverage} wallet=${tradeWalletForOpen} agentId=${agentCtxId}`);
-
-        // ── Preflight: hard balance gate — no silent bypass ──────────────────
-        {
-          let rawBalanceResponse: string | null = null;
-          try {
-            const balUrl = normalizeUrl(process.env.PYTHON_SERVICE_URL || 'http://localhost:8001');
-            const balKey = process.env.YIELDR_DATA_API_SECRET || process.env.API_KEY || '';
-            console.log(`[open_trade] balance preflight: GET ${balUrl}/trade/balance wallet=${tradeWalletForOpen}`);
-            const balRes = await fetch(
-              `${balUrl}/trade/balance?agent_wallet_address=${encodeURIComponent(tradeWalletForOpen)}`,
-              { headers: { 'X-API-Key': balKey }, signal: AbortSignal.timeout(15_000) }
-            );
-            if (balRes.ok) {
-              rawBalanceResponse = await balRes.text();
-              console.log(`[open_trade] balance preflight OK: ${rawBalanceResponse.slice(0, 200)}`);
-            } else {
-              console.warn(`[open_trade] balance preflight HTTP ${balRes.status} — hard gate blocking trade`);
-            }
-          } catch (balErr: any) {
-            console.warn(`[open_trade] balance preflight fetch failed: ${balErr.message} — hard gate blocking trade`);
-          }
-          const gate = validateBalanceForTrade(rawBalanceResponse, collateral);
-          console.log(`[open_trade] balance gate: allowed=${gate.allowed} status=${gate.classifiedResult.status} rawLen=${rawBalanceResponse?.length ?? 'null'}`);
-          if (!gate.allowed) {
-            console.warn(`[open_trade] BLOCKED by balance gate: ${gate.classifiedResult.classifiedMessage.slice(0, 300)}`);
-            return gate.classifiedResult.classifiedMessage;
-          }
+        // BANKR MIGRATION: Trade execution via Bankr natural-language prompt API.
+        // Bankr handles USDC approval, gas, and on-chain tx signing internally.
+        // No balance gate or allowance check needed — Bankr returns clean text with tx details.
+        const { pair, direction, collateral, leverage, tp_pct, sl_pct, order_type = 'MARKET', open_price } = input;
+        const action = direction === 'SHORT' ? 'short' : 'buy';
+        let prompt = `${action} $${collateral} of ${pair} with ${leverage}x leverage, ${sl_pct}% stop loss, and ${tp_pct}% take profit on avantis`;
+        if (order_type === 'LIMIT' && open_price != null) {
+          prompt += ` at limit price $${open_price}`;
         }
-        // ────────────────────────────────────────────────────────────────────
-
-        const nextjsUrl    = normalizeUrl(process.env.NEXTJS_API_URL || 'http://localhost:3000');
-        const internalSec  = process.env.YIELDR_INTERNAL_SECRET || '';
-        console.log(`[open_trade] calling execute/open → ${nextjsUrl}/api/avantis/execute/open (internalSec set=${!!internalSec})`);
-        const tradeBody: Record<string, any> = {
-          agentId: agentCtxId,
-          userId:  wallet || '',
-          pair, pair_index, direction, collateral, leverage, tp_pct, sl_pct,
-          order_type,
-          createMonitor: true,
-          monitorIntervalSeconds: 300,
-          monitorInstruction: `Monitor ${pair} ${direction} trade opened by ${agentCtxId}. TP at ${tp_pct}%, SL at ${sl_pct}%. Alert if exit conditions are met.`,
-        };
-        if (order_type === 'LIMIT' && open_price != null) tradeBody.open_price = open_price;
-        const res = await fetch(`${nextjsUrl}/api/avantis/execute/open`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            ...(internalSec ? { Authorization: `Bearer ${internalSec}` } : {}),
-          },
-          body: JSON.stringify(tradeBody),
-          signal: AbortSignal.timeout(60_000),
-        });
-        console.log(`[open_trade] execute/open response: HTTP ${res.status}`);
-        const data = await res.json();
-        if (!res.ok) {
-          console.error(`[open_trade] execute/open FAILED: HTTP ${res.status} error="${data.error}" body=${JSON.stringify(data).slice(0, 300)}`);
-          return JSON.stringify({ success: false, error: data.error || `Trade failed: HTTP ${res.status}` });
-        }
-        console.log(`[open_trade] execute/open SUCCESS: tx_hash=${data.tx_hash ?? data.trade?.tx_hash ?? 'none'}`);
-        return JSON.stringify({ success: true, ...data });
+        console.log(`[open_trade] Bankr prompt: "${prompt}"`);
+        const job = await submitBankrPrompt(prompt);
+        console.log(`[open_trade] Bankr job status=${job.status} response="${(job.response || '').slice(0, 200)}"`);
+        return job.response || JSON.stringify({ success: false, error: `Bankr trade failed (status: ${job.status})` });
       }
 
       case 'close_trade': {
-        if (!agentCtxId) return JSON.stringify({ success: false, error: 'No agent ID in context.' });
-        const { pair_index, trade_index, collateral_to_close } = input;
-        const nextjsUrl   = normalizeUrl(process.env.NEXTJS_API_URL || 'http://localhost:3000');
-        const internalSec = process.env.YIELDR_INTERNAL_SECRET || '';
-        const res = await fetch(`${nextjsUrl}/api/avantis/execute/close`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            ...(internalSec ? { Authorization: `Bearer ${internalSec}` } : {}),
-          },
-          body: JSON.stringify({ agentId: agentCtxId, userId: wallet || '', pair_index, trade_index, collateral_to_close }),
-          signal: AbortSignal.timeout(60_000),
-        });
-        const data = await res.json();
-        if (!res.ok) return JSON.stringify({ success: false, error: data.error || `Close failed: HTTP ${res.status}` });
-        return JSON.stringify({ success: true, ...data });
+        // BANKR MIGRATION: Close via Bankr natural-language prompt — no pair_index/trade_index needed.
+        const { pair_index } = input;
+        const pairMap: Record<number, string> = { 1: 'BTC', 2: 'ETH', 3: 'SOL', 4: 'LINK', 5: 'ARB' };
+        const pairName = pairMap[pair_index] || 'my';
+        const prompt = `close my ${pairName} position on Avantis`;
+        console.log(`[close_trade] Bankr prompt: "${prompt}"`);
+        const job = await submitBankrPrompt(prompt);
+        console.log(`[close_trade] Bankr job status=${job.status} response="${(job.response || '').slice(0, 200)}"`);
+        return job.response || JSON.stringify({ success: false, error: `Bankr close failed (status: ${job.status})` });
       }
 
       case 'cancel_limit_order': {
-        if (!agentCtxId) return JSON.stringify({ success: false, error: 'No agent ID in context.' });
-        const { pair_index, trade_index } = input;
-        const nextjsUrl   = normalizeUrl(process.env.NEXTJS_API_URL || 'http://localhost:3000');
-        const internalSec = process.env.YIELDR_INTERNAL_SECRET || '';
-        const res = await fetch(`${nextjsUrl}/api/avantis/execute/cancel-limit`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            ...(internalSec ? { Authorization: `Bearer ${internalSec}` } : {}),
-          },
-          body: JSON.stringify({ agentId: agentCtxId, userId: wallet || '', pair_index, trade_index }),
-          signal: AbortSignal.timeout(60_000),
-        });
-        const data = await res.json();
-        if (!res.ok) return JSON.stringify({ success: false, error: data.error || `Cancel failed: HTTP ${res.status}` });
-        return JSON.stringify({ success: true, ...data });
+        // BANKR MIGRATION: Cancel via Bankr natural-language prompt.
+        const { pair_index } = input;
+        const pairMap: Record<number, string> = { 1: 'BTC', 2: 'ETH', 3: 'SOL', 4: 'LINK', 5: 'ARB' };
+        const pairName = pairMap[pair_index] || 'my';
+        const prompt = `cancel my ${pairName} limit order on Avantis`;
+        console.log(`[cancel_limit_order] Bankr prompt: "${prompt}"`);
+        const job = await submitBankrPrompt(prompt);
+        console.log(`[cancel_limit_order] Bankr job status=${job.status} response="${(job.response || '').slice(0, 200)}"`);
+        return job.response || JSON.stringify({ success: false, error: `Bankr cancel failed (status: ${job.status})` });
       }
 
       case 'withdraw_funds': {
-        if (!agentCtxId) return JSON.stringify({ success: false, error: 'No agent ID in context.' });
-        if (!agentCtxWallet) return JSON.stringify({ success: false, error: 'No agent wallet configured.' });
+        // BANKR MIGRATION: Withdraw via Bankr /agent/submit REST endpoint (synchronous, returns tx hash).
+        // ETH: native transfer. USDC: ERC20 transfer(address,uint256) calldata.
         const { amount, asset, to_address } = input;
-        const nextjsUrl   = normalizeUrl(process.env.NEXTJS_API_URL || 'http://localhost:3000');
-        const internalSec = process.env.YIELDR_INTERNAL_SECRET || '';
-        const res = await fetch(`${nextjsUrl}/api/avantis/withdraw`, {
+        const apiKey = process.env.BANKR_API_KEY || '';
+        let transaction: Record<string, any>;
+
+        if (asset === 'ETH') {
+          const weiHex = `0x${BigInt(Math.round(amount * 1e18)).toString(16)}`;
+          transaction = { to: to_address, chainId: 8453, value: weiHex };
+        } else {
+          // USDC ERC20 transfer(address,uint256) — selector 0xa9059cbb
+          const usdcUnits = BigInt(Math.round(amount * 1e6));
+          const paddedAddr   = to_address.replace('0x', '').toLowerCase().padStart(64, '0');
+          const paddedAmount = usdcUnits.toString(16).padStart(64, '0');
+          transaction = {
+            to: USDC_BASE_ADDRESS,
+            chainId: 8453,
+            value: '0',
+            data: `0xa9059cbb${paddedAddr}${paddedAmount}`,
+          };
+        }
+
+        console.log(`[withdraw_funds] Bankr submit: ${amount} ${asset} → ${to_address}`);
+        const res = await fetch(`${BANKR_API_BASE}/agent/submit`, {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            ...(internalSec ? { Authorization: `Bearer ${internalSec}` } : {}),
-          },
-          body: JSON.stringify({ agentId: agentCtxId, amount, asset, to_address }),
+          headers: { 'Content-Type': 'application/json', 'X-API-Key': apiKey },
+          body: JSON.stringify({
+            transaction,
+            description: `Withdraw ${amount} ${asset} to ${to_address}`,
+            waitForConfirmation: true,
+          }),
           signal: AbortSignal.timeout(60_000),
         });
         const data = await res.json();
-        if (!res.ok) return JSON.stringify({ success: false, error: data.error || `Withdraw failed: HTTP ${res.status}` });
-        return JSON.stringify({ success: true, ...data });
+        if (!res.ok || !data.success) {
+          console.error(`[withdraw_funds] Bankr submit failed: ${JSON.stringify(data).slice(0, 300)}`);
+          return JSON.stringify({ success: false, error: data.error || `Withdraw failed: HTTP ${res.status}` });
+        }
+        console.log(`[withdraw_funds] Bankr submit SUCCESS: tx=${data.transactionHash}`);
+        return JSON.stringify({
+          success: true,
+          tx_hash: data.transactionHash,
+          status: data.status,
+          message: `Withdrew ${amount} ${asset} to ${to_address}. Transaction: ${data.transactionHash}`,
+        });
       }
 
       case 'fund_agent': {
+        // BANKR MIGRATION: Deposit targets the Bankr agent wallet directly.
+        // Constructs ERC20 transfer calldata inline — no external API call needed.
         if (!agentCtxId) return JSON.stringify({ success: false, error: 'No agent ID in context.' });
         const userWallet = wallet || '';
         if (!userWallet) return JSON.stringify({ success: false, error: 'No user wallet in context.' });
         const { amount } = input;
-        const nextjsUrl   = normalizeUrl(process.env.NEXTJS_API_URL || 'http://localhost:3000');
-        const internalSec = process.env.YIELDR_INTERNAL_SECRET || '';
-        const res = await fetch(`${nextjsUrl}/api/avantis/fund`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            ...(internalSec ? { Authorization: `Bearer ${internalSec}` } : {}),
-          },
-          body: JSON.stringify({ agentId: agentCtxId, amount, user_wallet_address: userWallet }),
-          signal: AbortSignal.timeout(30_000),
-        });
-        const data = await res.json();
-        if (!res.ok) return JSON.stringify({ success: false, error: data.error || `Fund request failed: HTTP ${res.status}` });
-        // Emit deposit_request event to frontend for user to approve via wagmi
+        // USDC ERC20 transfer(address,uint256) calldata to Bankr wallet
+        const usdcUnits = BigInt(Math.round(amount * 1e6));
+        const paddedAddr   = BANKR_WALLET_ADDRESS.replace('0x', '').toLowerCase().padStart(64, '0');
+        const paddedAmount = usdcUnits.toString(16).padStart(64, '0');
         emitToStream?.({
           type: 'deposit_request',
           amount,
-          agent_wallet: data.agent_wallet,
-          unsigned_tx: data.unsigned_tx,
+          agent_wallet: BANKR_WALLET_ADDRESS,
+          unsigned_tx: {
+            to: USDC_BASE_ADDRESS,
+            data: `0xa9059cbb${paddedAddr}${paddedAmount}`,
+            value: '0x0',
+            chainId: 8453,
+          },
         });
         return JSON.stringify({
           success: true,
           status: 'awaiting_user_approval',
           message: `A deposit approval card for ${amount} USDC has been shown. The user must click Approve and sign in their wallet.`,
-          agent_wallet: data.agent_wallet,
+          agent_wallet: BANKR_WALLET_ADDRESS,
         });
       }
 
       case 'fund_agent_eth': {
-        if (!agentCtxWallet) return JSON.stringify({ success: false, error: 'No agent wallet configured.' });
+        // BANKR MIGRATION: ETH deposit targets the Bankr agent wallet.
         const { amount_eth } = input;
         const weiAmount = BigInt(Math.round(amount_eth * 1e18));
-        // Emit deposit_eth_request — native ETH transfer, no ERC20 calldata needed
         emitToStream?.({
           type: 'deposit_eth_request',
           amount_eth,
-          agent_wallet: agentCtxWallet,
+          agent_wallet: BANKR_WALLET_ADDRESS,
           unsigned_tx: {
-            to: agentCtxWallet,
+            to: BANKR_WALLET_ADDRESS,
             data: '0x',
             value: `0x${weiAmount.toString(16)}`,
             chainId: 8453,
@@ -1620,7 +1623,7 @@ async function executeTool(name: string, input: any, wallet?: string, agentCtxId
           success: true,
           status: 'awaiting_user_approval',
           message: `An ETH gas deposit card for ${amount_eth} ETH has been shown. The user must click Approve and sign in their wallet to send ETH to the agent.`,
-          agent_wallet: agentCtxWallet,
+          agent_wallet: BANKR_WALLET_ADDRESS,
         });
       }
 
@@ -1668,7 +1671,7 @@ You discover, monitor, and synthesise alpha across perpetual and prediction mark
 • Framing all insights as data-driven analysis, never as personal financial advice
 
 **Role 2 — Senior Trader**
-You execute trade strategies directly on-chain using the agent's CDP wallet on Avantis (Base). This includes:
+You execute trade strategies directly on-chain using the Bankr agent wallet on Avantis (Base). This includes:
 • Opening, managing, and closing perpetual positions on Avantis
 • Placing and cancelling limit orders
 • Running the full pre-trade workflow (signal validation → balance verification → proposal → execution)
@@ -1702,13 +1705,13 @@ You have access to powerful data tools. USE THEM proactively:
 • get_pm_user_activity — Fetch recent Polymarket trades (buys/sells/redeems) for any wallet. Filter by market, side, or days back. Use to see what a wallet is actively trading on Polymarket.
 • web_search — Search the web for market news, macro events (native Claude tool)
 
-**Trading Execution (agent CDP wallet — LIVE):**
-• get_agent_wallet_balance — Check agent wallet ETH (gas) and USDC (collateral) balances before trading
+**Trading Execution (Bankr agent wallet — LIVE):**
+• get_agent_wallet_balance — Check Bankr agent wallet USDC balance before trading (Bankr manages gas internally)
 • propose_trade — Show a trade confirmation card to the user BEFORE executing (REQUIRED first step)
-• open_trade — Execute MARKET or LIMIT perpetual order on Avantis (Base). Only call AFTER user approves propose_trade AND balance is sufficient.
-• close_trade — Close an open Avantis position. Use get_avantis_live_positions first for trade_index.
-• cancel_limit_order — Cancel a pending Avantis limit order.
-• withdraw_funds — Withdraw ETH or USDC from the agent wallet back to the user's wallet.
+• open_trade — Execute MARKET or LIMIT perpetual order on Avantis (Base) via Bankr. Only call AFTER user approves propose_trade AND USDC balance is sufficient. Returns a natural-language confirmation with entry price, TP/SL, and tx hash.
+• close_trade — Close an open Avantis position via Bankr. Returns a natural-language confirmation with tx hash.
+• cancel_limit_order — Cancel a pending Avantis limit order via Bankr.
+• withdraw_funds — Withdraw ETH or USDC from the Bankr agent wallet to the user's wallet.
 
 ---
 
@@ -1783,7 +1786,7 @@ I can execute this portfolio plan directly on Avantis (Base) using the agent wal
 
 ## 🚀 Trading Execution — LIVE
 
-You CAN execute perpetual trades directly on Avantis (Base) using the agent's CDP wallet.
+You CAN execute perpetual trades directly on Avantis (Base) using the Bankr agent wallet.
 
 DO NOT say:
 • "I cannot execute trades"
@@ -1799,15 +1802,14 @@ DO NOT say:
 ### Pre-Trade Workflow
 
 1. Call get_market_snapshot (or fetch_live_indicator) to validate entry signals
-2. Call get_agent_wallet_balance — show the user current ETH and USDC balances.
-   The server enforces a hard balance gate inside open_trade. If the gate blocks the trade you will receive a [TOOL_RESULT_CLASSIFIED] message — follow its instructions exactly. Do NOT re-attempt open_trade until the user has deposited funds and confirmed. Minimum gas required: 0.001 ETH.
+2. Call get_agent_wallet_balance — show the user current USDC balance. Bankr manages gas internally, so ETH balance is informational only.
 3. Call propose_trade — shows a confirmation card in the UI with all trade params
 4. Wait for user to approve (they click Approve or say "execute"/"yes")
 5. Call open_trade with the SAME params from step 3
 
 **Example flow when user says "mean reversion on BTC 10 USDC 10x" and wallet is funded:**
 1. Call get_market_snapshot → analyze signals
-2. Call get_agent_wallet_balance → confirm USDC ≥ 10, ETH ≥ 0.001
+2. Call get_agent_wallet_balance → confirm USDC ≥ 10 (Bankr manages gas)
 3. Call propose_trade → trade confirmation card appears in UI
 User approves → call open_trade → report tx_hash from tool result
 
@@ -1822,7 +1824,7 @@ Example: TRADE_APPROVED:{"pair":"BTC/USD","pair_index":1,"direction":"LONG","col
 → Call open_trade with those exact params. No text before the tool call.
 
 **If open_trade fails after TRADE_APPROVED:**
-- Call get_agent_wallet_balance to get the current balance
+- Call get_agent_wallet_balance to verify USDC balance
 - Report the exact error and current balance to the user
 - If INSUFFICIENT_FUNDS: call fund_agent to show deposit card for the deficit amount. State exactly how much to deposit and to which wallet address.
 - Do NOT call open_trade again until the user has taken action (deposited, fixed the error) and you have re-verified the balance via get_agent_wallet_balance.
@@ -1841,24 +1843,24 @@ This rule overrides every other instruction about explaining your reasoning or c
 
 These rules prevent hallucinating trade outcomes:
 
-1. NEVER say a trade was executed unless open_trade returned a tx_hash field in its result. If open_trade returns success:false or an error field, the trade DID NOT execute. Quote the error verbatim.
-2. NEVER fabricate a tx_hash, entry_price, trade_index, or any trade detail. All of these come only from the open_trade tool result. If the tool did not run or returned an error, say so clearly.
-3. NEVER say "the trade is live" or "position opened" based on the user saying "execute" alone. You must call open_trade AND receive a successful response first.
-4. If open_trade returns an error like "Insufficient USDC", tell the user exactly that: "The trade could not execute — the agent wallet has X USDC but needs Y." Then call fund_agent to show a deposit card for the required amount.
+1. NEVER say a trade was executed unless open_trade returned a natural-language response confirming it (containing entry price, leverage, and a tx hash). If the tool returns an error or failure message, the trade DID NOT execute. Quote the error verbatim.
+2. NEVER fabricate a tx hash, entry_price, or any trade detail. All of these come only from the open_trade tool result text. If the tool did not run or returned an error, say so clearly.
+3. NEVER say "the trade is live" or "position opened" based on the user saying "execute" alone. You must call open_trade AND receive a successful Bankr confirmation response first.
+4. If open_trade returns an error like "insufficient balance" or "not enough USDC", tell the user exactly that and call fund_agent to show a deposit card for the required amount.
 5. NEVER check balance after a failed trade and fabricate a story about why it worked. If balance check also fails, say both tools failed and give the error.
 6. NEVER retry open_trade for the same error without user action in between. If open_trade returns INSUFFICIENT_FUNDS twice in a row, STOP and tell the user what to deposit. Do NOT call open_trade a third time.
 7. NEVER describe "calling open_trade now..." or "executing trade..." in text without actually making the tool call. If you write those words, you MUST also call the tool. If the tool cannot be called, explain why instead of narrating a fake execution.
-8. Same rules apply to withdraw_funds and close_trade — never report tx_hash, success, or "funds sent" without a real tool result containing a confirmed tx_hash.
-9. ABSOLUTE RULE — TX HASH: A transaction hash (0x followed by exactly 64 hex characters) MUST NEVER appear in your response text unless it was provided in a [TOOL_RESULT_CLASSIFIED] block with Status: CONFIRMED. Zero exceptions. Do NOT pre-generate a hash, show one as a placeholder, narrate one while "executing", or include one before the tool result exists. The ONLY valid sequence is: call open_trade → receive CONFIRMED result → report the hash from that result. Any text you write BEFORE calling the tool must not contain any 0x hex string of 40+ characters. If you feel compelled to show a hash, that means you have not called the tool yet — call it immediately instead.
+8. Same rules apply to withdraw_funds and close_trade — never report tx hash, success, or "funds sent" without a real tool result from Bankr containing a confirmed tx hash.
+9. ABSOLUTE RULE — TX HASH: A transaction hash (0x followed by exactly 64 hex characters) MUST NEVER appear in your response text unless it was provided in the tool result from Bankr. Zero exceptions. Do NOT pre-generate a hash, show one as a placeholder, narrate one while "executing", or include one before the tool result exists. The ONLY valid sequence is: call open_trade → receive Bankr confirmation text containing the hash → report that exact hash. Any text you write BEFORE calling the tool must not contain any 0x hex string of 40+ characters. If you feel compelled to show a hash, that means you have not called the tool yet — call it immediately instead.
 
 ### Execution Tools Available
 
-• get_agent_wallet_balance — check ETH (gas) and USDC (collateral) balances
+• get_agent_wallet_balance — check USDC balance (Bankr manages gas internally)
 • propose_trade — show trade confirmation card (REQUIRED before open_trade)
-• open_trade — place market or limit order (ONLY after user approves propose_trade and balance is confirmed sufficient)
-• close_trade — close an open position (call get_avantis_live_positions first for trade_index)
-• cancel_limit_order — cancel a pending limit order
-• withdraw_funds — withdraw ETH or USDC from the agent wallet to the user's wallet (or any address they specify)
+• open_trade — place market or limit order via Bankr (ONLY after user approves propose_trade and USDC is sufficient)
+• close_trade — close an open position via Bankr (uses pair_index to identify which asset to close)
+• cancel_limit_order — cancel a pending limit order via Bankr
+• withdraw_funds — withdraw ETH or USDC from the Bankr agent wallet to the user's wallet (or any address they specify)
 
 ### Auto-Monitoring After Trade Open
 
@@ -2051,9 +2053,11 @@ News monitoring IS supported — use get_news_headlines inside the monitor's eva
 
 ---
 
-## 🔐 [TOOL_RESULT_CLASSIFIED] Messages — MANDATORY READING
+## 🔐 Execution Tool Results — MANDATORY READING
 
-Every execution tool result (open_trade, close_trade, withdraw_funds, cancel_limit_order) arrives pre-classified by the server as a [TOOL_RESULT_CLASSIFIED] block. You MUST follow the embedded instructions exactly.
+**Bankr trade tools** (open_trade, close_trade, cancel_limit_order, withdraw_funds): The tool result is a clean natural-language string from Bankr (e.g. "shorted $10 of BTC/USD on avantis: • entry: $71,546 • tx: 0x..."). Read and relay it directly. If the result contains a tx hash, you may report success. If it describes a failure, report the failure verbatim.
+
+**Deposit tools** (fund_agent, fund_agent_eth): These arrive as [TOOL_RESULT_CLASSIFIED] blocks — follow the embedded instructions exactly.
 
 ### Status meanings and required actions
 
@@ -2258,8 +2262,8 @@ function buildDynamicUserContext(context: {
 User Wallet Address: ${walletAddress}
 Agent Name: ${agentName}
 Agent ID: ${agentId || 'N/A'}
-Agent Wallet (CDP): ${agentWalletAddress || 'Not configured — wallet not yet created'}
-Trade Execution Wallet: ${process.env.STATIC_TRADE_WALLET_ADDRESS || 'Not configured (set STATIC_TRADE_WALLET_ADDRESS)'}
+Agent Wallet (CDP — signup only): ${agentWalletAddress || 'Not configured — wallet not yet created'}
+Trade Execution Wallet (Bankr): ${BANKR_WALLET_ADDRESS}
 Total Value: ~$${totalPortfolioValue.toFixed(2)}
 Positions: ${portfolioSummary?.positionCount || 0}
 Token Holdings: $${tokensTotalUsd.toFixed(2)} across ${tokens.length} tokens
