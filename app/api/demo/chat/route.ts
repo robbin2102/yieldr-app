@@ -1842,8 +1842,8 @@ When a user asks to "design", "set up", or "execute" any trade strategy:
 ### Pre-Trade Workflow (MANDATORY — never skip steps)
 
 1. Call get_market_snapshot to validate entry signals — you MUST identify at least 3 leading indicators (e.g. RSI, funding rate, OI, Stoch RSI, EMA alignment) and state concrete values + thresholds for each
-2. Present the strategy to the user with explicit entry signals, exit rules, and the indicators you will monitor
-3. Call get_agent_wallet_balance — show the user current USDC balance
+2. Call get_agent_wallet_balance — confirm USDC balance
+3. EXPLAIN the strategy to the user in text: describe the setup, why these signals support the trade, entry/exit logic, risk assessment, and key levels. This explanation is IMPORTANT — the user needs to understand the reasoning BEFORE seeing the approval card.
 4. Call propose_trade — shows a confirmation card in the UI with all trade params, entry_conditions, and exit_conditions populated from your analysis. ALWAYS call this — NEVER skip to open_trade directly.
 5. Wait for user to approve (they click Approve or say "execute"/"yes")
 6. Call open_trade with the SAME params from step 4
@@ -2364,32 +2364,39 @@ export async function POST(request: NextRequest) {
             // If no tool calls, check if the agent described trading actions without calling tools
             if (!hasToolUse) {
               const textLower = iterationText.toLowerCase();
-              // Keywords that indicate the agent was trying to execute trading/deposit actions
+              // Keywords that indicate the agent NARRATED execution without calling tools
+              // (NOT strategy explanation — only actual "I did X" narration)
               const executionKeywords = [
                 // deposit/fund patterns
                 'deposit card', 'funding card', 'fund_agent', 'eth deposit', 'usdc deposit',
-                'checking wallet', 'agent wallet status', 'wallet balance', 'running the full workflow',
-                'generating deposit', 'full workflow', 'i\'ll execute', 'executing the strategy',
+                'generating deposit', 'full workflow', 'running the full workflow',
                 'deposit approval', 'approve both', 'approve the deposit',
                 // trade execution narration (agent describes calling tool without doing it)
                 'executing now', 'executing trade', 'executing the trade', 'calling open_trade',
                 'placing the trade', 'placing order', 'opening position', 'opening the position',
                 'calling close_trade', 'closing position', 'closing the position',
-                'calling withdraw', 'withdrawing', 'sending back funds', 'funds sent',
+                'calling withdraw', 'sending back funds', 'funds sent',
                 'withdrawal complete', 'funds withdrawn', 'successfully withdrawn',
                 'trade executed', 'position opened', 'order placed', 'order confirmed',
                 'trade confirmed', 'successfully executed', 'successfully opened',
               ];
               const tradingToolNames = ['get_agent_wallet_balance', 'fund_agent_eth', 'fund_agent', 'propose_trade', 'open_trade', 'close_trade', 'withdraw_funds', 'cancel_limit_order'];
               const executionToolNames = ['open_trade', 'close_trade', 'withdraw_funds', 'cancel_limit_order'];
+              const analysisToolNames = ['get_market_snapshot', 'fetch_live_indicator', 'get_macro_snapshot', 'get_funding_rate_history', 'get_derivatives_history'];
               const describedExecution = executionKeywords.some(kw => textLower.includes(kw));
               const noTradingToolsCalled = !allToolCalls.some(t => tradingToolNames.includes(t.name));
+              // Skip hallucination check if agent already called analysis tools — it's explaining the strategy before propose_trade
+              const calledAnalysisTools = allToolCalls.some(t => analysisToolNames.includes(t.name));
+              const calledProposeTrade = allToolCalls.some(t => t.name === 'propose_trade');
               // Also catch fabricated tx_hashes: if Claude put a 0x...64-char hash in text without calling an execution tool
               const TX_HASH_IN_TEXT = /0x[a-fA-F0-9]{64}/.test(iterationText);
               const noExecutionToolsCalled = !allToolCalls.some(t => executionToolNames.includes(t.name));
               const fabricatedHashInNarration = TX_HASH_IN_TEXT && noExecutionToolsCalled;
 
-              if (((describedExecution && noExecutionToolsCalled) || fabricatedHashInNarration) && maxIterations > 0) {
+              // Don't trigger if agent is in the pre-trade workflow (analysis done, explaining before propose_trade)
+              const isPreTradeExplanation = calledAnalysisTools && !calledProposeTrade;
+
+              if (((describedExecution && noExecutionToolsCalled && !isPreTradeExplanation) || fabricatedHashInNarration) && maxIterations > 0) {
                 // Agent hallucinated execution — narrated a trade/withdrawal or fabricated a tx_hash without calling the tool.
                 // Use noExecutionToolsCalled (not noTradingToolsCalled) so this fires even if balance/propose were already called.
                 console.log(`[chat] Hallucination detected: ${fabricatedHashInNarration ? 'fabricated tx_hash in text without calling execution tool' : 'agent described trading actions without calling execution tool'}. Forcing tool invocation.`);
