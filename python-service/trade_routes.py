@@ -37,6 +37,14 @@ router = APIRouter()
 
 # USDC on Base mainnet
 USDC_BASE_ADDRESS = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+
+# Hardcoded Avantis mainnet contract addresses (from avantis_trader_sdk.config).
+# Used for approvals so we never depend on client.contracts dict resolution.
+_AVANTIS_TRADING_ADDR         = "0x44914408af82bC9983bbb330e3578E1105e11d4e"
+_AVANTIS_TRADING_STORAGE_ADDR = "0x8a311D7048c35985aa31C131B9A13e03a5f7422d"
+
+# Approve 2^256-1 once — allowance never depletes across trades.
+_USDC_APPROVE_MAX = 2**256 - 1
 USDC_APPROVE_ABI = [{
     "name": "approve",
     "type": "function",
@@ -195,13 +203,12 @@ async def _cdp_svc_approve_usdc(wallet_address: str, spender: str, required_amou
         address=Web3.to_checksum_address(USDC_BASE_ADDRESS),
         abi=USDC_APPROVE_ABI,
     )
-    APPROVE_AMOUNT_USDC = 10_000.0
-    amount_wei = int(APPROVE_AMOUNT_USDC * 1e6)
     data = usdc.encodeABI(fn_name="approve", args=[
         Web3.to_checksum_address(spender),
-        amount_wei,
+        _USDC_APPROVE_MAX,
     ])
-    log.info(f"[CDP-svc] approving 10000 USDC for wallet={wallet_address} spender={spender}")
+    print(f"[CDP-svc] approving uint256_max USDC for wallet={wallet_address} spender={spender}", flush=True)
+    log.info(f"[CDP-svc] approving uint256_max USDC for wallet={wallet_address} spender={spender}")
     tx_hash = await _cdp_svc_send_transaction(
         wallet_address=wallet_address,
         to=USDC_BASE_ADDRESS,
@@ -505,6 +512,7 @@ MIN_POSITION_SIZE_USDC = 100.0  # Avantis protocol minimum
 
 @router.post("/execute-open")
 async def execute_open(body: OpenTradeRequest, _: str = Depends(verify_api_key)):
+    print(f"[execute_open] STEP-0 pair={body.pair} dir={body.direction} col={body.collateral} lev={body.leverage} wallet={body.agent_wallet_address}", flush=True)
     log.info(f"[execute_open] STEP-0 ── REQUEST RECEIVED ── pair={body.pair} direction={body.direction} collateral={body.collateral} leverage={body.leverage} agent_wallet={body.agent_wallet_address} order_type={body.order_type}")
 
     position_size = body.collateral * body.leverage
@@ -518,6 +526,7 @@ async def execute_open(body: OpenTradeRequest, _: str = Depends(verify_api_key))
     # ── Resolve signing strategy ────────────────────────────────────────────────
     # Priority: CDP wallet service (HTTP) > local EOA fallback
     using_cdp = bool(body.agent_wallet_address and _cdp_service_configured())
+    print(f"[execute_open] STEP-1 using_cdp={using_cdp} cdp_url={'SET' if _cdp_service_url() else 'NOT SET'}", flush=True)
     log.info(f"[execute_open] STEP-1 using_cdp={using_cdp} cdp_service_url={_cdp_service_url() or 'NOT SET'}")
 
     if using_cdp:
@@ -538,6 +547,7 @@ async def execute_open(body: OpenTradeRequest, _: str = Depends(verify_api_key))
             _usdc_balance(agent_wallet),
             _eth_balance(agent_wallet),
         )
+        print(f"[execute_open] STEP-3 usdc={usdc_balance:.4f} eth={eth_balance:.6f}", flush=True)
         log.info(f"[execute_open] STEP-3 wallet balances: usdc={usdc_balance:.6f} eth={eth_balance:.8f}")
         if usdc_balance < body.collateral:
             raise HTTPException(
@@ -575,39 +585,47 @@ async def execute_open(body: OpenTradeRequest, _: str = Depends(verify_api_key))
         log.info(f"[execute_open] STEP-4 live_price={live_price} tp={tp_price:.4f} sl={sl_price:.4f}")
 
         # ── USDC Approval ───────────────────────────────────────────────────────
-        # Always re-approve BOTH Trading and TradingStorage unconditionally.
-        # Skipping based on cached allowance caused stale-state failures where
-        # eth_estimateGas reverted despite a seemingly sufficient allowance.
-        _approval_targets = []
-        try:
-            _approval_targets.append(("Trading",        str(client.contracts["Trading"].address)))
-        except Exception as _e:
-            log.warning(f"[execute_open] STEP-5 WARNING: cannot resolve Trading contract address: {_e}")
-        try:
-            _approval_targets.append(("TradingStorage", str(client.contracts["TradingStorage"].address)))
-        except Exception as _e:
-            log.warning(f"[execute_open] STEP-5 WARNING: cannot resolve TradingStorage contract address: {_e}")
+        # Approve with uint256_max so allowance never depletes.
+        # Use hardcoded Avantis addresses — never depend on client.contracts dict
+        # resolution, which can silently return empty and skip all approvals.
+        # TradingStorage is the contract that calls transferFrom; Trading is
+        # approved as belt-and-suspenders.
+        _approval_targets = [
+            ("TradingStorage", _AVANTIS_TRADING_STORAGE_ADDR),
+            ("Trading",        _AVANTIS_TRADING_ADDR),
+        ]
 
-        log.info(f"[execute_open] STEP-5 approval_targets={_approval_targets}")
-        if not _approval_targets:
-            log.warning(f"[execute_open] STEP-5 WARNING: no approval targets resolved — trade may fail with allowance error")
+        print(f"[execute_open] STEP-5 approval_targets={_approval_targets} using_cdp={using_cdp}", flush=True)
+        log.info(f"[execute_open] STEP-5 approval_targets={_approval_targets} using_cdp={using_cdp}")
 
         for _spender_name, _spender_addr in _approval_targets:
             _allowance = await _usdc_allowance(agent_wallet, _spender_addr)
-            log.info(f"[execute_open] STEP-5 pre-approval allowance[{_spender_name}={_spender_addr}]={_allowance:.4f} USDC using_cdp={using_cdp}")
-            if using_cdp:
-                log.info(f"[execute_open] STEP-5 calling CDP approve for {_spender_name}={_spender_addr}")
-                await _cdp_svc_approve_usdc(agent_wallet, _spender_addr, body.collateral)
-                log.info(f"[execute_open] STEP-5 CDP approve DONE for {_spender_name}")
+            print(f"[execute_open] STEP-5 pre-approval allowance[{_spender_name}]={_allowance:.4f} USDC", flush=True)
+            log.info(f"[execute_open] STEP-5 pre-approval allowance[{_spender_name}={_spender_addr}]={_allowance:.4f} USDC")
+            # Only send approval tx if allowance is below a generous threshold
+            # (uint256_max / 2) — avoids unnecessary txs if already max-approved.
+            if _allowance < 1_000_000:
+                if using_cdp:
+                    print(f"[execute_open] STEP-5 CDP approve → {_spender_name}", flush=True)
+                    log.info(f"[execute_open] STEP-5 calling CDP approve for {_spender_name}={_spender_addr}")
+                    await _cdp_svc_approve_usdc(agent_wallet, _spender_addr, body.collateral)
+                    print(f"[execute_open] STEP-5 CDP approve DONE for {_spender_name}", flush=True)
+                    log.info(f"[execute_open] STEP-5 CDP approve DONE for {_spender_name}")
+                else:
+                    await client.write_contract("USDC", "approve", _spender_addr, _USDC_APPROVE_MAX)
+                    _post = await _usdc_allowance(agent_wallet, _spender_addr)
+                    print(f"[execute_open] STEP-5 {_spender_name} post-approval={_post:.4f} USDC", flush=True)
+                    log.info(f"[execute_open] STEP-5 {_spender_name} post-approval allowance={_post:.4f} USDC (local signer)")
+                    if _post < body.collateral:
+                        raise HTTPException(
+                            status_code=500,
+                            detail=f"USDC approval to {_spender_name}={_spender_addr} did not take effect (post={_post:.4f}). Check AGENT_WALLET_PRIVATE_KEY.",
+                        )
             else:
-                await client.write_contract("USDC", "approve", _spender_addr, int(10_000 * 1e6))
-                _post = await _usdc_allowance(agent_wallet, _spender_addr)
-                log.info(f"[execute_open] STEP-5 {_spender_name} post-approval allowance={_post:.4f} USDC (local signer)")
-                if _post < body.collateral:
-                    raise HTTPException(
-                        status_code=500,
-                        detail=f"USDC approval to {_spender_name}={_spender_addr} did not take effect (post={_post:.4f}). Check AGENT_WALLET_PRIVATE_KEY.",
-                    )
+                print(f"[execute_open] STEP-5 {_spender_name} already has sufficient allowance={_allowance:.0f} — skipping approve tx", flush=True)
+                log.info(f"[execute_open] STEP-5 {_spender_name} allowance={_allowance:.0f} already sufficient — skipping approve tx")
+
+        print(f"[execute_open] STEP-5 all approvals complete", flush=True)
         log.info(f"[execute_open] STEP-5 all approvals complete")
         # ── End USDC Approval ───────────────────────────────────────────────────
 
@@ -635,16 +653,21 @@ async def execute_open(body: OpenTradeRequest, _: str = Depends(verify_api_key))
         }
         order_type = order_type_map.get(body.order_type.upper(), TradeInputOrderType.MARKET)
 
+        print(f"[execute_open] STEP-6 building trade tx order_type={order_type}", flush=True)
         log.info(f"[execute_open] STEP-6 building trade tx order_type={order_type}")
         try:
             tx = await client.trade.build_trade_open_tx(trade_input, order_type, slippage_percentage=1)
         except Exception as _build_err:
+            print(f"[execute_open] STEP-6 FAILED: {type(_build_err).__name__}: {_build_err}", flush=True)
             log.error(f"[execute_open] STEP-6 build_trade_open_tx FAILED: {type(_build_err).__name__}: {_build_err}\n{traceback.format_exc()}")
             raise
+        print(f"[execute_open] STEP-6 tx built to={tx.get('to')}", flush=True)
         log.info(f"[execute_open] STEP-6 tx built successfully to={tx.get('to')} data_len={len(tx.get('data',''))}")
         tx["nonce"] = await _fresh_nonce(agent_wallet)
+        print(f"[execute_open] STEP-7 sending trade tx nonce={tx.get('nonce')}", flush=True)
         log.info(f"[execute_open] STEP-7 sending tx via sign_and_get_receipt nonce={tx['nonce']}")
         receipt = await client.sign_and_get_receipt(tx)
+        print(f"[execute_open] STEP-7 receipt status={receipt.status} hash={receipt.transactionHash.hex()}", flush=True)
         log.info(f"[execute_open] STEP-7 receipt status={receipt.status} block={receipt.blockNumber} hash={receipt.transactionHash.hex()}")
 
         return {
@@ -671,6 +694,7 @@ async def execute_open(body: OpenTradeRequest, _: str = Depends(verify_api_key))
         raise
     except Exception as e:
         tb = traceback.format_exc()
+        print(f"[execute_open] UNHANDLED EXCEPTION: {type(e).__name__}: {e}", flush=True)
         log.error(f"[execute_open] UNHANDLED EXCEPTION: {type(e).__name__}: {e}\n{tb}")
         raise HTTPException(status_code=500, detail=f"Trade open failed: {str(e)}")
 
