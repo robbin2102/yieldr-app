@@ -1407,14 +1407,16 @@ async function executeTool(name: string, input: any, wallet?: string, agentCtxId
 
       // ── Agent Trading Execution Tools ────────────────────────────────────────
       case 'get_agent_wallet_balance': {
-        if (!agentCtxWallet) {
-          return JSON.stringify({ error: 'No agent wallet configured. The agent does not have a CDP wallet yet.' });
+        // Use static trade wallet if configured (bankr wallet); fall back to CDP wallet
+        const tradeWallet = process.env.STATIC_TRADE_WALLET_ADDRESS || agentCtxWallet;
+        if (!tradeWallet) {
+          return JSON.stringify({ error: 'No trade wallet configured. Set STATIC_TRADE_WALLET_ADDRESS or create an agent CDP wallet.' });
         }
         const pythonUrl = normalizeUrl(process.env.PYTHON_SERVICE_URL || 'http://localhost:8001');
         const apiKey    = process.env.YIELDR_DATA_API_SECRET || process.env.API_KEY || '';
         if (!apiKey) console.warn('[balance] WARNING: no API key set (YIELDR_DATA_API_SECRET / API_KEY)');
         const res = await fetch(
-          `${pythonUrl}/trade/balance?agent_wallet_address=${encodeURIComponent(agentCtxWallet)}`,
+          `${pythonUrl}/trade/balance?agent_wallet_address=${encodeURIComponent(tradeWallet)}`,
           { headers: { 'X-API-Key': apiKey }, signal: AbortSignal.timeout(30_000) }
         );
         if (!res.ok) {
@@ -1427,12 +1429,12 @@ async function executeTool(name: string, input: any, wallet?: string, agentCtxId
         const eth = data.eth_balance ?? 0;
         const usdc = data.usdc_balance ?? 0;
         return JSON.stringify({
-          agent_wallet:           agentCtxWallet,
+          agent_wallet:           tradeWallet,
           eth_balance:            eth,
           usdc_balance:           usdc,
           eth_sufficient_for_gas: eth >= 0.001,
           status: eth < 0.001
-            ? `⚠️ Low ETH: ${eth.toFixed(6)} ETH — send at least 0.001 ETH to ${agentCtxWallet} for gas`
+            ? `⚠️ Low ETH: ${eth.toFixed(6)} ETH — send at least 0.001 ETH to ${tradeWallet} for gas`
             : `✓ ETH OK (${eth.toFixed(6)} ETH)`,
           usdc_note: usdc === 0
             ? `Agent wallet has no USDC. Fund it before placing trades.`
@@ -1442,9 +1444,11 @@ async function executeTool(name: string, input: any, wallet?: string, agentCtxId
 
       case 'open_trade': {
         if (!agentCtxId) return JSON.stringify({ success: false, error: 'No agent ID in context.' });
-        if (!agentCtxWallet) return JSON.stringify({ success: false, error: 'No agent wallet configured.' });
+        // Use static trade wallet if configured (bankr wallet); fall back to CDP wallet
+        const tradeWalletForOpen = process.env.STATIC_TRADE_WALLET_ADDRESS || agentCtxWallet;
+        if (!tradeWalletForOpen) return JSON.stringify({ success: false, error: 'No trade wallet configured.' });
         const { pair, pair_index, direction, collateral, leverage, tp_pct, sl_pct, order_type = 'MARKET', open_price } = input;
-        console.log(`[open_trade] ── ENTER ── pair=${pair} direction=${direction} collateral=${collateral} leverage=${leverage} wallet=${agentCtxWallet} agentId=${agentCtxId}`);
+        console.log(`[open_trade] ── ENTER ── pair=${pair} direction=${direction} collateral=${collateral} leverage=${leverage} wallet=${tradeWalletForOpen} agentId=${agentCtxId}`);
 
         // ── Preflight: hard balance gate — no silent bypass ──────────────────
         {
@@ -1452,9 +1456,9 @@ async function executeTool(name: string, input: any, wallet?: string, agentCtxId
           try {
             const balUrl = normalizeUrl(process.env.PYTHON_SERVICE_URL || 'http://localhost:8001');
             const balKey = process.env.YIELDR_DATA_API_SECRET || process.env.API_KEY || '';
-            console.log(`[open_trade] balance preflight: GET ${balUrl}/trade/balance wallet=${agentCtxWallet}`);
+            console.log(`[open_trade] balance preflight: GET ${balUrl}/trade/balance wallet=${tradeWalletForOpen}`);
             const balRes = await fetch(
-              `${balUrl}/trade/balance?agent_wallet_address=${encodeURIComponent(agentCtxWallet)}`,
+              `${balUrl}/trade/balance?agent_wallet_address=${encodeURIComponent(tradeWalletForOpen)}`,
               { headers: { 'X-API-Key': balKey }, signal: AbortSignal.timeout(15_000) }
             );
             if (balRes.ok) {
@@ -2257,6 +2261,7 @@ User Wallet Address: ${walletAddress}
 Agent Name: ${agentName}
 Agent ID: ${agentId || 'N/A'}
 Agent Wallet (CDP): ${agentWalletAddress || 'Not configured — wallet not yet created'}
+Trade Execution Wallet: ${process.env.STATIC_TRADE_WALLET_ADDRESS || agentWalletAddress || 'Not configured'}
 Total Value: ~$${totalPortfolioValue.toFixed(2)}
 Positions: ${portfolioSummary?.positionCount || 0}
 Token Holdings: $${tokensTotalUsd.toFixed(2)} across ${tokens.length} tokens
