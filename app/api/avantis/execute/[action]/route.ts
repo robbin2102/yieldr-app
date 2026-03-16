@@ -3,7 +3,6 @@ import connectDB from '@/lib/mongoose';
 import TradeSetup from '@/models/TradeSetup';
 import MonitoringTask from '@/models/MonitoringTask';
 import AgentTrade, { TradeAction } from '@/models/AgentTrade';
-import Agent from '@/models/Agent';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -101,25 +100,13 @@ export async function POST(
 
   await connectDB();
 
-  // ── Resolve agent's CDP wallet address ─────────────────────────────────────
-  // Passed to Python so it signs with the per-agent CDP wallet instead of the
-  // shared AGENT_WALLET_PRIVATE_KEY fallback.
-  let agentWalletAddress: string | undefined;
-  if (agentId) {
-    const agent = await Agent.findOne({ agentId })
-      .select('agentWalletAddress')
-      .lean() as { agentWalletAddress?: string } | null;
-    agentWalletAddress = agent?.agentWalletAddress;
-  }
-
   const tradeAction = resolveTradeAction(action, tradeParams.order_type);
 
   // ── Proxy to Python service ─────────────────────────────────────────────────
-  const pythonBody = {
-    ...tradeParams,
-    ...(agentWalletAddress ? { agent_wallet_address: agentWalletAddress } : {}),
-  };
-  console.log(`[avantis/execute/${action}] → Python ${PYTHON_URL}/trade/${pythonEndpoint} agentWallet=${agentWalletAddress ?? 'none'} body.pair=${pythonBody.pair} body.collateral=${pythonBody.collateral}`);
+  // agent_wallet_address is intentionally NOT passed — Python uses the static
+  // AGENT_WALLET_PRIVATE_KEY (bankr wallet) which has pre-approved USDC allowances.
+  const pythonBody = { ...tradeParams };
+  console.log(`[avantis/execute/${action}] → Python ${PYTHON_URL}/trade/${pythonEndpoint} body.pair=${pythonBody.pair} body.collateral=${pythonBody.collateral}`);
   let result: Record<string, any>;
   try {
     result = await proxyToPython(pythonEndpoint, pythonBody);
