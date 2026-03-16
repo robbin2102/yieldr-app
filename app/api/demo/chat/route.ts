@@ -72,48 +72,6 @@ async function submitBankrPrompt(prompt: string): Promise<{ success: boolean; re
   return { success: false, response: 'Bankr job timed out after 2 minutes.', status: 'timeout' };
 }
 
-// ─── Bankr position sync (fetch from Bankr → upsert into MongoDB positions collection) ────
-async function syncBankrPositionsToMongo(userWallet: string): Promise<void> {
-  try {
-    if (!BANKR_API_KEY) return;
-    const res = await fetch(`${BANKR_API_BASE}/agent/prompt`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-API-Key': BANKR_API_KEY },
-      body: JSON.stringify({ prompt: 'show my Avantis positions with entry price, leverage, pnl, liquidation price, direction, and pair name' }),
-      signal: AbortSignal.timeout(15_000),
-    });
-    if (!res.ok) return;
-    const { jobId } = await res.json();
-    // Poll for result (max 30s)
-    for (let i = 0; i < 15; i++) {
-      await new Promise(r => setTimeout(r, 2000));
-      const pollRes = await fetch(`${BANKR_API_BASE}/agent/job/${jobId}`, {
-        headers: { 'X-API-Key': BANKR_API_KEY },
-        signal: AbortSignal.timeout(10_000),
-      });
-      const job = await pollRes.json();
-      if (job.status === 'pending' || job.status === 'processing') continue;
-      if (job.status === 'completed' && job.response) {
-        console.log(`[syncBankrPositions] Bankr response: ${job.response.slice(0, 300)}`);
-        // Parse natural language response for position data
-        // Bankr returns text like: "pair: BTC/USD, direction: SHORT, leverage: 10x, entry: $73,772..."
-        // Save raw response to a lightweight position doc for the user
-        await connectDB();
-        // Mark all existing Bankr-agent positions as potentially stale
-        await Position.updateMany(
-          { agentWallet: BANKR_WALLET_ADDRESS.toLowerCase(), platform: 'Avantis', status: 'active' },
-          { $set: { updatedAt: new Date() } }
-        );
-        // We store the raw Bankr response. The frontend will parse and render.
-        // The actual structured position is saved in the open_trade handler below.
-      }
-      break;
-    }
-  } catch (err: any) {
-    console.error(`[syncBankrPositions] Error: ${err.message}`);
-  }
-}
-
 // ─── Position Cache (30 second TTL) ──────────────────────────────────────────
 interface CachedPosition {
   data: any;
@@ -986,14 +944,9 @@ async function executeTool(name: string, input: any, wallet?: string, agentCtxId
       }
       case 'get_avantis_live_positions': {
         const { walletAddress, limit = 10 } = input;
-        // BANKR MIGRATION: If querying the Bankr agent wallet, use Bankr prompt API.
-        // For all other wallets (copy trading / analytics), use the Railway fetch-positions API.
-        if (walletAddress?.toLowerCase() === BANKR_WALLET_ADDRESS.toLowerCase()) {
-          console.log(`[get_avantis_live_positions] Bankr wallet detected — using Bankr prompt API`);
-          const job = await submitBankrPrompt('show my Avantis positions');
-          return JSON.stringify({ source: 'bankr', response: job.response, success: job.success });
-        }
-        // Other wallets: use Railway fetch-positions API
+        // Use Railway fetch-positions API for ALL wallets (including Bankr agent wallet).
+        // Bankr prompt API is reserved ONLY for trade execution (open/close) to conserve
+        // the 100 msg/day free-tier limit. Position fetching uses QuickNode RPC via Python service.
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 30000);
         try {
