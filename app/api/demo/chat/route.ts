@@ -1573,7 +1573,7 @@ async function executeTool(name: string, input: any, wallet?: string, agentCtxId
         const job = await submitBankrPrompt(prompt, emitToStream);
         console.log(`[close_trade] Bankr job status=${job.status} response="${(job.response || '').slice(0, 200)}"`);
 
-        // Mark position as closed in MongoDB
+        // Mark position as closed in MongoDB + pause related monitors
         const closeResponse = job.response || '';
         const closeTxMatch = closeResponse.match(/0x[a-fA-F0-9]{64}/);
         if (job.success && closeTxMatch) {
@@ -1589,6 +1589,26 @@ async function executeTool(name: string, input: any, wallet?: string, agentCtxId
               { $set: { status: 'closed', updatedAt: new Date() } }
             );
             console.log(`[close_trade] Position marked closed in MongoDB for pair=${pairName}`);
+
+            // Auto-pause any active monitoring tasks related to this pair
+            const db = mongoose.connection.db!;
+            const tasksCol = db.collection('monitoring_tasks');
+            const monitorFilter: any = {
+              userId: (wallet || '').toLowerCase(),
+              status: 'active',
+            };
+            // If we know the specific pair, only pause monitors for that pair
+            if (pairName !== 'my') {
+              monitorFilter.task = { $regex: new RegExp(pairName, 'i') };
+            }
+            const pauseResult = await tasksCol.updateMany(monitorFilter, {
+              $set: { status: 'paused', updatedAt: new Date() },
+            });
+            if (pauseResult.modifiedCount > 0) {
+              console.log(`[close_trade] Auto-paused ${pauseResult.modifiedCount} monitor(s) for pair=${pairName}`);
+              emitToStream?.({ type: 'agent_activity', message: `Paused ${pauseResult.modifiedCount} monitor${pauseResult.modifiedCount > 1 ? 's' : ''} — position closed.` });
+            }
+
             emitToStream?.({ type: 'position_closed', pair: pairName, pair_index });
           } catch (closeErr: any) {
             console.error(`[close_trade] Failed to update position: ${closeErr.message}`);
