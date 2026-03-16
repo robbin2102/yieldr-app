@@ -42,10 +42,13 @@ const USDC_BASE_ADDRESS = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
 const BANKR_API_KEY = process.env.BANKR_API_KEY ?? '';
 
 /** Submit a natural-language prompt to Bankr and poll until complete (max 60 × 2 s = 2 min). */
-async function submitBankrPrompt(prompt: string): Promise<{ success: boolean; response?: string; status: string }> {
+async function submitBankrPrompt(prompt: string, emitToStream?: (event: any) => void): Promise<{ success: boolean; response?: string; status: string }> {
   if (!BANKR_API_KEY) throw new Error('Bankr authentication issue (BANKR_API_KEY is not configured)');
   console.log(`[bankr] Using API key: ${BANKR_API_KEY.slice(0, 6)}...${BANKR_API_KEY.slice(-4)} (len=${BANKR_API_KEY.length})`);
   const apiKey = BANKR_API_KEY;
+
+  emitToStream?.({ type: 'agent_activity', message: 'Submitting trade to execution engine...' });
+
   const submitRes = await fetch(`${BANKR_API_BASE}/agent/prompt`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-API-Key': apiKey },
@@ -57,19 +60,36 @@ async function submitBankrPrompt(prompt: string): Promise<{ success: boolean; re
     throw new Error(`Bankr prompt submit failed: HTTP ${submitRes.status}${body ? ` — ${body}` : ''}`);
   }
   const { jobId } = await submitRes.json();
+
+  // Activity messages shown to user during execution (no Bankr/wallet references)
+  const activitySteps = [
+    { at: 2, msg: 'Checking token allowances...' },
+    { at: 5, msg: 'Preparing on-chain transaction...' },
+    { at: 10, msg: 'Signing and broadcasting transaction...' },
+    { at: 18, msg: 'Waiting for block confirmation...' },
+    { at: 30, msg: 'Transaction pending — confirming on Base network...' },
+    { at: 45, msg: 'Still waiting for confirmation (this can take a moment)...' },
+  ];
+
   // Poll
   for (let i = 0; i < 60; i++) {
     await new Promise(r => setTimeout(r, 2000));
+
+    // Emit activity step if it matches this iteration
+    const step = activitySteps.find(s => s.at === i);
+    if (step) emitToStream?.({ type: 'agent_activity', message: step.msg });
+
     const pollRes = await fetch(`${BANKR_API_BASE}/agent/job/${jobId}`, {
       headers: { 'X-API-Key': apiKey },
       signal: AbortSignal.timeout(10_000),
     });
     const job = await pollRes.json();
     if (job.status !== 'pending' && job.status !== 'processing') {
+      emitToStream?.({ type: 'agent_activity', message: job.status === 'completed' ? 'Transaction confirmed!' : 'Execution finished.' });
       return { success: job.status === 'completed', response: job.response, status: job.status };
     }
   }
-  return { success: false, response: 'Bankr job timed out after 2 minutes.', status: 'timeout' };
+  return { success: false, response: 'Trade execution timed out after 2 minutes.', status: 'timeout' };
 }
 
 // ─── Position Cache (30 second TTL) ──────────────────────────────────────────
@@ -685,7 +705,7 @@ function getToolStatusLabel(name: string, input: any): string {
     case 'open_trade':
       return `Executing ${input.direction || ''} ${input.pair || ''} ${input.order_type || 'MARKET'} order...`.trim();
     case 'close_trade':
-      return `Closing position (pair_index=${input.pair_index}, trade_index=${input.trade_index})...`;
+      return `Closing ${input.pair_index ? (['', 'BTC', 'ETH', 'SOL', 'LINK', 'ARB'][input.pair_index] || '') + ' ' : ''}position...`.trim();
     case 'cancel_limit_order':
       return `Cancelling limit order (pair_index=${input.pair_index}, trade_index=${input.trade_index})...`;
     case 'withdraw_funds':
@@ -1498,7 +1518,8 @@ async function executeTool(name: string, input: any, wallet?: string, agentCtxId
           prompt += ` at limit price $${open_price}`;
         }
         console.log(`[open_trade] Bankr prompt: "${prompt}"`);
-        const job = await submitBankrPrompt(prompt);
+        emitToStream?.({ type: 'agent_activity', message: `Executing ${direction || 'LONG'} ${pair || 'BTC/USD'} on Avantis...` });
+        const job = await submitBankrPrompt(prompt, emitToStream);
         console.log(`[open_trade] Bankr job status=${job.status} response="${(job.response || '').slice(0, 200)}"`);
 
         // Save position to MongoDB if trade succeeded (response contains tx hash)
@@ -1548,7 +1569,8 @@ async function executeTool(name: string, input: any, wallet?: string, agentCtxId
         const pairName = pairMap[pair_index] || 'my';
         const prompt = `close my ${pairName} position on Avantis`;
         console.log(`[close_trade] Bankr prompt: "${prompt}"`);
-        const job = await submitBankrPrompt(prompt);
+        emitToStream?.({ type: 'agent_activity', message: `Closing ${pairName} position on Avantis...` });
+        const job = await submitBankrPrompt(prompt, emitToStream);
         console.log(`[close_trade] Bankr job status=${job.status} response="${(job.response || '').slice(0, 200)}"`);
 
         // Mark position as closed in MongoDB
@@ -1583,7 +1605,8 @@ async function executeTool(name: string, input: any, wallet?: string, agentCtxId
         const pairName = pairMap[pair_index] || 'my';
         const prompt = `cancel my ${pairName} limit order on Avantis`;
         console.log(`[cancel_limit_order] Bankr prompt: "${prompt}"`);
-        const job = await submitBankrPrompt(prompt);
+        emitToStream?.({ type: 'agent_activity', message: `Cancelling ${pairName} limit order...` });
+        const job = await submitBankrPrompt(prompt, emitToStream);
         console.log(`[cancel_limit_order] Bankr job status=${job.status} response="${(job.response || '').slice(0, 200)}"`);
         return job.response || JSON.stringify({ success: false, error: `Bankr cancel failed (status: ${job.status})` });
       }

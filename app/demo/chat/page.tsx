@@ -413,20 +413,33 @@ export default function ChatPage() {
   }, [mounted, effectiveWallet, fetchMonitoring, fetchAlerts]);
 
   // ── Agent position polling (5 min cycle)
-  const fetchAgentPositions = useCallback(async (wallet: string) => {
+  // Read positions from DB (fast, no chain sync)
+  const fetchAgentPositionsFromDB = useCallback(async (wallet: string) => {
+    try {
+      const res = await fetch(`/api/demo/positions?wallet=${wallet}`);
+      if (res.ok) {
+        const d = await res.json();
+        const positions = d.positions || [];
+        setAgentPositions(positions);
+        if (positions.length === 0) setPositionPollingActive(false);
+      }
+    } catch (err) {
+      console.error('[position-poll] DB fetch error:', err);
+    }
+  }, []);
+
+  // Sync with chain then read (slower, used for periodic refresh)
+  const syncAgentPositions = useCallback(async (wallet: string) => {
     try {
       const res = await fetch(`/api/demo/positions?wallet=${wallet}`, { method: 'POST' });
       if (res.ok) {
         const d = await res.json();
         const positions = d.positions || [];
         setAgentPositions(positions);
-        // Auto-stop polling when no active positions remain
-        if (positions.length === 0) {
-          setPositionPollingActive(false);
-        }
+        if (positions.length === 0) setPositionPollingActive(false);
       }
     } catch (err) {
-      console.error('[position-poll] fetch error:', err);
+      console.error('[position-poll] sync error:', err);
     }
   }, []);
 
@@ -450,8 +463,8 @@ export default function ChatPage() {
 
     if (!positionPollingActive || !effectiveWallet) return;
 
-    // Initial fetch immediately
-    fetchAgentPositions(effectiveWallet);
+    // Initial fetch from DB (fast — shows position saved by open_trade)
+    fetchAgentPositionsFromDB(effectiveWallet);
 
     // Countdown timer (ticks every 1s)
     positionCountdownRef.current = setInterval(() => {
@@ -461,9 +474,9 @@ export default function ChatPage() {
       });
     }, 1000);
 
-    // Position refresh every 5 minutes
+    // Periodic chain sync every 5 minutes (updates PnL, current price, etc.)
     positionPollRef.current = setInterval(() => {
-      fetchAgentPositions(effectiveWallet);
+      syncAgentPositions(effectiveWallet);
       setPositionCountdown(POSITION_POLL_INTERVAL); // reset countdown
     }, POSITION_POLL_INTERVAL * 1000);
 
@@ -471,7 +484,7 @@ export default function ChatPage() {
       if (positionPollRef.current) clearInterval(positionPollRef.current);
       if (positionCountdownRef.current) clearInterval(positionCountdownRef.current);
     };
-  }, [positionPollingActive, effectiveWallet, fetchAgentPositions]);
+  }, [positionPollingActive, effectiveWallet, fetchAgentPositionsFromDB, syncAgentPositions]);
 
   // Check on mount if there are already active agent positions → resume polling
   useEffect(() => {
@@ -792,6 +805,8 @@ export default function ChatPage() {
               setMessages(prev => prev.map(m => m.id === agentMsgId ? { ...m, content: '' } : m));
             } else if (parsed.type === 'tool_status') {
               setToolStatus(parsed.status);
+            } else if (parsed.type === 'agent_activity') {
+              setToolStatus(parsed.message);
             } else if (parsed.type === 'session') {
               setSessionId(parsed.sessionId);
               loadChatSessions();
@@ -828,11 +843,11 @@ export default function ChatPage() {
             } else if (parsed.type === 'position_opened') {
               // Trade executed — start 5m position polling cycle
               startPositionPolling();
-              // Immediate fetch to show the new position
-              if (effectiveWallet) fetchAgentPositions(effectiveWallet);
+              // Immediate fetch from DB to show the just-saved position
+              if (effectiveWallet) fetchAgentPositionsFromDB(effectiveWallet);
             } else if (parsed.type === 'position_closed') {
-              // Position closed — refresh immediately, polling auto-stops when 0 positions
-              if (effectiveWallet) fetchAgentPositions(effectiveWallet);
+              // Position closed — refresh from DB, polling auto-stops when 0 positions
+              if (effectiveWallet) fetchAgentPositionsFromDB(effectiveWallet);
             }
           } catch {}
         }
@@ -858,7 +873,7 @@ export default function ChatPage() {
         fetchAlerts(effectiveWallet);
       }, 2000);
     }
-  }, [inputValue, isStreaming, creditsExceeded, messages, effectiveWallet, sessionId, loadChatSessions, fetchCredits, fetchMonitoring, fetchAlerts, startPositionPolling, fetchAgentPositions]);
+  }, [inputValue, isStreaming, creditsExceeded, messages, effectiveWallet, sessionId, loadChatSessions, fetchCredits, fetchMonitoring, fetchAlerts, startPositionPolling, fetchAgentPositionsFromDB]);
 
   // ── Logout
   const handleLogout = useCallback(() => {
@@ -1051,6 +1066,34 @@ export default function ChatPage() {
           <button className={s.mobToggle} onClick={() => setMobPanelHidden(p => !p)}>☰</button>
         </div>
       </nav>
+
+      {/* ═══ DEMO BANNER ═══ */}
+      <div style={{
+        background: 'linear-gradient(90deg, #1a1a2e 0%, #16213e 50%, #1a1a2e 100%)',
+        borderBottom: '1px solid rgba(0, 212, 170, 0.2)',
+        padding: '6px 16px',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: '8px',
+        fontSize: '12px',
+        color: 'rgba(255,255,255,0.7)',
+        letterSpacing: '0.3px',
+      }}>
+        <span style={{ color: '#00d4aa', fontWeight: 600 }}>DEMO</span>
+        <span style={{ opacity: 0.4 }}>|</span>
+        <span>This terminal is for demo purposes only. Full version launching soon.</span>
+        <span style={{
+          marginLeft: '8px',
+          background: 'rgba(0, 212, 170, 0.15)',
+          color: '#00d4aa',
+          padding: '2px 8px',
+          borderRadius: '4px',
+          fontSize: '10px',
+          fontWeight: 600,
+          letterSpacing: '0.5px',
+        }}>BETA COMING SOON</span>
+      </div>
 
       {/* ═══ APP BODY ═══ */}
       <div className={s.appBody}>
