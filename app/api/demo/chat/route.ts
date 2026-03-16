@@ -473,7 +473,8 @@ toolDefinitions.push({
 toolDefinitions.push({
   name: 'open_trade',
   description:
-    'Execute a perpetual trade on Avantis (Base) via Bankr API. Call get_agent_wallet_balance first UNLESS responding to a TRADE_APPROVED: message (balance was already checked). ' +
+    'Execute a perpetual trade on Avantis (Base). ONLY call this after receiving a TRADE_APPROVED: message from the user — ' +
+    'calling without approval will be REJECTED. You must call propose_trade first to show an approval card. ' +
     'Minimum position size: collateral × leverage >= $100 USDC. ' +
     'Pair indices: 1=BTC/USD, 2=ETH/USD, 3=SOL/USD, 4=LINK/USD, 5=ARB/USD. ' +
     'For MARKET orders open_price is not needed. For LIMIT orders open_price is required. ' +
@@ -723,7 +724,7 @@ function getToolStatusLabel(name: string, input: any): string {
 
 // ─── Tool Execution ────────────────────────────────────────────────────────
 
-async function executeTool(name: string, input: any, wallet?: string, agentCtxId?: string, agentCtxWallet?: string, emitToStream?: (event: any) => void): Promise<string> {
+async function executeTool(name: string, input: any, wallet?: string, agentCtxId?: string, agentCtxWallet?: string, emitToStream?: (event: any) => void, tradeApproved?: boolean): Promise<string> {
   console.log(`[chat] Executing tool: ${name}`, JSON.stringify(input).slice(0, 200));
   try {
     switch (name) {
@@ -1509,6 +1510,14 @@ async function executeTool(name: string, input: any, wallet?: string, agentCtxId
       }
 
       case 'open_trade': {
+        // GUARD: Reject execution unless user explicitly approved via TRADE_APPROVED message
+        if (!tradeApproved) {
+          console.log(`[open_trade] BLOCKED — no TRADE_APPROVED in user message. Must call propose_trade first.`);
+          return JSON.stringify({
+            error: 'TRADE NOT APPROVED. You must call propose_trade first to show the user a confirmation card. Only call open_trade after the user clicks Approve (TRADE_APPROVED message).',
+            action_required: 'Call propose_trade with the trade parameters to show the approval card.',
+          });
+        }
         // BANKR MIGRATION: Trade execution via Bankr natural-language prompt API.
         // Bankr handles USDC approval, gas, and on-chain tx signing internally.
         const { pair, pair_index, direction, collateral, leverage, tp_pct, sl_pct, order_type = 'MARKET', open_price } = input;
@@ -1525,11 +1534,24 @@ async function executeTool(name: string, input: any, wallet?: string, agentCtxId
         // Save position to MongoDB if trade succeeded (response contains tx hash)
         const bankrResponse = job.response || '';
         const txMatch = bankrResponse.match(/0x[a-fA-F0-9]{64}/);
-        const entryMatch = bankrResponse.match(/entry[:\s]*\$?([\d,]+\.?\d*)/i);
+        // Try multiple price patterns from Bankr response
+        const pricePatterns = [
+          /entry[:\s]*\$?([\d,]+\.?\d*)/i,                    // "entry: $73,499"
+          /(?:price|at)[:\s]*\$?([\d,]+\.?\d*)/i,             // "price: $73,499" or "at $73,499"
+          /opened?\s+(?:at\s+)?\$?([\d,]+\.?\d*)/i,           // "opened at $73,499"
+          /\$?([\d,]+\.?\d{2,})\s*(?:per|\/)/i,               // "$73,499.73 per" or "/BTC"
+        ];
+        let entryPrice: number | undefined;
+        for (const pat of pricePatterns) {
+          const m = bankrResponse.match(pat);
+          if (m) {
+            const parsed = parseFloat(m[1].replace(/,/g, ''));
+            if (parsed > 0) { entryPrice = parsed; break; }
+          }
+        }
         if (job.success && txMatch) {
           try {
             await connectDB();
-            const entryPrice = entryMatch ? parseFloat(entryMatch[1].replace(/,/g, '')) : undefined;
             await Position.create({
               walletAddress: (wallet || '').toLowerCase(),
               agentWallet: BANKR_WALLET_ADDRESS.toLowerCase(),
@@ -1543,6 +1565,7 @@ async function executeTool(name: string, input: any, wallet?: string, agentCtxId
               positionSize: (collateral || 0) * (leverage || 1),
               margin: collateral || 0,
               entryPrice,
+              currentPrice: entryPrice, // Mark = Entry at open time
               pnl: 0,
               roi: 0,
               txHash: txMatch[0],
@@ -1579,6 +1602,20 @@ async function executeTool(name: string, input: any, wallet?: string, agentCtxId
         if (job.success && closeTxMatch) {
           try {
             await connectDB();
+            // Extract exit price from close response
+            const exitPricePatterns = [
+              /(?:exit|close[d]?|price)[:\s]*\$?([\d,]+\.?\d*)/i,
+              /at\s+\$?([\d,]+\.?\d{2,})/i,
+              /\$?([\d,]+\.?\d{2,})\s*(?:per|\/)/i,
+            ];
+            let exitPrice: number | undefined;
+            for (const pat of exitPricePatterns) {
+              const m = closeResponse.match(pat);
+              if (m) {
+                const parsed = parseFloat(m[1].replace(/,/g, ''));
+                if (parsed > 0) { exitPrice = parsed; break; }
+              }
+            }
             await Position.updateMany(
               {
                 agentWallet: BANKR_WALLET_ADDRESS.toLowerCase(),
@@ -1586,7 +1623,11 @@ async function executeTool(name: string, input: any, wallet?: string, agentCtxId
                 status: 'active',
                 ...(pairName !== 'my' ? { pair: pairName } : {}),
               },
-              { $set: { status: 'closed', updatedAt: new Date() } }
+              { $set: {
+                status: 'closed',
+                updatedAt: new Date(),
+                ...(exitPrice ? { currentPrice: exitPrice } : {}),
+              } }
             );
             console.log(`[close_trade] Position marked closed in MongoDB for pair=${pairName}`);
 
@@ -1789,12 +1830,21 @@ const STATIC_SYSTEM_PROMPT = `You are an AI trading agent on Yieldr. You analyze
 
 ## Trading Execution — LIVE (Bankr Agent Wallet on Avantis/Base)
 
+### CRITICAL: NEVER call open_trade without user approval
+open_trade will REJECT execution unless the user has clicked Approve (TRADE_APPROVED message). You MUST always call propose_trade first. There are NO exceptions.
+
+When a user asks to "design", "set up", or "execute" any trade strategy:
+1. Call get_market_snapshot and analyze signals
+2. Call propose_trade to show the approval card — ALWAYS, even if user says "execute now"
+3. STOP and wait for user to click Approve
+4. Only when you receive TRADE_APPROVED: message → call open_trade
+
 ### Pre-Trade Workflow (MANDATORY — never skip steps)
 
 1. Call get_market_snapshot to validate entry signals — you MUST identify at least 3 leading indicators (e.g. RSI, funding rate, OI, Stoch RSI, EMA alignment) and state concrete values + thresholds for each
 2. Present the strategy to the user with explicit entry signals, exit rules, and the indicators you will monitor
 3. Call get_agent_wallet_balance — show the user current USDC balance
-4. Call propose_trade — shows a confirmation card in the UI with all trade params, entry_conditions, and exit_conditions populated from your analysis
+4. Call propose_trade — shows a confirmation card in the UI with all trade params, entry_conditions, and exit_conditions populated from your analysis. ALWAYS call this — NEVER skip to open_trade directly.
 5. Wait for user to approve (they click Approve or say "execute"/"yes")
 6. Call open_trade with the SAME params from step 4
 7. After open_trade succeeds: IMMEDIATELY call manage_monitoring to create a monitoring task using the strategy signals as exit conditions
@@ -2278,7 +2328,8 @@ export async function POST(request: NextRequest) {
                   allToolCalls.push({ name: currentToolName });
                   // Execute the tool (emitToStream lets tools push special events to the frontend)
                   const emitToStream = (event: any) => controller.enqueue(encoder.encode(JSON.stringify(event) + '\n'));
-                  const rawToolResult = await executeTool(currentToolName, parsedInput, walletLower, agentId, agentWalletAddress, emitToStream);
+                  const isTradeApproved = /TRADE_APPROVED:/i.test(lastMsgText);
+                  const rawToolResult = await executeTool(currentToolName, parsedInput, walletLower, agentId, agentWalletAddress, emitToStream, isTradeApproved);
 
                   // Classify execution tool results — Claude receives the classified message,
                   // never the raw JSON. Non-execution tools pass through unchanged.
