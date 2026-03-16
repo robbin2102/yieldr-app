@@ -42,13 +42,18 @@ const USDC_BASE_ADDRESS = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
 /** Submit a natural-language prompt to Bankr and poll until complete (max 60 × 2 s = 2 min). */
 async function submitBankrPrompt(prompt: string): Promise<{ success: boolean; response?: string; status: string }> {
   const apiKey = process.env.BANKR_API_KEY || '';
+  if (!apiKey) throw new Error('Bankr authentication issue (BANKR_API_KEY is not configured)');
+  console.log(`[bankr] Using API key: ${apiKey.slice(0, 6)}...${apiKey.slice(-4)} (len=${apiKey.length})`);
   const submitRes = await fetch(`${BANKR_API_BASE}/agent/prompt`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-API-Key': apiKey },
     body: JSON.stringify({ prompt }),
     signal: AbortSignal.timeout(15_000),
   });
-  if (!submitRes.ok) throw new Error(`Bankr prompt submit failed: HTTP ${submitRes.status}`);
+  if (!submitRes.ok) {
+    const body = await submitRes.text().catch(() => '');
+    throw new Error(`Bankr prompt submit failed: HTTP ${submitRes.status}${body ? ` — ${body}` : ''}`);
+  }
   const { jobId } = await submitRes.json();
   // Poll
   for (let i = 0; i < 60; i++) {
