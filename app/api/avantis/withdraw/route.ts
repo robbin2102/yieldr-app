@@ -1,6 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server';
-import connectDB from '@/lib/mongoose';
-import Agent from '@/models/Agent';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -27,7 +25,7 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { agentId, amount, asset, to_address } = body;
+    const { amount, asset, to_address } = body;
 
     if (!amount || !asset || !to_address) {
       return NextResponse.json(
@@ -36,28 +34,14 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Resolve the agent's dedicated CDP wallet address from MongoDB
-    let agentWalletAddress: string | undefined;
-    if (agentId) {
-      await connectDB();
-      const agent = await Agent.findOne({ agentId })
-        .select('agentWalletAddress')
-        .lean() as { agentWalletAddress?: string } | null;
-      agentWalletAddress = agent?.agentWalletAddress;
-    }
-
+    // Static EOA wallet (AGENT_WALLET_PRIVATE_KEY) handles signing in the Python service
     const res = await fetch(`${PYTHON_URL}/trade/withdraw`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'X-API-Key': API_KEY,
       },
-      body: JSON.stringify({
-        amount,
-        asset,
-        to_address,
-        ...(agentWalletAddress ? { agent_wallet_address: agentWalletAddress } : {}),
-      }),
+      body: JSON.stringify({ amount, asset, to_address }),
       signal: AbortSignal.timeout(60_000),
     });
 
