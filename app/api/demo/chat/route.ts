@@ -1461,10 +1461,10 @@ async function executeTool(name: string, input: any, wallet?: string, agentCtxId
       // REVERT POINT: restore CDP/Railway code from git history (commit 0a9f445 / 418a27e).
       case 'get_agent_wallet_balance': {
         // Use Bankr REST API to get balances for the Bankr agent wallet
-        const apiKey = BANKR_API_KEY;
+        if (!BANKR_API_KEY) throw new Error('Bankr API key not configured (set BANKR_API_KEY in .env.local)');
         console.log(`[balance] Fetching Bankr wallet balances from ${BANKR_API_BASE}/agent/balances?chains=base`);
         const res = await fetch(`${BANKR_API_BASE}/agent/balances?chains=base`, {
-          headers: { 'X-API-Key': apiKey },
+          headers: { 'X-API-Key': BANKR_API_KEY },
           signal: AbortSignal.timeout(15_000),
         });
         if (!res.ok) {
@@ -1535,8 +1535,8 @@ async function executeTool(name: string, input: any, wallet?: string, agentCtxId
       case 'withdraw_funds': {
         // BANKR MIGRATION: Withdraw via Bankr /agent/submit REST endpoint (synchronous, returns tx hash).
         // ETH: native transfer. USDC: ERC20 transfer(address,uint256) calldata.
+        if (!BANKR_API_KEY) throw new Error('Bankr API key not configured (set BANKR_API_KEY in .env.local)');
         const { amount, asset, to_address } = input;
-        const apiKey = BANKR_API_KEY;
         let transaction: Record<string, any>;
 
         if (asset === 'ETH') {
@@ -1558,7 +1558,7 @@ async function executeTool(name: string, input: any, wallet?: string, agentCtxId
         console.log(`[withdraw_funds] Bankr submit: ${amount} ${asset} → ${to_address}`);
         const res = await fetch(`${BANKR_API_BASE}/agent/submit`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'X-API-Key': apiKey },
+          headers: { 'Content-Type': 'application/json', 'X-API-Key': BANKR_API_KEY },
           body: JSON.stringify({
             transaction,
             description: `Withdraw ${amount} ${asset} to ${to_address}`,
