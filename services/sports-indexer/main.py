@@ -7,7 +7,7 @@ Or:       python main.py
 import asyncio
 import logging
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -388,7 +388,16 @@ async def handle_discovery(db, api: APIFootballClient):
     logger.info("=== Discovery: scanning for upcoming fixtures ===")
 
     for league_id in PRIORITY_LEAGUES:
-        fixtures = await api.get_next_fixtures(league_id, CURRENT_SEASON, count=10)
+        # Free plan doesn't support 'next' param — query by date range instead
+        fixtures = []
+        today = datetime.now(timezone.utc)
+        for day_offset in range(7):
+            date_str = (today + timedelta(days=day_offset)).strftime("%Y-%m-%d")
+            day_fixtures = await api.get_fixtures_by_date(league_id, CURRENT_SEASON, date_str)
+            fixtures.extend(day_fixtures)
+            if fixtures:
+                break  # found fixtures, no need to check further days
+
         if not fixtures:
             logger.info(f"  No upcoming fixtures for league {league_id}")
             continue
