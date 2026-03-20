@@ -23,7 +23,8 @@ from src.config import (
     PRIORITY_LEAGUES,
     CURRENT_SEASON,
     MAX_TRACKED_MATCHES,
-    SCHEDULER_CHECK_INTERVAL_SEC,
+    DISCOVERY_INTERVAL_SEC,
+    MATCHDAY_POLL_INTERVAL_SEC,
     LIVE_POLL_INTERVAL_SEC,
     POLYMARKET_POLL_INTERVAL_SEC,
     KNOWN_DERBIES,
@@ -687,8 +688,8 @@ async def handle_post_match(db, api: APIFootballClient, match: dict):
 # ── Main Scheduler Loop ──
 
 
-async def run_cycle():
-    """One full scheduler cycle: check all tracked matches and act on their phase."""
+async def discovery_cycle():
+    """Daily cycle: discover new fixtures and do pre-match enrichment."""
     try:
         db = await get_db()
         api = APIFootballClient(db)
@@ -701,7 +702,7 @@ async def run_cycle():
         # 1. Discovery — find new fixtures
         await handle_discovery(db, api)
 
-        # 2. Process each active match
+        # 2. Pre-match enrichment for newly discovered matches
         active_matches = await db.matches.find(
             {"lifecycle_phase": {"$nin": [CLOSED]}}
         ).sort("date", 1).to_list(None)
@@ -709,7 +710,6 @@ async def run_cycle():
         logger.info(f"Active matches: {len(active_matches)}")
 
         for match in active_matches:
-            # Check phase transition
             do_transition, new_phase = should_transition(match)
             if do_transition:
                 old_phase = match.get("lifecycle_phase", "?")
@@ -723,29 +723,73 @@ async def run_cycle():
 
             phase = match["lifecycle_phase"]
 
-            # Check budget before API-heavy phases
-            if not await tracker.can_make_request() and phase in (PRE_MATCH, PRE_KICKOFF, LIVE, POST_MATCH):
+            if not await tracker.can_make_request() and phase == PRE_MATCH:
+                logger.warning(f"  Budget exhausted — skipping pre-match for {match['home']['name']}")
+                continue
+
+            if phase == PRE_MATCH and not match.get("home_form"):
+                await handle_pre_match(db, api, poly, match)
+            elif phase == PRE_MATCH:
+                logger.info(f"  Pre-match already enriched: {match['home']['name']} vs {match['away']['name']}")
+
+        await api.close()
+        await poly.close()
+        logger.info("=== Discovery cycle complete ===\n")
+
+    except Exception as e:
+        logger.exception(f"Discovery cycle error: {e}")
+
+
+async def matchday_cycle():
+    """Frequent cycle (every 5 min): handle pre-kickoff, live, and post-match phases.
+
+    This is a lightweight no-op when no matches need attention.
+    """
+    try:
+        db = await get_db()
+
+        # Only query for matches that need active polling
+        active_phases = [PRE_KICKOFF, LIVE, POST_MATCH]
+        active_matches = await db.matches.find(
+            {"lifecycle_phase": {"$in": active_phases}}
+        ).sort("date", 1).to_list(None)
+
+        if not active_matches:
+            return  # silent no-op — no matches need polling
+
+        api = APIFootballClient(db)
+        poly = PolymarketClient()
+        tracker = BudgetTracker(db)
+
+        logger.info(f"Match-day poll: {len(active_matches)} active matches")
+
+        for match in active_matches:
+            # Check phase transitions
+            do_transition, new_phase = should_transition(match)
+            if do_transition:
+                old_phase = match.get("lifecycle_phase", "?")
+                logger.info(f"  Transition: {match['home']['name']} vs {match['away']['name']} "
+                            f"{old_phase} → {new_phase}")
+                await db.matches.update_one(
+                    {"fixture_id": match["fixture_id"]},
+                    {"$set": {"lifecycle_phase": new_phase, "last_updated": datetime.now(timezone.utc)}}
+                )
+                match["lifecycle_phase"] = new_phase
+
+            phase = match["lifecycle_phase"]
+
+            if not await tracker.can_make_request() and phase in active_phases:
                 logger.warning(f"  Budget exhausted — skipping {phase} for {match['home']['name']}")
                 continue
 
-            if phase == PRE_MATCH:
-                # Only enrich once (check if already enriched)
-                if not match.get("home_form"):
-                    await handle_pre_match(db, api, poly, match)
-                else:
-                    logger.info(f"  Pre-match already enriched: {match['home']['name']} vs {match['away']['name']}")
-
-            elif phase == PRE_KICKOFF:
+            if phase == PRE_KICKOFF:
                 await handle_pre_kickoff(db, api, poly, match)
-
             elif phase == LIVE:
                 await handle_live(db, api, poly, match)
-
             elif phase == POST_MATCH:
                 if not match.get("match_stats", {}).get("last_updated"):
                     await handle_post_match(db, api, match)
                 else:
-                    # Already got final stats — close it
                     await db.matches.update_one(
                         {"fixture_id": match["fixture_id"]},
                         {"$set": {"lifecycle_phase": CLOSED, "last_updated": datetime.now(timezone.utc)}}
@@ -754,10 +798,10 @@ async def run_cycle():
 
         await api.close()
         await poly.close()
-        logger.info("=== Cycle complete ===\n")
+        logger.info("=== Match-day cycle complete ===\n")
 
     except Exception as e:
-        logger.exception(f"Cycle error: {e}")
+        logger.exception(f"Match-day cycle error: {e}")
 
 
 # ── FastAPI App ──
@@ -769,11 +813,18 @@ async def lifespan(app: FastAPI):
     db = await get_db()
     await ensure_indexes(db)
     logger.info("Starting scheduler...")
+    # Daily: discover fixtures + pre-match enrichment
     scheduler.add_job(
-        run_cycle, "interval",
-        seconds=SCHEDULER_CHECK_INTERVAL_SEC,
-        id="main_cycle",
+        discovery_cycle, "interval",
+        seconds=DISCOVERY_INTERVAL_SEC,
+        id="discovery_cycle",
         next_run_time=datetime.now(timezone.utc),  # run immediately on startup
+    )
+    # Every 5 min: poll pre-kickoff/live/post-match (no-op when nothing active)
+    scheduler.add_job(
+        matchday_cycle, "interval",
+        seconds=MATCHDAY_POLL_INTERVAL_SEC,
+        id="matchday_cycle",
     )
     scheduler.start()
     yield
@@ -818,8 +869,9 @@ async def get_match(fixture_id: int):
 
 @app.post("/run-cycle")
 async def trigger_cycle():
-    """Manually trigger a cycle (for testing)."""
-    await run_cycle()
+    """Manually trigger a full cycle (discovery + match-day)."""
+    await discovery_cycle()
+    await matchday_cycle()
     return {"status": "cycle complete"}
 
 
