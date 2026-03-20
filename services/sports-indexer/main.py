@@ -388,18 +388,23 @@ async def handle_discovery(db, api: APIFootballClient):
     logger.info("=== Discovery: scanning for upcoming fixtures ===")
 
     for league_id in PRIORITY_LEAGUES:
-        # Free plan doesn't support 'next' param — query by date range instead
+        # Free plan: only today/tomorrow allowed for date queries
         fixtures = []
         today = datetime.now(timezone.utc)
-        for day_offset in range(7):
+        for day_offset in range(2):
             date_str = (today + timedelta(days=day_offset)).strftime("%Y-%m-%d")
             day_fixtures = await api.get_fixtures_by_date(league_id, CURRENT_SEASON, date_str)
             fixtures.extend(day_fixtures)
             if fixtures:
-                break  # found fixtures, no need to check further days
+                break
+
+        # Fallback: if no upcoming fixtures found (e.g. past season), grab recent ones
+        if not fixtures:
+            logger.info(f"  No live/upcoming fixtures — fetching last played for league {league_id}")
+            fixtures = await api.get_last_fixtures(league_id, CURRENT_SEASON, count=3)
 
         if not fixtures:
-            logger.info(f"  No upcoming fixtures for league {league_id}")
+            logger.info(f"  No fixtures found for league {league_id}")
             continue
 
         for raw in fixtures:
