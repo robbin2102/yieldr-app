@@ -87,10 +87,10 @@ class APIFootballClient:
         }, phase=phase)
         return data.get("response", []) if data else []
 
-    async def get_last_fixtures(self, league_id: int, season: int, count: int = 10, phase: str = "discovery") -> list:
-        """Get last N played fixtures for a league (free-plan compatible)."""
+    async def get_all_fixtures(self, league_id: int, season: int, phase: str = "discovery") -> list:
+        """Get all fixtures for a league/season (free-plan compatible fallback)."""
         data = await self._request("/fixtures", {
-            "league": league_id, "season": season, "last": count
+            "league": league_id, "season": season
         }, phase=phase)
         return data.get("response", []) if data else []
 

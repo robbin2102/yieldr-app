@@ -398,10 +398,12 @@ async def handle_discovery(db, api: APIFootballClient):
             if fixtures:
                 break
 
-        # Fallback: if no upcoming fixtures found (e.g. past season), grab recent ones
+        # Fallback: if no upcoming fixtures (e.g. past season), fetch all and take last 3
         if not fixtures:
-            logger.info(f"  No live/upcoming fixtures — fetching last played for league {league_id}")
-            fixtures = await api.get_last_fixtures(league_id, CURRENT_SEASON, count=3)
+            logger.info(f"  No live/upcoming fixtures — fetching season fixtures for league {league_id}")
+            all_fixtures = await api.get_all_fixtures(league_id, CURRENT_SEASON)
+            # Take the last 3 fixtures (most recent by date)
+            fixtures = all_fixtures[-3:] if all_fixtures else []
 
         if not fixtures:
             logger.info(f"  No fixtures found for league {league_id}")
