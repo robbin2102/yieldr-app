@@ -1,6 +1,12 @@
 """Sports indexer configuration — env vars and constants."""
 
 import os
+from pathlib import Path
+from dotenv import load_dotenv
+
+# Load env.local from project root (three levels up from src/)
+_env_file = Path(__file__).resolve().parent.parent.parent.parent / "env.local"
+load_dotenv(_env_file)
 
 # API-Football
 API_FOOTBALL_KEY = os.getenv("API_FOOTBALL_KEY", "")
