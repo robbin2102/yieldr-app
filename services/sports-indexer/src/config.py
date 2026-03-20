@@ -22,7 +22,7 @@ POLYMARKET_GAMMA_URL = os.getenv("POLYMARKET_GAMMA_URL", "https://gamma-api.poly
 
 # Leagues
 PRIORITY_LEAGUES = [int(x) for x in os.getenv("PRIORITY_LEAGUES", "39").split(",")]
-CURRENT_SEASON = int(os.getenv("CURRENT_SEASON", "2025"))
+CURRENT_SEASON = int(os.getenv("CURRENT_SEASON", "2024"))
 
 # Budget
 MAX_TRACKED_MATCHES = int(os.getenv("MAX_TRACKED_MATCHES", "3"))
