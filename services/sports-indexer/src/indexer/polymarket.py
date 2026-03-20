@@ -22,16 +22,22 @@ class PolymarketClient:
         """Search Polymarket for sports markets matching a query.
 
         Use team names or match description, e.g. "Arsenal Manchester United".
+        Uses the /search endpoint for keyword search, then fetches full events.
         """
         try:
+            # /search returns matching events/markets by keyword
             resp = await self._client.get(
-                f"{self.gamma_url}/events",
-                params={"title": query, "limit": limit, "active": True, "closed": False},
+                f"{self.gamma_url}/search",
+                params={"query": query, "limit": limit},
             )
             if resp.status_code != 200:
                 logger.warning(f"Polymarket search failed: {resp.status_code}")
                 return []
-            return resp.json()
+
+            data = resp.json()
+            # /search returns {"events": [...], "markets": [...], ...}
+            events = data if isinstance(data, list) else data.get("events", [])
+            return events
         except Exception as e:
             logger.error(f"Polymarket search error: {e}")
             return []
