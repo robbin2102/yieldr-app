@@ -8,6 +8,13 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+# Load env.local from project root (two levels up from services/sports-indexer/)
+_env_file = Path(__file__).resolve().parent.parent.parent / "env.local"
+load_dotenv(_env_file)
 
 from fastapi import FastAPI
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
