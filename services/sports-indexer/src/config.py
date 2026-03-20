@@ -22,7 +22,7 @@ POLYMARKET_GAMMA_URL = os.getenv("POLYMARKET_GAMMA_URL", "https://gamma-api.poly
 
 # Leagues
 PRIORITY_LEAGUES = [int(x) for x in os.getenv("PRIORITY_LEAGUES", "39").split(",")]
-CURRENT_SEASON = int(os.getenv("CURRENT_SEASON", "2024"))
+CURRENT_SEASON = int(os.getenv("CURRENT_SEASON", "2025"))
 
 # Budget
 MAX_TRACKED_MATCHES = int(os.getenv("MAX_TRACKED_MATCHES", "3"))
@@ -33,7 +33,7 @@ INDEXER_LIMIT = DAILY_API_LIMIT - AGENT_RESERVE  # 80
 # Polling intervals
 LIVE_POLL_INTERVAL_SEC = int(os.getenv("LIVE_POLL_INTERVAL_SEC", "900"))
 POLYMARKET_POLL_INTERVAL_SEC = int(os.getenv("POLYMARKET_POLL_INTERVAL_SEC", "300"))
-SCHEDULER_CHECK_INTERVAL_SEC = int(os.getenv("SCHEDULER_CHECK_INTERVAL_SEC", "300"))
+SCHEDULER_CHECK_INTERVAL_SEC = int(os.getenv("SCHEDULER_CHECK_INTERVAL_SEC", "86400"))
 
 # Server
 PORT = int(os.getenv("PORT", "8080"))
