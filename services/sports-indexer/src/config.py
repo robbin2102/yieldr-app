@@ -6,7 +6,10 @@ from dotenv import load_dotenv
 
 # Load env.local from project root (three levels up from src/)
 _env_file = Path(__file__).resolve().parent.parent.parent.parent / "env.local"
-load_dotenv(_env_file)
+print(f"[config] Looking for env.local at: {_env_file} (exists: {_env_file.exists()})")
+_loaded = load_dotenv(_env_file)
+print(f"[config] load_dotenv returned: {_loaded}")
+print(f"[config] MONGODB_URI after load: {os.getenv('MONGODB_URI', '<NOT SET>')[:20]}...")
 
 # API-Football
 API_FOOTBALL_KEY = os.getenv("API_FOOTBALL_KEY", "")
