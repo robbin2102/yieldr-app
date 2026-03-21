@@ -28,6 +28,15 @@ import { getHLPortfolioTool } from './live-api/get-hl-portfolio.js';
 import { getPMMarketTool } from './live-api/get-pm-market.js';
 import { getPMUserActivityTool } from './live-api/get-pm-user-activity.js';
 
+// Football / Soccer live API tools
+import { searchFootballFixturesTool } from './live-api/search-football-fixtures.js';
+import { getFixtureDetailsTool } from './live-api/get-fixture-details.js';
+import { getFootballH2HTool } from './live-api/get-football-h2h.js';
+import { getFootballStandingsTool } from './live-api/get-football-standings.js';
+import { getTeamFormTool } from './live-api/get-team-form.js';
+import { getMatchOddsTool } from './live-api/get-match-odds.js';
+import { getFootballInjuriesTool } from './live-api/get-football-injuries.js';
+
 // Market intelligence tools
 import { getMarketSnapshotTool } from './market/get-market-snapshot.js';
 import { fetchLiveIndicatorTool } from './market/fetch-live-indicator.js';
@@ -51,6 +60,13 @@ export {
   getHLPortfolioTool,
   getPMMarketTool,
   getPMUserActivityTool,
+  searchFootballFixturesTool,
+  getFixtureDetailsTool,
+  getFootballH2HTool,
+  getFootballStandingsTool,
+  getTeamFormTool,
+  getMatchOddsTool,
+  getFootballInjuriesTool,
 } from './live-api/index.js';
 export { getMarketSnapshotTool, fetchLiveIndicatorTool, getCoinPriceTool, getMacroSnapshotTool, getFundingRateHistoryTool, getFundingRateCurrentTool, getDerivativesHistoryTool, getNewsHeadlinesTool } from './market/index.js';
 export { getStrategyTemplateTool, openTradeTool, closeTradeTool, cancelLimitOrderTool } from './trading/index.js';
@@ -87,6 +103,14 @@ export const tools = [
   // Polymarket market data (odds, volume, outcomes) + user activity
   getPMMarketTool,
   getPMUserActivityTool,
+  // Football / Soccer live API tools (API-Football)
+  searchFootballFixturesTool,
+  getFixtureDetailsTool,
+  getFootballH2HTool,
+  getFootballStandingsTool,
+  getTeamFormTool,
+  getMatchOddsTool,
+  getFootballInjuriesTool,
   // Strategy templates + signal catalog
   getStrategyTemplateTool,
   // Trade execution: open, close, cancel

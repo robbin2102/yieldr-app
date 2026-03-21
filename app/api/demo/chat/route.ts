@@ -38,6 +38,35 @@ const BASE_RPC_URL = process.env.QUICKNODE_BASE_RPC_URL || process.env.BASE_RPC_
 // To REVERT: restore CDP/Railway handlers in executeTool() and re-add trade tools to EXECUTION_TOOLS.
 const BANKR_API_BASE = 'https://api.bankr.bot';
 const BANKR_WALLET_ADDRESS = '0xcdc44ffda057aca49bb9c8b7d54de212742729c7';
+
+// ─── API-Football Helper ──────────────────────────────────────────────────────
+const API_FOOTBALL_BASE = process.env.API_FOOTBALL_BASE_URL || 'https://v3.football.api-sports.io';
+const API_FOOTBALL_TIMEOUT = 15_000;
+
+async function apiFootballGet(endpoint: string, params: Record<string, string | number | undefined> = {}): Promise<{ ok: boolean; data: any; errors?: string[] }> {
+  const apiKey = process.env.API_FOOTBALL_KEY;
+  if (!apiKey) return { ok: false, data: null, errors: ['API_FOOTBALL_KEY not configured'] };
+  const qs = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v !== undefined && v !== null && v !== '') qs.set(k, String(v));
+  }
+  const url = `${API_FOOTBALL_BASE}/${endpoint}?${qs.toString()}`;
+  console.log(`[api-football] GET ${endpoint}?${qs.toString()}`);
+  try {
+    const res = await fetch(url, {
+      headers: { 'x-apisports-key': apiKey, Accept: 'application/json' },
+      signal: AbortSignal.timeout(API_FOOTBALL_TIMEOUT),
+    });
+    if (!res.ok) return { ok: false, data: null, errors: [`HTTP ${res.status}`] };
+    const json = await res.json();
+    if (json.errors && Object.keys(json.errors).length > 0) {
+      return { ok: false, data: null, errors: Object.values(json.errors) as string[] };
+    }
+    return { ok: true, data: json.response ?? json };
+  } catch (err: any) {
+    return { ok: false, data: null, errors: [err.message] };
+  }
+}
 const USDC_BASE_ADDRESS = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
 const BANKR_API_KEY = process.env.BANKR_API_KEY ?? '';
 
@@ -294,13 +323,14 @@ const toolDefinitions: Anthropic.Tool[] = [
   },
   {
     name: 'get_pm_market',
-    description: 'Fetch Polymarket market data including outcomes, current odds/probabilities, volume, and liquidity. Look up by slug, conditionId, or keyword search.',
+    description: 'Fetch Polymarket market data including outcomes, current odds/probabilities, volume, and liquidity. PREFERRED: pass the full Polymarket URL and the slug is extracted automatically. Also accepts slug, conditionId, or keyword search.',
     input_schema: {
       type: 'object' as const,
       properties: {
+        url: { type: 'string', description: 'Full Polymarket URL (e.g. "https://polymarket.com/event/arsenal-v-liverpool"). Slug is extracted automatically.' },
         slug: { type: 'string', description: 'Market slug (e.g. "will-israel-attack-iran-in-2025")' },
         conditionId: { type: 'string', description: 'Market condition ID (0x hex string)' },
-        keyword: { type: 'string', description: 'Search keyword to find markets by title (e.g. "bitcoin", "trump", "taiwan")' },
+        keyword: { type: 'string', description: 'Search keyword to find markets by title (e.g. "bitcoin", "trump", "Arsenal Liverpool")' },
         limit: { type: 'number', description: 'Number of markets to return for keyword search (default: 5, max: 20)' },
         activeOnly: { type: 'boolean', description: 'Only return active/open markets (default: true)' },
       },
@@ -636,6 +666,125 @@ toolDefinitions.push({
   },
 });
 
+// ─── Football / Soccer Live API Tools (API-Football) ─────────────────────────
+toolDefinitions.push({
+  name: 'search_football_fixtures',
+  description:
+    'Search for football/soccer fixtures by team name, date, league, or live status. ' +
+    'Resolves fuzzy team names automatically (e.g. "Man Utd" → "Manchester United"). ' +
+    'Use to find fixture_id and team IDs for other football tools. ' +
+    'Common league IDs: 39=Premier League, 140=La Liga, 135=Serie A, 78=Bundesliga, 61=Ligue 1, 2=UCL.',
+  input_schema: {
+    type: 'object' as const,
+    properties: {
+      team: { type: 'string', description: 'Team name to search (e.g. "Arsenal", "Man United")' },
+      date: { type: 'string', description: 'Date in YYYY-MM-DD format' },
+      league: { type: 'number', description: 'League ID (39=PL, 140=La Liga, 135=Serie A, 78=Bundesliga, 61=Ligue 1, 2=UCL)' },
+      season: { type: 'number', description: 'Season year (e.g. 2025)' },
+      live: { type: 'boolean', description: 'If true, only return live matches' },
+      next: { type: 'number', description: 'Return next N upcoming fixtures for a team (max 10)' },
+      last: { type: 'number', description: 'Return last N completed fixtures for a team (max 10)' },
+    },
+  },
+});
+
+toolDefinitions.push({
+  name: 'get_fixture_details',
+  description:
+    'Get full details for a football fixture: score, status, referee, venue, lineups, match statistics ' +
+    '(shots, possession, passes, corners, fouls, cards), and events (goals, cards, substitutions). ' +
+    'Works for upcoming, live, and completed matches. Requires fixture_id from search_football_fixtures.',
+  input_schema: {
+    type: 'object' as const,
+    properties: {
+      fixture_id: { type: 'number', description: 'Fixture ID from search_football_fixtures' },
+      include: {
+        type: 'array', items: { type: 'string', enum: ['stats', 'events', 'lineups'] },
+        description: 'Which extra data to include. Default: all. Use ["stats"] to save API calls.',
+      },
+    },
+    required: ['fixture_id'],
+  },
+});
+
+toolDefinitions.push({
+  name: 'get_football_h2h',
+  description:
+    'Get head-to-head history between two football teams. Returns last N meetings with scores, ' +
+    'plus summary: wins/draws/losses, total goals, BTTS%, over 2.5%. Requires team IDs from search_football_fixtures.',
+  input_schema: {
+    type: 'object' as const,
+    properties: {
+      team_a: { type: 'number', description: 'First team ID' },
+      team_b: { type: 'number', description: 'Second team ID' },
+      last: { type: 'number', description: 'Number of H2H meetings (default: 10, max: 20)' },
+    },
+    required: ['team_a', 'team_b'],
+  },
+});
+
+toolDefinitions.push({
+  name: 'get_football_standings',
+  description:
+    'Get full league standings/table: rank, points, W/D/L, GF/GA, GD, form, home/away splits. ' +
+    'League IDs: 39=Premier League, 140=La Liga, 135=Serie A, 78=Bundesliga, 61=Ligue 1, 2=UCL.',
+  input_schema: {
+    type: 'object' as const,
+    properties: {
+      league: { type: 'number', description: 'League ID' },
+      season: { type: 'number', description: 'Season year (default: current year)' },
+    },
+    required: ['league'],
+  },
+});
+
+toolDefinitions.push({
+  name: 'get_team_form',
+  description:
+    'Get team form (recent results) and season statistics. Returns last N fixtures, computed betting stats ' +
+    '(BTTS%, O2.5%, clean sheet%), momentum grade, fixture congestion, and full season stats. ' +
+    'Requires team_id from search_football_fixtures.',
+  input_schema: {
+    type: 'object' as const,
+    properties: {
+      team_id: { type: 'number', description: 'Team ID from search_football_fixtures' },
+      league: { type: 'number', description: 'League ID for season stats (e.g. 39=PL)' },
+      season: { type: 'number', description: 'Season year (default: current year)' },
+      last: { type: 'number', description: 'Number of recent fixtures (default: 10, max: 15)' },
+    },
+    required: ['team_id'],
+  },
+});
+
+toolDefinitions.push({
+  name: 'get_match_odds',
+  description:
+    'Get bookmaker odds and AI predictions for a fixture. Returns 1X2, O/U 2.5, BTTS, implied probabilities, ' +
+    'AI prediction (winner, advice), and team comparison. Compare implied_probability with Polymarket prices to find edges.',
+  input_schema: {
+    type: 'object' as const,
+    properties: {
+      fixture_id: { type: 'number', description: 'Fixture ID from search_football_fixtures' },
+      include_predictions: { type: 'boolean', description: 'Also fetch AI predictions (default: true)' },
+    },
+    required: ['fixture_id'],
+  },
+});
+
+toolDefinitions.push({
+  name: 'get_football_injuries',
+  description:
+    'Get injury and suspension list for a football fixture or team. Returns players grouped by team with injury type and reason.',
+  input_schema: {
+    type: 'object' as const,
+    properties: {
+      fixture_id: { type: 'number', description: 'Fixture ID for both teams in a match' },
+      team_id: { type: 'number', description: 'Team ID for a specific team' },
+      season: { type: 'number', description: 'Season year (required with team_id)' },
+    },
+  },
+});
+
 // Claude native web search tool
 const webSearchTool = {
   type: 'web_search_20250305' as const,
@@ -701,6 +850,27 @@ function getToolStatusLabel(name: string, input: any): string {
         ? `Scanning ${src} news for "${input.topics}"...`
         : `Fetching latest ${src} headlines...`;
     }
+    // Football / Soccer tools
+    case 'search_football_fixtures':
+      return input.team
+        ? `Searching for "${input.team}" fixtures...`
+        : input.date
+        ? `Fetching fixtures for ${input.date}...`
+        : input.live
+        ? `Fetching live football matches...`
+        : `Searching football fixtures...`;
+    case 'get_fixture_details':
+      return `Loading match details for fixture #${input.fixture_id}...`;
+    case 'get_football_h2h':
+      return `Fetching head-to-head history...`;
+    case 'get_football_standings':
+      return `Loading league standings...`;
+    case 'get_team_form':
+      return `Analyzing team form and stats...`;
+    case 'get_match_odds':
+      return `Fetching bookmaker odds and predictions...`;
+    case 'get_football_injuries':
+      return `Checking injury reports...`;
     case 'get_agent_wallet_balance':
       return `Checking agent wallet balance...`;
     case 'open_trade':
@@ -1066,22 +1236,44 @@ async function executeTool(name: string, input: any, wallet?: string, agentCtxId
         });
       }
       case 'get_pm_market': {
-        const { slug, conditionId, keyword, limit: mktLimit = 5, activeOnly = true } = input;
-        if (!slug && !conditionId && !keyword) return JSON.stringify({ error: 'Provide slug, conditionId, or keyword' });
+        let { slug, conditionId, keyword, limit: mktLimit = 5, activeOnly = true } = input;
+        // Auto-extract slug from pasted Polymarket URL
+        if (input.url && !slug && !conditionId) {
+          const urlMatch = input.url.match(/polymarket\.com\/(?:event|market)\/([^/?#]+)/);
+          if (urlMatch) slug = urlMatch[1];
+        }
+        if (!slug && !conditionId && !keyword) return JSON.stringify({ error: 'Provide url, slug, conditionId, or keyword' });
         const GAMMA_API = 'https://gamma-api.polymarket.com';
-        let url: string;
+        let pmMarkets: any[] = [];
         if (conditionId) {
-          url = `${GAMMA_API}/markets?condition_id=${encodeURIComponent(conditionId)}`;
+          const res = await fetch(`${GAMMA_API}/markets?condition_id=${encodeURIComponent(conditionId)}`, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(8000) });
+          if (!res.ok) return JSON.stringify({ error: `Gamma API error: ${res.status}` });
+          const raw = await res.json();
+          pmMarkets = Array.isArray(raw) ? raw : [raw];
         } else if (slug) {
-          url = `${GAMMA_API}/markets?slug=${encodeURIComponent(slug)}`;
+          // Try /markets first, then fallback to /events (Polymarket uses event-level slugs)
+          const mRes = await fetch(`${GAMMA_API}/markets?slug=${encodeURIComponent(slug)}`, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(8000) });
+          if (mRes.ok) {
+            const mData = await mRes.json();
+            pmMarkets = (Array.isArray(mData) ? mData : []).filter((m: any) => m.conditionId || m.condition_id);
+          }
+          if (pmMarkets.length === 0) {
+            const eRes = await fetch(`${GAMMA_API}/events?slug=${encodeURIComponent(slug)}`, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(8000) });
+            if (eRes.ok) {
+              const eData = await eRes.json();
+              const events = Array.isArray(eData) ? eData : [eData];
+              const childMarkets = events.flatMap((e: any) => { const ms = e.markets ?? e.series ?? []; return Array.isArray(ms) ? ms : []; });
+              pmMarkets = childMarkets.length > 0 ? childMarkets : events;
+            }
+          }
         } else {
           const p = new URLSearchParams({ _q: keyword, limit: String(Math.min(mktLimit, 20)), order: 'volume', ascending: 'false', ...(activeOnly ? { active: 'true', closed: 'false' } : {}) });
-          url = `${GAMMA_API}/markets?${p.toString()}`;
+          const res = await fetch(`${GAMMA_API}/markets?${p.toString()}`, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(8000) });
+          if (!res.ok) return JSON.stringify({ error: `Gamma API error: ${res.status}` });
+          const raw = await res.json();
+          pmMarkets = Array.isArray(raw) ? raw : [];
         }
-        const res = await fetch(url, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(8000) });
-        if (!res.ok) return JSON.stringify({ error: `Gamma API error: ${res.status}` });
-        const raw = await res.json();
-        const markets = (Array.isArray(raw) ? raw : [raw]).map((m: any) => {
+        const markets = pmMarkets.map((m: any) => {
           let outcomes: Array<{ name: string; probability: number }> = [];
           try {
             const names = typeof m.outcomes === 'string' ? JSON.parse(m.outcomes) : (m.outcomes ?? []);
@@ -1324,6 +1516,254 @@ async function executeTool(name: string, input: any, wallet?: string, agentCtxId
           maxAgeMinutes: input.maxAgeMinutes ?? 1440,
         });
         return formatArticlesForLLM(articles);
+      }
+
+      // ─── Football / Soccer Live API Tools ─────────────────────────────────────
+      case 'search_football_fixtures': {
+        const { team, date, league, season, live, next, last: lastN } = input;
+        // Resolve team name → ID
+        let teamId: number | undefined;
+        let resolvedTeamName: string | undefined;
+        if (team) {
+          const teamRes = await apiFootballGet('teams', { search: team });
+          if (!teamRes.ok || !teamRes.data?.length) {
+            return JSON.stringify({ found: false, message: `Could not find team matching "${team}".` });
+          }
+          const t = teamRes.data[0]?.team;
+          teamId = t?.id;
+          resolvedTeamName = t?.name;
+        }
+        const fParams: Record<string, string | number | undefined> = {};
+        if (live) { fParams.live = 'all'; }
+        else if (teamId && next) { fParams.team = teamId; fParams.next = Math.min(next, 10); }
+        else if (teamId && lastN) { fParams.team = teamId; fParams.last = Math.min(lastN, 10); }
+        else {
+          if (teamId) fParams.team = teamId;
+          if (date) fParams.date = date;
+          if (league) fParams.league = league;
+          if (season) fParams.season = season;
+          if (league && !season && !date) fParams.season = new Date().getFullYear();
+        }
+        const fRes = await apiFootballGet('fixtures', fParams);
+        if (!fRes.ok) return JSON.stringify({ found: false, errors: fRes.errors });
+        const fixtures = (fRes.data || []).slice(0, 20).map((f: any) => ({
+          fixture_id: f.fixture?.id, date: f.fixture?.date, referee: f.fixture?.referee,
+          venue: f.fixture?.venue?.name,
+          status: { long: f.fixture?.status?.long, short: f.fixture?.status?.short, elapsed: f.fixture?.status?.elapsed },
+          league: { id: f.league?.id, name: f.league?.name, country: f.league?.country, round: f.league?.round, season: f.league?.season },
+          home: { id: f.teams?.home?.id, name: f.teams?.home?.name, winner: f.teams?.home?.winner },
+          away: { id: f.teams?.away?.id, name: f.teams?.away?.name, winner: f.teams?.away?.winner },
+          score: { home: f.goals?.home, away: f.goals?.away, halftime: f.score?.halftime, fulltime: f.score?.fulltime },
+        }));
+        return JSON.stringify({
+          found: true,
+          ...(resolvedTeamName ? { resolved_team: resolvedTeamName, team_id: teamId } : {}),
+          total: fixtures.length, fixtures,
+        });
+      }
+
+      case 'get_fixture_details': {
+        const { fixture_id, include } = input;
+        const incSet = new Set(include ?? ['stats', 'events', 'lineups']);
+        const fdRes = await apiFootballGet('fixtures', { id: fixture_id });
+        if (!fdRes.ok || !fdRes.data?.length) return JSON.stringify({ found: false, fixture_id, errors: fdRes.errors || ['Not found'] });
+        const fd = fdRes.data[0];
+        const fdResult: Record<string, any> = {
+          found: true, fixture_id, date: fd.fixture?.date, referee: fd.fixture?.referee, venue: fd.fixture?.venue?.name,
+          status: { long: fd.fixture?.status?.long, short: fd.fixture?.status?.short, elapsed: fd.fixture?.status?.elapsed },
+          league: { id: fd.league?.id, name: fd.league?.name, round: fd.league?.round },
+          home: { id: fd.teams?.home?.id, name: fd.teams?.home?.name },
+          away: { id: fd.teams?.away?.id, name: fd.teams?.away?.name },
+          score: { home: fd.goals?.home, away: fd.goals?.away, halftime: fd.score?.halftime, fulltime: fd.score?.fulltime },
+          events: fd.events ?? [],
+        };
+        const fdPromises: Promise<void>[] = [];
+        if (incSet.has('stats')) {
+          fdPromises.push(apiFootballGet('fixtures/statistics', { fixture: fixture_id }).then(r => {
+            if (r.ok && r.data?.length) {
+              fdResult.statistics = r.data.map((ts: any) => ({
+                team: ts.team?.name, team_id: ts.team?.id,
+                stats: Object.fromEntries((ts.statistics || []).map((s: any) => [s.type?.toLowerCase().replace(/\s+/g, '_'), s.value])),
+              }));
+            }
+          }));
+        }
+        if (incSet.has('lineups')) {
+          fdPromises.push(apiFootballGet('fixtures/lineups', { fixture: fixture_id }).then(r => {
+            if (r.ok && r.data?.length) {
+              fdResult.lineups = r.data.map((l: any) => ({
+                team: l.team?.name, formation: l.formation,
+                starting_xi: (l.startXI || []).map((p: any) => ({ name: p.player?.name, number: p.player?.number, pos: p.player?.pos })),
+                substitutes: (l.substitutes || []).slice(0, 7).map((p: any) => ({ name: p.player?.name, number: p.player?.number, pos: p.player?.pos })),
+                coach: l.coach?.name,
+              }));
+            }
+          }));
+        }
+        await Promise.all(fdPromises);
+        return JSON.stringify(fdResult);
+      }
+
+      case 'get_football_h2h': {
+        const { team_a, team_b, last: h2hLast = 10 } = input;
+        const h2hRes = await apiFootballGet('fixtures/headtohead', { h2h: `${team_a}-${team_b}`, last: Math.min(h2hLast, 20) });
+        if (!h2hRes.ok || !h2hRes.data?.length) return JSON.stringify({ found: false, team_a, team_b, errors: h2hRes.errors || ['No H2H data'] });
+        const h2hMatches = h2hRes.data;
+        let aW = 0, bW = 0, dr = 0, aG = 0, bG = 0, btts = 0, o25 = 0;
+        const h2hHistory = h2hMatches.map((f: any) => {
+          const hId = f.teams?.home?.id; const hG = f.goals?.home ?? 0; const awG = f.goals?.away ?? 0;
+          const aIsH = hId === team_a;
+          const tAG = aIsH ? hG : awG; const tBG = aIsH ? awG : hG;
+          aG += tAG; bG += tBG;
+          if (tAG > tBG) aW++; else if (tBG > tAG) bW++; else dr++;
+          if (hG > 0 && awG > 0) btts++;
+          if (hG + awG > 2) o25++;
+          return { date: f.fixture?.date?.slice(0, 10), home: f.teams?.home?.name, away: f.teams?.away?.name, score: `${hG}-${awG}`, result_for_team_a: tAG > tBG ? 'W' : tBG > tAG ? 'L' : 'D' };
+        });
+        const tot = h2hMatches.length;
+        return JSON.stringify({
+          found: true,
+          team_a: { id: team_a, name: h2hMatches[0]?.teams?.[h2hMatches[0]?.teams?.home?.id === team_a ? 'home' : 'away']?.name },
+          team_b: { id: team_b, name: h2hMatches[0]?.teams?.[h2hMatches[0]?.teams?.home?.id === team_b ? 'home' : 'away']?.name },
+          summary: { total_matches: tot, team_a_wins: aW, team_b_wins: bW, draws: dr, team_a_goals: aG, team_b_goals: bG, avg_total_goals: +((aG + bG) / tot).toFixed(2), btts_pct: +((btts / tot * 100).toFixed(1)), over_25_pct: +((o25 / tot * 100).toFixed(1)) },
+          matches: h2hHistory,
+        });
+      }
+
+      case 'get_football_standings': {
+        const { league: stLeague, season: stSeason = new Date().getFullYear() } = input;
+        const stRes = await apiFootballGet('standings', { league: stLeague, season: stSeason });
+        if (!stRes.ok || !stRes.data?.length) return JSON.stringify({ found: false, league: stLeague, season: stSeason, errors: stRes.errors || ['No standings'] });
+        const stData = stRes.data[0]?.league;
+        if (!stData?.standings?.length) return JSON.stringify({ found: false, message: 'Standings not available' });
+        const groups = stData.standings.map((group: any[]) => group.map((e: any) => ({
+          rank: e.rank, team: e.team?.name, team_id: e.team?.id, points: e.points,
+          played: e.all?.played, won: e.all?.win, draw: e.all?.draw, lost: e.all?.lose,
+          gf: e.all?.goals?.for, ga: e.all?.goals?.against, gd: e.goalsDiff, form: e.form,
+          home: { p: e.home?.played, w: e.home?.win, d: e.home?.draw, l: e.home?.lose, gf: e.home?.goals?.for, ga: e.home?.goals?.against },
+          away: { p: e.away?.played, w: e.away?.win, d: e.away?.draw, l: e.away?.lose, gf: e.away?.goals?.for, ga: e.away?.goals?.against },
+          description: e.description,
+        })));
+        return JSON.stringify({
+          found: true, league: { id: stData.id, name: stData.name, country: stData.country, season: stData.season },
+          standings: groups.length === 1 ? groups[0] : groups,
+        });
+      }
+
+      case 'get_team_form': {
+        const { team_id: tfTeamId, league: tfLeague, season: tfSeason = new Date().getFullYear(), last: tfLast = 10 } = input;
+        const [tfFixRes, tfSeasonRes] = await Promise.all([
+          apiFootballGet('fixtures', { team: tfTeamId, last: Math.min(tfLast, 15) }),
+          tfLeague ? apiFootballGet('teams/statistics', { team: tfTeamId, league: tfLeague, season: tfSeason }) : Promise.resolve({ ok: false, data: null }),
+        ]);
+        const tfResult: Record<string, any> = { found: true, team_id: tfTeamId };
+        if (tfFixRes.ok && tfFixRes.data?.length) {
+          let tw = 0, td = 0, tl = 0, tgf = 0, tga = 0, tbtts = 0, to25 = 0, tcs = 0, tfts = 0;
+          const recentForm = tfFixRes.data.map((f: any) => {
+            const isH = f.teams?.home?.id === tfTeamId;
+            const gf = isH ? (f.goals?.home ?? 0) : (f.goals?.away ?? 0);
+            const ga = isH ? (f.goals?.away ?? 0) : (f.goals?.home ?? 0);
+            const r = gf > ga ? 'W' : ga > gf ? 'L' : 'D';
+            if (r === 'W') tw++; else if (r === 'D') td++; else tl++;
+            tgf += gf; tga += ga;
+            if (gf > 0 && ga > 0) tbtts++; if (gf + ga > 2) to25++;
+            if (ga === 0) tcs++; if (gf === 0) tfts++;
+            return { date: f.fixture?.date?.slice(0, 10), opponent: isH ? f.teams?.away?.name : f.teams?.home?.name, venue: isH ? 'home' : 'away', score: `${gf}-${ga}`, result: r, league: f.league?.name };
+          });
+          const n = recentForm.length; const pts = tw * 3 + td;
+          const l5 = recentForm.slice(0, 5);
+          const l5pts = l5.reduce((s: number, r: any) => s + (r.result === 'W' ? 3 : r.result === 'D' ? 1 : 0), 0);
+          const momentum = l5pts >= 12 ? 'strong' : l5pts >= 8 ? 'steady' : l5pts >= 4 ? 'declining' : 'poor';
+          tfResult.form = {
+            results: recentForm, form_string: recentForm.map((r: any) => r.result).join(''), momentum,
+            stats: { played: n, won: tw, drawn: td, lost: tl, points: pts, goals_for: tgf, goals_against: tga, avg_goals_scored: +(tgf / n).toFixed(2), avg_goals_conceded: +(tga / n).toFixed(2) },
+            betting_stats: { btts_pct: +((tbtts / n * 100).toFixed(1)), over_25_pct: +((to25 / n * 100).toFixed(1)), clean_sheet_pct: +((tcs / n * 100).toFixed(1)), failed_to_score_pct: +((tfts / n * 100).toFixed(1)), avg_total_goals: +(((tgf + tga) / n).toFixed(2)) },
+          };
+          if (recentForm.length >= 2) {
+            const dates = recentForm.map((r: any) => new Date(r.date).getTime());
+            const daysSince = Math.round((Date.now() - dates[0]) / 86400000);
+            const twoWAgo = Date.now() - 14 * 86400000;
+            const m14d = dates.filter((d: number) => d >= twoWAgo).length;
+            tfResult.context = { days_since_last_match: daysSince, matches_last_14_days: m14d, is_congested: m14d >= 4 };
+          }
+        }
+        if (tfSeasonRes.ok && tfSeasonRes.data) {
+          const s = tfSeasonRes.data;
+          tfResult.team_name = s.team?.name;
+          tfResult.season_stats = {
+            league: s.league?.name, season: s.league?.season,
+            fixtures: { played: s.fixtures?.played?.total, wins: s.fixtures?.wins?.total, draws: s.fixtures?.draws?.total, losses: s.fixtures?.loses?.total },
+            goals: { for_total: s.goals?.for?.total?.total, for_avg: s.goals?.for?.average?.total, against_total: s.goals?.against?.total?.total, against_avg: s.goals?.against?.average?.total },
+            clean_sheets: s.clean_sheet?.total, failed_to_score: s.failed_to_score?.total, form: s.form,
+          };
+        }
+        return JSON.stringify(tfResult);
+      }
+
+      case 'get_match_odds': {
+        const { fixture_id: moFixId, include_predictions: moPred = true } = input;
+        const [moOddsRes, moPredRes] = await Promise.all([
+          apiFootballGet('odds', { fixture: moFixId }),
+          moPred ? apiFootballGet('predictions', { fixture: moFixId }) : Promise.resolve({ ok: false, data: null }),
+        ]);
+        const moResult: Record<string, any> = { found: true, fixture_id: moFixId };
+        if (moOddsRes.ok && moOddsRes.data?.length) {
+          const bk = moOddsRes.data[0]?.bookmakers?.[0];
+          if (bk) {
+            moResult.bookmaker = bk.name;
+            const odds: Record<string, any> = {};
+            for (const bet of (bk.bets || [])) {
+              const vals = (bet.values || []) as Array<{ value: string; odd: string }>;
+              if (bet.name === 'Match Winner') {
+                odds.match_winner = { home: parseFloat(vals.find((v: any) => v.value === 'Home')?.odd ?? '0'), draw: parseFloat(vals.find((v: any) => v.value === 'Draw')?.odd ?? '0'), away: parseFloat(vals.find((v: any) => v.value === 'Away')?.odd ?? '0') };
+              } else if (bet.name === 'Goals Over/Under' || bet.name === 'Over/Under 2.5') {
+                const ov = vals.find((v: any) => v.value === 'Over 2.5'); const un = vals.find((v: any) => v.value === 'Under 2.5');
+                if (ov || un) odds.over_under_25 = { over: parseFloat(ov?.odd ?? '0'), under: parseFloat(un?.odd ?? '0') };
+              } else if (bet.name === 'Both Teams Score') {
+                odds.btts = { yes: parseFloat(vals.find((v: any) => v.value === 'Yes')?.odd ?? '0'), no: parseFloat(vals.find((v: any) => v.value === 'No')?.odd ?? '0') };
+              }
+            }
+            moResult.odds = odds;
+            const mw = odds.match_winner;
+            if (mw?.home && mw?.draw && mw?.away) {
+              const ti = 1 / mw.home + 1 / mw.draw + 1 / mw.away;
+              moResult.implied_probability = { home: +((1 / mw.home / ti * 100).toFixed(1)), draw: +((1 / mw.draw / ti * 100).toFixed(1)), away: +((1 / mw.away / ti * 100).toFixed(1)), overround_pct: +(((ti - 1) * 100).toFixed(1)) };
+            }
+          }
+        } else {
+          moResult.odds = null; moResult.odds_note = 'Odds not yet available (usually 1-3 days before kickoff)';
+        }
+        if (moPredRes.ok && moPredRes.data?.length) {
+          const pred = moPredRes.data[0];
+          moResult.predictions = { winner: pred.predictions?.winner?.name, advice: pred.predictions?.advice, percent: pred.predictions?.percent, goals: pred.predictions?.goals };
+          if (pred.comparison) moResult.comparison = { form: pred.comparison.form, attack: pred.comparison.att, defense: pred.comparison.def, total: pred.comparison.total };
+          if (pred.teams) {
+            const mp = (t: any) => ({ name: t.name, form: t.league?.form, attack_avg: t.league?.goals?.for?.average?.total, defense_avg: t.league?.goals?.against?.average?.total });
+            moResult.team_overview = { home: pred.teams.home ? mp(pred.teams.home) : null, away: pred.teams.away ? mp(pred.teams.away) : null };
+          }
+        }
+        return JSON.stringify(moResult);
+      }
+
+      case 'get_football_injuries': {
+        const { fixture_id: injFixId, team_id: injTeamId, season: injSeason = new Date().getFullYear() } = input;
+        if (!injFixId && !injTeamId) return JSON.stringify({ found: false, error: 'Provide fixture_id or team_id' });
+        const injParams: Record<string, string | number | undefined> = {};
+        if (injFixId) injParams.fixture = injFixId;
+        if (injTeamId) { injParams.team = injTeamId; injParams.season = injSeason; }
+        const injRes = await apiFootballGet('injuries', injParams);
+        if (!injRes.ok) return JSON.stringify({ found: false, errors: injRes.errors });
+        if (!injRes.data?.length) return JSON.stringify({ found: true, total: 0, message: 'No injuries reported', injuries: [] });
+        const byTeam = new Map<number, { name: string; injuries: any[] }>();
+        for (const inj of injRes.data) {
+          const tid = inj.team?.id; if (!tid) continue;
+          if (!byTeam.has(tid)) byTeam.set(tid, { name: inj.team.name, injuries: [] });
+          byTeam.get(tid)!.injuries.push({ player: inj.player?.name, type: inj.player?.type, reason: inj.player?.reason });
+        }
+        return JSON.stringify({
+          found: true, ...(injFixId ? { fixture_id: injFixId } : { team_id: injTeamId }), total: injRes.data.length,
+          teams: Array.from(byTeam.entries()).map(([id, d]) => ({ team_id: id, team: d.name, total: d.injuries.length, players: d.injuries })),
+        });
       }
 
       case 'manage_monitoring': {
@@ -1825,6 +2265,7 @@ const STATIC_SYSTEM_PROMPT = `You are an AI trading agent on Yieldr. You analyze
 • Funding/OI history → get_derivatives_history (15m, up to 7d); get_funding_rate_history (8h settled, fallback to get_market_snapshot)
 • News → get_news_headlines (topics=, sourceTypes=geo/crypto/all)
 • Polymarket → get_pm_market (odds/volume), get_pm_user_activity (recent trades)
+• Football/Soccer → search_football_fixtures (find matches by team/date/league), get_fixture_details (score/stats/lineups/events), get_football_h2h (H2H history), get_football_standings (league table), get_team_form (recent form + betting stats), get_match_odds (bookmaker odds + AI predictions), get_football_injuries (injury list)
 • Web → web_search (expensive ~$0.03, max 2/response, use sparingly)
 • Reuse data fetched earlier in conversation when recent.
 
@@ -1906,6 +2347,20 @@ Deposit tools (fund_agent/fund_agent_eth) return [TOOL_RESULT_CLASSIFIED] blocks
 • Top trader L/S diverging from retail → smart money signal
 • Fear & Greed < 25 → extreme fear (contrarian buy); > 75 → extreme greed
 • Positive Coinbase premium → US spot buyers leading (bullish)
+
+## Football / Soccer Match Analysis (Polymarket Sports Betting)
+When analyzing a football match on Polymarket, follow this workflow:
+1. search_football_fixtures(team="...") → get fixture_id + team IDs
+2. get_pm_market(keyword="Team A Team B") → Polymarket odds/prices
+3. get_fixture_details(fixture_id=X) → match stats if live/completed
+4. get_team_form(team_id=X, league=Y) → recent form, betting stats, momentum
+5. get_football_h2h(team_a=X, team_b=Y) → H2H history, BTTS%, O2.5%
+6. get_match_odds(fixture_id=X) → bookmaker odds + implied probabilities
+7. get_football_injuries(fixture_id=X) → injury impact
+8. get_football_standings(league=Y) → league position context
+Compare bookmaker implied_probability with Polymarket prices — delta > 3% = potential edge.
+Common league IDs: 39=Premier League, 140=La Liga, 135=Serie A, 78=Bundesliga, 61=Ligue 1, 2=UCL, 3=Europa League.
+API-Football free tier: ~100 calls/day — full analysis costs ~7-8 calls, so be efficient. Reuse data.
 
 ## Data & Positions
 • Always call tools before presenting data — never fabricate
@@ -2382,7 +2837,7 @@ export async function POST(request: NextRequest) {
               ];
               const tradingToolNames = ['get_agent_wallet_balance', 'fund_agent_eth', 'fund_agent', 'propose_trade', 'open_trade', 'close_trade', 'withdraw_funds', 'cancel_limit_order'];
               const executionToolNames = ['open_trade', 'close_trade', 'withdraw_funds', 'cancel_limit_order'];
-              const analysisToolNames = ['get_market_snapshot', 'fetch_live_indicator', 'get_macro_snapshot', 'get_funding_rate_history', 'get_derivatives_history'];
+              const analysisToolNames = ['get_market_snapshot', 'fetch_live_indicator', 'get_macro_snapshot', 'get_funding_rate_history', 'get_derivatives_history', 'search_football_fixtures', 'get_fixture_details', 'get_football_h2h', 'get_football_standings', 'get_team_form', 'get_match_odds', 'get_football_injuries'];
               const describedExecution = executionKeywords.some(kw => textLower.includes(kw));
               const noTradingToolsCalled = !allToolCalls.some(t => tradingToolNames.includes(t.name));
               // Skip hallucination check if agent already called analysis tools — it's explaining the strategy before propose_trade
