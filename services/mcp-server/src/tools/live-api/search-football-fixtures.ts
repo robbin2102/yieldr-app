@@ -19,8 +19,42 @@ export const searchFootballFixturesSchema = z.object({
 
 export type SearchFootballFixturesInput = z.infer<typeof searchFootballFixturesSchema>;
 
+// Common team name aliases → full names that API-Football resolves correctly.
+// Prevents wasted API calls on abbreviations the search endpoint can't fuzzy-match.
+const TEAM_ALIASES: Record<string, string> = {
+  'man united': 'Manchester United', 'man utd': 'Manchester United', 'mufc': 'Manchester United', 'man u': 'Manchester United',
+  'man city': 'Manchester City', 'mcfc': 'Manchester City',
+  'spurs': 'Tottenham Hotspur', 'tottenham': 'Tottenham Hotspur', 'thfc': 'Tottenham Hotspur',
+  'chelsea': 'Chelsea', 'cfc': 'Chelsea',
+  'arsenal': 'Arsenal', 'afc': 'Arsenal', 'gunners': 'Arsenal',
+  'liverpool': 'Liverpool', 'lfc': 'Liverpool', 'the reds': 'Liverpool',
+  'newcastle': 'Newcastle United', 'nufc': 'Newcastle United', 'toon': 'Newcastle United',
+  'west ham': 'West Ham United', 'whu': 'West Ham United', 'hammers': 'West Ham United',
+  'everton': 'Everton', 'efc': 'Everton', 'toffees': 'Everton',
+  'aston villa': 'Aston Villa', 'avfc': 'Aston Villa', 'villa': 'Aston Villa',
+  'wolves': 'Wolverhampton Wanderers', 'wolverhampton': 'Wolverhampton Wanderers',
+  'leicester': 'Leicester City', 'lcfc': 'Leicester City',
+  'brighton': 'Brighton And Hove Albion', 'bhafc': 'Brighton And Hove Albion',
+  'barca': 'Barcelona', 'fc barcelona': 'Barcelona',
+  'real': 'Real Madrid', 'real madrid': 'Real Madrid', 'rmcf': 'Real Madrid',
+  'atletico': 'Atletico Madrid', 'atletico madrid': 'Atletico Madrid',
+  'bayern': 'Bayern Munich', 'bayern munich': 'Bayern Munich', 'fcb': 'Bayern Munich',
+  'psg': 'Paris Saint Germain', 'paris sg': 'Paris Saint Germain',
+  'juve': 'Juventus', 'juventus': 'Juventus',
+  'inter': 'Inter Milan', 'inter milan': 'Inter Milan', 'internazionale': 'Inter Milan',
+  'ac milan': 'AC Milan', 'milan': 'AC Milan',
+  'dortmund': 'Borussia Dortmund', 'bvb': 'Borussia Dortmund',
+  'napoli': 'SSC Napoli',
+  'benfica': 'SL Benfica',
+  'porto': 'FC Porto',
+  'ajax': 'Ajax',
+  'celtic': 'Celtic',
+  'rangers': 'Rangers',
+};
+
 async function resolveTeamId(teamName: string): Promise<{ id: number; name: string } | null> {
-  const res = await apiFootballGet<any[]>('teams', { search: teamName });
+  const searchName = TEAM_ALIASES[teamName.toLowerCase().trim()] || teamName;
+  const res = await apiFootballGet<any[]>('teams', { search: searchName });
   if (!res.ok || !res.data?.length) return null;
   // Return the best match (first result from API)
   const team = res.data[0]?.team;

@@ -1525,7 +1525,41 @@ async function executeTool(name: string, input: any, wallet?: string, agentCtxId
         let teamId: number | undefined;
         let resolvedTeamName: string | undefined;
         if (team) {
-          const teamRes = await apiFootballGet('teams', { search: team });
+          // Common team name aliases → full names that API-Football resolves correctly.
+          // Prevents wasted API calls on abbreviations the search endpoint can't fuzzy-match.
+          const TEAM_ALIASES: Record<string, string> = {
+            'man united': 'Manchester United', 'man utd': 'Manchester United', 'mufc': 'Manchester United', 'man u': 'Manchester United',
+            'man city': 'Manchester City', 'mcfc': 'Manchester City',
+            'spurs': 'Tottenham Hotspur', 'tottenham': 'Tottenham Hotspur', 'thfc': 'Tottenham Hotspur',
+            'chelsea': 'Chelsea', 'cfc': 'Chelsea',
+            'arsenal': 'Arsenal', 'afc': 'Arsenal', 'gunners': 'Arsenal',
+            'liverpool': 'Liverpool', 'lfc': 'Liverpool', 'the reds': 'Liverpool',
+            'newcastle': 'Newcastle United', 'nufc': 'Newcastle United', 'toon': 'Newcastle United',
+            'west ham': 'West Ham United', 'whu': 'West Ham United', 'hammers': 'West Ham United',
+            'everton': 'Everton', 'efc': 'Everton', 'toffees': 'Everton',
+            'aston villa': 'Aston Villa', 'avfc': 'Aston Villa', 'villa': 'Aston Villa',
+            'wolves': 'Wolverhampton Wanderers', 'wolverhampton': 'Wolverhampton Wanderers',
+            'leicester': 'Leicester City', 'lcfc': 'Leicester City',
+            'brighton': 'Brighton And Hove Albion', 'bhafc': 'Brighton And Hove Albion',
+            'barca': 'Barcelona', 'fc barcelona': 'Barcelona',
+            'real': 'Real Madrid', 'real madrid': 'Real Madrid', 'rmcf': 'Real Madrid',
+            'atletico': 'Atletico Madrid', 'atletico madrid': 'Atletico Madrid',
+            'bayern': 'Bayern Munich', 'bayern munich': 'Bayern Munich', 'fcb': 'Bayern Munich',
+            'psg': 'Paris Saint Germain', 'paris sg': 'Paris Saint Germain',
+            'juve': 'Juventus', 'juventus': 'Juventus',
+            'inter': 'Inter Milan', 'inter milan': 'Inter Milan', 'internazionale': 'Inter Milan',
+            'ac milan': 'AC Milan', 'milan': 'AC Milan',
+            'dortmund': 'Borussia Dortmund', 'bvb': 'Borussia Dortmund',
+            'napoli': 'SSC Napoli',
+            'benfica': 'SL Benfica',
+            'porto': 'FC Porto',
+            'ajax': 'Ajax',
+            'celtic': 'Celtic',
+            'rangers': 'Rangers',
+          };
+          const searchTeam = TEAM_ALIASES[team.toLowerCase().trim()] || team;
+          console.log(`[api-football] Team search: "${team}" → "${searchTeam}"`);
+          const teamRes = await apiFootballGet('teams', { search: searchTeam });
           if (!teamRes.ok || !teamRes.data?.length) {
             return JSON.stringify({ found: false, message: `Could not find team matching "${team}".` });
           }
@@ -2610,7 +2644,7 @@ export async function POST(request: NextRequest) {
         try {
           // Agentic loop: keep calling Claude until it stops using tools
           let currentMessages = [...anthropicMessages];
-          let maxIterations = 5; // safety limit
+          let maxIterations = 8; // safety limit — needs headroom for multi-tool queries (e.g. sports: fixtures + odds + h2h + standings)
 
           // Detect execution-intent messages and force tool use from the very first iteration.
           // This prevents the LLM from generating a text-only "narration" response before
@@ -2881,6 +2915,38 @@ export async function POST(request: NextRequest) {
               { role: 'assistant', content: contentBlocks },
               ...toolResults,
             ];
+          }
+
+          // If all iterations were consumed by tool calls and no text response was generated,
+          // make one final API call without tools to generate the text response.
+          if (maxIterations <= 0 && !fullResponse.trim()) {
+            console.log(`[chat] All iterations consumed by tool calls — making final call for text response`);
+            const finalResponse = await callClaudeWithRetry(() =>
+              anthropic.messages.create({
+                model: 'claude-sonnet-4-5-20250929',
+                max_tokens: 4096,
+                system: systemMessage,
+                messages: currentMessages,
+                tools: allTools,
+                tool_choice: { type: 'none' as const },
+                stream: true,
+              })
+            );
+            for await (const event of finalResponse) {
+              if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
+                fullResponse += event.delta.text;
+                const chunk = JSON.stringify({ type: 'text', text: event.delta.text }) + '\n';
+                controller.enqueue(encoder.encode(chunk));
+              } else if (event.type === 'message_start' && (event as any).message?.usage) {
+                const usage = (event as any).message.usage;
+                totalInputTokens += usage.input_tokens || 0;
+                console.log(`[TOKENS] Final response input_tokens: ${usage.input_tokens || 0}`);
+              } else if (event.type === 'message_delta' && (event as any).usage) {
+                const iterOutput = (event as any).usage.output_tokens || 0;
+                totalOutputTokens += iterOutput;
+                console.log(`[TOKENS] Final response output_tokens: ${iterOutput}`);
+              }
+            }
           }
 
           // Post-response hallucination detection: log only — do NOT replace streamed content.
