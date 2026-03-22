@@ -2653,7 +2653,7 @@ export async function POST(request: NextRequest) {
         try {
           // Agentic loop: keep calling Claude until it stops using tools
           let currentMessages = [...anthropicMessages];
-          let maxIterations = 5; // safety limit
+          let maxIterations = 3; // safety limit — alias resolution + auto-season ensure tools succeed on first try
 
           // Detect execution-intent messages and force tool use from the very first iteration.
           // This prevents the LLM from generating a text-only "narration" response before
