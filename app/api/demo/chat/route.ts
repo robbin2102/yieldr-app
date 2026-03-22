@@ -673,6 +673,8 @@ toolDefinitions.push({
     'Search for football/soccer fixtures by team name, date, league, or live status. ' +
     'Resolves fuzzy team names automatically (e.g. "Man Utd" → "Manchester United"). ' +
     'Use to find fixture_id and team IDs for other football tools. ' +
+    'IMPORTANT: For upcoming fixtures, always use the "next" param (e.g. next=5). For recent results, use "last". ' +
+    'Season auto-defaults to current season — do NOT retry with different season values if results are empty. ' +
     'Common league IDs: 39=Premier League, 140=La Liga, 135=Serie A, 78=Bundesliga, 61=Ligue 1, 2=UCL.',
   input_schema: {
     type: 'object' as const,
@@ -1576,7 +1578,14 @@ async function executeTool(name: string, input: any, wallet?: string, agentCtxId
           if (date) fParams.date = date;
           if (league) fParams.league = league;
           if (season) fParams.season = season;
-          if (league && !season && !date) fParams.season = new Date().getFullYear();
+          // Auto-default season when team or league is provided without season/date
+          // API-Football returns empty without a season filter
+          if ((teamId || league) && !season && !date) {
+            const now = new Date();
+            // Football seasons span two calendar years (e.g. 2024-25 season starts Aug 2024).
+            // API-Football uses the start year, so before August use previous year.
+            fParams.season = now.getMonth() < 7 ? now.getFullYear() - 1 : now.getFullYear();
+          }
         }
         const fRes = await apiFootballGet('fixtures', fParams);
         if (!fRes.ok) return JSON.stringify({ found: false, errors: fRes.errors });
@@ -2644,7 +2653,7 @@ export async function POST(request: NextRequest) {
         try {
           // Agentic loop: keep calling Claude until it stops using tools
           let currentMessages = [...anthropicMessages];
-          let maxIterations = 8; // safety limit — needs headroom for multi-tool queries (e.g. sports: fixtures + odds + h2h + standings)
+          let maxIterations = 5; // safety limit
 
           // Detect execution-intent messages and force tool use from the very first iteration.
           // This prevents the LLM from generating a text-only "narration" response before

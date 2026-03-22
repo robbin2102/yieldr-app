@@ -92,8 +92,14 @@ export async function executeSearchFootballFixtures(input: SearchFootballFixture
     if (date) params.date = date;
     if (league) params.league = league;
     if (season) params.season = season;
-    // Default to current season if league is provided but no season
-    if (league && !season && !date) params.season = new Date().getFullYear();
+    // Auto-default season when team or league is provided without season/date
+    // API-Football returns empty without a season filter
+    if ((teamId || league) && !season && !date) {
+      const now = new Date();
+      // Football seasons span two calendar years (e.g. 2024-25 season starts Aug 2024).
+      // API-Football uses the start year, so before August use previous year.
+      params.season = now.getMonth() < 7 ? now.getFullYear() - 1 : now.getFullYear();
+    }
   }
 
   const res = await apiFootballGet<any[]>('fixtures', params);
