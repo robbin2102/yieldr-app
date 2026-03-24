@@ -752,6 +752,34 @@ function buildMarketTitlesSummary(closedPositions: ClosedPosition[]) {
 // ═══════════════════════════════════════════════════════════════
 // Insider Detection
 // ═══════════════════════════════════════════════════════════════
+//
+// Five behavioral signals modelled on how insiders actually operate:
+//   S1 — Acts Late             (max +3): buys near resolution, wins
+//   S2 — Bets Against Crowd   (max +2): wins on sub-0.20 price entries
+//   S3 — Conviction Spike     (+2):     10x spike buy near resolution, won
+//   S4 — Thin History          (+1):     new account, immediate large bet, winning
+//   S5 — Domain Concentration  (+1):     40%+ winning volume in one category, WR ≥65%
+//
+// Sports-aware windows: Sports markets (NBA, NFL, NHL, Soccer, Tennis, Golf,
+// MMA, MLB) naturally resolve within hours of game time, so betting <72h before
+// resolution is normal. For sports categories S1/S3 use a 4h window; for
+// non-sports categories (Politics, Crypto, Finance, Entertainment, Other) the
+// full 72h window applies.
+//
+// Thresholds: 0–2 none | 3–4 low | 5 medium | 6+ high  (max possible = 9)
+
+const SPORTS_CATEGORIES = new Set(['NBA', 'NFL', 'NHL', 'Soccer', 'Tennis', 'Golf', 'MMA', 'MLB']);
+
+function isSportsCategory(category: string): boolean {
+  return SPORTS_CATEGORIES.has(category);
+}
+
+/** Returns the late-entry hour threshold for a given market category.
+ *  Sports → 4h (betting near game time is normal).
+ *  Non-sports → 72h (entering close to resolution is suspicious). */
+function lateEntryWindowHours(category: string): number {
+  return isSportsCategory(category) ? 4 : 72;
+}
 
 function computeInsiderScore(params: {
   account_age_days: number | null;
@@ -762,94 +790,239 @@ function computeInsiderScore(params: {
   avg_bet_size_usdc: number;
   medianTradeSize: number;
   activities: Activity[];
-}): { insider_score: number; insider_probability: 'high' | 'medium' | 'low' | 'none'; insider_signals_fired: string[] } {
+}): { insider_score: number; insider_probability: 'high' | 'medium' | 'low' | 'none'; insider_signals_fired: string[]; insider_category: string | null } {
   const {
     account_age_days,
-    first_ever_activity_at,
     closedPositions1000,
     win_rate_sample_size,
     win_rate,
-    avg_bet_size_usdc,
     medianTradeSize,
     activities,
   } = params;
 
   let score = 0;
   const signals: string[] = [];
+  // Track which categories contribute to signals for insider_category derivation
+  const categorySignalPoints = new Map<string, number>();
 
-  const accountAgeThreshold = Number(process.env.INSIDER_ACCOUNT_AGE_THRESHOLD ?? 30);
-  const dormancyThreshold = Number(process.env.INSIDER_DORMANCY_THRESHOLD ?? 30);
+  const addCategoryPoints = (cat: string, pts: number) => {
+    categorySignalPoints.set(cat, (categorySignalPoints.get(cat) ?? 0) + pts);
+  };
 
-  // Signal a — account age: +2
-  if (account_age_days !== null && account_age_days < accountAgeThreshold) {
-    score += 2;
-    signals.push('a_young_account');
+  // ── Shared pre-computation ─────────────────────────────────────────────────
+
+  // Index closed positions by conditionId for O(1) lookup
+  const wonByCondition  = new Map<string, ClosedPosition>();
+  const allByCondition  = new Map<string, ClosedPosition>();
+  for (const pos of closedPositions1000) {
+    allByCondition.set(pos.conditionId, pos);
+    if (pos.realizedPnl > 0) wonByCondition.set(pos.conditionId, pos);
   }
 
-  // Signal b — dormancy: +2
-  // dormancy = days between first_ever_activity_at and start of 30d profiling window
-  if (first_ever_activity_at !== null) {
-    const profileWindowStart = Date.now() - 30 * 86400000;
-    const dormancy = (profileWindowStart - first_ever_activity_at.getTime()) / 86400000;
-    if (dormancy > dormancyThreshold) {
-      score += 2;
-      signals.push('b_dormant_account');
+  // Sort activities ascending by timestamp; isolate BUY trades
+  const sortedActs  = [...activities].sort((a, b) => a.timestamp - b.timestamp);
+  const buyActs     = sortedActs.filter(a => a.type === 'TRADE' && a.side === 'BUY');
+
+  // First BUY per conditionId (earliest entry into each market)
+  const firstBuyByCondition = new Map<string, Activity>();
+  for (const act of buyActs) {
+    if (!firstBuyByCondition.has(act.conditionId)) {
+      firstBuyByCondition.set(act.conditionId, act);
     }
   }
 
-  // Signal c — category virgin large bet: +1
-  // A category appearing exactly once AND totalBought > 500 AND minimal history
-  if (win_rate_sample_size < 5 && closedPositions1000.length > 0) {
-    const categoryCounts = new Map<string, number>();
+  // ── Signal 1 — Acts Late (max +3) ─────────────────────────────────────────
+  // Entry near market resolution + won. Size-weighted win rate gates score.
+  // Window: 4h for sports categories, 72h for non-sports.
+  //
+  // Reactivation variant: account older than 45d but first activity in the 30d
+  // window is within the last 7 days → inferred dormancy of 23+ days. If that
+  // first-window activity is itself a late entry win, it counts as +2 alone.
+
+  const lateEntries: { won: boolean; usdc: number; category: string }[] = [];
+  let lateWinCount = 0;
+
+  for (const [conditionId, firstBuy] of firstBuyByCondition) {
+    const closedPos = allByCondition.get(conditionId);
+    if (!closedPos) continue;
+    const gapHours = (closedPos.timestamp - firstBuy.timestamp) / 3600;
+    const category = categorizeMarket(closedPos.title);
+    const windowHours = lateEntryWindowHours(category);
+    if (gapHours >= 0 && gapHours < windowHours) {
+      const won = closedPos.realizedPnl > 0;
+      lateEntries.push({ won, usdc: firstBuy.usdcSize, category });
+      if (won) lateWinCount++;
+    }
+  }
+
+  // Size-weighted win rate across all late entries (wins + losses)
+  const lateTotalUsdc = lateEntries.reduce((s, e) => s + e.usdc, 0);
+  const lateWonUsdc   = lateEntries.filter(e => e.won).reduce((s, e) => s + e.usdc, 0);
+  const lateSwWr      = lateTotalUsdc > 0 ? lateWonUsdc / lateTotalUsdc : 0;
+
+  // Reactivation check: established account + inactive most of the 30d window + late win
+  const nowSec         = Date.now() / 1000;
+  const sevenDaysAgoSec = nowSec - 7 * 86400;
+  const isReactivation  =
+    account_age_days !== null &&
+    account_age_days > 45 &&
+    sortedActs.length > 0 &&
+    sortedActs[0].timestamp > sevenDaysAgoSec; // first activity in window is very recent
+
+  let hasReactivationLateWin = false;
+  if (isReactivation && sortedActs.length > 0) {
+    const firstAct = sortedActs[0];
+    if (firstAct.type === 'TRADE' && firstAct.side === 'BUY') {
+      const wonPos = wonByCondition.get(firstAct.conditionId);
+      if (wonPos) {
+        const category = categorizeMarket(wonPos.title);
+        const windowHours = lateEntryWindowHours(category);
+        const gapHours = (wonPos.timestamp - firstAct.timestamp) / 3600;
+        if (gapHours >= 0 && gapHours < windowHours) {
+          hasReactivationLateWin = true;
+          addCategoryPoints(category, 2);
+        }
+      }
+    }
+  }
+
+  // Track dominant late-entry category for insider_category
+  const lateWinCategories = new Map<string, number>();
+  for (const e of lateEntries) {
+    if (e.won) lateWinCategories.set(e.category, (lateWinCategories.get(e.category) ?? 0) + 1);
+  }
+
+  if (lateWinCount >= 2 && lateSwWr >= 0.70) {
+    score += 3;
+    signals.push(`s1_late_entry:wins=${lateWinCount},swwr=${Math.round(lateSwWr * 100)}%`);
+    for (const [cat, cnt] of lateWinCategories) addCategoryPoints(cat, cnt >= 5 ? 3 : 2);
+  } else if (lateWinCount >= 2 && lateSwWr >= 0.50) {
+    score += 2;
+    signals.push(`s1_late_entry:wins=${lateWinCount},swwr=${Math.round(lateSwWr * 100)}%`);
+    for (const [cat, cnt] of lateWinCategories) addCategoryPoints(cat, cnt >= 5 ? 2 : 1);
+  } else if (hasReactivationLateWin) {
+    score += 2;
+    signals.push('s1_reactivation_late_win');
+  } else if (lateWinCount === 1) {
+    score += 1;
+    signals.push('s1_single_late_win');
+    for (const [cat] of lateWinCategories) addCategoryPoints(cat, 1);
+  }
+
+  // ── Signal 2 — Bets Against the Crowd (max +2) ────────────────────────────
+  // Wins on entries where avgPrice < 0.20. Size-weighted win rate gates score.
+
+  const contrarian     = closedPositions1000.filter(p => p.avgPrice < 0.20);
+  const contrarianWins = contrarian.filter(p => p.realizedPnl > 0);
+
+  const contrTotalUsdc = contrarian.reduce((s, p) => s + p.totalBought, 0);
+  const contrWonUsdc   = contrarianWins.reduce((s, p) => s + p.totalBought, 0);
+  const contrSwWr      = contrTotalUsdc > 0 ? contrWonUsdc / contrTotalUsdc : 0;
+
+  if (contrarianWins.length >= 2 && contrSwWr >= 0.75) {
+    score += 2;
+    signals.push(`s2_contrarian:wins=${contrarianWins.length},swwr=${Math.round(contrSwWr * 100)}%`);
+    for (const p of contrarianWins) addCategoryPoints(categorizeMarket(p.title), 1);
+  } else if (contrarianWins.length >= 2 && contrSwWr >= 0.55) {
+    score += 1;
+    signals.push(`s2_contrarian:wins=${contrarianWins.length},swwr=${Math.round(contrSwWr * 100)}%`);
+    for (const p of contrarianWins) addCategoryPoints(categorizeMarket(p.title), 1);
+  }
+
+  // ── Signal 3 — Conviction Spike Near Resolution (+2) ──────────────────────
+  // A single BUY > 10x median bet size, placed near resolution, that won.
+  // Window: 4h for sports, 72h for non-sports.
+
+  if (medianTradeSize > 0) {
+    const spikeAct = buyActs.find(act => {
+      if (act.usdcSize <= medianTradeSize * 10) return false;
+      const wonPos = wonByCondition.get(act.conditionId);
+      if (!wonPos) return false;
+      const category = categorizeMarket(wonPos.title);
+      const windowHours = lateEntryWindowHours(category);
+      const gapHours = (wonPos.timestamp - act.timestamp) / 3600;
+      return gapHours >= 0 && gapHours < windowHours;
+    });
+    if (spikeAct) {
+      score += 2;
+      const spikePos = wonByCondition.get(spikeAct.conditionId)!;
+      const spikeCat = categorizeMarket(spikePos.title);
+      signals.push(`s3_conviction_spike:${spikeCat}`);
+      addCategoryPoints(spikeCat, 2);
+    }
+  }
+
+  // ── Signal 4 — Thin History, Immediate Concentration (+1) ─────────────────
+  // New account (< 14d), first bets are large (> $300), already winning (WR > 55%, ≥3 trades).
+
+  const hasLargeEarlyBet = closedPositions1000.some(p => p.totalBought > 300);
+  if (
+    account_age_days !== null &&
+    account_age_days < 14 &&
+    hasLargeEarlyBet &&
+    win_rate_sample_size >= 3 &&
+    win_rate > 55
+  ) {
+    score += 1;
+    signals.push('s4_thin_history_concentrated');
+  }
+
+  // ── Signal 5 — Domain Concentration (+1) ──────────────────────────────────
+  // 40%+ of winning USDC volume concentrated in one category, with WR ≥ 65% in that category.
+
+  const wonPositions = closedPositions1000.filter(p => p.realizedPnl > 0);
+  let s5Category: string | null = null;
+  if (wonPositions.length > 0) {
+    const totalWonUsdc = wonPositions.reduce((s, p) => s + p.totalBought, 0);
+
+    // Per-category: won usdc + win rate
+    const catWonUsdc = new Map<string, number>();
+    const catStats   = new Map<string, { wins: number; total: number }>();
     for (const pos of closedPositions1000) {
       const cat = categorizeMarket(pos.title);
-      categoryCounts.set(cat, (categoryCounts.get(cat) ?? 0) + 1);
+      catWonUsdc.set(cat, (catWonUsdc.get(cat) ?? 0) + (pos.realizedPnl > 0 ? pos.totalBought : 0));
+      const st = catStats.get(cat) ?? { wins: 0, total: 0 };
+      st.total++;
+      if (pos.realizedPnl > 0) st.wins++;
+      catStats.set(cat, st);
     }
-    const hasVirginalLargeBet = closedPositions1000.some(pos => {
-      const cat = categorizeMarket(pos.title);
-      return categoryCounts.get(cat) === 1 && pos.totalBought > 500;
-    });
-    if (hasVirginalLargeBet) {
-      score += 1;
-      signals.push('c_category_virgin_large_bet');
-    }
-  }
 
-  // Signal d — large bet minimal history: +2
-  if (win_rate_sample_size < 15) {
-    const hasLargeWithMinimalHistory = closedPositions1000.some(pos => pos.totalBought > 100000);
-    if (hasLargeWithMinimalHistory) {
-      score += 2;
-      signals.push('d_large_bet_minimal_history');
-    }
-  }
-
-  // Signal e — conviction spike established account: +1
-  if (win_rate_sample_size >= 10 && medianTradeSize > 0) {
-    const hasSpikedTrade = activities.some(a => a.type === 'TRADE' && a.usdcSize > medianTradeSize * 10);
-    if (hasSpikedTrade) {
-      score += 1;
-      signals.push('e_conviction_spike');
+    for (const [cat, wonUsdc] of catWonUsdc) {
+      const share      = totalWonUsdc > 0 ? wonUsdc / totalWonUsdc : 0;
+      const st         = catStats.get(cat)!;
+      const catWinRate = st.total > 0 ? st.wins / st.total : 0;
+      if (share >= 0.40 && catWinRate >= 0.65) {
+        score += 1;
+        signals.push(`s5_domain:${cat}(vol=${Math.round(share * 100)}%,wr=${Math.round(catWinRate * 100)}%)`);
+        s5Category = cat;
+        addCategoryPoints(cat, 1);
+        break; // only award once
+      }
     }
   }
 
-  // Signal f — whale concentration: +2
-  // Large avg bet + limited history + solid win rate → probable informed trader
-  if (avg_bet_size_usdc > 50000 && win_rate_sample_size >= 5 && win_rate_sample_size <= 20 && win_rate > 60) {
-    score += 2;
-    signals.push('f_whale_concentration');
+  // ── Derive insider_category ────────────────────────────────────────────────
+  // The category with the most signal points is the primary insider category.
+  let insider_category: string | null = null;
+  if (categorySignalPoints.size > 0) {
+    let maxPts = 0;
+    for (const [cat, pts] of categorySignalPoints) {
+      if (pts > maxPts) {
+        maxPts = pts;
+        insider_category = cat;
+      }
+    }
   }
 
-  // Cap at 7
-  score = Math.min(score, 7);
-
+  // ── Threshold mapping ──────────────────────────────────────────────────────
+  // 0–2 → none | 3–4 → low | 5 → medium | 6+ → high
   let insider_probability: 'high' | 'medium' | 'low' | 'none';
-  if (score >= 3) insider_probability = 'high';
-  else if (score === 2) insider_probability = 'medium';
-  else if (score === 1) insider_probability = 'low';
-  else insider_probability = 'none';
+  if      (score >= 6) insider_probability = 'high';
+  else if (score >= 5) insider_probability = 'medium';
+  else if (score >= 3) insider_probability = 'low';
+  else                 insider_probability = 'none';
 
-  return { insider_score: score, insider_probability, insider_signals_fired: signals };
+  return { insider_score: score, insider_probability, insider_signals_fired: signals, insider_category };
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1162,7 +1335,7 @@ export async function profileTrader(
   const isWhaleConcentrator = total_unique_markets_30d <= 15 && avg_bet_size_usdc > 50000;
 
   // ── Insider score ──────────────────────────────────────────
-  const { insider_score, insider_probability, insider_signals_fired } = computeInsiderScore({
+  const { insider_score, insider_probability, insider_signals_fired, insider_category } = computeInsiderScore({
     account_age_days,
     first_ever_activity_at,
     closedPositions1000,
@@ -1468,7 +1641,8 @@ export async function profileTrader(
     console.log('                    INSIDER DETECTION                           ');
     console.log('═══════════════════════════════════════════════════════════════');
     console.log(`  Probability:    ${insider_probability.toUpperCase()}`);
-    console.log(`  Score:          ${insider_score}/7`);
+    console.log(`  Score:          ${insider_score}/9`);
+    console.log(`  Category:       ${insider_category ?? 'n/a'}`);
     console.log(`  Signals Fired:  ${insider_signals_fired.length > 0 ? insider_signals_fired.join(', ') : 'none'}`);
 
     // ── TOP OPEN POSITIONS ──
@@ -1578,6 +1752,7 @@ export async function profileTrader(
     insider_score,
     insider_probability,
     insider_signals_fired,
+    insider_category,
     // Pre-computed rank_score multiplier for filter-alpha-traders.ts:
     // insider whales are statistically undersold by small n — boost their rank.
     insider_rank_multiplier: insider_probability === 'high' ? 1.5 : 1.0,

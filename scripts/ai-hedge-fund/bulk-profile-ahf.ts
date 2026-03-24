@@ -316,9 +316,11 @@ async function main() {
         ? ((p.cashFlowPnL as Record<string, unknown>).capitalTrend ?? 'stable')
         : 'stable';
       const insider = typeof p.insider_probability === 'string' ? p.insider_probability : '?';
+      const insiderCat = typeof p.insider_category === 'string' ? p.insider_category : null;
+      const insiderLabel = insiderCat ? `${insider}[${insiderCat}]` : insider;
 
       console.log(
-        `OK (wr:${wr}% sample:${sample} pf:${pf} roce:${roce}% insider:${insider}) | elapsed:${elapsed} eta:${etaStr}`
+        `OK (wr:${wr}% sample:${sample} pf:${pf} roce:${roce}% insider:${insiderLabel}) | elapsed:${elapsed} eta:${etaStr}`
       );
     } catch (err: unknown) {
       errors++;
