@@ -108,102 +108,74 @@ interface PublicProfile {
 // Fetch Functions
 // ═══════════════════════════════════════════════════════════════
 
-// fetchActivities — time-based with automatic cursor fallback when API offset caps out
+// fetchActivities — uses startTs/endTs API params with cursor fallback at offset cap
 async function fetchActivities(wallet: string, days: number): Promise<Activity[]> {
   const now = Math.floor(Date.now() / 1000);
-  const startTs = now - (days * 24 * 60 * 60);
+  const periodStartTs = now - (days * 24 * 60 * 60);
   const LIMIT = 500;
-  const MAX_OFFSET = 10000;
+  const MAX_OFFSET = 3000; // Polymarket API caps around 3500
 
   let allActivities: Activity[] = [];
-  let offset = 0;
-  let done = false;
+  let currentEndTs = now;
 
-  while (!done && offset <= MAX_OFFSET) {
-    const url = `${API_BASE}/activity?user=${wallet}&limit=${LIMIT}&offset=${offset}&sortBy=TIMESTAMP&sortDirection=DESC`;
-    const response = await fetch(url);
-    if (!response.ok) {
-      // API returns 400 when offset exceeds its internal cap — switch to timestamp cursor
-      if (response.status === 400 && allActivities.length > 0) {
-        const lastTs = allActivities[allActivities.length - 1]?.timestamp;
-        if (lastTs && lastTs > startTs) {
-          console.log(`  API returned 400 at offset=${offset} — switching to timestamp cursor from ${new Date(lastTs * 1000).toISOString().split('T')[0]}`);
-          const remaining = await fetchActivitiesByCursor(wallet, startTs, lastTs);
-          allActivities.push(...remaining);
-        }
-        break;
-      }
-      throw new Error(`API error: ${response.status}`);
-    }
+  // Outer loop: each iteration covers a time window (cursor-based)
+  // Inner loop: paginate within that window using offset
+  let cursorRound = 0;
+  const MAX_CURSOR_ROUNDS = 20; // safety cap
 
-    const batch = await response.json() as Activity[];
-    if (batch.length === 0) break;
-
-    const lastTs = batch[batch.length - 1]?.timestamp;
-    console.log(`  Fetching activities offset=${offset}... [${allActivities.length} collected] (${lastTs ? new Date(lastTs * 1000).toISOString().split('T')[0] : 'N/A'})`);
-
-    for (const activity of batch) {
-      if (activity.timestamp >= startTs) {
-        allActivities.push(activity);
-      } else {
-        done = true;
-        break;
-      }
-    }
-
-    if (batch.length < LIMIT) break;
-    offset += LIMIT;
-    await new Promise(r => setTimeout(r, 100));
-  }
-
-  if (offset > MAX_OFFSET && !done) {
-    console.log(`  Hit API offset limit (${MAX_OFFSET}) — may have more activities`);
-  }
-
-  return allActivities;
-}
-
-// fetchActivitiesByCursor — continues fetching using endTs as upper bound when offset-based pagination hits API cap
-async function fetchActivitiesByCursor(wallet: string, startTs: number, endTs: number): Promise<Activity[]> {
-  const LIMIT = 500;
-  const MAX_PAGES = 20; // safety cap: 20 × 500 = 10k additional activities max
-  let allActivities: Activity[] = [];
-  let currentEndTs = endTs - 1; // start 1 second before where we left off
-  let page = 0;
-
-  while (currentEndTs > startTs && page < MAX_PAGES) {
-    // Reset offset to 0 but filter by timestamp range
+  while (currentEndTs > periodStartTs && cursorRound < MAX_CURSOR_ROUNDS) {
     let offset = 0;
-    let pageActivities: Activity[] = [];
+    let done = false;
+    let batchCollected = 0;
 
-    while (offset <= 3000) { // stay under the API's offset cap
-      const url = `${API_BASE}/activity?user=${wallet}&limit=${LIMIT}&offset=${offset}&sortBy=TIMESTAMP&sortDirection=DESC`;
+    while (!done && offset <= MAX_OFFSET) {
+      const url = `${API_BASE}/activity?user=${wallet}&limit=${LIMIT}&offset=${offset}&startTs=${periodStartTs}&endTs=${currentEndTs}&sortBy=TIMESTAMP&sortDirection=DESC`;
       const response = await fetch(url);
-      if (!response.ok) break; // stop this page on any error
+      if (!response.ok) {
+        if (response.status === 400 && batchCollected > 0) {
+          // Offset cap hit — break inner loop, outer loop will continue with cursor
+          console.log(`  API 400 at offset=${offset} — cursor advancing from ${new Date(currentEndTs * 1000).toISOString().split('T')[0]}`);
+          done = true;
+          break;
+        }
+        if (response.status === 400 && batchCollected === 0 && allActivities.length > 0) {
+          // No more data available
+          return allActivities;
+        }
+        throw new Error(`API error: ${response.status}`);
+      }
 
       const batch = await response.json() as Activity[];
-      if (batch.length === 0) break;
+      if (batch.length === 0) { done = true; break; }
 
-      let foundOlder = false;
+      const lastTs = batch[batch.length - 1]?.timestamp;
+      console.log(`  Fetching activities offset=${offset}... [${allActivities.length + batchCollected} collected] (${lastTs ? new Date(lastTs * 1000).toISOString().split('T')[0] : 'N/A'})`);
+
       for (const activity of batch) {
-        if (activity.timestamp > currentEndTs) continue; // skip already-collected
-        if (activity.timestamp < startTs) { foundOlder = true; break; }
-        pageActivities.push(activity);
+        if (activity.timestamp >= periodStartTs) {
+          allActivities.push(activity);
+          batchCollected++;
+        } else {
+          done = true;
+          break;
+        }
       }
 
-      if (foundOlder || batch.length < LIMIT) break;
+      if (batch.length < LIMIT) { done = true; break; }
       offset += LIMIT;
       await new Promise(r => setTimeout(r, 100));
     }
 
-    if (pageActivities.length === 0) break;
-
-    const lastTs = pageActivities[pageActivities.length - 1]?.timestamp;
-    console.log(`  Cursor fetch: +${pageActivities.length} activities (${lastTs ? new Date(lastTs * 1000).toISOString().split('T')[0] : 'N/A'}) [total: ${allActivities.length + pageActivities.length}]`);
-
-    allActivities.push(...pageActivities);
-    currentEndTs = pageActivities[pageActivities.length - 1].timestamp - 1;
-    page++;
+    // If we didn't finish (hit offset cap), advance cursor to oldest activity timestamp
+    if (!done && allActivities.length > 0) {
+      const oldestTs = allActivities[allActivities.length - 1].timestamp;
+      if (oldestTs >= currentEndTs) break; // no progress — avoid infinite loop
+      currentEndTs = oldestTs - 1;
+      cursorRound++;
+      console.log(`  Cursor round ${cursorRound}: continuing from ${new Date(currentEndTs * 1000).toISOString().split('T')[0]} [${allActivities.length} total]`);
+    } else {
+      break; // all data collected or no more activities
+    }
   }
 
   return allActivities;
