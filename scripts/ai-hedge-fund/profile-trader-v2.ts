@@ -567,7 +567,10 @@ function computeTimeframePnL(activities: Activity[], openPositions: OpenPosition
   }
 
   const pnl = sells + redeems + endingValue - buys;
-  const capitalDeployed = buys;
+  // Capital deployed = buys in this window, but if sells+redeems far exceed buys,
+  // it means capital was deployed before the window. Use the larger of buys vs
+  // (sells+redeems) to avoid inflated ROCE from pre-window positions redeeming.
+  const capitalDeployed = Math.max(buys, sells + redeems);
   const roce = capitalDeployed > 0 ? (pnl / capitalDeployed) * 100 : 0;
   const winRate = (wins + losses) > 0 ? (wins / (wins + losses)) * 100 : 0;
   const tradingDays = new Set(windowActivities.map(a => new Date(a.timestamp * 1000).toISOString().split('T')[0])).size;
@@ -1337,8 +1340,10 @@ export async function profileTrader(
 
   // profitFactor — cashFlow-based (replaces closedPositions-based)
   // > 1 = profitable overall, < 1 = losing overall
+  // Use max(buys, sells+redeems) as denominator to avoid inflation from pre-window capital
   const totalInflows = cashFlowPnL.totalSells + cashFlowPnL.totalRedeems + cashFlowPnL.totalEndingValue;
-  const profitFactor = cashFlowPnL.totalBuys > 0 ? totalInflows / cashFlowPnL.totalBuys : 0;
+  const pfCapitalBase = Math.max(cashFlowPnL.totalBuys, cashFlowPnL.totalSells + cashFlowPnL.totalRedeems);
+  const profitFactor = pfCapitalBase > 0 ? totalInflows / pfCapitalBase : 0;
 
   // ── Win Rate (CORRECTED — CRITICAL) ───────────────────────
   // win_rate uses last 1000 closed positions + resolved open positions
