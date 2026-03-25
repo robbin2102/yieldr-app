@@ -1088,17 +1088,17 @@ function computeCurrentStreak(closedPositions: ClosedPosition[]): { currentStrea
 
 export async function profileTrader(
   wallet: string,
-  options: { convictionMultiplier?: number; verbose?: boolean } = {}
+  options: { convictionMultiplier?: number; verbose?: boolean; periodDays?: number } = {}
 ): Promise<Record<string, unknown>> {
-  const { convictionMultiplier = 10, verbose = true } = options;
+  const { convictionMultiplier = 10, verbose = true, periodDays = 30 } = options;
   const cleanWallet = wallet.toLowerCase();
   const profiledAt = new Date();
 
   // ── Fetch all data ─────────────────────────────────────────
   if (verbose) {
-    console.log('\nFetching activities (30d)...');
+    console.log(`\nFetching activities (${periodDays}d)...`);
   }
-  const activities = await fetchActivities(cleanWallet, 30);
+  const activities = await fetchActivities(cleanWallet, periodDays);
   if (verbose) console.log(`  Found ${activities.length} activities\n`);
 
   if (verbose) console.log('Fetching open positions...');
@@ -1213,6 +1213,10 @@ export async function profileTrader(
     '15d': computeTimeframePnL(activities, allOpenPositions, 15),
     '30d': computeTimeframePnL(activities, allOpenPositions, 30),
   };
+  // Add custom period timeframe if different from standard ones
+  if (periodDays > 30) {
+    timeframePnL[`${periodDays}d`] = computeTimeframePnL(activities, allOpenPositions, periodDays);
+  }
 
   const pnlConsistency = computePnlConsistency(timeframePnL);
 
@@ -1412,14 +1416,14 @@ export async function profileTrader(
   // ── Console output ─────────────────────────────────────────
   if (verbose) {
     const now = Math.floor(Date.now() / 1000);
-    const startDate = new Date((now - 30 * 24 * 60 * 60) * 1000).toISOString().split('T')[0];
+    const startDate = new Date((now - periodDays * 24 * 60 * 60) * 1000).toISOString().split('T')[0];
     const endDate = new Date(now * 1000).toISOString().split('T')[0];
 
     console.log('\n═══════════════════════════════════════════════════════════════');
     console.log('                    TRADER PROFILER v2                          ');
     console.log('═══════════════════════════════════════════════════════════════');
     console.log(`Wallet:  ${cleanWallet}`);
-    console.log(`Period:  Last 30 days (${startDate} to ${endDate})`);
+    console.log(`Period:  Last ${periodDays} days (${startDate} to ${endDate})`);
     console.log('═══════════════════════════════════════════════════════════════\n');
 
     // ── NEW: Identity ──
@@ -1674,7 +1678,7 @@ export async function profileTrader(
     wallet: cleanWallet,
     traderLabel,
     profiledAt,
-    periodDays: 30,
+    periodDays,
     periodInfo,
 
     // Activity counts
@@ -1792,9 +1796,10 @@ export async function profileTrader(
 async function main() {
   const wallet = process.argv[2];
   const convictionMultiplier = parseInt(process.argv[3] || '10');
+  const periodDays = parseInt(process.argv[4] || '30');
 
   if (!wallet) {
-    console.log('Usage: npx tsx scripts/ai-hedge-fund/profile-trader-v2.ts <wallet_address> [conviction_multiplier]');
+    console.log('Usage: npx tsx scripts/ai-hedge-fund/profile-trader-v2.ts <wallet_address> [conviction_multiplier] [days]');
     process.exit(1);
   }
 
@@ -1823,7 +1828,7 @@ async function main() {
   console.log(`Connected → db: ${dbName}\n`);
 
   // Run the profiler
-  const profileData = await profileTrader(wallet, { convictionMultiplier, verbose: true });
+  const profileData = await profileTrader(wallet, { convictionMultiplier, verbose: true, periodDays });
 
   // Save to polymarket-traderProfiles (production collection)
   const db = client.db(dbName);
