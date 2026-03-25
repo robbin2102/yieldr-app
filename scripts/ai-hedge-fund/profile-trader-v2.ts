@@ -1795,11 +1795,11 @@ export async function profileTrader(
 
 async function main() {
   const wallet = process.argv[2];
-  const convictionMultiplier = parseInt(process.argv[3] || '10');
-  const periodDays = parseInt(process.argv[4] || '30');
+  const periodDays = parseInt(process.argv[3] || '30');
+  const convictionMultiplier = parseInt(process.argv[4] || '10');
 
   if (!wallet) {
-    console.log('Usage: npx tsx scripts/ai-hedge-fund/profile-trader-v2.ts <wallet_address> [conviction_multiplier] [days]');
+    console.log('Usage: npx tsx scripts/ai-hedge-fund/profile-trader-v2.ts <wallet_address> [days] [conviction_multiplier]');
     process.exit(1);
   }
 
