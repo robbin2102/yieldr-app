@@ -833,7 +833,8 @@ function computeInsiderScore(params: {
 
   // ── Signal 1 — Acts Late (max +3) ─────────────────────────────────────────
   // Entry near market resolution + won. Size-weighted win rate gates score.
-  // Window: 4h for sports categories, 72h for non-sports.
+  // Window: 72h for non-sports only. Sports categories are EXCLUDED because
+  // most bettors naturally place bets near or during matches.
   //
   // Reactivation variant: account older than 45d but first activity in the 30d
   // window is within the last 7 days → inferred dormancy of 23+ days. If that
@@ -845,8 +846,10 @@ function computeInsiderScore(params: {
   for (const [conditionId, firstBuy] of firstBuyByCondition) {
     const closedPos = allByCondition.get(conditionId);
     if (!closedPos) continue;
-    const gapHours = (closedPos.timestamp - firstBuy.timestamp) / 3600;
     const category = categorizeMarket(closedPos.title);
+    // Skip sports categories — most bettors naturally place bets near/during matches
+    if (isSportsCategory(category)) continue;
+    const gapHours = (closedPos.timestamp - firstBuy.timestamp) / 3600;
     const windowHours = lateEntryWindowHours(category);
     if (gapHours >= 0 && gapHours < windowHours) {
       const won = closedPos.realizedPnl > 0;
@@ -876,11 +879,14 @@ function computeInsiderScore(params: {
       const wonPos = wonByCondition.get(firstAct.conditionId);
       if (wonPos) {
         const category = categorizeMarket(wonPos.title);
-        const windowHours = lateEntryWindowHours(category);
-        const gapHours = (wonPos.timestamp - firstAct.timestamp) / 3600;
-        if (gapHours >= 0 && gapHours < windowHours) {
-          hasReactivationLateWin = true;
-          addCategoryPoints(category, 2);
+        // Skip sports categories for reactivation late win too
+        if (!isSportsCategory(category)) {
+          const windowHours = lateEntryWindowHours(category);
+          const gapHours = (wonPos.timestamp - firstAct.timestamp) / 3600;
+          if (gapHours >= 0 && gapHours < windowHours) {
+            hasReactivationLateWin = true;
+            addCategoryPoints(category, 2);
+          }
         }
       }
     }
@@ -931,7 +937,7 @@ function computeInsiderScore(params: {
 
   // ── Signal 3 — Conviction Spike Near Resolution (+2) ──────────────────────
   // A single BUY > 10x median bet size, placed near resolution, that won.
-  // Window: 4h for sports, 72h for non-sports.
+  // Window: 72h for non-sports only. Sports excluded (big bets near game time is normal).
 
   if (medianTradeSize > 0) {
     const spikeAct = buyActs.find(act => {
@@ -939,6 +945,7 @@ function computeInsiderScore(params: {
       const wonPos = wonByCondition.get(act.conditionId);
       if (!wonPos) return false;
       const category = categorizeMarket(wonPos.title);
+      if (isSportsCategory(category)) return false; // skip sports
       const windowHours = lateEntryWindowHours(category);
       const gapHours = (wonPos.timestamp - act.timestamp) / 3600;
       return gapHours >= 0 && gapHours < windowHours;
