@@ -300,22 +300,47 @@ function categorizeMarket(title: string): string {
   const soccerTeams = ['premier league', 'la liga', 'bundesliga', 'serie a', 'ligue 1', 'champions league',
     'europa league', 'conference league', 'manchester', 'liverpool', 'chelsea', 'arsenal', 'tottenham',
     'barcelona', 'real madrid', 'bayern', 'juventus', 'psg', 'fc ', ' fc', 'united', 'inter milan',
-    'ac milan', 'as roma', 'napoli', 'atletico', 'sevilla', 'ajax', 'benfica', 'porto'];
+    'ac milan', 'as roma', 'napoli', 'atletico', 'sevilla', 'ajax', 'benfica', 'porto',
+    // South American clubs & leagues
+    'san lorenzo', 'boca juniors', 'river plate', 'racing club', 'independiente',
+    'flamengo', 'palmeiras', 'corinthians', 'santos', 'são paulo', 'sao paulo',
+    'grêmio', 'gremio', 'internacional', 'libertadores', 'copa sudamericana',
+    'liga mx', 'liga profesional', 'superliga argentina',
+    // Additional European clubs/leagues
+    'dortmund', 'leverkusen', 'leipzig', 'freiburg', 'wolfsburg', 'monchengladbach',
+    'lazio', 'fiorentina', 'atalanta', 'bologna', 'torino', 'genoa', 'cagliari',
+    'lyon', 'marseille', 'monaco', 'lille', 'nice', 'lens', 'rennes',
+    'sporting', 'braga', 'feyenoord', 'club brugge', 'celtic', 'rangers',
+    'fenerbahce', 'galatasaray', 'besiktas', 'trabzonspor',
+    // Competitions
+    'carabao cup', 'fa cup', 'copa del rey', 'dfb-pokal', 'coppa italia',
+    'coupe de france', 'world cup', 'euro 2', 'nations league', 'mls ',
+    'a-league', 'j-league', 'k-league', 'eredivisie', 'primeira liga'];
   if (soccerTeams.some(team => lower.includes(team))) return 'Soccer';
 
   // MLB
   if (lower.includes('mlb') || lower.includes('baseball')) return 'MLB';
 
   // Tennis — NEW
-  const tennisKeywords = ['tennis', 'atp', 'wta', 'wimbledon', 'us open', 'french open', 'australian open', 'grand slam'];
+  const tennisKeywords = ['tennis', 'atp', 'wta', 'wimbledon', 'us open', 'french open', 'australian open', 'grand slam',
+    'roland garros', 'indian wells', 'miami open', 'monte carlo', 'madrid open', 'rome open',
+    'cincinnati open', 'shanghai masters', 'paris masters', 'davis cup', 'laver cup',
+    // Top players (last name)
+    'djokovic', 'sinner', 'alcaraz', 'medvedev', 'zverev', 'rublev', 'ruud', 'tsitsipas',
+    'fritz', 'de minaur', 'hurkacz', 'dimitrov', 'paul', 'shelton', 'draper', 'berrettini',
+    'musetti', 'tiafoe', 'rune', 'swiatek', 'sabalenka', 'gauff', 'rybakina', 'pegula',
+    // Generic tennis patterns
+    'hellenic championship'];
   if (tennisKeywords.some(k => lower.includes(k))) return 'Tennis';
 
   // Golf — NEW
   const golfKeywords = ['golf', 'pga', 'masters', 'open championship', 'ryder cup'];
   if (golfKeywords.some(k => lower.includes(k))) return 'Golf';
 
-  // MMA — NEW
-  const mmaKeywords = ['ufc', 'mma', 'bellator', 'fighting championship'];
+  // MMA/Boxing — NEW
+  const mmaKeywords = ['ufc', 'mma', 'bellator', 'fighting championship',
+    'boxing', 'canelo', 'crawford', 'fury', 'usyk', 'haney', 'spence', 'beterbiev',
+    'bivol', 'inoue', 'heavyweight bout', 'middleweight', 'welterweight', 'lightweight'];
   if (mmaKeywords.some(k => lower.includes(k))) return 'MMA';
 
   // Politics (existing, unchanged)
@@ -1346,7 +1371,7 @@ export async function profileTrader(
   const isWhaleConcentrator = total_unique_markets_30d <= 15 && avg_bet_size_usdc > 50000;
 
   // ── Insider score ──────────────────────────────────────────
-  const { insider_score, insider_probability, insider_signals_fired, insider_category } = computeInsiderScore({
+  const { insider_score, insider_probability, insider_signals_fired, insider_category: rawInsiderCategory } = computeInsiderScore({
     account_age_days,
     first_ever_activity_at,
     closedPositions1000,
@@ -1356,6 +1381,8 @@ export async function profileTrader(
     medianTradeSize,
     activities,
   });
+  // When insider_category is "Other" (uncategorized noise), fall back to trader's specialty
+  const insider_category = (rawInsiderCategory === 'Other' && specialty) ? specialty : rawInsiderCategory;
 
   // ── Baseline snapshot ──────────────────────────────────────
   const baseline_snapshot = {
