@@ -65,6 +65,7 @@ const OPT = (name: string, fallback: string): string => {
 
 const CONCURRENCY    = parseInt(OPT('concurrency', '5'));
 const START_OFFSET   = parseInt(OPT('offset', '0'));
+const LIMIT          = parseInt(OPT('limit', '0'));    // 0 = no limit (process all)
 const DAILY_MODE     = FLAG('daily');
 const SKIP_EXISTING  = FLAG('skip-existing');   // skip wallets already profiled in DB
 const SOURCE         = OPT('source', 'mongo');   // 'mongo' | 'leaderboard' | 'holders'
@@ -231,6 +232,7 @@ async function main() {
   console.log(`  Source:      ${SOURCE}`);
   console.log(`  Concurrency: ${CONCURRENCY} traders`);
   console.log(`  Offset:      ${START_OFFSET}`);
+  console.log(`  Limit:       ${LIMIT > 0 ? LIMIT : 'all'}`);
   console.log(`  Skip existing: ${SKIP_EXISTING}`);
   console.log(`  DB:          ${dbName}`);
   console.log('════════════════════════════════════════════════════════════\n');
@@ -254,6 +256,12 @@ async function main() {
   if (START_OFFSET > 0) {
     console.log(`Resuming from offset ${START_OFFSET} (skipping first ${START_OFFSET} wallets)\n`);
     wallets = wallets.slice(START_OFFSET);
+  }
+
+  // Apply limit
+  if (LIMIT > 0) {
+    console.log(`Limiting to ${LIMIT} wallets\n`);
+    wallets = wallets.slice(0, LIMIT);
   }
 
   // Skip wallets already profiled in DB
