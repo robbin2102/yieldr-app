@@ -122,7 +122,14 @@ async function fetchActivities(wallet: string, days: number): Promise<Activity[]
   while (!done && offset <= MAX_OFFSET) {
     const url = `${API_BASE}/activity?user=${wallet}&limit=${LIMIT}&offset=${offset}&sortBy=TIMESTAMP&sortDirection=DESC`;
     const response = await fetch(url);
-    if (!response.ok) throw new Error(`API error: ${response.status}`);
+    if (!response.ok) {
+      // API returns 400 when offset exceeds its internal cap — stop gracefully with data collected so far
+      if (response.status === 400 && allActivities.length > 0) {
+        console.log(`  API returned 400 at offset=${offset} — stopping with ${allActivities.length} activities collected`);
+        break;
+      }
+      throw new Error(`API error: ${response.status}`);
+    }
 
     const batch = await response.json() as Activity[];
     if (batch.length === 0) break;
@@ -162,7 +169,13 @@ async function fetchOpenPositions(wallet: string): Promise<OpenPosition[]> {
   while (offset <= MAX_OFFSET) {
     const url = `${API_BASE}/positions?user=${wallet}&sizeThreshold=0.1&limit=${LIMIT}&offset=${offset}`;
     const response = await fetch(url);
-    if (!response.ok) throw new Error(`API error: ${response.status}`);
+    if (!response.ok) {
+      if (response.status === 400 && allPositions.length > 0) {
+        console.log(`  API returned 400 at offset=${offset} — stopping with ${allPositions.length} open positions collected`);
+        break;
+      }
+      throw new Error(`API error: ${response.status}`);
+    }
 
     const batch = await response.json() as OpenPosition[];
     console.log(`  Fetching open positions offset=${offset}... [${allPositions.length + batch.length} positions]`);
@@ -203,7 +216,13 @@ async function fetchClosedPositions(
   while (!done && offset <= MAX_OFFSET) {
     const url = `${API_BASE}/v1/closed-positions?user=${wallet}&limit=${LIMIT}&offset=${offset}&sortBy=TIMESTAMP&sortDirection=DESC`;
     const response = await fetch(url);
-    if (!response.ok) throw new Error(`API error: ${response.status}`);
+    if (!response.ok) {
+      if (response.status === 400 && allPositions.length > 0) {
+        console.log(`  API returned 400 at offset=${offset} — stopping with ${allPositions.length} closed positions collected`);
+        break;
+      }
+      throw new Error(`API error: ${response.status}`);
+    }
 
     const batch = await response.json() as ClosedPosition[];
     if (batch.length === 0) break;
@@ -1381,8 +1400,15 @@ export async function profileTrader(
     medianTradeSize,
     activities,
   });
-  // When insider_category is "Other" (uncategorized noise), fall back to trader's specialty
-  const insider_category = (rawInsiderCategory === 'Other' && specialty) ? specialty : rawInsiderCategory;
+  // When insider_category is "Other" (uncategorized noise), fall back to trader's
+  // first non-Other specialty from strengths (top profitable categories)
+  let insider_category = rawInsiderCategory;
+  if (rawInsiderCategory === 'Other' || rawInsiderCategory === null) {
+    const realSpecialty = strengths.find(s => s.category !== 'Other')?.category ?? null;
+    if (realSpecialty) {
+      insider_category = realSpecialty;
+    }
+  }
 
   // ── Baseline snapshot ──────────────────────────────────────
   const baseline_snapshot = {
