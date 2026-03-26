@@ -104,38 +104,50 @@ function parseCycleOpen(slug: string): number {
   return match ? parseInt(match[1]) : 0;
 }
 
-function inferWinner(activities: Activity[]): 'Up' | 'Down' | 'Unknown' {
-  // Look at redeems — the side with larger redeem amount won
+function inferWinnerFromSharesAndRedeems(activities: Activity[]): 'Up' | 'Down' | 'Unknown' {
+  // Winning side's shares pay $1 each → redeemUsdc ≈ winning shares count
+  const buys = activities.filter(a => a.type === 'TRADE' && a.side === 'BUY');
   const redeems = activities.filter(a => a.type === 'REDEEM' && a.usdcSize > 0);
-  if (redeems.length === 0) return 'Unknown';
-  // Also check: which side's closed positions had positive PnL
-  // Since we only have activities, use the outcome field from buys as proxy
-  // The winning side's shares redeem at $1, losing at $0
-  // So total redeem USDC ≈ winning shares count
-  return 'Unknown'; // We'll determine from price trajectory instead
+  const redeemUsdc = redeems.reduce((s, r) => s + r.usdcSize, 0);
+  if (redeemUsdc === 0) {
+    // No redeems — market may not have resolved yet. Try price-based fallback.
+    return inferWinnerFromPrices(activities, buys);
+  }
+
+  // Count shares per side
+  const upShares = buys
+    .filter(b => b.outcome === 'Up' || b.outcomeIndex === 0)
+    .reduce((s, b) => s + (b.size || b.usdcSize / Math.max(b.price, 0.001)), 0);
+  const downShares = buys
+    .filter(b => b.outcome === 'Down' || b.outcomeIndex === 1)
+    .reduce((s, b) => s + (b.size || b.usdcSize / Math.max(b.price, 0.001)), 0);
+
+  // redeemUsdc should match the winning side's shares (within 10% tolerance)
+  const upDiff = Math.abs(redeemUsdc - upShares) / Math.max(redeemUsdc, 1);
+  const downDiff = Math.abs(redeemUsdc - downShares) / Math.max(redeemUsdc, 1);
+
+  if (upDiff < 0.15 && upDiff < downDiff) return 'Up';
+  if (downDiff < 0.15 && downDiff < upDiff) return 'Down';
+
+  // Fallback: whichever side's shares are closer to redeem amount
+  return upDiff < downDiff ? 'Up' : 'Down';
 }
 
-function inferWinnerFromPrices(activities: Activity[], cycleCloseTs: number): 'Up' | 'Down' | 'Unknown' {
-  // The side whose price is highest near resolution likely won
-  const lateBuys = activities.filter(a =>
-    a.type === 'TRADE' && a.side === 'BUY' &&
-    (cycleCloseTs - a.timestamp) < 30 && (cycleCloseTs - a.timestamp) >= 0
-  );
-  if (lateBuys.length === 0) {
-    // Try wider window
-    const wideBuys = activities.filter(a =>
-      a.type === 'TRADE' && a.side === 'BUY' &&
-      (cycleCloseTs - a.timestamp) < 60 && (cycleCloseTs - a.timestamp) >= 0
-    );
-    if (wideBuys.length === 0) return 'Unknown';
-    const upPrices = wideBuys.filter(a => a.outcome === 'Up' || a.outcomeIndex === 0).map(a => a.price);
-    const lastUpPrice = upPrices.length > 0 ? upPrices[upPrices.length - 1] : 0.5;
-    return lastUpPrice > 0.5 ? 'Up' : 'Down';
+function inferWinnerFromPrices(activities: Activity[], buys: Activity[]): 'Up' | 'Down' | 'Unknown' {
+  // Use the latest trade prices — high Up price near end = Up likely won
+  if (buys.length === 0) return 'Unknown';
+  const sorted = [...buys].sort((a, b) => b.timestamp - a.timestamp);
+  const latestUp = sorted.find(b => b.outcome === 'Up' || b.outcomeIndex === 0);
+  const latestDown = sorted.find(b => b.outcome === 'Down' || b.outcomeIndex === 1);
+
+  if (latestUp && latestDown) {
+    return latestUp.price > latestDown.price ? 'Up' : 'Down';
   }
-  const upPrices = lateBuys.filter(a => a.outcome === 'Up' || a.outcomeIndex === 0).map(a => a.price);
-  const lastUpPrice = upPrices.length > 0 ? upPrices[upPrices.length - 1] : 0.5;
-  return lastUpPrice > 0.5 ? 'Up' : 'Down';
+  if (latestUp) return latestUp.price > 0.5 ? 'Up' : 'Down';
+  if (latestDown) return latestDown.price > 0.5 ? 'Down' : 'Up';
+  return 'Unknown';
 }
+
 
 function buildMarketCycles(allActivities: Activity[]): MarketCycle[] {
   const byCondition = new Map<string, Activity[]>();
@@ -169,7 +181,7 @@ function buildMarketCycles(allActivities: Activity[]): MarketCycle[] {
 
     const redeems = acts.filter(a => a.type === 'REDEEM');
     const redeemUsdc = redeems.reduce((s, r) => s + r.usdcSize, 0);
-    const winner = inferWinnerFromPrices(acts, cycleCloseTs);
+    const winner = inferWinnerFromSharesAndRedeems(acts);
 
     cycles.push({
       conditionId, title, slug, cycleOpenTs, cycleCloseTs,
