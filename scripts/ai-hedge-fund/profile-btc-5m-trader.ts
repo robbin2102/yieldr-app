@@ -482,52 +482,38 @@ export async function profileBtc5mTrader(
     }
     if (verbose) console.log(`  ${markets5m.length} markets from DB`);
 
-    // Fetch activities
+    // Fetch closed positions FIRST — they have titles we can use to detect BTC 5m markets
+    if (verbose) console.log('\nFetching closed positions...');
+    const allClosed = await fetchClosedPositions(cleanWallet, 2000);
+    if (verbose) console.log(`  ${allClosed.length} total closed positions`);
+
+    // Detect BTC 5m conditionIds from closed position titles
+    const btc5mPattern = /bitcoin up or down/i;
+    const closedPositions: ClosedPosition[] = [];
+    for (const c of allClosed) {
+      if (conditionIdSet.has(c.conditionId) || btc5mPattern.test(c.title)) {
+        closedPositions.push(c);
+        conditionIdSet.add(c.conditionId);
+        // Parse resolution time from title if not in DB
+        if (!marketLookup.has(c.conditionId)) {
+          const endDate = parseResolutionTimeFromTitle(c.title);
+          if (endDate) {
+            marketLookup.set(c.conditionId, {
+              conditionId: c.conditionId, endDate, priceToBeat: 0, slug: '',
+            });
+          }
+        }
+      }
+    }
+    if (verbose) console.log(`  ${closedPositions.length} BTC 5m closed positions (${conditionIdSet.size} unique markets detected)`);
+
+    // Now fetch activities and filter using the conditionId set built from closed positions
     if (verbose) console.log(`\nFetching activities (${periodDays}d)...`);
     const allActivities = await fetchActivities(cleanWallet, periodDays);
     if (verbose) console.log(`  ${allActivities.length} total activities`);
 
-    // Filter to BTC 5m — use DB conditionIds if available, otherwise detect from titles
-    const btc5mPattern = /bitcoin up or down/i;
-    let activities: Activity[];
-    if (conditionIdSet.size > 0) {
-      activities = allActivities.filter(a => conditionIdSet.has(a.conditionId));
-    } else {
-      // Fallback: detect from activity titles
-      if (verbose) console.log('  (No polyMarket5m data — detecting BTC 5m from titles)');
-      activities = allActivities.filter(a => btc5mPattern.test(a.title));
-      // Build conditionIdSet from detected activities
-      for (const a of activities) conditionIdSet.add(a.conditionId);
-    }
+    const activities = allActivities.filter(a => conditionIdSet.has(a.conditionId));
     if (verbose) console.log(`  ${activities.length} BTC 5m activities\n`);
-
-    // Parse resolution time from titles for markets not in DB
-    // Title format: "Bitcoin Up or Down - March 25, 10:05AM-10:10AM ET"
-    for (const a of activities) {
-      if (marketLookup.has(a.conditionId)) continue;
-      const endDate = parseResolutionTimeFromTitle(a.title);
-      if (endDate) {
-        marketLookup.set(a.conditionId, {
-          conditionId: a.conditionId,
-          endDate,
-          priceToBeat: 0,
-          slug: '',
-        });
-      }
-    }
-
-    // Fetch closed positions
-    if (verbose) console.log('Fetching closed positions...');
-    const allClosed = await fetchClosedPositions(cleanWallet, 2000);
-    let closedPositions: ClosedPosition[];
-    if (conditionIdSet.size > 0) {
-      closedPositions = allClosed.filter(c => conditionIdSet.has(c.conditionId) || btc5mPattern.test(c.title));
-    } else {
-      closedPositions = allClosed.filter(c => btc5mPattern.test(c.title));
-    }
-    // Add any new conditionIds from closed positions
-    for (const c of closedPositions) conditionIdSet.add(c.conditionId);
-    if (verbose) console.log(`  ${closedPositions.length} BTC 5m closed positions\n`);
 
     // Build lookups
     const closedByCondition = new Map<string, ClosedPosition>();
