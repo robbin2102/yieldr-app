@@ -426,13 +426,15 @@ function classifyArchetype(metrics: {
 //   "Bitcoin Up or Down on March 25?"
 function parseResolutionTimeFromTitle(title: string): Date | null {
   try {
+    // Normalize time: "4:55AM" → "4:55 AM" (Node.js Date needs space before AM/PM)
+    const normalize = (t: string) => t.replace(/(\d)(AM|PM)/i, '$1 $2');
+
     // Pattern: "Month DD, H:MMAM-H:MMAM ET" — use the end time
     const rangeMatch = title.match(/(\w+ \d+),?\s+(\d{1,2}(?::\d{2})?[AP]M)\s*-\s*(\d{1,2}(?::\d{2})?[AP]M)\s*ET/i);
     if (rangeMatch) {
       const [, datePart, , endTime] = rangeMatch;
       const year = new Date().getFullYear();
-      const dateStr = `${datePart} ${year} ${endTime}`;
-      const parsed = new Date(dateStr + ' EST');
+      const parsed = new Date(`${datePart} ${year} ${normalize(endTime)} EST`);
       if (!isNaN(parsed.getTime())) return parsed;
     }
 
@@ -441,7 +443,7 @@ function parseResolutionTimeFromTitle(title: string): Date | null {
     if (singleMatch) {
       const [, datePart, time] = singleMatch;
       const year = new Date().getFullYear();
-      const parsed = new Date(`${datePart} ${year} ${time} EST`);
+      const parsed = new Date(`${datePart} ${year} ${normalize(time)} EST`);
       if (!isNaN(parsed.getTime())) return parsed;
     }
 
