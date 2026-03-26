@@ -37,11 +37,17 @@ const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
 // ── CLI Args ──────────────────────────────────────────────────
 const ARGS = process.argv.slice(2);
-const slug = ARGS.find(a => !a.startsWith('--')) || '';
 const OPT = (name: string, fallback: string): string => {
   const idx = ARGS.indexOf(`--${name}`);
   return idx !== -1 && ARGS[idx + 1] ? ARGS[idx + 1] : fallback;
 };
+
+// Find slug: first arg that doesn't start with -- AND isn't a value after a --flag
+let slug = '';
+for (let i = 0; i < ARGS.length; i++) {
+  if (ARGS[i].startsWith('--')) { i++; continue; } // skip flag + its value
+  if (ARGS[i].startsWith('btc-')) { slug = ARGS[i]; break; } // only accept btc- slugs
+}
 
 const HOLDERS_PER_SIDE = parseInt(OPT('holders-per-side', '10'));
 const ACTIVITIES_PER_WALLET = parseInt(OPT('activities-per-wallet', '7000'));
