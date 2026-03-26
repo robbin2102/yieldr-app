@@ -47,6 +47,10 @@ const HOLDERS_PER_SIDE = parseInt(OPT('holders-per-side', '10'));
 const ACTIVITIES_PER_WALLET = parseInt(OPT('activities-per-wallet', '7000'));
 const LOOKBACK_DAYS = parseInt(OPT('days', '7'));
 
+// Direct wallet list — skip holders API entirely for BTC 5m markets
+// Pass via --wallets "0x...,0x...,0x..." or leave empty to try holders API
+const DIRECT_WALLETS = OPT('wallets', '').split(',').map(w => w.trim().toLowerCase()).filter(Boolean);
+
 // ── Fetch Market from Gamma ───────────────────────────────────
 async function fetchMarketFromGamma(slug: string) {
   const url = `${GAMMA_API}/events?slug=${slug}`;
@@ -146,9 +150,18 @@ async function fetchActivities(wallet: string, days: number, maxActivities: numb
 
 // ── Main ──────────────────────────────────────────────────────
 async function main() {
-  if (!slug) {
-    console.log('Usage: npx tsx scripts/ai-hedge-fund/fetch-live-btc5m-data.ts <market_slug> [--holders-per-side 10] [--activities-per-wallet 7000] [--days 7]');
-    console.log('Example: npx tsx scripts/ai-hedge-fund/fetch-live-btc5m-data.ts btc-updown-5m-1774505100');
+  if (!slug && DIRECT_WALLETS.length === 0) {
+    console.log('Usage: npx tsx scripts/ai-hedge-fund/fetch-live-btc5m-data.ts <market_slug> [options]');
+    console.log('');
+    console.log('Options:');
+    console.log('  --wallets "0x...,0x..."   Direct wallet list (skip holders API)');
+    console.log('  --holders-per-side N      Top N holders per outcome (default: 10)');
+    console.log('  --activities-per-wallet N Max activities per wallet (default: 7000)');
+    console.log('  --days N                 Lookback days (default: 7)');
+    console.log('');
+    console.log('Examples:');
+    console.log('  npx tsx fetch-live-btc5m-data.ts btc-updown-5m-1774505100 --wallets "0x2d8b...,0xabc..."');
+    console.log('  npx tsx fetch-live-btc5m-data.ts --wallets "0x2d8b..." --days 3');
     process.exit(1);
   }
 
@@ -164,45 +177,61 @@ async function main() {
   console.log(`  Activities/wallet:   ${ACTIVITIES_PER_WALLET}`);
   console.log(`  Lookback days:       ${LOOKBACK_DAYS}`);
 
-  // 1. Fetch market data
-  console.log('\n[1] Fetching market from Gamma API...');
-  const market = await fetchMarketFromGamma(slug);
-  console.log(`  Question: ${market.question}`);
-  console.log(`  Price to beat: $${market.priceToBeat}`);
-  console.log(`  Volume: $${market.volume.toFixed(0)}`);
-  console.log(`  Outcomes: ${market.outcomes.join(', ')}`);
-
-  // 2. Fetch holders
-  console.log('\n[2] Fetching top holders...');
-  const holderData = await fetchHolders(market.conditionId);
-
-  const walletSet = new Set<string>();
-  const holdersByOutcome: Record<string, { wallet: string; amount: number; outcome: string }[]> = {};
-
-  for (let i = 0; i < holderData.length; i++) {
-    const th = holderData[i];
-    const tokenIdx = market.clobTokenIds.indexOf(th.token);
-    const outcome = tokenIdx >= 0 && tokenIdx < market.outcomes.length ? market.outcomes[tokenIdx] : `Token${i}`;
-
-    const holders = (th.holders || [])
-      .sort((a: any, b: any) => (b.amount || 0) - (a.amount || 0))
-      .slice(0, HOLDERS_PER_SIDE);
-
-    holdersByOutcome[outcome] = holders.map((h: any) => ({
-      wallet: h.proxyWallet?.toLowerCase(),
-      amount: h.amount || 0,
-      outcome,
-    }));
-
-    for (const h of holders) {
-      if (h.proxyWallet) walletSet.add(h.proxyWallet.toLowerCase());
-    }
-
-    console.log(`  ${outcome}: ${holders.length} holders (top: $${holders[0]?.amount?.toFixed(0) || 0})`);
+  // 1. Fetch market data (optional — skip if only fetching wallet activities)
+  let market = { conditionId: '', slug: slug || 'direct-wallets', question: 'Direct wallet fetch', priceToBeat: 0, eventStartTime: '', endDate: '', clobTokenIds: [] as string[], outcomes: ['Up', 'Down'], volume: 0, bestBid: 0, bestAsk: 0 };
+  if (slug) {
+    console.log('\n[1] Fetching market from Gamma API...');
+    market = await fetchMarketFromGamma(slug);
+    console.log(`  Question: ${market.question}`);
+    console.log(`  Price to beat: $${market.priceToBeat}`);
+    console.log(`  Volume: $${market.volume.toFixed(0)}`);
+    console.log(`  Outcomes: ${market.outcomes.join(', ')}`);
+  } else {
+    console.log('\n[1] No slug provided — fetching wallet activities only');
   }
 
-  const wallets = [...walletSet];
-  console.log(`  Unique wallets: ${wallets.length}`);
+  // 2. Get wallets — direct list or from holders API
+  let wallets: string[];
+  const holdersByOutcome: Record<string, { wallet: string; amount: number; outcome: string }[]> = {};
+
+  if (DIRECT_WALLETS.length > 0) {
+    console.log(`\n[2] Using ${DIRECT_WALLETS.length} direct wallets (skipping holders API)`);
+    wallets = DIRECT_WALLETS;
+    wallets.forEach(w => console.log(`  ${w}`));
+  } else {
+    console.log('\n[2] Fetching top holders...');
+    const holderData = await fetchHolders(market.conditionId);
+
+    const walletSet = new Set<string>();
+
+    for (let i = 0; i < holderData.length; i++) {
+      const th = holderData[i];
+      const tokenIdx = market.clobTokenIds.indexOf(th.token);
+      const outcome = tokenIdx >= 0 && tokenIdx < market.outcomes.length ? market.outcomes[tokenIdx] : `Token${i}`;
+
+      const holders = (th.holders || [])
+        .sort((a: any, b: any) => (b.amount || 0) - (a.amount || 0))
+        .slice(0, HOLDERS_PER_SIDE);
+
+      holdersByOutcome[outcome] = holders.map((h: any) => ({
+        wallet: h.proxyWallet?.toLowerCase(),
+        amount: h.amount || 0,
+        outcome,
+      }));
+
+      for (const h of holders) {
+        if (h.proxyWallet) walletSet.add(h.proxyWallet.toLowerCase());
+      }
+
+      console.log(`  ${outcome}: ${holders.length} holders (top: $${holders[0]?.amount?.toFixed(0) || 0})`);
+    }
+
+    wallets = [...walletSet];
+    if (wallets.length === 0) {
+      console.log('  No holders found — pass --wallets "0x...,0x..." to provide wallets directly');
+    }
+  }
+  console.log(`  Total wallets: ${wallets.length}`);
 
   // 3. Connect to MongoDB
   const client = new MongoClient(mongoUri);
