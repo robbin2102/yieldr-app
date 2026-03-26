@@ -370,10 +370,14 @@ function classifyArchetype(metrics: {
   hedgerPositions: number;
   avgCombinedCost: number;
   avgHoldSeconds: number;
+  bothSidesRatio: number;      // % of markets where trader bought both Up and Down
+  directionalAccuracy: number; // % of markets where larger-USDC side won
+  tradesPerCycle: number;      // avg trades per 5m market
 }): { primary: string; secondary: string | null; confidence: number } {
   const scores: Record<string, number> = {
     SNIPER: 0, LATE_MOMENTUM: 0, EARLY_MOMENTUM: 0,
     CONTRARIAN: 0, LOTTERY: 0, SCALPER: 0, HEDGER: 0,
+    MOMENTUM_HEDGER: 0,
   };
 
   // SNIPER: high entry, high WR, holds to resolution
@@ -406,9 +410,17 @@ function classifyArchetype(metrics: {
   if (metrics.sellRatio > 0.5) scores.SCALPER += 3;
   if (metrics.avgHoldSeconds < 120 && metrics.avgHoldSeconds > 0) scores.SCALPER += 2;
 
-  // HEDGER: multiple hedge positions
-  if (metrics.hedgerPositions >= 3 && metrics.avgCombinedCost < 0.85) scores.HEDGER += 4;
-  if (metrics.hedgerPositions >= 1) scores.HEDGER += 1;
+  // HEDGER: pure arb — buys both sides below $1 combined
+  if (metrics.hedgerPositions >= 3 && metrics.avgCombinedCost < 0.95) scores.HEDGER += 4;
+  if (metrics.hedgerPositions >= 1 && metrics.avgCombinedCost < 0.90) scores.HEDGER += 2;
+
+  // MOMENTUM_HEDGER: buys both sides but bets MORE on the directional side
+  // Key signals: high both-sides ratio, directional accuracy >55%, combined cost ~100c+
+  if (metrics.bothSidesRatio > 0.7) scores.MOMENTUM_HEDGER += 2;
+  if (metrics.directionalAccuracy > 60) scores.MOMENTUM_HEDGER += 2;
+  else if (metrics.directionalAccuracy > 55) scores.MOMENTUM_HEDGER += 1;
+  if (metrics.avgCombinedCost > 0.95 && metrics.bothSidesRatio > 0.5) scores.MOMENTUM_HEDGER += 2; // paying ~$1 combined = not arb, directional
+  if (metrics.tradesPerCycle > 10) scores.MOMENTUM_HEDGER += 1; // sweeps the book
 
   const sorted = Object.entries(scores).sort((a, b) => b[1] - a[1]);
   const primary = sorted[0][1] > 0 ? sorted[0][0] : 'MIXED';
@@ -628,11 +640,61 @@ export async function profileBtc5mTrader(
     // ── Adverse Movement ───────────────────────────────
     const adverse = detectAdverseMovement(activities);
 
+    // ── Both-Sides & Directional Analysis ───────────────
+    // Group buys by conditionId+outcome to detect both-sides trading
+    const marketSides = new Map<string, Map<string, number>>(); // conditionId → outcome → totalUsdc
+    for (const a of buyActivities) {
+      const sides = marketSides.get(a.conditionId) || new Map();
+      sides.set(a.outcome || String(a.outcomeIndex), (sides.get(a.outcome || String(a.outcomeIndex)) || 0) + a.usdcSize);
+      marketSides.set(a.conditionId, sides);
+    }
+
+    let bothSidesCount = 0;
+    let directionalWins = 0;
+    let directionalTotal = 0;
+    let combinedCostSum = 0;
+    let combinedCostCount = 0;
+
+    for (const [cid, sides] of marketSides) {
+      if (sides.size >= 2) {
+        bothSidesCount++;
+        // Find which side had more USDC
+        const entries = [...sides.entries()].sort((a, b) => b[1] - a[1]);
+        const favoredOutcome = entries[0][0];
+
+        // Check if favored side won (from closed positions)
+        const closedForMarket = closedPositions.filter(c => c.conditionId === cid);
+        const favoredClosed = closedForMarket.find(c => (c.outcome || '') === favoredOutcome);
+        if (favoredClosed) {
+          directionalTotal++;
+          if (favoredClosed.realizedPnl > 0) directionalWins++;
+        }
+
+        // Compute combined cost for this market
+        const totalShares = new Map<string, number>();
+        for (const a of buyActivities.filter(a2 => a2.conditionId === cid)) {
+          const key = a.outcome || String(a.outcomeIndex);
+          totalShares.set(key, (totalShares.get(key) || 0) + (a.usdcSize / Math.max(a.price, 0.001)));
+        }
+        const avgPrices = [...sides.entries()].map(([outcome, usdc]) => usdc / Math.max(totalShares.get(outcome) || 1, 0.001));
+        if (avgPrices.length >= 2) {
+          combinedCostSum += avgPrices.reduce((s, p) => s + p, 0);
+          combinedCostCount++;
+        }
+      }
+    }
+
+    const uniqueMarkets = marketSides.size;
+    const bothSidesRatio = uniqueMarkets > 0 ? bothSidesCount / uniqueMarkets : 0;
+    const directionalAccuracy = directionalTotal > 0 ? (directionalWins / directionalTotal) * 100 : 0;
+    const avgCombinedCostAll = combinedCostCount > 0 ? combinedCostSum / combinedCostCount : 0;
+    const tradesPerCycle = uniqueMarkets > 0 ? buyActivities.length / uniqueMarkets : 0;
+
     // ── Strategy Classification ────────────────────────
     const archetype = classifyArchetype({
       avgEntryPrice, winRate, redeemRatio, sellRatio, tradesPerDay,
       avgPayoutOnWin, hedgerPositions: hedger.count, avgCombinedCost: hedger.avgCombinedCost,
-      avgHoldSeconds,
+      avgHoldSeconds, bothSidesRatio, directionalAccuracy, tradesPerCycle,
     });
 
     // ── Top Markets ────────────────────────────────────
@@ -678,6 +740,9 @@ export async function profileBtc5mTrader(
       console.log(`── Selectivity: ${cyclesTraded}/${cyclesAvailable} cycles (${(selectivityRatio * 100).toFixed(1)}%)`);
       console.log(`── Streaks: ${maxWinStreak} max wins / ${maxLossStreak} max losses`);
       console.log(`── Days: ${profitableDays} profitable / ${losingDays} losing | best $${bestDay.pnl.toFixed(0)} | worst $${worstDay.pnl.toFixed(0)}`);
+      console.log(`── Both sides: ${bothSidesCount}/${uniqueMarkets} markets (${(bothSidesRatio * 100).toFixed(0)}%) | combined cost avg ${(avgCombinedCostAll * 100).toFixed(1)}c`);
+      console.log(`── Directional accuracy: ${directionalWins}/${directionalTotal} (${directionalAccuracy.toFixed(0)}%) — larger-USDC side won`);
+      console.log(`── Trades/cycle: ${tradesPerCycle.toFixed(0)} avg`);
       console.log(`── Hedger: ${hedger.count} positions (avg cost ${hedger.avgCombinedCost.toFixed(2)})`);
       console.log(`── Adverse exits: ${adverse.count} (${adverse.rate.toFixed(0)}%)`);
       console.log('═══════════════════════════════════════════════════════════════\n');
@@ -721,6 +786,11 @@ export async function profileBtc5mTrader(
       adverseExitCount: adverse.count,
       adverseExitRate: adverse.rate,
       avgAdverseLoss: adverse.avgLoss,
+
+      bothSidesRatio,
+      directionalAccuracy,
+      avgCombinedCost: avgCombinedCostAll,
+      tradesPerCycle,
 
       topWinningMarkets: topWinning,
       topLosingMarkets: topLosing,
