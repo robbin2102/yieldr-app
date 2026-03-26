@@ -412,6 +412,38 @@ function classifyArchetype(metrics: {
   return { primary, secondary, confidence };
 }
 
+// ── Title Parser ──────────────────────────────────────────────
+// Parses resolution time from titles like:
+//   "Bitcoin Up or Down - March 25, 10:05AM-10:10AM ET"
+//   "Bitcoin Up or Down - January 15, 5PM ET"
+//   "Bitcoin Up or Down on March 25?"
+function parseResolutionTimeFromTitle(title: string): Date | null {
+  try {
+    // Pattern: "Month DD, H:MMAM-H:MMAM ET" — use the end time
+    const rangeMatch = title.match(/(\w+ \d+),?\s+(\d{1,2}(?::\d{2})?[AP]M)\s*-\s*(\d{1,2}(?::\d{2})?[AP]M)\s*ET/i);
+    if (rangeMatch) {
+      const [, datePart, , endTime] = rangeMatch;
+      const year = new Date().getFullYear();
+      const dateStr = `${datePart} ${year} ${endTime}`;
+      const parsed = new Date(dateStr + ' EST');
+      if (!isNaN(parsed.getTime())) return parsed;
+    }
+
+    // Pattern: "Month DD, HPM ET" — single time (hourly market)
+    const singleMatch = title.match(/(\w+ \d+),?\s+(\d{1,2}(?::\d{2})?[AP]M)\s*ET/i);
+    if (singleMatch) {
+      const [, datePart, time] = singleMatch;
+      const year = new Date().getFullYear();
+      const parsed = new Date(`${datePart} ${year} ${time} EST`);
+      if (!isNaN(parsed.getTime())) return parsed;
+    }
+
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 // ── Core Profiler ─────────────────────────────────────────────
 
 export async function profileBtc5mTrader(
@@ -435,7 +467,7 @@ export async function profileBtc5mTrader(
   }
 
   try {
-    // Load BTC 5m market conditionIds
+    // Load BTC 5m market conditionIds from DB
     if (verbose) console.log('Loading BTC 5m market data...');
     const markets5m = await db.collection('polyMarket5m').find({}).toArray();
     const conditionIdSet = new Set(markets5m.map(m => m.conditionId as string));
@@ -448,21 +480,53 @@ export async function profileBtc5mTrader(
         slug: m.slug,
       });
     }
-    if (verbose) console.log(`  ${markets5m.length} markets loaded\n`);
+    if (verbose) console.log(`  ${markets5m.length} markets from DB`);
 
     // Fetch activities
-    if (verbose) console.log(`Fetching activities (${periodDays}d)...`);
+    if (verbose) console.log(`\nFetching activities (${periodDays}d)...`);
     const allActivities = await fetchActivities(cleanWallet, periodDays);
     if (verbose) console.log(`  ${allActivities.length} total activities`);
 
-    // Filter to BTC 5m only
-    const activities = allActivities.filter(a => conditionIdSet.has(a.conditionId));
+    // Filter to BTC 5m — use DB conditionIds if available, otherwise detect from titles
+    const btc5mPattern = /bitcoin up or down/i;
+    let activities: Activity[];
+    if (conditionIdSet.size > 0) {
+      activities = allActivities.filter(a => conditionIdSet.has(a.conditionId));
+    } else {
+      // Fallback: detect from activity titles
+      if (verbose) console.log('  (No polyMarket5m data — detecting BTC 5m from titles)');
+      activities = allActivities.filter(a => btc5mPattern.test(a.title));
+      // Build conditionIdSet from detected activities
+      for (const a of activities) conditionIdSet.add(a.conditionId);
+    }
     if (verbose) console.log(`  ${activities.length} BTC 5m activities\n`);
+
+    // Parse resolution time from titles for markets not in DB
+    // Title format: "Bitcoin Up or Down - March 25, 10:05AM-10:10AM ET"
+    for (const a of activities) {
+      if (marketLookup.has(a.conditionId)) continue;
+      const endDate = parseResolutionTimeFromTitle(a.title);
+      if (endDate) {
+        marketLookup.set(a.conditionId, {
+          conditionId: a.conditionId,
+          endDate,
+          priceToBeat: 0,
+          slug: '',
+        });
+      }
+    }
 
     // Fetch closed positions
     if (verbose) console.log('Fetching closed positions...');
     const allClosed = await fetchClosedPositions(cleanWallet, 2000);
-    const closedPositions = allClosed.filter(c => conditionIdSet.has(c.conditionId));
+    let closedPositions: ClosedPosition[];
+    if (conditionIdSet.size > 0) {
+      closedPositions = allClosed.filter(c => conditionIdSet.has(c.conditionId) || btc5mPattern.test(c.title));
+    } else {
+      closedPositions = allClosed.filter(c => btc5mPattern.test(c.title));
+    }
+    // Add any new conditionIds from closed positions
+    for (const c of closedPositions) conditionIdSet.add(c.conditionId);
     if (verbose) console.log(`  ${closedPositions.length} BTC 5m closed positions\n`);
 
     // Build lookups
