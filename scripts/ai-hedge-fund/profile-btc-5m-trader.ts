@@ -180,21 +180,27 @@ function computeEntryBuckets(
   const buckets = new Map<string, {
     count: number; totalUsdc: number; priceSum: number;
     wins: number; losses: number; totalPnl: number; usdcWeightedPnl: number;
+    seenConditions: Set<string>;
   }>();
 
   for (const a of buyActivities) {
     const b = bucketPrice(a.price);
-    const entry = buckets.get(b) ?? { count: 0, totalUsdc: 0, priceSum: 0, wins: 0, losses: 0, totalPnl: 0, usdcWeightedPnl: 0 };
+    const entry = buckets.get(b) ?? { count: 0, totalUsdc: 0, priceSum: 0, wins: 0, losses: 0, totalPnl: 0, usdcWeightedPnl: 0, seenConditions: new Set() };
     entry.count++;
     entry.totalUsdc += a.usdcSize;
     entry.priceSum += a.price * a.usdcSize;
 
+    // Only count PnL/win/loss ONCE per conditionId per bucket (avoid double-counting)
     const closed = closedByCondition.get(a.conditionId);
-    if (closed) {
+    if (closed && !entry.seenConditions.has(a.conditionId)) {
+      entry.seenConditions.add(a.conditionId);
       if (closed.realizedPnl >= 0) entry.wins++;
       else entry.losses++;
       entry.totalPnl += closed.realizedPnl;
-      entry.usdcWeightedPnl += a.usdcSize * closed.realizedPnl;
+    }
+    // USDC-weighted PnL is per-trade (not per-market) — intentional
+    if (closed) {
+      entry.usdcWeightedPnl += a.usdcSize * (closed.realizedPnl / Math.max(closed.totalBought, 1));
     }
     buckets.set(b, entry);
   }
@@ -222,22 +228,23 @@ function computeTimeToResBuckets(
   marketLookup: Map<string, Market5m>,
   closedByCondition: Map<string, ClosedPosition>
 ): TimeToResBucket[] {
-  const buckets = new Map<string, { count: number; totalUsdc: number; wins: number; losses: number; pnlSum: number }>();
+  const buckets = new Map<string, { count: number; totalUsdc: number; wins: number; losses: number; pnlSum: number; seenConditions: Set<string> }>();
 
   for (const a of buyActivities) {
     const market = marketLookup.get(a.conditionId);
     if (!market) continue;
     const resTime = market.endDate.getTime() / 1000;
     const secsBefore = resTime - a.timestamp;
-    if (secsBefore < 0 || secsBefore > 600) continue; // skip if outside 0-10min range
+    if (secsBefore < 0 || secsBefore > 600) continue;
 
     const b = bucketTimeToRes(secsBefore);
-    const entry = buckets.get(b) ?? { count: 0, totalUsdc: 0, wins: 0, losses: 0, pnlSum: 0 };
+    const entry = buckets.get(b) ?? { count: 0, totalUsdc: 0, wins: 0, losses: 0, pnlSum: 0, seenConditions: new Set() };
     entry.count++;
     entry.totalUsdc += a.usdcSize;
 
     const closed = closedByCondition.get(a.conditionId);
-    if (closed) {
+    if (closed && !entry.seenConditions.has(a.conditionId)) {
+      entry.seenConditions.add(a.conditionId);
       if (closed.realizedPnl >= 0) entry.wins++;
       else entry.losses++;
       entry.pnlSum += closed.realizedPnl;
@@ -490,22 +497,36 @@ export async function profileBtc5mTrader(
     // Detect BTC 5m conditionIds from closed position titles
     const btc5mPattern = /bitcoin up or down/i;
     const closedPositions: ClosedPosition[] = [];
+    let titleParseSuccess = 0;
+    let titleParseFail = 0;
+    const sampleTitles: string[] = [];
     for (const c of allClosed) {
       if (conditionIdSet.has(c.conditionId) || btc5mPattern.test(c.title)) {
         closedPositions.push(c);
         conditionIdSet.add(c.conditionId);
+        if (sampleTitles.length < 5) sampleTitles.push(c.title);
         // Parse resolution time from title if not in DB
         if (!marketLookup.has(c.conditionId)) {
           const endDate = parseResolutionTimeFromTitle(c.title);
           if (endDate) {
+            titleParseSuccess++;
             marketLookup.set(c.conditionId, {
               conditionId: c.conditionId, endDate, priceToBeat: 0, slug: '',
             });
+          } else {
+            titleParseFail++;
           }
         }
       }
     }
-    if (verbose) console.log(`  ${closedPositions.length} BTC 5m closed positions (${conditionIdSet.size} unique markets detected)`);
+    if (verbose) {
+      console.log(`  ${closedPositions.length} BTC 5m closed positions (${conditionIdSet.size} unique markets detected)`);
+      console.log(`  Title parsing: ${titleParseSuccess} success, ${titleParseFail} failed, ${marketLookup.size} total in lookup`);
+      if (sampleTitles.length > 0) {
+        console.log(`  Sample titles:`);
+        sampleTitles.forEach(t => console.log(`    "${t}"`));
+      }
+    }
 
     // Now fetch activities and filter using the conditionId set built from closed positions
     if (verbose) console.log(`\nFetching activities (${periodDays}d)...`);
@@ -615,10 +636,10 @@ export async function profileBtc5mTrader(
     // ── Top Markets ────────────────────────────────────
     const sortedByPnl = [...closedByCondition.values()].sort((a, b) => b.realizedPnl - a.realizedPnl);
     const topWinning = sortedByPnl.slice(0, 5).map(c => ({
-      conditionId: c.conditionId, title: c.title, pnl: c.realizedPnl, entryPrice: c.avgPrice,
+      conditionId: c.conditionId, title: c.title || '', pnl: c.realizedPnl, entryPrice: c.avgPrice,
     }));
     const topLosing = sortedByPnl.slice(-5).reverse().map(c => ({
-      conditionId: c.conditionId, title: c.title, pnl: c.realizedPnl, entryPrice: c.avgPrice,
+      conditionId: c.conditionId, title: c.title || '', pnl: c.realizedPnl, entryPrice: c.avgPrice,
     }));
 
     // ── Console Output ─────────────────────────────────
