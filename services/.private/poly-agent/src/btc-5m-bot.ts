@@ -49,8 +49,8 @@ const CONFIG = {
   polygonRpcUrl: process.env.POLYGON_RPC_URL!,
   pollIntervalMs: 2000,       // Poll orderbook every 2s
   cycleCheckMs: 5000,         // Check for new cycle every 5s
-  maxOrderRetries: 5,
-  orderRetryDelayMs: 500,
+  maxOrderRetries: 2,
+  orderRetryDelayMs: 300,
 };
 
 // Validate required config
@@ -73,9 +73,9 @@ interface StrategyConfig {
 }
 
 const STRATEGIES: StrategyConfig[] = [
-  { name: '85c_90s', entryPrice: 0.85, triggerSpread: 0.01, windowSecs: 90, budgetUsdc: 5, active: true },
-  { name: '90c_90s', entryPrice: 0.90, triggerSpread: 0.01, windowSecs: 90, budgetUsdc: 5, active: false },
-  { name: '95c_60s', entryPrice: 0.95, triggerSpread: 0.01, windowSecs: 60, budgetUsdc: 5, active: false },
+  { name: '85c_90s', entryPrice: 0.85, triggerSpread: 0.01, windowSecs: 90, budgetUsdc: 3.5, active: true },
+  { name: '90c_90s', entryPrice: 0.90, triggerSpread: 0.01, windowSecs: 90, budgetUsdc: 3.5, active: false },
+  { name: '95c_60s', entryPrice: 0.95, triggerSpread: 0.01, windowSecs: 60, budgetUsdc: 3.5, active: false },
 ];
 
 // ── Types ─────────────────────────────────────────────────────
@@ -315,7 +315,13 @@ async function placeLimitBuy(
     try {
       // Use createOrder with BUY side at limit price (maker order)
       const MIN_SHARES = 5; // Polymarket minimum order size
-      const targetShares = Math.max(remainingBudget / limitPrice, MIN_SHARES);
+      let targetShares = remainingBudget / limitPrice;
+      if (targetShares < MIN_SHARES) {
+        targetShares = MIN_SHARES;
+        // Check if we can actually afford MIN_SHARES
+        const neededUsdc = MIN_SHARES * limitPrice;
+        console.log(`  [Order] Need ${MIN_SHARES} min shares = $${neededUsdc.toFixed(2)} USDC`);
+      }
       const adjustedBudget = targetShares * limitPrice;
       console.log(`  [Order] Attempt ${attempts}: creating order for ${targetShares.toFixed(2)} shares @ ${limitPrice} ($${adjustedBudget.toFixed(2)})`);
 
@@ -332,18 +338,26 @@ async function placeLimitBuy(
       // Post as GTC — sits in book as maker order
       // We poll for fills and cancel remainder after timeout
       const response = await clobClient.postOrder(order, OrderType.GTC);
-      console.log(`  [Order] Posted → orderID: ${response?.orderID?.slice(0, 20) || 'null'}... status: ${response?.status || '?'}`);
+      const ordId = response?.orderID || response?.orderid || null;
+      console.log(`  [Order] Posted → orderID: ${ordId?.slice(0, 20) || 'null'}... status: ${response?.status || '?'}`);
 
-      if (response && response.orderID) {
-        lastOrderId = response.orderID;
+      // If no orderID, the API rejected the order (logged as "request error" by SDK)
+      if (!ordId) {
+        console.log(`  [Order] Order rejected by API — check logs above for error`);
+        // Don't retry on API rejections (balance, size, etc.)
+        break;
+      }
+
+      if (ordId) {
+        lastOrderId = ordId;
 
         // Poll for fill status — GTC order sits in book for up to 2s
-        console.log(`  [Fill] Polling order ${response.orderID.slice(0, 16)}...`);
+        console.log(`  [Fill] Polling order ${ordId.slice(0, 16)}...`);
         let orderFilled = false;
         for (let i = 0; i < 10; i++) {
           await sleep(200);
           try {
-            const statusRes = await fetch(`${CONFIG.clobApiBase}/order/${response.orderID}`, {
+            const statusRes = await fetch(`${CONFIG.clobApiBase}/order/${ordId}`, {
               headers: {
                 'POLY_API_KEY': CONFIG.apiKey,
                 'POLY_SIGNATURE': CONFIG.apiSecret,
@@ -386,13 +400,19 @@ async function placeLimitBuy(
         // Cancel unfilled GTC order to avoid stale orders
         if (!orderFilled) {
           try {
-            await clobClient.cancelOrder({ orderID: response.orderID });
-            console.log(`  [Order] Cancelled unfilled GTC order ${response.orderID.slice(0, 12)}...`);
+            await clobClient.cancelOrder({ orderID: ordId });
+            console.log(`  [Order] Cancelled unfilled GTC order ${ordId.slice(0, 12)}...`);
           } catch { /* ok if already cancelled */ }
         }
       }
     } catch (err: any) {
-      console.error(`  [Order] Attempt ${attempts} error: ${err.message}`);
+      const msg = err.message || String(err);
+      console.error(`  [Order] Attempt ${attempts} error: ${msg}`);
+      // Stop retrying on fatal errors (balance, allowance, invalid size)
+      if (msg.includes('balance') || msg.includes('allowance') || msg.includes('minimum')) {
+        console.error(`  [Order] Fatal error — stopping retries`);
+        break;
+      }
     }
 
     if (remainingBudget > 0.5 && attempts < CONFIG.maxOrderRetries) {
