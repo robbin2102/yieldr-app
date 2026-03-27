@@ -73,9 +73,9 @@ interface StrategyConfig {
 }
 
 const STRATEGIES: StrategyConfig[] = [
-  { name: '85c_90s', entryPrice: 0.85, triggerSpread: 0.01, windowSecs: 90, budgetUsdc: 3, active: true },
-  { name: '90c_90s', entryPrice: 0.90, triggerSpread: 0.01, windowSecs: 90, budgetUsdc: 3, active: false },
-  { name: '95c_60s', entryPrice: 0.95, triggerSpread: 0.01, windowSecs: 60, budgetUsdc: 3, active: false },
+  { name: '85c_90s', entryPrice: 0.85, triggerSpread: 0.01, windowSecs: 90, budgetUsdc: 5, active: true },
+  { name: '90c_90s', entryPrice: 0.90, triggerSpread: 0.01, windowSecs: 90, budgetUsdc: 5, active: false },
+  { name: '95c_60s', entryPrice: 0.95, triggerSpread: 0.01, windowSecs: 60, budgetUsdc: 5, active: false },
 ];
 
 // ── Types ─────────────────────────────────────────────────────
@@ -186,9 +186,20 @@ async function fetchCycleData(slug: string): Promise<ActiveCycle | null> {
 
     const event = events[0];
     const market = event.markets[0];
-    const meta = event.eventMetadata || event.metadata || {};
-    // priceToBeat can be nested in different places
-    const ptb = meta.priceToBeat || market.priceToBeat || event.priceToBeat || 0;
+
+    // priceToBeat can be in various locations and formats
+    let ptb = 0;
+    try {
+      const meta = typeof event.eventMetadata === 'string' ? JSON.parse(event.eventMetadata) : (event.eventMetadata || {});
+      ptb = parseFloat(meta.priceToBeat) || 0;
+    } catch { /* ignore parse errors */ }
+    if (!ptb) {
+      try {
+        const meta2 = typeof market.metadata === 'string' ? JSON.parse(market.metadata) : (market.metadata || {});
+        ptb = parseFloat(meta2.priceToBeat) || 0;
+      } catch { /* ignore */ }
+    }
+    if (!ptb) ptb = parseFloat(event.priceToBeat) || parseFloat(market.priceToBeat) || 0;
 
     let tokenIds: string[] = [];
     try { tokenIds = JSON.parse(market.clobTokenIds); }
@@ -303,8 +314,10 @@ async function placeLimitBuy(
 
     try {
       // Use createOrder with BUY side at limit price (maker order)
-      const targetShares = remainingBudget / limitPrice;
-      console.log(`  [Order] Attempt ${attempts}: creating order for ${targetShares.toFixed(2)} shares @ ${limitPrice} ($${remainingBudget.toFixed(2)} budget)`);
+      const MIN_SHARES = 5; // Polymarket minimum order size
+      const targetShares = Math.max(remainingBudget / limitPrice, MIN_SHARES);
+      const adjustedBudget = targetShares * limitPrice;
+      console.log(`  [Order] Attempt ${attempts}: creating order for ${targetShares.toFixed(2)} shares @ ${limitPrice} ($${adjustedBudget.toFixed(2)})`);
 
       const order = await clobClient.createOrder({
         tokenID: tokenId,
