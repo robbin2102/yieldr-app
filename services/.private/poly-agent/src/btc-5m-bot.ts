@@ -508,11 +508,15 @@ async function evaluateStrategies(cycle: ActiveCycle): Promise<void> {
       continue;
     }
 
-    // Entry condition met — place LIMIT order at entry price (below market = maker)
-    console.log(`\n  ⚡ [${strategy.name}] ENTRY: ${targetSide} market@${(currentPrice*100).toFixed(0)}c → limit@${(strategy.entryPrice*100).toFixed(0)}c | -${secsLeft}s`);
+    // Entry condition met — place LIMIT order at current ask price (fills immediately as taker)
+    // We trigger when price >= entryPrice + spread, then buy at current ask
+    // Cap at 95c max to limit downside
+    const maxPrice = 0.95;
+    const fillPrice = Math.min(currentPrice, maxPrice);
+    console.log(`\n  ⚡ [${strategy.name}] ENTRY: ${targetSide} market@${(currentPrice*100).toFixed(0)}c → buy@${(fillPrice*100).toFixed(0)}c | -${secsLeft}s`);
     stats.cyclesTriggered++;
 
-    const result = await placeLimitBuy(targetTokenId, strategy.budgetUsdc, strategy.entryPrice);
+    const result = await placeLimitBuy(targetTokenId, strategy.budgetUsdc, fillPrice);
 
     if (result.filled) {
       stats.cyclesFilled++;
