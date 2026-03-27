@@ -1,24 +1,21 @@
 /**
- * BTC 5-Minute Market Trading Bot
+ * BTC 5-Minute Market Trading Bot v2
  *
- * Runs 3 naked tail strategies on live BTC 5m markets:
- *   Strategy 1: Buy at 85c, last 90s before resolution
- *   Strategy 2: Buy at 90c, last 90s before resolution
- *   Strategy 3: Buy at 95c, last 60s before resolution
- *
- * Places limit buy orders on BOTH sides (Up/Down) via FAK.
- * First side to reach target price gets filled, other is not placed.
- * Holds to resolution — no sells.
+ * Features:
+ * - WebSocket BTC price feed from Polymarket Chainlink (1s updates)
+ * - priceToBeat derived from WS data at cycle open
+ * - Delta filter: skip cycles where |BTC - priceToBeat| < 30 points
+ * - GTC limit orders with 10s fill window + retry
+ * - Orderbook + BTC price logging to MongoDB
  *
  * Usage:
  *   npx tsx services/.private/poly-agent/src/btc-5m-bot.ts
- *
- * Required: .env.polyagent with BOT_PRIVATE_KEY, POLYMARKET_API_KEY, etc.
  */
 
 import { ethers } from 'ethers';
 import { ClobClient, Side, OrderType } from '@polymarket/clob-client';
 import { MongoClient, Db } from 'mongodb';
+import WebSocket from 'ws';
 import dotenv from 'dotenv';
 import path from 'path';
 
@@ -43,39 +40,36 @@ const CONFIG = {
   passphrase: process.env.POLYMARKET_PASSPHRASE!,
   mongoUri: process.env.MONGODB_URI!,
   clobApiBase: process.env.CLOB_API_BASE || 'https://clob.polymarket.com',
-  dataApiBase: process.env.DATA_API_BASE || 'https://data-api.polymarket.com',
   gammaApiBase: 'https://gamma-api.polymarket.com',
+  wsLiveData: 'wss://ws-live-data.polymarket.com',
   chainId: parseInt(process.env.CHAIN_ID || '137'),
   polygonRpcUrl: process.env.POLYGON_RPC_URL!,
-  pollIntervalMs: 2000,       // Poll orderbook every 2s
-  cycleCheckMs: 5000,         // Check for new cycle every 5s
-  maxOrderRetries: 2,
-  orderRetryDelayMs: 300,
+  pollIntervalMs: 2000,
+  maxOrderRetries: 3,
+  orderRetryDelayMs: 500,
+  gctFillTimeoutMs: 10000,  // GTC order stays alive for 10s
+  minDeltaPoints: 30,       // Skip cycles with |BTC - strike| < 30
 };
 
-// Validate required config
 const required = ['botPrivateKey', 'botWallet', 'apiKey', 'apiSecret', 'passphrase', 'mongoUri', 'polygonRpcUrl'];
 for (const key of required) {
-  if (!CONFIG[key as keyof typeof CONFIG]) {
-    console.error(`Missing required config: ${key}`);
-    process.exit(1);
-  }
+  if (!CONFIG[key as keyof typeof CONFIG]) { console.error(`Missing: ${key}`); process.exit(1); }
 }
 
 // ── Strategy Definitions ──────────────────────────────────────
 interface StrategyConfig {
   name: string;
-  entryPrice: number;     // limit order price (e.g., 0.85)
-  triggerSpread: number;  // place order when market is this much ABOVE entry (e.g., 0.01 = 1c)
-  windowSecs: number;     // seconds before resolution to start
-  budgetUsdc: number;     // USDC per trade
+  entryPrice: number;
+  triggerSpread: number;
+  windowSecs: number;
+  budgetUsdc: number;
   active: boolean;
 }
 
 const STRATEGIES: StrategyConfig[] = [
-  { name: '85c_90s', entryPrice: 0.85, triggerSpread: 0.01, windowSecs: 90, budgetUsdc: 3.5, active: true },
-  { name: '90c_90s', entryPrice: 0.90, triggerSpread: 0.01, windowSecs: 90, budgetUsdc: 3.5, active: false },
-  { name: '95c_60s', entryPrice: 0.95, triggerSpread: 0.01, windowSecs: 60, budgetUsdc: 3.5, active: false },
+  { name: '90c_90s', entryPrice: 0.90, triggerSpread: 0.01, windowSecs: 90, budgetUsdc: 5, active: true },
+  { name: '85c_90s', entryPrice: 0.85, triggerSpread: 0.01, windowSecs: 90, budgetUsdc: 5, active: false },
+  { name: '95c_60s', entryPrice: 0.95, triggerSpread: 0.01, windowSecs: 60, budgetUsdc: 5, active: false },
 ];
 
 // ── Types ─────────────────────────────────────────────────────
@@ -101,29 +95,6 @@ interface StrategyPosition {
   fillAttempts: number;
 }
 
-interface TradeLog {
-  slug: string;
-  conditionId: string;
-  strategy: string;
-  side: string;
-  entryPrice: number;       // limit order price
-  triggerPrice: number;     // market price when order was placed
-  filledPrice: number;
-  shares: number;
-  costUsdc: number;
-  fillType: 'maker' | 'taker' | 'unknown';
-  fillAttempts: number;
-  pnl: number | null;
-  won: boolean | null;
-  winner: string | null;
-  cycleOpen: number;
-  cycleClose: number;
-  secsBeforeClose: number;
-  priceToBeat: number;
-  filledAt: Date;
-  resolvedAt: Date | null;
-}
-
 // ── Globals ───────────────────────────────────────────────────
 let clobClient: ClobClient;
 let db: Db;
@@ -131,50 +102,87 @@ let currentCycle: ActiveCycle | null = null;
 let positions: Map<string, StrategyPosition> = new Map();
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
-// Cycle stats (per session)
+// BTC price state from WebSocket
+let currentBtcPrice = 0;
+let btcPriceTimestamp = 0;
+let wsPriceConnected = false;
+
+// Cycle stats
 const stats = {
-  cyclesSeen: 0,
-  cyclesWithWindow: 0,     // cycles where at least 1 strategy window was active
-  cyclesTriggered: 0,      // cycles where at least 1 strategy placed an order
-  cyclesFilled: 0,         // cycles where at least 1 order filled
-  totalFills: 0,
-  makerFills: 0,
-  takerFills: 0,
-  totalPnl: 0,
-  wins: 0,
-  losses: 0,
+  cyclesSeen: 0, cyclesTriggered: 0, cyclesFilled: 0, cyclesSkippedDelta: 0,
+  totalFills: 0, makerFills: 0, takerFills: 0, totalPnl: 0, wins: 0, losses: 0,
 };
 
-// ── CLOB Client Setup ─────────────────────────────────────────
+// ── WebSocket BTC Price Feed ──────────────────────────────────
+function connectBtcPriceWs(): void {
+  console.log('[WS] Connecting to BTC price feed...');
+  const ws = new WebSocket(CONFIG.wsLiveData);
+
+  ws.on('open', () => {
+    console.log('[WS] Connected — subscribing to btc/usd');
+    ws.send(JSON.stringify({
+      action: 'subscribe',
+      subscriptions: [{ topic: 'crypto_prices_chainlink', type: '*', filters: '{"symbol":"btc/usd"}' }]
+    }));
+    wsPriceConnected = true;
+  });
+
+  ws.on('message', (data: WebSocket.Data) => {
+    try {
+      const msg = JSON.parse(data.toString());
+
+      // Initial snapshot (array of historical prices)
+      if (msg.type === 'subscribe' && msg.payload?.data) {
+        const prices = msg.payload.data;
+        if (prices.length > 0) {
+          const last = prices[prices.length - 1];
+          currentBtcPrice = last.value;
+          btcPriceTimestamp = last.timestamp;
+          console.log(`[WS] Initial snapshot: $${currentBtcPrice.toFixed(2)} (${prices.length} points)`);
+
+          // Log to MongoDB (lightweight — just the latest)
+          db?.collection('btc5mPriceStream').insertOne({
+            type: 'snapshot',
+            price: currentBtcPrice,
+            timestamp: new Date(btcPriceTimestamp),
+            count: prices.length,
+          }).catch(() => {});
+        }
+      }
+
+      // Streaming update (single price)
+      if (msg.type === 'update' && msg.payload?.value) {
+        currentBtcPrice = msg.payload.value;
+        btcPriceTimestamp = msg.payload.timestamp;
+      }
+    } catch { /* ignore parse errors */ }
+  });
+
+  ws.on('close', () => {
+    console.log('[WS] Disconnected — reconnecting in 3s...');
+    wsPriceConnected = false;
+    setTimeout(connectBtcPriceWs, 3000);
+  });
+
+  ws.on('error', (err) => {
+    console.error(`[WS] Error: ${err.message}`);
+  });
+}
+
+// ── CLOB Client ───────────────────────────────────────────────
 async function initClobClient(): Promise<ClobClient> {
   const network = { name: 'polygon', chainId: CONFIG.chainId };
   const provider = new ethers.providers.StaticJsonRpcProvider(CONFIG.polygonRpcUrl, network);
   const wallet = new ethers.Wallet(CONFIG.botPrivateKey, provider);
-
   console.log(`[Init] Wallet: ${wallet.address}`);
-  console.log(`[Init] Chain: ${CONFIG.chainId}`);
-
-  const client = new ClobClient(
-    CONFIG.clobApiBase,
-    CONFIG.chainId,
-    wallet,
-    { key: CONFIG.apiKey, secret: CONFIG.apiSecret, passphrase: CONFIG.passphrase }
-  );
-
-  return client;
+  return new ClobClient(CONFIG.clobApiBase, CONFIG.chainId, wallet,
+    { key: CONFIG.apiKey, secret: CONFIG.apiSecret, passphrase: CONFIG.passphrase });
 }
 
 // ── Market Data ───────────────────────────────────────────────
 function getCurrentSlug(): string {
   const now = Math.floor(Date.now() / 1000);
-  const rounded = Math.floor(now / 300) * 300;
-  return `btc-updown-5m-${rounded}`;
-}
-
-function getNextSlug(): string {
-  const now = Math.floor(Date.now() / 1000);
-  const rounded = Math.floor(now / 300) * 300 + 300;
-  return `btc-updown-5m-${rounded}`;
+  return `btc-updown-5m-${Math.floor(now / 300) * 300}`;
 }
 
 async function fetchCycleData(slug: string): Promise<ActiveCycle | null> {
@@ -184,567 +192,400 @@ async function fetchCycleData(slug: string): Promise<ActiveCycle | null> {
     const events = await res.json() as any[];
     if (!events?.[0]?.markets?.[0]) return null;
 
-    const event = events[0];
-    const market = event.markets[0];
-
-    // priceToBeat can be in various locations and formats
-    let ptb = 0;
-    try {
-      const meta = typeof event.eventMetadata === 'string' ? JSON.parse(event.eventMetadata) : (event.eventMetadata || {});
-      ptb = parseFloat(meta.priceToBeat) || 0;
-    } catch { /* ignore parse errors */ }
-    if (!ptb) {
-      try {
-        const meta2 = typeof market.metadata === 'string' ? JSON.parse(market.metadata) : (market.metadata || {});
-        ptb = parseFloat(meta2.priceToBeat) || 0;
-      } catch { /* ignore */ }
-    }
-    if (!ptb) ptb = parseFloat(event.priceToBeat) || parseFloat(market.priceToBeat) || 0;
-
+    const market = events[0].markets[0];
     let tokenIds: string[] = [];
     try { tokenIds = JSON.parse(market.clobTokenIds); }
     catch { tokenIds = (market.clobTokenIds || '').split(',').map((s: string) => s.trim()); }
 
     const cycleOpen = parseInt(slug.match(/btc-updown-5m-(\d+)/)?.[1] || '0');
 
+    // priceToBeat from WS: use the BTC price at cycle open time
+    // The WS gives us the current price — for priceToBeat we use the price at cycleOpen
+    // which we capture when the cycle starts
+    const ptb = currentBtcPrice; // Will be set properly in main loop on cycle start
+
     return {
-      slug,
-      conditionId: market.conditionId,
-      upTokenId: tokenIds[0] || '',
-      downTokenId: tokenIds[1] || '',
-      cycleOpen,
-      cycleClose: cycleOpen + 300,
+      slug, conditionId: market.conditionId,
+      upTokenId: tokenIds[0] || '', downTokenId: tokenIds[1] || '',
+      cycleOpen, cycleClose: cycleOpen + 300,
       priceToBeat: ptb,
       question: market.question || slug,
     };
   } catch (err: any) {
-    console.error(`[Market] Error fetching ${slug}: ${err.message}`);
+    console.error(`[Market] Error: ${err.message}`);
     return null;
   }
 }
 
 // ── Orderbook ─────────────────────────────────────────────────
-interface BookSnapshot {
-  tokenId: string;
-  side: string;        // 'Up' or 'Down'
-  bestAsk: number | null;
-  bestBid: number | null;
-  askDepth: number;     // total size at best ask
-  totalAskLiquidity: number; // total USDC across all asks
-  spread: number | null;
-  timestamp: Date;
-}
-
-async function getBookSnapshot(tokenId: string, label: string): Promise<BookSnapshot> {
-  const snapshot: BookSnapshot = {
-    tokenId, side: label, bestAsk: null, bestBid: null,
-    askDepth: 0, totalAskLiquidity: 0, spread: null, timestamp: new Date(),
-  };
-
+async function getBookSnapshot(tokenId: string, label: string) {
+  const snap = { side: label, bestAsk: null as number | null, bestBid: null as number | null, askDepth: 0, totalAskLiq: 0, spread: null as number | null };
   try {
-    const url = `${CONFIG.clobApiBase}/book?token_id=${tokenId}`;
-    const res = await fetch(url);
-    if (!res.ok) return snapshot;
+    const res = await fetch(`${CONFIG.clobApiBase}/book?token_id=${tokenId}`);
+    if (!res.ok) return snap;
     const data = await res.json() as any;
-
-    const asks = (data.asks || [])
-      .map((a: any) => ({ price: parseFloat(a.price), size: parseFloat(a.size) }))
-      .sort((a: any, b: any) => a.price - b.price);
-
-    const bids = (data.bids || [])
-      .map((b: any) => ({ price: parseFloat(b.price), size: parseFloat(b.size) }))
-      .sort((a: any, b: any) => b.price - a.price);
-
-    snapshot.bestAsk = asks.length > 0 ? asks[0].price : null;
-    snapshot.bestBid = bids.length > 0 ? bids[0].price : null;
-    snapshot.askDepth = asks.length > 0 ? asks[0].size : 0;
-    snapshot.totalAskLiquidity = asks.reduce((s: number, a: any) => s + a.price * a.size, 0);
-    snapshot.spread = (snapshot.bestAsk !== null && snapshot.bestBid !== null)
-      ? snapshot.bestAsk - snapshot.bestBid : null;
-
-    return snapshot;
-  } catch {
-    return snapshot;
-  }
+    const asks = (data.asks || []).map((a: any) => ({ price: parseFloat(a.price), size: parseFloat(a.size) })).sort((a: any, b: any) => a.price - b.price);
+    const bids = (data.bids || []).map((b: any) => ({ price: parseFloat(b.price), size: parseFloat(b.size) })).sort((a: any, b: any) => b.price - a.price);
+    snap.bestAsk = asks.length > 0 ? asks[0].price : null;
+    snap.bestBid = bids.length > 0 ? bids[0].price : null;
+    snap.askDepth = asks.length > 0 ? asks[0].size : 0;
+    snap.totalAskLiq = asks.reduce((s: number, a: any) => s + a.price * a.size, 0);
+    snap.spread = (snap.bestAsk !== null && snap.bestBid !== null) ? snap.bestAsk - snap.bestBid : null;
+  } catch { /* return defaults */ }
+  return snap;
 }
 
-async function logOrderbook(slug: string, cycleClose: number, upSnap: BookSnapshot, downSnap: BookSnapshot): Promise<void> {
-  const now = Math.floor(Date.now() / 1000);
-  const secsLeft = cycleClose - now;
-
-  try {
-    await db.collection('btc5mOrderbook').insertOne({
-      slug,
-      timestamp: new Date(),
-      secsBeforeClose: secsLeft,
-      up: {
-        bestAsk: upSnap.bestAsk,
-        bestBid: upSnap.bestBid,
-        askDepth: upSnap.askDepth,
-        totalAskLiquidity: upSnap.totalAskLiquidity,
-        spread: upSnap.spread,
-      },
-      down: {
-        bestAsk: downSnap.bestAsk,
-        bestBid: downSnap.bestBid,
-        askDepth: downSnap.askDepth,
-        totalAskLiquidity: downSnap.totalAskLiquidity,
-        spread: downSnap.spread,
-      },
-    });
-  } catch { /* non-critical, don't crash */ }
-}
-
-// ── Order Execution ───────────────────────────────────────────
+// ── Order Execution (GTC with 10s timeout) ────────────────────
 async function placeLimitBuy(
-  tokenId: string,
-  budgetUsdc: number,
-  limitPrice: number
-): Promise<{ filled: boolean; filledShares: number; avgPrice: number; orderId: string; fillType: 'maker' | 'taker' | 'unknown'; attempts: number }> {
-  console.log(`  [Order] Placing LIMIT BUY: token=${tokenId.slice(0, 16)}... budget=$${budgetUsdc} limit=${limitPrice}`);
-  let totalFilled = 0;
-  let totalCost = 0;
-  let attempts = 0;
-  let lastOrderId = '';
-  let remainingBudget = budgetUsdc;
-  let fillType: 'maker' | 'taker' | 'unknown' = 'unknown';
+  tokenId: string, budgetUsdc: number, limitPrice: number
+): Promise<{ filled: boolean; filledShares: number; avgPrice: number; orderId: string; fillType: string; attempts: number }> {
+  console.log(`  [Order] LIMIT BUY: limit=${(limitPrice*100).toFixed(0)}c budget=$${budgetUsdc.toFixed(2)}`);
+  let totalFilled = 0, totalCost = 0, attempts = 0, lastOrderId = '', remainingBudget = budgetUsdc;
+  let fillType = 'unknown';
 
   while (remainingBudget > 0.5 && attempts < CONFIG.maxOrderRetries) {
     attempts++;
-
     try {
-      // Use createOrder with BUY side at limit price (maker order)
-      const MIN_SHARES = 5; // Polymarket minimum order size
-      let targetShares = remainingBudget / limitPrice;
-      if (targetShares < MIN_SHARES) {
-        targetShares = MIN_SHARES;
-        // Check if we can actually afford MIN_SHARES
-        const neededUsdc = MIN_SHARES * limitPrice;
-        console.log(`  [Order] Need ${MIN_SHARES} min shares = $${neededUsdc.toFixed(2)} USDC`);
+      const MIN_SHARES = 5;
+      let shares = remainingBudget / limitPrice;
+      if (shares < MIN_SHARES) {
+        shares = MIN_SHARES;
+        console.log(`  [Order] Bumping to min ${MIN_SHARES} shares = $${(shares * limitPrice).toFixed(2)}`);
       }
-      const adjustedBudget = targetShares * limitPrice;
-      console.log(`  [Order] Attempt ${attempts}: creating order for ${targetShares.toFixed(2)} shares @ ${limitPrice} ($${adjustedBudget.toFixed(2)})`);
 
+      console.log(`  [Order] Attempt ${attempts}: ${shares.toFixed(1)} shares @ ${(limitPrice*100).toFixed(0)}c`);
       const order = await clobClient.createOrder({
-        tokenID: tokenId,
-        price: limitPrice,
-        size: targetShares,
-        side: Side.BUY,
-        feeRateBps: 1000, // BTC 5m markets require 1000 bps maker fee
-        nonce: 0,
+        tokenID: tokenId, price: limitPrice, size: shares,
+        side: Side.BUY, feeRateBps: 1000, nonce: 0,
       });
-      console.log(`  [Order] Order created, signing and posting as GTC...`);
 
-      // Post as GTC — sits in book as maker order
-      // We poll for fills and cancel remainder after timeout
       const response = await clobClient.postOrder(order, OrderType.GTC);
-      const ordId = response?.orderID || response?.orderid || null;
-      console.log(`  [Order] Posted → orderID: ${ordId?.slice(0, 20) || 'null'}... status: ${response?.status || '?'}`);
+      const ordId = response?.orderID || (response as any)?.orderid || null;
 
-      // If no orderID, the API rejected the order (logged as "request error" by SDK)
       if (!ordId) {
-        console.log(`  [Order] Order rejected by API — check logs above for error`);
-        // Don't retry on API rejections (balance, size, etc.)
+        console.log(`  [Order] Rejected by API — stopping`);
         break;
       }
 
-      if (ordId) {
-        lastOrderId = ordId;
+      console.log(`  [Order] Live: ${ordId.slice(0, 16)}... polling for ${CONFIG.gctFillTimeoutMs / 1000}s`);
+      lastOrderId = ordId;
 
-        // Poll for fill status — GTC order sits in book for up to 2s
-        console.log(`  [Fill] Polling order ${ordId.slice(0, 16)}...`);
-        let orderFilled = false;
-        for (let i = 0; i < 10; i++) {
-          await sleep(200);
-          try {
-            const statusRes = await fetch(`${CONFIG.clobApiBase}/order/${ordId}`, {
-              headers: {
-                'POLY_API_KEY': CONFIG.apiKey,
-                'POLY_SIGNATURE': CONFIG.apiSecret,
-                'POLY_TIMESTAMP': Date.now().toString(),
-                'POLY_PASSPHRASE': CONFIG.passphrase,
-              },
-            });
+      // Poll for fill for up to 10 seconds
+      const pollEnd = Date.now() + CONFIG.gctFillTimeoutMs;
+      let orderFilled = false;
 
-            if (statusRes.ok) {
-              const orderStatus = await statusRes.json() as any;
-              const filled = parseFloat(orderStatus.size_matched) || 0;
-              const price = parseFloat(orderStatus.price) || limitPrice;
-              const status = orderStatus.status || '?';
+      while (Date.now() < pollEnd) {
+        await sleep(500);
+        try {
+          const statusRes = await fetch(`${CONFIG.clobApiBase}/order/${ordId}`, {
+            headers: { 'POLY_API_KEY': CONFIG.apiKey, 'POLY_SIGNATURE': CONFIG.apiSecret, 'POLY_TIMESTAMP': Date.now().toString(), 'POLY_PASSPHRASE': CONFIG.passphrase },
+          });
+          if (statusRes.ok) {
+            const os = await statusRes.json() as any;
+            const filled = parseFloat(os.size_matched) || 0;
+            const price = parseFloat(os.price) || limitPrice;
 
-              console.log(`  [Fill] Poll ${i + 1}/10: status=${status} filled=${filled.toFixed(2)} price=${price.toFixed(4)}`);
-
-              // Detect maker/taker
-              if (filled > 0 && price <= limitPrice) fillType = 'maker';
-              else if (filled > 0) fillType = 'taker';
-
-              if (filled > 0) {
-                const cost = filled * price;
-                totalFilled += filled;
-                totalCost += cost;
-                remainingBudget -= cost;
-                orderFilled = true;
-                console.log(`  [Order] Filled ${filled.toFixed(2)} shares @ ${price.toFixed(4)} [${fillType}] (attempt ${attempts})`);
-                break;
-              }
-
-              if (orderStatus.status === 'MATCHED' || orderStatus.status === 'FILLED') {
-                orderFilled = true;
-                break;
-              }
-              if (orderStatus.status === 'CANCELED' || orderStatus.status === 'EXPIRED') break;
+            if (filled > 0) {
+              fillType = price <= limitPrice ? 'maker' : 'taker';
+              totalFilled += filled;
+              totalCost += filled * price;
+              remainingBudget -= filled * price;
+              orderFilled = true;
+              console.log(`  [Fill] ✅ ${filled.toFixed(1)} shares @ ${(price*100).toFixed(1)}c [${fillType}]`);
+              break;
             }
-          } catch { /* continue polling */ }
-        }
+            if (os.status === 'CANCELED' || os.status === 'EXPIRED') break;
+          }
+        } catch { /* continue */ }
+      }
 
-        // Cancel unfilled GTC order to avoid stale orders
-        if (!orderFilled) {
-          try {
-            await clobClient.cancelOrder({ orderID: ordId });
-            console.log(`  [Order] Cancelled unfilled GTC order ${ordId.slice(0, 12)}...`);
-          } catch { /* ok if already cancelled */ }
-        }
+      // Cancel if not filled
+      if (!orderFilled) {
+        try { await clobClient.cancelOrder({ orderID: ordId }); } catch {}
+        console.log(`  [Order] Cancelled after ${CONFIG.gctFillTimeoutMs / 1000}s — no fill`);
       }
     } catch (err: any) {
-      const msg = err.message || String(err);
-      console.error(`  [Order] Attempt ${attempts} error: ${msg}`);
-      // Stop retrying on fatal errors (balance, allowance, invalid size)
-      if (msg.includes('balance') || msg.includes('allowance') || msg.includes('minimum')) {
-        console.error(`  [Order] Fatal error — stopping retries`);
-        break;
-      }
+      const msg = err.message || '';
+      console.error(`  [Order] Error: ${msg}`);
+      if (msg.includes('balance') || msg.includes('allowance') || msg.includes('minimum')) break;
     }
 
-    if (remainingBudget > 0.5 && attempts < CONFIG.maxOrderRetries) {
-      await sleep(CONFIG.orderRetryDelayMs);
-    }
+    if (remainingBudget > 0.5 && attempts < CONFIG.maxOrderRetries) await sleep(CONFIG.orderRetryDelayMs);
   }
 
-  return {
-    filled: totalFilled > 0,
-    filledShares: totalFilled,
-    avgPrice: totalFilled > 0 ? totalCost / totalFilled : 0,
-    orderId: lastOrderId,
-    fillType,
-    attempts,
-  };
+  return { filled: totalFilled > 0, filledShares: totalFilled, avgPrice: totalFilled > 0 ? totalCost / totalFilled : 0, orderId: lastOrderId, fillType, attempts };
 }
 
 // ── Strategy Evaluation ───────────────────────────────────────
 async function evaluateStrategies(cycle: ActiveCycle): Promise<void> {
   const now = Math.floor(Date.now() / 1000);
   const secsLeft = cycle.cycleClose - now;
+  if (secsLeft <= 0) return;
 
-  // Log every poll regardless of window
   const anyInWindow = STRATEGIES.some(s => s.active && secsLeft <= s.windowSecs);
-
-  if (secsLeft <= 0) {
-    console.log(`  [Poll] Cycle expired (secsLeft=${secsLeft}), skipping`);
-    return;
-  }
-
   if (!anyInWindow) {
-    // Log waiting status every 10s
     if (secsLeft % 10 < 3) {
-      const nextWindow = Math.min(...STRATEGIES.filter(s => s.active).map(s => s.windowSecs));
-      console.log(`  [Poll] -${secsLeft}s | Waiting for window (starts at -${nextWindow}s)`);
+      const delta = currentBtcPrice > 0 && cycle.priceToBeat > 0 ? (currentBtcPrice - cycle.priceToBeat).toFixed(1) : '?';
+      console.log(`  [Poll] -${secsLeft}s | BTC=$${currentBtcPrice.toFixed(0)} strike=$${cycle.priceToBeat.toFixed(0)} delta=${delta} | waiting`);
     }
     return;
   }
 
-  console.log(`  [Poll] -${secsLeft}s | IN WINDOW — fetching orderbook...`);
+  // Delta check
+  const delta = currentBtcPrice - cycle.priceToBeat;
+  const absDelta = Math.abs(delta);
+  const direction = delta > 0 ? 'Up' : 'Down';
 
-  // Fetch orderbook snapshots for both sides
-  const fetchStart = Date.now();
+  // Fetch orderbook
   const [upSnap, downSnap] = await Promise.all([
     getBookSnapshot(cycle.upTokenId, 'Up'),
     getBookSnapshot(cycle.downTokenId, 'Down'),
   ]);
-  const fetchMs = Date.now() - fetchStart;
 
-  console.log(`  [Book] Up: ask=${upSnap.bestAsk?.toFixed(3) || 'null'} bid=${upSnap.bestBid?.toFixed(3) || 'null'} depth=${upSnap.askDepth.toFixed(0)} | Down: ask=${downSnap.bestAsk?.toFixed(3) || 'null'} bid=${downSnap.bestBid?.toFixed(3) || 'null'} depth=${downSnap.askDepth.toFixed(0)} | ${fetchMs}ms`);
+  // Log to MongoDB
+  db.collection('btc5mOrderbook').insertOne({
+    slug: cycle.slug, timestamp: new Date(), secsBeforeClose: secsLeft,
+    btcPrice: currentBtcPrice, priceToBeat: cycle.priceToBeat, delta, absDelta,
+    up: { bestAsk: upSnap.bestAsk, bestBid: upSnap.bestBid, askDepth: upSnap.askDepth },
+    down: { bestAsk: downSnap.bestAsk, bestBid: downSnap.bestBid, askDepth: downSnap.askDepth },
+  }).catch(() => {});
 
-  // Log orderbook to MongoDB
-  await logOrderbook(cycle.slug, cycle.cycleClose, upSnap, downSnap);
+  console.log(`  [Poll] -${secsLeft}s | BTC=$${currentBtcPrice.toFixed(0)} strike=$${cycle.priceToBeat.toFixed(0)} delta=${delta.toFixed(0)}(${direction}) | Up=${upSnap.bestAsk?.toFixed(2) || '?'} Down=${downSnap.bestAsk?.toFixed(2) || '?'}`);
 
-  const upAsk = upSnap.bestAsk;
-  const downAsk = downSnap.bestAsk;
+  // Delta filter
+  if (absDelta < CONFIG.minDeltaPoints) {
+    console.log(`  [Delta] ${absDelta.toFixed(0)} < ${CONFIG.minDeltaPoints} pts — SKIP (too choppy)`);
+    return;
+  }
 
   for (const strategy of STRATEGIES) {
     if (!strategy.active) continue;
-
     const pos = positions.get(strategy.name);
     if (pos?.filled) continue;
-
     if (secsLeft > strategy.windowSecs) continue;
 
-    if (upAsk === null && downAsk === null) {
-      console.log(`  [${strategy.name}] ⚠️ No orderbook data (both null), skipping`);
-      continue;
-    }
-
-    // Check if either side is at least triggerSpread above entry price
-    // This ensures our limit order sits in the book as a MAKER order
     const triggerLevel = strategy.entryPrice + strategy.triggerSpread;
-    console.log(`  [${strategy.name}] Checking: Up=${upAsk?.toFixed(3) || 'null'} Down=${downAsk?.toFixed(3) || 'null'} | trigger>=${(triggerLevel*100).toFixed(0)}c | limit=${(strategy.entryPrice*100).toFixed(0)}c`);
+    const upAsk = upSnap.bestAsk;
+    const downAsk = downSnap.bestAsk;
+
     let targetSide: 'Up' | 'Down' | null = null;
     let targetTokenId = '';
-    let currentPrice = 0;
+    let marketPrice = 0;
 
     if (upAsk !== null && upAsk >= triggerLevel) {
-      targetSide = 'Up';
-      targetTokenId = cycle.upTokenId;
-      currentPrice = upAsk;
+      targetSide = 'Up'; targetTokenId = cycle.upTokenId; marketPrice = upAsk;
     } else if (downAsk !== null && downAsk >= triggerLevel) {
-      targetSide = 'Down';
-      targetTokenId = cycle.downTokenId;
-      currentPrice = downAsk;
+      targetSide = 'Down'; targetTokenId = cycle.downTokenId; marketPrice = downAsk;
     }
 
     if (!targetSide) {
-      if (secsLeft % 10 < 3) {
-        console.log(`  [${strategy.name}] Waiting... Up=${upAsk?.toFixed(2) || '?'}(depth:${upSnap.askDepth.toFixed(0)}) Down=${downAsk?.toFixed(2) || '?'}(depth:${downSnap.askDepth.toFixed(0)}) | trigger>=${(triggerLevel*100).toFixed(0)}c | -${secsLeft}s`);
-      }
+      if (secsLeft % 10 < 3) console.log(`  [${strategy.name}] No trigger (need >=${(triggerLevel*100).toFixed(0)}c)`);
       continue;
     }
 
-    // Entry condition met — place LIMIT order at current ask price (fills immediately as taker)
-    // We trigger when price >= entryPrice + spread, then buy at current ask
-    // Cap at 95c max to limit downside
-    const maxPrice = 0.95;
-    const fillPrice = Math.min(currentPrice, maxPrice);
-    console.log(`\n  ⚡ [${strategy.name}] ENTRY: ${targetSide} market@${(currentPrice*100).toFixed(0)}c → buy@${(fillPrice*100).toFixed(0)}c | -${secsLeft}s`);
+    console.log(`\n  ⚡ [${strategy.name}] ENTRY: ${targetSide} market@${(marketPrice*100).toFixed(0)}c → limit@${(strategy.entryPrice*100).toFixed(0)}c | delta=${delta.toFixed(0)} | -${secsLeft}s`);
     stats.cyclesTriggered++;
 
-    const result = await placeLimitBuy(targetTokenId, strategy.budgetUsdc, fillPrice);
+    const result = await placeLimitBuy(targetTokenId, strategy.budgetUsdc, strategy.entryPrice);
 
     if (result.filled) {
       stats.cyclesFilled++;
       stats.totalFills++;
       if (result.fillType === 'maker') stats.makerFills++;
-      else if (result.fillType === 'taker') stats.takerFills++;
+      else stats.takerFills++;
 
-      const posState: StrategyPosition = {
-        strategyName: strategy.name,
-        filled: true,
-        filledSide: targetSide,
-        filledPrice: result.avgPrice,
-        filledShares: result.filledShares,
-        filledUsdc: result.filledShares * result.avgPrice,
-        orderId: result.orderId,
-        fillAttempts: result.attempts,
-      };
-      positions.set(strategy.name, posState);
+      positions.set(strategy.name, {
+        strategyName: strategy.name, filled: true, filledSide: targetSide,
+        filledPrice: result.avgPrice, filledShares: result.filledShares,
+        filledUsdc: result.filledShares * result.avgPrice, orderId: result.orderId, fillAttempts: result.attempts,
+      });
 
-      console.log(`  ✅ [${strategy.name}] FILLED: ${result.filledShares.toFixed(2)} ${targetSide} shares @ ${result.avgPrice.toFixed(4)} [${result.fillType}] (${result.attempts} attempts)`);
+      console.log(`  ✅ [${strategy.name}] FILLED: ${result.filledShares.toFixed(1)} ${targetSide} @ ${(result.avgPrice*100).toFixed(1)}c [${result.fillType}]`);
 
-      // Log to MongoDB
-      const trade: TradeLog = {
-        slug: cycle.slug,
-        conditionId: cycle.conditionId,
-        strategy: strategy.name,
-        side: targetSide,
-        entryPrice: strategy.entryPrice,
-        triggerPrice: currentPrice,
-        filledPrice: result.avgPrice,
-        shares: result.filledShares,
-        costUsdc: result.filledShares * result.avgPrice,
-        fillType: result.fillType,
-        fillAttempts: result.attempts,
-        pnl: null,
-        won: null,
-        winner: null,
-        cycleOpen: cycle.cycleOpen,
-        cycleClose: cycle.cycleClose,
-        secsBeforeClose: secsLeft,
-        priceToBeat: cycle.priceToBeat,
-        filledAt: new Date(),
-        resolvedAt: null,
-      };
-
-      await db.collection('btc5mBotTrades').insertOne(trade);
+      await db.collection('btc5mBotTrades').insertOne({
+        slug: cycle.slug, conditionId: cycle.conditionId, strategy: strategy.name,
+        side: targetSide, entryPrice: strategy.entryPrice, triggerPrice: marketPrice,
+        filledPrice: result.avgPrice, shares: result.filledShares,
+        costUsdc: result.filledShares * result.avgPrice, fillType: result.fillType, fillAttempts: result.attempts,
+        btcPriceAtEntry: currentBtcPrice, delta, pnl: null, won: null, winner: null,
+        cycleOpen: cycle.cycleOpen, cycleClose: cycle.cycleClose, secsBeforeClose: secsLeft,
+        priceToBeat: cycle.priceToBeat, filledAt: new Date(), resolvedAt: null,
+      });
     } else {
       console.log(`  ❌ [${strategy.name}] No fill — retrying next poll`);
     }
   }
 }
 
-// ── Resolution Tracking ───────────────────────────────────────
+// ── Resolution ────────────────────────────────────────────────
 async function resolvePositions(cycle: ActiveCycle): Promise<void> {
-  console.log(`\n  [Resolve] Waiting 10s for ${cycle.slug} to resolve...`);
-  await sleep(10000);
+  const filledPos = [...positions.values()].filter(p => p.filled);
+  if (filledPos.length === 0) return;
 
-  // Fetch resolution from Gamma API
-  const data = await fetchCycleData(cycle.slug);
-  if (!data) {
-    console.log('[Resolve] Could not fetch resolution data');
-    return;
+  console.log(`\n  [Resolve] Waiting for resolution of ${cycle.slug}...`);
+  await sleep(12000);
+
+  // Determine winner: compare BTC close price vs priceToBeat
+  // The WS gives us current BTC price which IS the close price right after resolution
+  let winner: 'Up' | 'Down' | 'Unknown' = 'Unknown';
+
+  // Use current BTC price as close price (we're checking right after resolution)
+  if (currentBtcPrice > 0 && cycle.priceToBeat > 0) {
+    winner = currentBtcPrice > cycle.priceToBeat ? 'Up' : 'Down';
+    console.log(`  [Resolve] BTC=$${currentBtcPrice.toFixed(2)} vs strike=$${cycle.priceToBeat.toFixed(2)} → ${winner}`);
   }
 
-  // Determine winner from Gamma API
-  let winner: 'Up' | 'Down' | 'Unknown' = 'Unknown';
-  try {
-    const res = await fetch(`${CONFIG.gammaApiBase}/events?slug=${cycle.slug}`);
-    if (res.ok) {
-      const events = await res.json() as any[];
-      const meta = events?.[0]?.eventMetadata || {};
-      const market = events?.[0]?.markets?.[0] || {};
-      if (meta.finalPrice && meta.priceToBeat) {
-        winner = meta.finalPrice > meta.priceToBeat ? 'Up' : 'Down';
-      } else {
-        const op = market.outcomePrices;
-        if (op === '["1", "0"]' || op === '[1, 0]') winner = 'Up';
-        else if (op === '["0", "1"]' || op === '[0, 1]') winner = 'Down';
-      }
-    }
-  } catch { /* keep Unknown */ }
-
+  // Fallback: check Gamma API outcomePrices
   if (winner === 'Unknown') {
-    // Retry after more time
-    await sleep(15000);
     try {
       const res = await fetch(`${CONFIG.gammaApiBase}/events?slug=${cycle.slug}`);
       if (res.ok) {
         const events = await res.json() as any[];
-        const meta = events?.[0]?.eventMetadata || {};
-        if (meta.finalPrice && meta.priceToBeat) {
-          winner = meta.finalPrice > meta.priceToBeat ? 'Up' : 'Down';
+        const market = events?.[0]?.markets?.[0] || {};
+        const op = market.outcomePrices;
+        if (op?.includes('"1"') && op?.includes('"0"')) {
+          winner = op.indexOf('"1"') < op.indexOf('"0"') ? 'Up' : 'Down';
         }
       }
-    } catch { /* keep Unknown */ }
+    } catch {}
   }
 
-  console.log(`\n[Resolve] ${cycle.slug} → Winner: ${winner}`);
+  if (winner === 'Unknown') {
+    await sleep(15000);
+    // Try Gamma again
+    try {
+      const res = await fetch(`${CONFIG.gammaApiBase}/events?slug=${cycle.slug}`);
+      if (res.ok) {
+        const events = await res.json() as any[];
+        const market = events?.[0]?.markets?.[0] || {};
+        const op = market.outcomePrices;
+        if (op?.includes('"1"') && op?.includes('"0"')) {
+          winner = op.indexOf('"1"') < op.indexOf('"0"') ? 'Up' : 'Down';
+        }
+      }
+    } catch {}
+  }
 
-  // Update each position
-  for (const [stratName, pos] of positions) {
+  console.log(`  [Resolve] Winner: ${winner}`);
+
+  for (const [name, pos] of positions) {
     if (!pos.filled) continue;
-
     const won = pos.filledSide === winner;
     const pnl = won ? pos.filledShares - pos.filledUsdc : -pos.filledUsdc;
-
-    // Update session stats
     stats.totalPnl += pnl;
-    if (won) stats.wins++;
-    else stats.losses++;
+    if (won) stats.wins++; else stats.losses++;
 
-    console.log(`  [${stratName}] ${pos.filledSide} @ ${pos.filledPrice.toFixed(4)} | ${won ? '✅ WIN' : '❌ LOSS'} | PnL: $${pnl.toFixed(2)}`);
+    console.log(`  [${name}] ${pos.filledSide} @${(pos.filledPrice*100).toFixed(0)}c | ${won ? '✅ WIN' : '❌ LOSS'} | PnL: $${pnl.toFixed(2)}`);
 
-    // Update MongoDB
     await db.collection('btc5mBotTrades').updateOne(
-      { slug: cycle.slug, strategy: stratName },
-      {
-        $set: {
-          pnl,
-          won,
-          winner,
-          resolvedAt: new Date(),
-        },
-      }
+      { slug: cycle.slug, strategy: name },
+      { $set: { pnl, won, winner, btcClosePrice: currentBtcPrice, resolvedAt: new Date() } }
     );
   }
 
-  // Print session stats
-  console.log(`\n  [Stats] Cycles: ${stats.cyclesSeen} seen | ${stats.cyclesTriggered} triggered | ${stats.cyclesFilled} filled`);
-  console.log(`  [Stats] Fills: ${stats.totalFills} total | ${stats.makerFills} maker (${stats.totalFills > 0 ? (stats.makerFills / stats.totalFills * 100).toFixed(0) : 0}%) | ${stats.takerFills} taker`);
-  console.log(`  [Stats] Session PnL: $${stats.totalPnl.toFixed(2)} | ${stats.wins}W / ${stats.losses}L`);
+  console.log(`\n  [Stats] Cycles: ${stats.cyclesSeen} | Triggered: ${stats.cyclesTriggered} | Filled: ${stats.cyclesFilled} | Skipped(delta): ${stats.cyclesSkippedDelta}`);
+  console.log(`  [Stats] Fills: ${stats.totalFills} | Maker: ${stats.makerFills} (${stats.totalFills > 0 ? (stats.makerFills/stats.totalFills*100).toFixed(0) : 0}%) | Taker: ${stats.takerFills}`);
+  console.log(`  [Stats] PnL: $${stats.totalPnl.toFixed(2)} | ${stats.wins}W / ${stats.losses}L`);
 }
 
 // ── Main Loop ─────────────────────────────────────────────────
 async function main() {
   console.log('\n╔════════════════════════════════════════════════════════╗');
-  console.log('║   BTC 5-Minute Market Trading Bot                     ║');
+  console.log('║   BTC 5m Trading Bot v2 (WS Price + Delta Filter)     ║');
   console.log('╚════════════════════════════════════════════════════════╝');
   console.log(`  Wallet:     ${CONFIG.botWallet}`);
   console.log(`  Strategies: ${STRATEGIES.filter(s => s.active).map(s => s.name).join(', ')}`);
-  console.log(`  Budget:     $${STRATEGIES.reduce((s, st) => s + st.budgetUsdc, 0)} total ($${STRATEGIES.map(s => s.budgetUsdc).join('/$')} per strategy)`);
-  console.log(`  Poll:       ${CONFIG.pollIntervalMs}ms`);
+  console.log(`  Budget:     $${STRATEGIES.filter(s=>s.active).reduce((s, st) => s + st.budgetUsdc, 0)} total`);
+  console.log(`  Min delta:  ${CONFIG.minDeltaPoints} pts`);
+  console.log(`  GTC timeout: ${CONFIG.gctFillTimeoutMs / 1000}s`);
 
-  // Init CLOB client
-  console.log('\n[Init] Setting up CLOB client...');
+  // Init CLOB
+  console.log('\n[Init] CLOB client...');
   clobClient = await initClobClient();
-  console.log('[Init] ✅ CLOB client ready');
+  console.log('[Init] ✅ CLOB ready');
 
   // Init MongoDB
-  console.log('[Init] Connecting to MongoDB...');
+  console.log('[Init] MongoDB...');
   const mongoClient = new MongoClient(CONFIG.mongoUri);
   await mongoClient.connect();
   const dbName = (() => { try { return new URL(CONFIG.mongoUri).pathname.replace('/', '') || 'yieldr'; } catch { return 'yieldr'; } })();
   db = mongoClient.db(dbName);
   await db.collection('btc5mBotTrades').createIndex({ slug: 1, strategy: 1 });
-  await db.collection('btc5mBotTrades').createIndex({ filledAt: -1 });
   await db.collection('btc5mOrderbook').createIndex({ slug: 1, timestamp: 1 });
-  await db.collection('btc5mOrderbook').createIndex({ timestamp: -1 });
-  console.log(`[Init] ✅ MongoDB ready (${dbName})`);
+  await db.collection('btc5mPriceStream').createIndex({ timestamp: -1 });
+  console.log(`[Init] ✅ MongoDB (${dbName})`);
 
-  // Print cumulative PnL from past trades
+  // Connect WS price feed
+  connectBtcPriceWs();
+
+  // Wait for first BTC price
+  console.log('[Init] Waiting for BTC price from WS...');
+  for (let i = 0; i < 30; i++) {
+    if (currentBtcPrice > 0) break;
+    await sleep(1000);
+  }
+  if (currentBtcPrice === 0) {
+    console.error('[Init] ❌ No BTC price after 30s — check WS connection');
+    process.exit(1);
+  }
+  console.log(`[Init] ✅ BTC price: $${currentBtcPrice.toFixed(2)}`);
+
+  // History
   const pastTrades = await db.collection('btc5mBotTrades').find({ pnl: { $ne: null } }).toArray();
   const totalPnl = pastTrades.reduce((s: number, t: any) => s + (t.pnl || 0), 0);
-  const wins = pastTrades.filter((t: any) => t.won).length;
-  console.log(`\n[History] ${pastTrades.length} past trades | ${wins} wins | PnL: $${totalPnl.toFixed(2)}`);
+  console.log(`\n[History] ${pastTrades.length} trades | PnL: $${totalPnl.toFixed(2)}`);
 
-  console.log('\n[Bot] Starting main loop...\n');
+  console.log('\n[Bot] Starting...\n');
 
   let lastCycleSlug = '';
 
   while (true) {
     try {
-      const now = Math.floor(Date.now() / 1000);
       const currentSlug = getCurrentSlug();
       const cycleOpen = parseInt(currentSlug.match(/btc-updown-5m-(\d+)/)?.[1] || '0');
       const cycleClose = cycleOpen + 300;
+      const now = Math.floor(Date.now() / 1000);
       const secsLeft = cycleClose - now;
 
-      // New cycle detected
       if (currentSlug !== lastCycleSlug) {
         stats.cyclesSeen++;
-        // Resolve previous cycle
-        if (currentCycle && positions.size > 0) {
-          const filledPositions = [...positions.values()].filter(p => p.filled);
-          if (filledPositions.length > 0) {
-            await resolvePositions(currentCycle);
-          }
-        }
 
-        // Reset for new cycle
+        // Resolve previous
+        if (currentCycle) await resolvePositions(currentCycle);
+
+        // Reset positions
         positions = new Map();
         for (const s of STRATEGIES) {
-          positions.set(s.name, {
-            strategyName: s.name, filled: false, filledSide: null,
-            filledPrice: 0, filledShares: 0, filledUsdc: 0, orderId: '', fillAttempts: 0,
-          });
+          positions.set(s.name, { strategyName: s.name, filled: false, filledSide: null, filledPrice: 0, filledShares: 0, filledUsdc: 0, orderId: '', fillAttempts: 0 });
         }
 
-        console.log(`\n═══ NEW CYCLE: ${currentSlug} | ${secsLeft}s remaining ═══`);
+        // Capture priceToBeat = BTC price RIGHT NOW (at cycle open)
+        const priceToBeat = currentBtcPrice;
+
+        console.log(`\n═══ CYCLE ${currentSlug.slice(-10)} | -${secsLeft}s | BTC=$${priceToBeat.toFixed(2)} (strike) ═══`);
 
         // Fetch market data
         currentCycle = await fetchCycleData(currentSlug);
         if (currentCycle) {
-          console.log(`  Market: ${currentCycle.question}`);
-          console.log(`  Strike: $${currentCycle.priceToBeat.toFixed(2)}`);
-          console.log(`  TokenIds: Up=${currentCycle.upTokenId.slice(0, 16)}... Down=${currentCycle.downTokenId.slice(0, 16)}...`);
+          currentCycle.priceToBeat = priceToBeat; // Override with WS price
+          console.log(`  ${currentCycle.question} | tokens: Up=${currentCycle.upTokenId.slice(0, 12)}... Down=${currentCycle.downTokenId.slice(0, 12)}...`);
 
-          // Log cycle to MongoDB
-          await db.collection('btc5mBotCycles').updateOne(
+          // Log cycle
+          db.collection('btc5mBotCycles').updateOne(
             { slug: currentSlug },
-            { $set: { slug: currentSlug, cycleOpen, cycleClose, priceToBeat: currentCycle.priceToBeat, question: currentCycle.question, seenAt: new Date(), triggered: false, filled: false } },
+            { $set: { slug: currentSlug, cycleOpen, cycleClose, priceToBeat, btcPriceAtOpen: priceToBeat, seenAt: new Date() } },
             { upsert: true }
-          );
-        } else {
-          console.log('  ⚠️ Could not fetch market data — waiting for next cycle');
+          ).catch(() => {});
         }
 
         lastCycleSlug = currentSlug;
       }
 
-      // Evaluate strategies if we have an active cycle
       if (currentCycle && secsLeft > 0) {
         await evaluateStrategies(currentCycle);
       }
 
-      // Wait before next poll
       await sleep(CONFIG.pollIntervalMs);
-
     } catch (err: any) {
       console.error(`[Error] ${err.message}`);
       await sleep(5000);
@@ -752,8 +593,4 @@ async function main() {
   }
 }
 
-// ── Entry Point ───────────────────────────────────────────────
-main().catch(err => {
-  console.error('Fatal error:', err.message);
-  process.exit(1);
-});
+main().catch(err => { console.error('Fatal:', err.message); process.exit(1); });
