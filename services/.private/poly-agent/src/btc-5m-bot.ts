@@ -288,6 +288,7 @@ async function placeLimitBuy(
   budgetUsdc: number,
   limitPrice: number
 ): Promise<{ filled: boolean; filledShares: number; avgPrice: number; orderId: string; fillType: 'maker' | 'taker' | 'unknown'; attempts: number }> {
+  console.log(`  [Order] Placing LIMIT BUY: token=${tokenId.slice(0, 16)}... budget=$${budgetUsdc} limit=${limitPrice}`);
   let totalFilled = 0;
   let totalCost = 0;
   let attempts = 0;
@@ -301,6 +302,8 @@ async function placeLimitBuy(
     try {
       // Use createOrder with BUY side at limit price (maker order)
       const targetShares = remainingBudget / limitPrice;
+      console.log(`  [Order] Attempt ${attempts}: creating order for ${targetShares.toFixed(2)} shares @ ${limitPrice} ($${remainingBudget.toFixed(2)} budget)`);
+
       const order = await clobClient.createOrder({
         tokenID: tokenId,
         price: limitPrice,
@@ -309,15 +312,18 @@ async function placeLimitBuy(
         feeRateBps: 0,
         nonce: 0,
       });
+      console.log(`  [Order] Order created, signing and posting as GTC...`);
 
       // Post as GTC — sits in book as maker order
       // We poll for fills and cancel remainder after timeout
       const response = await clobClient.postOrder(order, OrderType.GTC);
+      console.log(`  [Order] Posted → orderID: ${response?.orderID?.slice(0, 20) || 'null'}... status: ${response?.status || '?'}`);
 
       if (response && response.orderID) {
         lastOrderId = response.orderID;
 
         // Poll for fill status — GTC order sits in book for up to 2s
+        console.log(`  [Fill] Polling order ${response.orderID.slice(0, 16)}...`);
         let orderFilled = false;
         for (let i = 0; i < 10; i++) {
           await sleep(200);
@@ -335,11 +341,11 @@ async function placeLimitBuy(
               const orderStatus = await statusRes.json() as any;
               const filled = parseFloat(orderStatus.size_matched) || 0;
               const price = parseFloat(orderStatus.price) || limitPrice;
+              const status = orderStatus.status || '?';
 
-              // Detect maker/taker from order response
-              const orderFillType = orderStatus.maker_address ? 'maker' : 'unknown';
-              // If our limit was below market ask, we're a maker
-              // (price sits in book waiting to be taken)
+              console.log(`  [Fill] Poll ${i + 1}/10: status=${status} filled=${filled.toFixed(2)} price=${price.toFixed(4)}`);
+
+              // Detect maker/taker
               if (filled > 0 && price <= limitPrice) fillType = 'maker';
               else if (filled > 0) fillType = 'taker';
 
@@ -394,17 +400,36 @@ async function evaluateStrategies(cycle: ActiveCycle): Promise<void> {
   const now = Math.floor(Date.now() / 1000);
   const secsLeft = cycle.cycleClose - now;
 
-  // Only fetch orderbook if at least one strategy is in its window
+  // Log every poll regardless of window
   const anyInWindow = STRATEGIES.some(s => s.active && secsLeft <= s.windowSecs);
-  if (!anyInWindow) return;
+
+  if (secsLeft <= 0) {
+    console.log(`  [Poll] Cycle expired (secsLeft=${secsLeft}), skipping`);
+    return;
+  }
+
+  if (!anyInWindow) {
+    // Log waiting status every 10s
+    if (secsLeft % 10 < 3) {
+      const nextWindow = Math.min(...STRATEGIES.filter(s => s.active).map(s => s.windowSecs));
+      console.log(`  [Poll] -${secsLeft}s | Waiting for window (starts at -${nextWindow}s)`);
+    }
+    return;
+  }
+
+  console.log(`  [Poll] -${secsLeft}s | IN WINDOW — fetching orderbook...`);
 
   // Fetch orderbook snapshots for both sides
+  const fetchStart = Date.now();
   const [upSnap, downSnap] = await Promise.all([
     getBookSnapshot(cycle.upTokenId, 'Up'),
     getBookSnapshot(cycle.downTokenId, 'Down'),
   ]);
+  const fetchMs = Date.now() - fetchStart;
 
-  // Log orderbook to MongoDB (every poll during active window)
+  console.log(`  [Book] Up: ask=${upSnap.bestAsk?.toFixed(3) || 'null'} bid=${upSnap.bestBid?.toFixed(3) || 'null'} depth=${upSnap.askDepth.toFixed(0)} | Down: ask=${downSnap.bestAsk?.toFixed(3) || 'null'} bid=${downSnap.bestBid?.toFixed(3) || 'null'} depth=${downSnap.askDepth.toFixed(0)} | ${fetchMs}ms`);
+
+  // Log orderbook to MongoDB
   await logOrderbook(cycle.slug, cycle.cycleClose, upSnap, downSnap);
 
   const upAsk = upSnap.bestAsk;
@@ -419,13 +444,14 @@ async function evaluateStrategies(cycle: ActiveCycle): Promise<void> {
     if (secsLeft > strategy.windowSecs) continue;
 
     if (upAsk === null && downAsk === null) {
-      console.log(`  [${strategy.name}] No orderbook data, skipping`);
+      console.log(`  [${strategy.name}] ⚠️ No orderbook data (both null), skipping`);
       continue;
     }
 
     // Check if either side is at least triggerSpread above entry price
     // This ensures our limit order sits in the book as a MAKER order
     const triggerLevel = strategy.entryPrice + strategy.triggerSpread;
+    console.log(`  [${strategy.name}] Checking: Up=${upAsk?.toFixed(3) || 'null'} Down=${downAsk?.toFixed(3) || 'null'} | trigger>=${(triggerLevel*100).toFixed(0)}c | limit=${(strategy.entryPrice*100).toFixed(0)}c`);
     let targetSide: 'Up' | 'Down' | null = null;
     let targetTokenId = '';
     let currentPrice = 0;
@@ -506,7 +532,7 @@ async function evaluateStrategies(cycle: ActiveCycle): Promise<void> {
 
 // ── Resolution Tracking ───────────────────────────────────────
 async function resolvePositions(cycle: ActiveCycle): Promise<void> {
-  // Wait a bit for resolution
+  console.log(`\n  [Resolve] Waiting 10s for ${cycle.slug} to resolve...`);
   await sleep(10000);
 
   // Fetch resolution from Gamma API
