@@ -74,8 +74,8 @@ interface StrategyConfig {
 
 const STRATEGIES: StrategyConfig[] = [
   { name: '85c_90s', entryPrice: 0.85, triggerSpread: 0.01, windowSecs: 90, budgetUsdc: 3, active: true },
-  { name: '90c_90s', entryPrice: 0.90, triggerSpread: 0.01, windowSecs: 90, budgetUsdc: 3, active: true },
-  { name: '95c_60s', entryPrice: 0.95, triggerSpread: 0.01, windowSecs: 60, budgetUsdc: 3, active: true },
+  { name: '90c_90s', entryPrice: 0.90, triggerSpread: 0.01, windowSecs: 90, budgetUsdc: 3, active: false },
+  { name: '95c_60s', entryPrice: 0.95, triggerSpread: 0.01, windowSecs: 60, budgetUsdc: 3, active: false },
 ];
 
 // ── Types ─────────────────────────────────────────────────────
