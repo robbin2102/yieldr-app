@@ -186,7 +186,9 @@ async function fetchCycleData(slug: string): Promise<ActiveCycle | null> {
 
     const event = events[0];
     const market = event.markets[0];
-    const meta = event.eventMetadata || {};
+    const meta = event.eventMetadata || event.metadata || {};
+    // priceToBeat can be nested in different places
+    const ptb = meta.priceToBeat || market.priceToBeat || event.priceToBeat || 0;
 
     let tokenIds: string[] = [];
     try { tokenIds = JSON.parse(market.clobTokenIds); }
@@ -201,7 +203,7 @@ async function fetchCycleData(slug: string): Promise<ActiveCycle | null> {
       downTokenId: tokenIds[1] || '',
       cycleOpen,
       cycleClose: cycleOpen + 300,
-      priceToBeat: meta.priceToBeat || 0,
+      priceToBeat: ptb,
       question: market.question || slug,
     };
   } catch (err: any) {
@@ -309,7 +311,7 @@ async function placeLimitBuy(
         price: limitPrice,
         size: targetShares,
         side: Side.BUY,
-        feeRateBps: 0,
+        feeRateBps: 1000, // BTC 5m markets require 1000 bps maker fee
         nonce: 0,
       });
       console.log(`  [Order] Order created, signing and posting as GTC...`);
