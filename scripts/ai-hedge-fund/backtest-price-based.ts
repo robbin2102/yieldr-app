@@ -30,7 +30,7 @@ const OPT = (name: string, fallback: string): string => {
 
 const DAYS = parseInt(OPT('days', '1'));
 const BUDGET = parseFloat(OPT('budget', '100'));
-const CONCURRENCY = parseInt(OPT('concurrency', '10'));
+const CONCURRENCY = parseInt(OPT('concurrency', '20'));
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
@@ -144,10 +144,11 @@ async function fetchAllCycles(slugs: string[], concurrency: number): Promise<Cyc
       const market = await fetchMarketWithResolution(slugs[i]);
       if (!market || !market.upTokenId || market.winner === 'Unknown') { failed++; continue; }
 
-      await sleep(100);
-      const upPrices = await fetchPriceHistory(market.upTokenId, market.cycleOpen, market.cycleClose);
-      await sleep(100);
-      const downPrices = await fetchPriceHistory(market.downTokenId, market.cycleOpen, market.cycleClose);
+      // Fetch both price histories in parallel
+      const [upPrices, downPrices] = await Promise.all([
+        fetchPriceHistory(market.upTokenId, market.cycleOpen, market.cycleClose),
+        fetchPriceHistory(market.downTokenId, market.cycleOpen, market.cycleClose),
+      ]);
 
       if (upPrices.length === 0 && downPrices.length === 0) { noData++; continue; }
 
