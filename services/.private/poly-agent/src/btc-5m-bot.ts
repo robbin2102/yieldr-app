@@ -192,23 +192,75 @@ async function fetchCycleData(slug: string): Promise<ActiveCycle | null> {
 }
 
 // ── Orderbook ─────────────────────────────────────────────────
-async function getBookPrice(tokenId: string, side: 'BUY'): Promise<number | null> {
+interface BookSnapshot {
+  tokenId: string;
+  side: string;        // 'Up' or 'Down'
+  bestAsk: number | null;
+  bestBid: number | null;
+  askDepth: number;     // total size at best ask
+  totalAskLiquidity: number; // total USDC across all asks
+  spread: number | null;
+  timestamp: Date;
+}
+
+async function getBookSnapshot(tokenId: string, label: string): Promise<BookSnapshot> {
+  const snapshot: BookSnapshot = {
+    tokenId, side: label, bestAsk: null, bestBid: null,
+    askDepth: 0, totalAskLiquidity: 0, spread: null, timestamp: new Date(),
+  };
+
   try {
     const url = `${CONFIG.clobApiBase}/book?token_id=${tokenId}`;
     const res = await fetch(url);
-    if (!res.ok) return null;
+    if (!res.ok) return snapshot;
     const data = await res.json() as any;
 
-    // For BUY: we look at asks (what sellers are offering)
-    // Best ask = lowest price someone will sell at
     const asks = (data.asks || [])
       .map((a: any) => ({ price: parseFloat(a.price), size: parseFloat(a.size) }))
       .sort((a: any, b: any) => a.price - b.price);
 
-    return asks.length > 0 ? asks[0].price : null;
+    const bids = (data.bids || [])
+      .map((b: any) => ({ price: parseFloat(b.price), size: parseFloat(b.size) }))
+      .sort((a: any, b: any) => b.price - a.price);
+
+    snapshot.bestAsk = asks.length > 0 ? asks[0].price : null;
+    snapshot.bestBid = bids.length > 0 ? bids[0].price : null;
+    snapshot.askDepth = asks.length > 0 ? asks[0].size : 0;
+    snapshot.totalAskLiquidity = asks.reduce((s: number, a: any) => s + a.price * a.size, 0);
+    snapshot.spread = (snapshot.bestAsk !== null && snapshot.bestBid !== null)
+      ? snapshot.bestAsk - snapshot.bestBid : null;
+
+    return snapshot;
   } catch {
-    return null;
+    return snapshot;
   }
+}
+
+async function logOrderbook(slug: string, cycleClose: number, upSnap: BookSnapshot, downSnap: BookSnapshot): Promise<void> {
+  const now = Math.floor(Date.now() / 1000);
+  const secsLeft = cycleClose - now;
+
+  try {
+    await db.collection('btc5mOrderbook').insertOne({
+      slug,
+      timestamp: new Date(),
+      secsBeforeClose: secsLeft,
+      up: {
+        bestAsk: upSnap.bestAsk,
+        bestBid: upSnap.bestBid,
+        askDepth: upSnap.askDepth,
+        totalAskLiquidity: upSnap.totalAskLiquidity,
+        spread: upSnap.spread,
+      },
+      down: {
+        bestAsk: downSnap.bestAsk,
+        bestBid: downSnap.bestBid,
+        askDepth: downSnap.askDepth,
+        totalAskLiquidity: downSnap.totalAskLiquidity,
+        spread: downSnap.spread,
+      },
+    });
+  } catch { /* non-critical, don't crash */ }
 }
 
 // ── Order Execution ───────────────────────────────────────────
@@ -294,20 +346,29 @@ async function evaluateStrategies(cycle: ActiveCycle): Promise<void> {
   const now = Math.floor(Date.now() / 1000);
   const secsLeft = cycle.cycleClose - now;
 
+  // Only fetch orderbook if at least one strategy is in its window
+  const anyInWindow = STRATEGIES.some(s => s.active && secsLeft <= s.windowSecs);
+  if (!anyInWindow) return;
+
+  // Fetch orderbook snapshots for both sides
+  const [upSnap, downSnap] = await Promise.all([
+    getBookSnapshot(cycle.upTokenId, 'Up'),
+    getBookSnapshot(cycle.downTokenId, 'Down'),
+  ]);
+
+  // Log orderbook to MongoDB (every poll during active window)
+  await logOrderbook(cycle.slug, cycle.cycleClose, upSnap, downSnap);
+
+  const upAsk = upSnap.bestAsk;
+  const downAsk = downSnap.bestAsk;
+
   for (const strategy of STRATEGIES) {
     if (!strategy.active) continue;
 
     const pos = positions.get(strategy.name);
-    if (pos?.filled) continue; // Already positioned this cycle
+    if (pos?.filled) continue;
 
-    // Check if we're within the entry window
     if (secsLeft > strategy.windowSecs) continue;
-
-    // Fetch orderbook prices for both sides
-    const [upAsk, downAsk] = await Promise.all([
-      getBookPrice(cycle.upTokenId, 'BUY'),
-      getBookPrice(cycle.downTokenId, 'BUY'),
-    ]);
 
     if (upAsk === null && downAsk === null) {
       console.log(`  [${strategy.name}] No orderbook data, skipping`);
@@ -330,9 +391,8 @@ async function evaluateStrategies(cycle: ActiveCycle): Promise<void> {
     }
 
     if (!targetSide) {
-      // Neither side at entry price yet
-      if (secsLeft <= strategy.windowSecs && secsLeft % 10 < 3) {
-        console.log(`  [${strategy.name}] Waiting... Up=${upAsk?.toFixed(2) || '?'} Down=${downAsk?.toFixed(2) || '?'} (-${secsLeft}s)`);
+      if (secsLeft % 10 < 3) {
+        console.log(`  [${strategy.name}] Waiting... Up=${upAsk?.toFixed(2) || '?'}(depth:${upSnap.askDepth.toFixed(0)}) Down=${downAsk?.toFixed(2) || '?'}(depth:${downSnap.askDepth.toFixed(0)}) | -${secsLeft}s`);
       }
       continue;
     }
@@ -478,6 +538,8 @@ async function main() {
   db = mongoClient.db(dbName);
   await db.collection('btc5mBotTrades').createIndex({ slug: 1, strategy: 1 });
   await db.collection('btc5mBotTrades').createIndex({ filledAt: -1 });
+  await db.collection('btc5mOrderbook').createIndex({ slug: 1, timestamp: 1 });
+  await db.collection('btc5mOrderbook').createIndex({ timestamp: -1 });
   console.log(`[Init] ✅ MongoDB ready (${dbName})`);
 
   // Print cumulative PnL from past trades
