@@ -65,16 +65,17 @@ for (const key of required) {
 // ── Strategy Definitions ──────────────────────────────────────
 interface StrategyConfig {
   name: string;
-  entryPrice: number;     // e.g., 0.85
+  entryPrice: number;     // limit order price (e.g., 0.85)
+  triggerSpread: number;  // place order when market is this much ABOVE entry (e.g., 0.01 = 1c)
   windowSecs: number;     // seconds before resolution to start
   budgetUsdc: number;     // USDC per trade
   active: boolean;
 }
 
 const STRATEGIES: StrategyConfig[] = [
-  { name: '85c_90s', entryPrice: 0.85, windowSecs: 90, budgetUsdc: 30, active: true },
-  { name: '90c_90s', entryPrice: 0.90, windowSecs: 90, budgetUsdc: 30, active: true },
-  { name: '95c_60s', entryPrice: 0.95, windowSecs: 60, budgetUsdc: 30, active: true },
+  { name: '85c_90s', entryPrice: 0.85, triggerSpread: 0.01, windowSecs: 90, budgetUsdc: 3, active: true },
+  { name: '90c_90s', entryPrice: 0.90, triggerSpread: 0.01, windowSecs: 90, budgetUsdc: 3, active: true },
+  { name: '95c_60s', entryPrice: 0.95, triggerSpread: 0.01, windowSecs: 60, budgetUsdc: 3, active: true },
 ];
 
 // ── Types ─────────────────────────────────────────────────────
@@ -105,15 +106,19 @@ interface TradeLog {
   conditionId: string;
   strategy: string;
   side: string;
-  entryPrice: number;
+  entryPrice: number;       // limit order price
+  triggerPrice: number;     // market price when order was placed
   filledPrice: number;
   shares: number;
   costUsdc: number;
-  pnl: number | null;        // null until resolved
+  fillType: 'maker' | 'taker' | 'unknown';
+  fillAttempts: number;
+  pnl: number | null;
   won: boolean | null;
   winner: string | null;
   cycleOpen: number;
   cycleClose: number;
+  secsBeforeClose: number;
   priceToBeat: number;
   filledAt: Date;
   resolvedAt: Date | null;
@@ -123,8 +128,22 @@ interface TradeLog {
 let clobClient: ClobClient;
 let db: Db;
 let currentCycle: ActiveCycle | null = null;
-let positions: Map<string, StrategyPosition> = new Map(); // strategyName → position
+let positions: Map<string, StrategyPosition> = new Map();
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+
+// Cycle stats (per session)
+const stats = {
+  cyclesSeen: 0,
+  cyclesWithWindow: 0,     // cycles where at least 1 strategy window was active
+  cyclesTriggered: 0,      // cycles where at least 1 strategy placed an order
+  cyclesFilled: 0,         // cycles where at least 1 order filled
+  totalFills: 0,
+  makerFills: 0,
+  takerFills: 0,
+  totalPnl: 0,
+  wins: 0,
+  losses: 0,
+};
 
 // ── CLOB Client Setup ─────────────────────────────────────────
 async function initClobClient(): Promise<ClobClient> {
@@ -264,35 +283,42 @@ async function logOrderbook(slug: string, cycleClose: number, upSnap: BookSnapsh
 }
 
 // ── Order Execution ───────────────────────────────────────────
-async function placeFAKBuy(
+async function placeLimitBuy(
   tokenId: string,
   budgetUsdc: number,
   limitPrice: number
-): Promise<{ filled: boolean; filledShares: number; avgPrice: number; orderId: string }> {
+): Promise<{ filled: boolean; filledShares: number; avgPrice: number; orderId: string; fillType: 'maker' | 'taker' | 'unknown'; attempts: number }> {
   let totalFilled = 0;
   let totalCost = 0;
   let attempts = 0;
   let lastOrderId = '';
   let remainingBudget = budgetUsdc;
+  let fillType: 'maker' | 'taker' | 'unknown' = 'unknown';
 
   while (remainingBudget > 0.5 && attempts < CONFIG.maxOrderRetries) {
     attempts++;
 
     try {
-      const order = await clobClient.createMarketBuyOrder({
+      // Use createOrder with BUY side at limit price (maker order)
+      const targetShares = remainingBudget / limitPrice;
+      const order = await clobClient.createOrder({
         tokenID: tokenId,
-        amount: Math.max(remainingBudget, 1),
         price: limitPrice,
+        size: targetShares,
+        side: Side.BUY,
         feeRateBps: 0,
         nonce: 0,
       });
 
-      const response = await clobClient.postOrder(order, OrderType.FAK);
+      // Post as GTC — sits in book as maker order
+      // We poll for fills and cancel remainder after timeout
+      const response = await clobClient.postOrder(order, OrderType.GTC);
 
       if (response && response.orderID) {
         lastOrderId = response.orderID;
 
-        // Poll for fill status
+        // Poll for fill status — GTC order sits in book for up to 2s
+        let orderFilled = false;
         for (let i = 0; i < 10; i++) {
           await sleep(200);
           try {
@@ -310,18 +336,38 @@ async function placeFAKBuy(
               const filled = parseFloat(orderStatus.size_matched) || 0;
               const price = parseFloat(orderStatus.price) || limitPrice;
 
+              // Detect maker/taker from order response
+              const orderFillType = orderStatus.maker_address ? 'maker' : 'unknown';
+              // If our limit was below market ask, we're a maker
+              // (price sits in book waiting to be taken)
+              if (filled > 0 && price <= limitPrice) fillType = 'maker';
+              else if (filled > 0) fillType = 'taker';
+
               if (filled > 0) {
                 const cost = filled * price;
                 totalFilled += filled;
                 totalCost += cost;
                 remainingBudget -= cost;
-                console.log(`  [Order] Filled ${filled.toFixed(2)} shares @ ${price.toFixed(4)} (attempt ${attempts})`);
+                orderFilled = true;
+                console.log(`  [Order] Filled ${filled.toFixed(2)} shares @ ${price.toFixed(4)} [${fillType}] (attempt ${attempts})`);
                 break;
               }
 
+              if (orderStatus.status === 'MATCHED' || orderStatus.status === 'FILLED') {
+                orderFilled = true;
+                break;
+              }
               if (orderStatus.status === 'CANCELED' || orderStatus.status === 'EXPIRED') break;
             }
           } catch { /* continue polling */ }
+        }
+
+        // Cancel unfilled GTC order to avoid stale orders
+        if (!orderFilled) {
+          try {
+            await clobClient.cancelOrder({ orderID: response.orderID });
+            console.log(`  [Order] Cancelled unfilled GTC order ${response.orderID.slice(0, 12)}...`);
+          } catch { /* ok if already cancelled */ }
         }
       }
     } catch (err: any) {
@@ -338,6 +384,8 @@ async function placeFAKBuy(
     filledShares: totalFilled,
     avgPrice: totalFilled > 0 ? totalCost / totalFilled : 0,
     orderId: lastOrderId,
+    fillType,
+    attempts,
   };
 }
 
@@ -375,16 +423,18 @@ async function evaluateStrategies(cycle: ActiveCycle): Promise<void> {
       continue;
     }
 
-    // Check if either side has reached the entry price
+    // Check if either side is at least triggerSpread above entry price
+    // This ensures our limit order sits in the book as a MAKER order
+    const triggerLevel = strategy.entryPrice + strategy.triggerSpread;
     let targetSide: 'Up' | 'Down' | null = null;
     let targetTokenId = '';
     let currentPrice = 0;
 
-    if (upAsk !== null && upAsk >= strategy.entryPrice) {
+    if (upAsk !== null && upAsk >= triggerLevel) {
       targetSide = 'Up';
       targetTokenId = cycle.upTokenId;
       currentPrice = upAsk;
-    } else if (downAsk !== null && downAsk >= strategy.entryPrice) {
+    } else if (downAsk !== null && downAsk >= triggerLevel) {
       targetSide = 'Down';
       targetTokenId = cycle.downTokenId;
       currentPrice = downAsk;
@@ -392,17 +442,23 @@ async function evaluateStrategies(cycle: ActiveCycle): Promise<void> {
 
     if (!targetSide) {
       if (secsLeft % 10 < 3) {
-        console.log(`  [${strategy.name}] Waiting... Up=${upAsk?.toFixed(2) || '?'}(depth:${upSnap.askDepth.toFixed(0)}) Down=${downAsk?.toFixed(2) || '?'}(depth:${downSnap.askDepth.toFixed(0)}) | -${secsLeft}s`);
+        console.log(`  [${strategy.name}] Waiting... Up=${upAsk?.toFixed(2) || '?'}(depth:${upSnap.askDepth.toFixed(0)}) Down=${downAsk?.toFixed(2) || '?'}(depth:${downSnap.askDepth.toFixed(0)}) | trigger>=${(triggerLevel*100).toFixed(0)}c | -${secsLeft}s`);
       }
       continue;
     }
 
-    // Entry condition met — place FAK order
-    console.log(`\n  ⚡ [${strategy.name}] ENTRY: ${targetSide} @ ${currentPrice.toFixed(2)} (limit ${strategy.entryPrice}) | -${secsLeft}s`);
+    // Entry condition met — place LIMIT order at entry price (below market = maker)
+    console.log(`\n  ⚡ [${strategy.name}] ENTRY: ${targetSide} market@${(currentPrice*100).toFixed(0)}c → limit@${(strategy.entryPrice*100).toFixed(0)}c | -${secsLeft}s`);
+    stats.cyclesTriggered++;
 
-    const result = await placeFAKBuy(targetTokenId, strategy.budgetUsdc, strategy.entryPrice);
+    const result = await placeLimitBuy(targetTokenId, strategy.budgetUsdc, strategy.entryPrice);
 
     if (result.filled) {
+      stats.cyclesFilled++;
+      stats.totalFills++;
+      if (result.fillType === 'maker') stats.makerFills++;
+      else if (result.fillType === 'taker') stats.takerFills++;
+
       const posState: StrategyPosition = {
         strategyName: strategy.name,
         filled: true,
@@ -411,11 +467,11 @@ async function evaluateStrategies(cycle: ActiveCycle): Promise<void> {
         filledShares: result.filledShares,
         filledUsdc: result.filledShares * result.avgPrice,
         orderId: result.orderId,
-        fillAttempts: 1,
+        fillAttempts: result.attempts,
       };
       positions.set(strategy.name, posState);
 
-      console.log(`  ✅ [${strategy.name}] FILLED: ${result.filledShares.toFixed(2)} ${targetSide} shares @ ${result.avgPrice.toFixed(4)}`);
+      console.log(`  ✅ [${strategy.name}] FILLED: ${result.filledShares.toFixed(2)} ${targetSide} shares @ ${result.avgPrice.toFixed(4)} [${result.fillType}] (${result.attempts} attempts)`);
 
       // Log to MongoDB
       const trade: TradeLog = {
@@ -424,14 +480,18 @@ async function evaluateStrategies(cycle: ActiveCycle): Promise<void> {
         strategy: strategy.name,
         side: targetSide,
         entryPrice: strategy.entryPrice,
+        triggerPrice: currentPrice,
         filledPrice: result.avgPrice,
         shares: result.filledShares,
         costUsdc: result.filledShares * result.avgPrice,
+        fillType: result.fillType,
+        fillAttempts: result.attempts,
         pnl: null,
         won: null,
         winner: null,
         cycleOpen: cycle.cycleOpen,
         cycleClose: cycle.cycleClose,
+        secsBeforeClose: secsLeft,
         priceToBeat: cycle.priceToBeat,
         filledAt: new Date(),
         resolvedAt: null,
@@ -498,6 +558,11 @@ async function resolvePositions(cycle: ActiveCycle): Promise<void> {
     const won = pos.filledSide === winner;
     const pnl = won ? pos.filledShares - pos.filledUsdc : -pos.filledUsdc;
 
+    // Update session stats
+    stats.totalPnl += pnl;
+    if (won) stats.wins++;
+    else stats.losses++;
+
     console.log(`  [${stratName}] ${pos.filledSide} @ ${pos.filledPrice.toFixed(4)} | ${won ? '✅ WIN' : '❌ LOSS'} | PnL: $${pnl.toFixed(2)}`);
 
     // Update MongoDB
@@ -513,6 +578,11 @@ async function resolvePositions(cycle: ActiveCycle): Promise<void> {
       }
     );
   }
+
+  // Print session stats
+  console.log(`\n  [Stats] Cycles: ${stats.cyclesSeen} seen | ${stats.cyclesTriggered} triggered | ${stats.cyclesFilled} filled`);
+  console.log(`  [Stats] Fills: ${stats.totalFills} total | ${stats.makerFills} maker (${stats.totalFills > 0 ? (stats.makerFills / stats.totalFills * 100).toFixed(0) : 0}%) | ${stats.takerFills} taker`);
+  console.log(`  [Stats] Session PnL: $${stats.totalPnl.toFixed(2)} | ${stats.wins}W / ${stats.losses}L`);
 }
 
 // ── Main Loop ─────────────────────────────────────────────────
@@ -562,6 +632,7 @@ async function main() {
 
       // New cycle detected
       if (currentSlug !== lastCycleSlug) {
+        stats.cyclesSeen++;
         // Resolve previous cycle
         if (currentCycle && positions.size > 0) {
           const filledPositions = [...positions.values()].filter(p => p.filled);
@@ -587,6 +658,13 @@ async function main() {
           console.log(`  Market: ${currentCycle.question}`);
           console.log(`  Strike: $${currentCycle.priceToBeat.toFixed(2)}`);
           console.log(`  TokenIds: Up=${currentCycle.upTokenId.slice(0, 16)}... Down=${currentCycle.downTokenId.slice(0, 16)}...`);
+
+          // Log cycle to MongoDB
+          await db.collection('btc5mBotCycles').updateOne(
+            { slug: currentSlug },
+            { $set: { slug: currentSlug, cycleOpen, cycleClose, priceToBeat: currentCycle.priceToBeat, question: currentCycle.question, seenAt: new Date(), triggered: false, filled: false } },
+            { upsert: true }
+          );
         } else {
           console.log('  ⚠️ Could not fetch market data — waiting for next cycle');
         }
