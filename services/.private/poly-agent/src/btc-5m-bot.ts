@@ -109,7 +109,9 @@ const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 // BTC price state from WebSocket
 let currentBtcPrice = 0;
 let btcPriceTimestamp = 0;
+let lastWsUpdateTime = 0;  // Date.now() of last received update
 let wsPriceConnected = false;
+let activeWs: WebSocket | null = null;
 
 // Store recent BTC prices for lookback (timestamp_ms → price)
 const btcPriceHistory: Map<number, number> = new Map();
@@ -123,8 +125,15 @@ const stats = {
 
 // ── WebSocket BTC Price Feed ──────────────────────────────────
 function connectBtcPriceWs(): void {
+  // Close existing connection if any
+  if (activeWs) {
+    try { activeWs.close(); } catch {}
+    activeWs = null;
+  }
+
   console.log('[WS] Connecting to BTC price feed...');
   const ws = new WebSocket(CONFIG.wsLiveData);
+  activeWs = ws;
 
   ws.on('open', () => {
     console.log('[WS] Connected — subscribing to btc/usd');
@@ -133,21 +142,21 @@ function connectBtcPriceWs(): void {
       subscriptions: [{ topic: 'crypto_prices_chainlink', type: '*', filters: '{"symbol":"btc/usd"}' }]
     }));
     wsPriceConnected = true;
+    lastWsUpdateTime = Date.now();
   });
 
   ws.on('message', (data: WebSocket.Data) => {
     try {
       const msg = JSON.parse(data.toString());
+      lastWsUpdateTime = Date.now(); // Track last message time
 
       // Initial snapshot (array of historical prices)
       if (msg.type === 'subscribe' && msg.payload?.data) {
         const prices = msg.payload.data;
         if (prices.length > 0) {
-          // Store ALL snapshot prices in history for lookback
           for (const p of prices) {
-            btcPriceHistory.set(Math.floor(p.timestamp / 1000), p.value); // key = unix seconds
+            btcPriceHistory.set(Math.floor(p.timestamp / 1000), p.value);
           }
-          // Trim history if too large
           if (btcPriceHistory.size > MAX_PRICE_HISTORY) {
             const keys = [...btcPriceHistory.keys()].sort();
             for (let i = 0; i < keys.length - MAX_PRICE_HISTORY; i++) btcPriceHistory.delete(keys[i]);
@@ -175,14 +184,32 @@ function connectBtcPriceWs(): void {
   });
 
   ws.on('close', () => {
-    console.log('[WS] Disconnected — reconnecting in 3s...');
+    console.log('[WS] Disconnected — reconnecting in 2s...');
     wsPriceConnected = false;
-    setTimeout(connectBtcPriceWs, 3000);
+    activeWs = null;
+    setTimeout(connectBtcPriceWs, 2000);
   });
 
   ws.on('error', (err) => {
     console.error(`[WS] Error: ${err.message}`);
   });
+}
+
+// Heartbeat: check if WS is still sending updates
+// If no update in 5s, force reconnect
+function startWsHeartbeat(): void {
+  setInterval(() => {
+    const staleSecs = (Date.now() - lastWsUpdateTime) / 1000;
+    if (lastWsUpdateTime > 0 && staleSecs > 5) {
+      console.log(`[WS] ⚠️ STALE: no update for ${staleSecs.toFixed(0)}s — force reconnecting`);
+      wsPriceConnected = false;
+      if (activeWs) {
+        try { activeWs.terminate(); } catch {} // terminate (not close) to force immediate disconnect
+        activeWs = null;
+      }
+      connectBtcPriceWs();
+    }
+  }, 3000); // Check every 3s
 }
 
 // Get BTC price at a specific unix timestamp (seconds) from history
@@ -664,8 +691,9 @@ async function main() {
   await db.collection('btc5mPriceStream').createIndex({ timestamp: -1 });
   console.log(`[Init] ✅ MongoDB (${dbName})`);
 
-  // Connect WS price feed
+  // Connect WS price feed + start heartbeat monitor
   connectBtcPriceWs();
+  startWsHeartbeat();
 
   // Wait for first BTC price
   console.log('[Init] Waiting for BTC price from WS...');
