@@ -45,9 +45,9 @@ const CONFIG = {
   chainId: parseInt(process.env.CHAIN_ID || '137'),
   polygonRpcUrl: process.env.POLYGON_RPC_URL!,
   pollIntervalMs: 2000,
-  maxOrderRetries: 3,
+  maxOrderRetries: 1,  // Place GTC once, let it sit until cycle ends
   orderRetryDelayMs: 500,
-  gctFillTimeoutMs: 10000,  // GTC order stays alive for 10s
+  gctFillTimeoutMs: 60000,  // GTC order stays alive until cycle end (up to 60s)
   minDeltaPoints: 30,       // Skip cycles with |BTC - strike| < 30
 };
 
@@ -93,6 +93,9 @@ interface StrategyPosition {
   filledUsdc: number;
   orderId: string;
   fillAttempts: number;
+  pendingOrderId: string | null;  // GTC order ID that's still live in the book
+  pendingTokenId: string;         // which token the pending order is for
+  pendingSide: 'Up' | 'Down' | null;
 }
 
 // ── Globals ───────────────────────────────────────────────────
@@ -369,7 +372,9 @@ async function evaluateStrategies(cycle: ActiveCycle): Promise<void> {
   if (secsLeft <= 0) return;
 
   const anyInWindow = STRATEGIES.some(s => s.active && secsLeft <= s.windowSecs);
-  if (!anyInWindow) {
+  const anyPending = STRATEGIES.some(s => s.active && positions.get(s.name)?.pendingOrderId);
+
+  if (!anyInWindow && !anyPending) {
     if (secsLeft % 10 < 3) {
       const delta = currentBtcPrice > 0 && cycle.priceToBeat > 0 ? (currentBtcPrice - cycle.priceToBeat).toFixed(1) : '?';
       console.log(`  [Poll] -${secsLeft}s | BTC=$${currentBtcPrice.toFixed(0)} strike=$${cycle.priceToBeat.toFixed(0)} delta=${delta} | waiting`);
@@ -377,7 +382,6 @@ async function evaluateStrategies(cycle: ActiveCycle): Promise<void> {
     return;
   }
 
-  // Delta check
   const delta = currentBtcPrice - cycle.priceToBeat;
   const absDelta = Math.abs(delta);
   const direction = delta > 0 ? 'Up' : 'Down';
@@ -388,7 +392,6 @@ async function evaluateStrategies(cycle: ActiveCycle): Promise<void> {
     getBookSnapshot(cycle.downTokenId, 'Down'),
   ]);
 
-  // Log to MongoDB
   db.collection('btc5mOrderbook').insertOne({
     slug: cycle.slug, timestamp: new Date(), secsBeforeClose: secsLeft,
     btcPrice: currentBtcPrice, priceToBeat: cycle.priceToBeat, delta, absDelta,
@@ -398,30 +401,83 @@ async function evaluateStrategies(cycle: ActiveCycle): Promise<void> {
 
   console.log(`  [Poll] -${secsLeft}s | BTC=$${currentBtcPrice.toFixed(0)} strike=$${cycle.priceToBeat.toFixed(0)} delta=${delta.toFixed(0)}(${direction}) | Up=${upSnap.bestAsk?.toFixed(2) || '?'} Down=${downSnap.bestAsk?.toFixed(2) || '?'}`);
 
-  // Delta filter
-  if (absDelta < CONFIG.minDeltaPoints) {
-    console.log(`  [Delta] ${absDelta.toFixed(0)} < ${CONFIG.minDeltaPoints} pts — SKIP (too choppy)`);
-    return;
-  }
-
   for (const strategy of STRATEGIES) {
     if (!strategy.active) continue;
     const pos = positions.get(strategy.name);
-    if (pos?.filled) continue;
+    if (!pos || pos.filled) continue;
+
+    // ── Step 1: Check if we have a pending GTC order — poll its fill status
+    if (pos.pendingOrderId) {
+      try {
+        const statusRes = await fetch(`${CONFIG.clobApiBase}/order/${pos.pendingOrderId}`, {
+          headers: { 'POLY_API_KEY': CONFIG.apiKey, 'POLY_SIGNATURE': CONFIG.apiSecret, 'POLY_TIMESTAMP': Date.now().toString(), 'POLY_PASSPHRASE': CONFIG.passphrase },
+        });
+        if (statusRes.ok) {
+          const os = await statusRes.json() as any;
+          const filled = parseFloat(os.size_matched) || 0;
+          const price = parseFloat(os.price) || strategy.entryPrice;
+
+          if (filled > 0) {
+            const fillType = price <= strategy.entryPrice ? 'maker' : 'taker';
+            stats.cyclesFilled++; stats.totalFills++;
+            if (fillType === 'maker') stats.makerFills++; else stats.takerFills++;
+
+            pos.filled = true;
+            pos.filledSide = pos.pendingSide;
+            pos.filledPrice = price;
+            pos.filledShares = filled;
+            pos.filledUsdc = filled * price;
+            pos.orderId = pos.pendingOrderId;
+            pos.pendingOrderId = null;
+
+            console.log(`  ✅ [${strategy.name}] GTC FILLED! ${filled.toFixed(1)} ${pos.filledSide} @ ${(price*100).toFixed(1)}c [${fillType}] | -${secsLeft}s`);
+
+            await db.collection('btc5mBotTrades').insertOne({
+              slug: cycle.slug, conditionId: cycle.conditionId, strategy: strategy.name,
+              side: pos.filledSide, entryPrice: strategy.entryPrice, triggerPrice: strategy.entryPrice,
+              filledPrice: price, shares: filled, costUsdc: filled * price,
+              fillType, fillAttempts: 1, btcPriceAtEntry: currentBtcPrice, delta,
+              pnl: null, won: null, winner: null,
+              cycleOpen: cycle.cycleOpen, cycleClose: cycle.cycleClose, secsBeforeClose: secsLeft,
+              priceToBeat: cycle.priceToBeat, filledAt: new Date(), resolvedAt: null,
+            });
+            continue;
+          }
+
+          // Check if order was cancelled/expired externally
+          if (os.status === 'CANCELED' || os.status === 'EXPIRED') {
+            console.log(`  [${strategy.name}] Pending GTC ${os.status} — will re-place if conditions met`);
+            pos.pendingOrderId = null;
+          } else {
+            console.log(`  [${strategy.name}] Pending GTC live (${os.status || '?'}) — waiting for fill | -${secsLeft}s`);
+            continue; // Don't place a new order while one is pending
+          }
+        }
+      } catch { /* continue to placement logic */ }
+      continue; // Skip to next strategy while pending
+    }
+
+    // ── Step 2: Check window
     if (secsLeft > strategy.windowSecs) continue;
 
+    // ── Step 3: Delta filter (only for FIRST entry, not retries)
+    if (absDelta < CONFIG.minDeltaPoints) {
+      if (secsLeft % 10 < 3) console.log(`  [Delta] ${absDelta.toFixed(0)} < ${CONFIG.minDeltaPoints} pts — SKIP`);
+      continue;
+    }
+
+    // ── Step 4: Check trigger
     const triggerLevel = strategy.entryPrice + strategy.triggerSpread;
     const upAsk = upSnap.bestAsk;
     const downAsk = downSnap.bestAsk;
 
     let targetSide: 'Up' | 'Down' | null = null;
     let targetTokenId = '';
-    let marketPrice = 0;
 
     if (upAsk !== null && upAsk >= triggerLevel) {
-      targetSide = 'Up'; targetTokenId = cycle.upTokenId; marketPrice = upAsk;
+      targetSide = 'Up'; targetTokenId = cycle.upTokenId;
     } else if (downAsk !== null && downAsk >= triggerLevel) {
-      targetSide = 'Down'; targetTokenId = cycle.downTokenId; marketPrice = downAsk;
+      targetSide = 'Down'; targetTokenId = cycle.downTokenId;
     }
 
     if (!targetSide) {
@@ -429,44 +485,53 @@ async function evaluateStrategies(cycle: ActiveCycle): Promise<void> {
       continue;
     }
 
-    console.log(`\n  ⚡ [${strategy.name}] ENTRY: ${targetSide} market@${(marketPrice*100).toFixed(0)}c → limit@${(strategy.entryPrice*100).toFixed(0)}c | delta=${delta.toFixed(0)} | -${secsLeft}s`);
+    // ── Step 5: Place GTC limit order and let it sit
+    console.log(`\n  ⚡ [${strategy.name}] PLACING GTC: ${targetSide} limit@${(strategy.entryPrice*100).toFixed(0)}c | delta=${delta.toFixed(0)} | -${secsLeft}s`);
     stats.cyclesTriggered++;
 
-    const result = await placeLimitBuy(targetTokenId, strategy.budgetUsdc, strategy.entryPrice);
+    try {
+      const MIN_SHARES = 5;
+      const shares = Math.max(strategy.budgetUsdc / strategy.entryPrice, MIN_SHARES);
 
-    if (result.filled) {
-      stats.cyclesFilled++;
-      stats.totalFills++;
-      if (result.fillType === 'maker') stats.makerFills++;
-      else stats.takerFills++;
-
-      positions.set(strategy.name, {
-        strategyName: strategy.name, filled: true, filledSide: targetSide,
-        filledPrice: result.avgPrice, filledShares: result.filledShares,
-        filledUsdc: result.filledShares * result.avgPrice, orderId: result.orderId, fillAttempts: result.attempts,
+      const order = await clobClient.createOrder({
+        tokenID: targetTokenId, price: strategy.entryPrice, size: shares,
+        side: Side.BUY, feeRateBps: 1000, nonce: 0,
       });
+      const response = await clobClient.postOrder(order, OrderType.GTC);
+      const ordId = response?.orderID || (response as any)?.orderid || null;
 
-      console.log(`  ✅ [${strategy.name}] FILLED: ${result.filledShares.toFixed(1)} ${targetSide} @ ${(result.avgPrice*100).toFixed(1)}c [${result.fillType}]`);
-
-      await db.collection('btc5mBotTrades').insertOne({
-        slug: cycle.slug, conditionId: cycle.conditionId, strategy: strategy.name,
-        side: targetSide, entryPrice: strategy.entryPrice, triggerPrice: marketPrice,
-        filledPrice: result.avgPrice, shares: result.filledShares,
-        costUsdc: result.filledShares * result.avgPrice, fillType: result.fillType, fillAttempts: result.attempts,
-        btcPriceAtEntry: currentBtcPrice, delta, pnl: null, won: null, winner: null,
-        cycleOpen: cycle.cycleOpen, cycleClose: cycle.cycleClose, secsBeforeClose: secsLeft,
-        priceToBeat: cycle.priceToBeat, filledAt: new Date(), resolvedAt: null,
-      });
-    } else {
-      console.log(`  ❌ [${strategy.name}] No fill — retrying next poll`);
+      if (ordId) {
+        pos.pendingOrderId = ordId;
+        pos.pendingTokenId = targetTokenId;
+        pos.pendingSide = targetSide;
+        console.log(`  [${strategy.name}] GTC LIVE: ${ordId.slice(0, 16)}... (${shares.toFixed(1)} shares @ ${(strategy.entryPrice*100).toFixed(0)}c) — will check fill each poll`);
+      } else {
+        console.log(`  [${strategy.name}] Order rejected — check API errors above`);
+      }
+    } catch (err: any) {
+      console.error(`  [${strategy.name}] Order error: ${err.message}`);
     }
   }
 }
 
 // ── Resolution ────────────────────────────────────────────────
 async function resolvePositions(cycle: ActiveCycle): Promise<void> {
+  // Cancel any pending GTC orders before resolution
+  for (const [name, pos] of positions) {
+    if (pos.pendingOrderId) {
+      try {
+        await clobClient.cancelOrder({ orderID: pos.pendingOrderId });
+        console.log(`  [${name}] Cancelled pending GTC ${pos.pendingOrderId.slice(0, 12)}... (cycle ending)`);
+      } catch {}
+      pos.pendingOrderId = null;
+    }
+  }
+
   const filledPos = [...positions.values()].filter(p => p.filled);
-  if (filledPos.length === 0) return;
+  if (filledPos.length === 0) {
+    console.log(`  [Resolve] No fills this cycle — skipping resolution`);
+    return;
+  }
 
   console.log(`\n  [Resolve] Waiting for resolution of ${cycle.slug}...`);
   await sleep(12000);
@@ -602,7 +667,7 @@ async function main() {
         // Reset positions
         positions = new Map();
         for (const s of STRATEGIES) {
-          positions.set(s.name, { strategyName: s.name, filled: false, filledSide: null, filledPrice: 0, filledShares: 0, filledUsdc: 0, orderId: '', fillAttempts: 0 });
+          positions.set(s.name, { strategyName: s.name, filled: false, filledSide: null, filledPrice: 0, filledShares: 0, filledUsdc: 0, orderId: '', fillAttempts: 0, pendingOrderId: null, pendingTokenId: '', pendingSide: null });
         }
 
         // Fetch market data — priceToBeat is now derived inside fetchCycleData
