@@ -107,6 +107,10 @@ let currentBtcPrice = 0;
 let btcPriceTimestamp = 0;
 let wsPriceConnected = false;
 
+// Store recent BTC prices for lookback (timestamp_ms → price)
+const btcPriceHistory: Map<number, number> = new Map();
+const MAX_PRICE_HISTORY = 600; // keep last 600 seconds
+
 // Cycle stats
 const stats = {
   cyclesSeen: 0, cyclesTriggered: 0, cyclesFilled: 0, cyclesSkippedDelta: 0,
@@ -135,17 +139,24 @@ function connectBtcPriceWs(): void {
       if (msg.type === 'subscribe' && msg.payload?.data) {
         const prices = msg.payload.data;
         if (prices.length > 0) {
+          // Store ALL snapshot prices in history for lookback
+          for (const p of prices) {
+            btcPriceHistory.set(Math.floor(p.timestamp / 1000), p.value); // key = unix seconds
+          }
+          // Trim history if too large
+          if (btcPriceHistory.size > MAX_PRICE_HISTORY) {
+            const keys = [...btcPriceHistory.keys()].sort();
+            for (let i = 0; i < keys.length - MAX_PRICE_HISTORY; i++) btcPriceHistory.delete(keys[i]);
+          }
+
           const last = prices[prices.length - 1];
           currentBtcPrice = last.value;
           btcPriceTimestamp = last.timestamp;
-          console.log(`[WS] Initial snapshot: $${currentBtcPrice.toFixed(2)} (${prices.length} points)`);
+          console.log(`[WS] Initial snapshot: $${currentBtcPrice.toFixed(2)} (${prices.length} points, history: ${btcPriceHistory.size})`);
 
-          // Log to MongoDB (lightweight — just the latest)
           db?.collection('btc5mPriceStream').insertOne({
-            type: 'snapshot',
-            price: currentBtcPrice,
-            timestamp: new Date(btcPriceTimestamp),
-            count: prices.length,
+            type: 'snapshot', price: currentBtcPrice,
+            timestamp: new Date(btcPriceTimestamp), count: prices.length,
           }).catch(() => {});
         }
       }
@@ -154,6 +165,7 @@ function connectBtcPriceWs(): void {
       if (msg.type === 'update' && msg.payload?.value) {
         currentBtcPrice = msg.payload.value;
         btcPriceTimestamp = msg.payload.timestamp;
+        btcPriceHistory.set(Math.floor(msg.payload.timestamp / 1000), msg.payload.value);
       }
     } catch { /* ignore parse errors */ }
   });
@@ -167,6 +179,25 @@ function connectBtcPriceWs(): void {
   ws.on('error', (err) => {
     console.error(`[WS] Error: ${err.message}`);
   });
+}
+
+// Get BTC price at a specific unix timestamp (seconds) from history
+// Looks for exact match or closest available within ±3 seconds
+function getBtcPriceAt(unixSecs: number): number {
+  // Exact match
+  const exact = btcPriceHistory.get(unixSecs);
+  if (exact) return exact;
+
+  // Search ±3 seconds
+  for (let offset = 1; offset <= 3; offset++) {
+    const before = btcPriceHistory.get(unixSecs - offset);
+    if (before) return before;
+    const after = btcPriceHistory.get(unixSecs + offset);
+    if (after) return after;
+  }
+
+  // Fallback: current price
+  return currentBtcPrice;
 }
 
 // ── CLOB Client ───────────────────────────────────────────────
@@ -559,10 +590,11 @@ async function main() {
           positions.set(s.name, { strategyName: s.name, filled: false, filledSide: null, filledPrice: 0, filledShares: 0, filledUsdc: 0, orderId: '', fillAttempts: 0 });
         }
 
-        // Capture priceToBeat = BTC price RIGHT NOW (at cycle open)
-        const priceToBeat = currentBtcPrice;
+        // priceToBeat = BTC price at the EXACT cycle open timestamp
+        // Use WS history to look back to the cycle open second
+        const priceToBeat = getBtcPriceAt(cycleOpen);
 
-        console.log(`\n═══ CYCLE ${currentSlug.slice(-10)} | -${secsLeft}s | BTC=$${priceToBeat.toFixed(2)} (strike) ═══`);
+        console.log(`\n═══ CYCLE ${currentSlug.slice(-10)} | -${secsLeft}s | strike=$${priceToBeat.toFixed(2)} (BTC@open) now=$${currentBtcPrice.toFixed(2)} ═══`);
 
         // Fetch market data
         currentCycle = await fetchCycleData(currentSlug);
