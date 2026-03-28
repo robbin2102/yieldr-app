@@ -223,17 +223,32 @@ async function fetchCycleData(slug: string): Promise<ActiveCycle | null> {
     const events = await res.json() as any[];
     if (!events?.[0]?.markets?.[0]) return null;
 
-    const market = events[0].markets[0];
+    const event = events[0];
+    const market = event.markets[0];
     let tokenIds: string[] = [];
     try { tokenIds = JSON.parse(market.clobTokenIds); }
     catch { tokenIds = (market.clobTokenIds || '').split(',').map((s: string) => s.trim()); }
 
     const cycleOpen = parseInt(slug.match(/btc-updown-5m-(\d+)/)?.[1] || '0');
 
-    // priceToBeat from WS: use the BTC price at cycle open time
-    // The WS gives us the current price — for priceToBeat we use the price at cycleOpen
-    // which we capture when the cycle starts
-    const ptb = currentBtcPrice; // Will be set properly in main loop on cycle start
+    // eventStartTime is the exact moment the strike price (priceToBeat) is captured
+    const eventStartTime = event.eventStartTime || market.startDate || '';
+    let eventStartUnix = 0;
+    if (eventStartTime) {
+      eventStartUnix = Math.floor(new Date(eventStartTime).getTime() / 1000);
+    }
+
+    // Look up BTC price at eventStartTime from WS history
+    let ptb = 0;
+    if (eventStartUnix > 0) {
+      ptb = getBtcPriceAt(eventStartUnix);
+      console.log(`  [Strike] eventStartTime=${eventStartTime} → unix=${eventStartUnix} → BTC=$${ptb.toFixed(2)}`);
+    }
+    // Fallback: use cycleOpen timestamp
+    if (ptb === 0 || ptb === currentBtcPrice) {
+      ptb = getBtcPriceAt(cycleOpen);
+      console.log(`  [Strike] Fallback: cycleOpen=${cycleOpen} → BTC=$${ptb.toFixed(2)}`);
+    }
 
     return {
       slug, conditionId: market.conditionId,
@@ -590,22 +605,19 @@ async function main() {
           positions.set(s.name, { strategyName: s.name, filled: false, filledSide: null, filledPrice: 0, filledShares: 0, filledUsdc: 0, orderId: '', fillAttempts: 0 });
         }
 
-        // priceToBeat = BTC price at the EXACT cycle open timestamp
-        // Use WS history to look back to the cycle open second
-        const priceToBeat = getBtcPriceAt(cycleOpen);
-
-        console.log(`\n═══ CYCLE ${currentSlug.slice(-10)} | -${secsLeft}s | strike=$${priceToBeat.toFixed(2)} (BTC@open) now=$${currentBtcPrice.toFixed(2)} ═══`);
-
-        // Fetch market data
+        // Fetch market data — priceToBeat is now derived inside fetchCycleData
+        // using eventStartTime from Gamma API + WS price history
         currentCycle = await fetchCycleData(currentSlug);
         if (currentCycle) {
-          currentCycle.priceToBeat = priceToBeat; // Override with WS price
+          const ptb = currentCycle.priceToBeat;
+          const ptbSource = ptb === currentBtcPrice ? '⚠️ fallback(now)' : 'eventStart';
+          console.log(`\n═══ CYCLE ${currentSlug.slice(-10)} | -${secsLeft}s | strike=$${ptb.toFixed(2)} [${ptbSource}] now=$${currentBtcPrice.toFixed(2)} ═══`);
           console.log(`  ${currentCycle.question} | tokens: Up=${currentCycle.upTokenId.slice(0, 12)}... Down=${currentCycle.downTokenId.slice(0, 12)}...`);
 
           // Log cycle
           db.collection('btc5mBotCycles').updateOne(
             { slug: currentSlug },
-            { $set: { slug: currentSlug, cycleOpen, cycleClose, priceToBeat, btcPriceAtOpen: priceToBeat, seenAt: new Date() } },
+            { $set: { slug: currentSlug, cycleOpen, cycleClose, priceToBeat: currentCycle.priceToBeat, btcPriceAtOpen: currentCycle.priceToBeat, btcPriceNow: currentBtcPrice, seenAt: new Date() } },
             { upsert: true }
           ).catch(() => {});
         }
