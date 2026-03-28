@@ -197,19 +197,28 @@ function connectBtcPriceWs(): void {
 
 // Heartbeat: check if WS is still sending updates
 // If no update in 5s, force reconnect
+let wsReconnectCount = 0;
 function startWsHeartbeat(): void {
   setInterval(() => {
     const staleSecs = (Date.now() - lastWsUpdateTime) / 1000;
     if (lastWsUpdateTime > 0 && staleSecs > 5) {
-      console.log(`[WS] ⚠️ STALE: no update for ${staleSecs.toFixed(0)}s — force reconnecting`);
+      wsReconnectCount++;
+      console.log(`[WS] ⚠️ STALE: no update for ${staleSecs.toFixed(0)}s — force reconnecting (#${wsReconnectCount})`);
+
+      db?.collection('btc5mPriceStream').insertOne({
+        type: 'ws_reconnect', reason: 'stale', staleSecs: Math.round(staleSecs),
+        reconnectCount: wsReconnectCount, lastPrice: currentBtcPrice,
+        timestamp: new Date(),
+      }).catch(() => {});
+
       wsPriceConnected = false;
       if (activeWs) {
-        try { activeWs.terminate(); } catch {} // terminate (not close) to force immediate disconnect
+        try { activeWs.terminate(); } catch {}
         activeWs = null;
       }
       connectBtcPriceWs();
     }
-  }, 3000); // Check every 3s
+  }, 3000);
 }
 
 // Get BTC price at a specific unix timestamp (seconds) from history
