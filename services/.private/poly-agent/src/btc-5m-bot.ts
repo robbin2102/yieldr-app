@@ -448,13 +448,32 @@ async function evaluateStrategies(cycle: ActiveCycle): Promise<void> {
           if (os.status === 'CANCELED' || os.status === 'EXPIRED') {
             console.log(`  [${strategy.name}] Pending GTC ${os.status} — will re-place if conditions met`);
             pos.pendingOrderId = null;
+            // Fall through to placement logic below
           } else {
-            console.log(`  [${strategy.name}] Pending GTC live (${os.status || '?'}) — waiting for fill | -${secsLeft}s`);
-            continue; // Don't place a new order while one is pending
+            // Order is still live — check if market REVERSED to the other side
+            const triggerLevel = strategy.entryPrice + strategy.triggerSpread;
+            const upAsk = upSnap.bestAsk;
+            const downAsk = downSnap.bestAsk;
+
+            // Determine which side currently meets the trigger
+            let currentTriggerSide: 'Up' | 'Down' | null = null;
+            if (upAsk !== null && upAsk >= triggerLevel) currentTriggerSide = 'Up';
+            else if (downAsk !== null && downAsk >= triggerLevel) currentTriggerSide = 'Down';
+
+            // If the OTHER side now meets trigger (market reversed), cancel and re-place
+            if (currentTriggerSide && currentTriggerSide !== pos.pendingSide) {
+              console.log(`  [${strategy.name}] ⚠️ REVERSAL: was ${pos.pendingSide} now ${currentTriggerSide} — cancelling old GTC`);
+              try { await clobClient.cancelOrder({ orderID: pos.pendingOrderId }); } catch {}
+              pos.pendingOrderId = null;
+              pos.pendingSide = null;
+              // Fall through to placement logic below to place on new side
+            } else {
+              console.log(`  [${strategy.name}] Pending GTC ${pos.pendingSide}@${(strategy.entryPrice*100).toFixed(0)}c live — waiting | -${secsLeft}s`);
+              continue; // Keep waiting for fill
+            }
           }
         }
-      } catch { /* continue to placement logic */ }
-      continue; // Skip to next strategy while pending
+      } catch { /* fall through to placement */ }
     }
 
     // ── Step 2: Check window
