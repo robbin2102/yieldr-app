@@ -476,6 +476,9 @@ async function evaluateStrategies(cycle: ActiveCycle): Promise<void> {
       } catch { /* fall through to placement */ }
     }
 
+    // If we still have a pending order after the check, don't place a new one
+    if (pos.pendingOrderId) continue;
+
     // ── Step 2: Check window
     if (secsLeft > strategy.windowSecs) continue;
 
