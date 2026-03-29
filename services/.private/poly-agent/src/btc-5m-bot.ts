@@ -505,7 +505,7 @@ async function evaluateStrategies(cycle: ActiveCycle): Promise<void> {
               pos.pendingSide = null;
               // Fall through to placement logic below to place on new side
             } else {
-              console.log(`  [${strategy.name}] Pending GTC ${pos.pendingSide}@${(strategy.entryPrice*100).toFixed(0)}c live — waiting | -${secsLeft}s`);
+              console.log(`  [${strategy.name}] Pending GTC ${pos.pendingSide} live — waiting for fill | -${secsLeft}s`);
               continue; // Keep waiting for fill
             }
           }
@@ -544,30 +544,34 @@ async function evaluateStrategies(cycle: ActiveCycle): Promise<void> {
       continue;
     }
 
-    // ── Step 5: Place GTC limit order and let it sit
-    console.log(`\n  ⚡ [${strategy.name}] TRIGGER: ${targetSide} @${(upSnap.bestAsk || downSnap.bestAsk || 0).toFixed ? ((targetSide === 'Up' ? upSnap.bestAsk : downSnap.bestAsk) || 0).toFixed(2) : '?'}c | limit=${(strategy.entryPrice*100).toFixed(0)}c | delta=${delta.toFixed(0)} | -${secsLeft}s`);
+    // ── Step 5: Place GTC at bestAsk - 1c (aggressive maker fill)
+    const currentAsk = (targetSide === 'Up' ? upSnap.bestAsk : downSnap.bestAsk) || 0;
+    const fillPrice = Math.round((currentAsk - 0.01) * 100) / 100; // bestAsk - 1c, rounded to 2dp
+    const cappedFillPrice = Math.min(fillPrice, 0.97); // never pay more than 97c
+
+    console.log(`\n  ⚡ [${strategy.name}] TRIGGER: ${targetSide} ask@${(currentAsk*100).toFixed(0)}c → GTC@${(cappedFillPrice*100).toFixed(0)}c | delta=${delta.toFixed(0)} | -${secsLeft}s`);
     stats.cyclesTriggered++;
 
-    // Log trigger event to MongoDB (always, regardless of dataOnlyMode)
+    // Log trigger event to MongoDB
     db.collection('btc5mBotTriggers').insertOne({
       slug: cycle.slug, strategy: strategy.name, side: targetSide,
-      entryPrice: strategy.entryPrice, marketPrice: targetSide === 'Up' ? upSnap.bestAsk : downSnap.bestAsk,
+      entryPrice: cappedFillPrice, marketPrice: currentAsk,
       btcPrice: currentBtcPrice, priceToBeat: cycle.priceToBeat, delta, absDelta,
       secsBeforeClose: secsLeft, timestamp: new Date(),
       dataOnlyMode: CONFIG.dataOnlyMode,
     }).catch(() => {});
 
     if (CONFIG.dataOnlyMode) {
-      console.log(`  [${strategy.name}] 📊 DATA ONLY — would place GTC ${targetSide}@${(strategy.entryPrice*100).toFixed(0)}c (skipping order)`);
+      console.log(`  [${strategy.name}] 📊 DATA ONLY — would place GTC ${targetSide}@${(cappedFillPrice*100).toFixed(0)}c (skipping order)`);
       continue;
     }
 
     try {
       const MIN_SHARES = 5;
-      const shares = Math.max(strategy.budgetUsdc / strategy.entryPrice, MIN_SHARES);
+      const shares = Math.max(strategy.budgetUsdc / cappedFillPrice, MIN_SHARES);
 
       const order = await clobClient.createOrder({
-        tokenID: targetTokenId, price: strategy.entryPrice, size: shares,
+        tokenID: targetTokenId, price: cappedFillPrice, size: shares,
         side: Side.BUY, feeRateBps: 1000, nonce: 0,
       });
       const response = await clobClient.postOrder(order, OrderType.GTC);
@@ -577,7 +581,7 @@ async function evaluateStrategies(cycle: ActiveCycle): Promise<void> {
         pos.pendingOrderId = ordId;
         pos.pendingTokenId = targetTokenId;
         pos.pendingSide = targetSide;
-        console.log(`  [${strategy.name}] GTC LIVE: ${ordId.slice(0, 16)}... (${shares.toFixed(1)} shares @ ${(strategy.entryPrice*100).toFixed(0)}c) — will check fill each poll`);
+        console.log(`  [${strategy.name}] GTC LIVE: ${ordId.slice(0, 16)}... (${shares.toFixed(1)} shares @ ${(cappedFillPrice*100).toFixed(0)}c) — will check fill each poll`);
       } else {
         console.log(`  [${strategy.name}] Order rejected — check API errors above`);
       }
