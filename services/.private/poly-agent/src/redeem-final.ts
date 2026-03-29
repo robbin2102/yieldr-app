@@ -66,8 +66,8 @@ async function main() {
     },
   ];
 
-  // Only test first one
-  const toRedeem = winners.slice(0, 1);
+  // Redeem all 3
+  const toRedeem = winners.slice(0, 3);
 
   for (const w of toRedeem) {
     console.log(`═══ ${w.title} ═══`);
