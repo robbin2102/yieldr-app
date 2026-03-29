@@ -593,13 +593,27 @@ async function evaluateStrategies(cycle: ActiveCycle): Promise<void> {
 
 // ── Resolution ────────────────────────────────────────────────
 async function resolvePositions(cycle: ActiveCycle): Promise<void> {
-  // Cancel any pending GTC orders before resolution
+  // Cancel any pending GTC orders before resolution + log unfilled
   for (const [name, pos] of positions) {
     if (pos.pendingOrderId) {
       try {
         await clobClient.cancelOrder({ orderID: pos.pendingOrderId });
-        console.log(`  [${name}] Cancelled pending GTC ${pos.pendingOrderId.slice(0, 12)}... (cycle ending)`);
+        console.log(`  [${name}] Cancelled pending GTC ${pos.pendingOrderId.slice(0, 12)}... (cycle ending — NOT filled)`);
       } catch {}
+
+      // Log unfilled trigger to MongoDB
+      db.collection('btc5mBotTrades').insertOne({
+        slug: cycle.slug, conditionId: cycle.conditionId, strategy: name,
+        side: pos.pendingSide, entryPrice: 0, triggerPrice: 0,
+        filledPrice: 0, shares: 0, costUsdc: 0,
+        fillType: 'unfilled', fillAttempts: 0,
+        btcPriceAtEntry: currentBtcPrice, delta: currentBtcPrice - cycle.priceToBeat,
+        pnl: 0, won: null, winner: null,
+        cycleOpen: cycle.cycleOpen, cycleClose: cycle.cycleClose, secsBeforeClose: 0,
+        priceToBeat: cycle.priceToBeat, filledAt: new Date(), resolvedAt: new Date(),
+        status: 'triggered_not_filled',
+      }).catch(() => {});
+
       pos.pendingOrderId = null;
     }
   }
