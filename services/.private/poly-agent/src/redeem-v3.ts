@@ -88,6 +88,10 @@ async function main() {
   const winners = positions.filter((p: any) => p.curPrice >= 0.99);
   console.log(`  ${winners.length} winners found\n`);
 
+  // Only redeem first 1 for testing (change to winners.length for all)
+  const toRedeem = winners.slice(0, 1);
+  console.log(`  Redeeming ${toRedeem.length} of ${winners.length} (test mode)\n`);
+
   const usdcBefore = parseInt((await usdc.balanceOf(wallet.address)).toString()) / 1e6;
   console.log(`  USDC.e before: $${usdcBefore.toFixed(6)}\n`);
 
@@ -96,7 +100,7 @@ async function main() {
     'function redeemPositions(bytes32 conditionId, uint256[] calldata amounts) external',
   ], wallet);
 
-  for (const p of winners) {
+  for (const p of toRedeem) {
     console.log(`[3] Redeeming: ${p.outcome} ${p.size?.toFixed(2)} shares | ${p.title?.slice(0, 50)}`);
     console.log(`    conditionId: ${p.conditionId}`);
 
