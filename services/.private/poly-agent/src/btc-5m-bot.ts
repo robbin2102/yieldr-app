@@ -44,12 +44,12 @@ const CONFIG = {
   wsLiveData: 'wss://ws-live-data.polymarket.com',
   chainId: parseInt(process.env.CHAIN_ID || '137'),
   polygonRpcUrl: process.env.POLYGON_RPC_URL!,
-  pollIntervalMs: 2000,
+  pollIntervalMs: 500,       // Poll orderbook every 500ms for faster entry
   maxOrderRetries: 1,  // Place GTC once, let it sit until cycle ends
   orderRetryDelayMs: 500,
   gctFillTimeoutMs: 60000,  // GTC order stays alive until cycle end (up to 60s)
-  minDeltaPoints: 15,       // Skip cycles with |BTC - strike| < 15
-  dataOnlyMode: true,        // true = collect data only, NO orders placed
+  minDeltaPoints: 30,       // Skip cycles with |BTC - strike| < 30
+  dataOnlyMode: false,       // LIVE TRADING
 };
 
 const required = ['botPrivateKey', 'botWallet', 'apiKey', 'apiSecret', 'passphrase', 'mongoUri', 'polygonRpcUrl'];
@@ -68,9 +68,9 @@ interface StrategyConfig {
 }
 
 const STRATEGIES: StrategyConfig[] = [
-  { name: '85c_90s', entryPrice: 0.85, triggerSpread: 0.01, windowSecs: 90, budgetUsdc: 5, active: true },
   { name: '90c_90s', entryPrice: 0.90, triggerSpread: 0.01, windowSecs: 90, budgetUsdc: 5, active: true },
-  { name: '95c_60s', entryPrice: 0.95, triggerSpread: 0.01, windowSecs: 60, budgetUsdc: 5, active: true },
+  { name: '85c_90s', entryPrice: 0.85, triggerSpread: 0.01, windowSecs: 90, budgetUsdc: 5, active: false },
+  { name: '95c_90s', entryPrice: 0.95, triggerSpread: 0.01, windowSecs: 90, budgetUsdc: 5, active: false },
 ];
 
 // ── Types ─────────────────────────────────────────────────────
