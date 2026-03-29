@@ -453,6 +453,12 @@ async function evaluateStrategies(cycle: ActiveCycle): Promise<void> {
           const os = await statusRes.json() as any;
           const filled = parseFloat(os.size_matched) || 0;
           const price = parseFloat(os.price) || strategy.entryPrice;
+          const status = os.status || '?';
+
+          // Log every fill check
+          if (secsLeft % 5 < 2) {
+            console.log(`  [${strategy.name}] Fill check: status=${status} matched=${filled.toFixed(2)} | -${secsLeft}s`);
+          }
 
           if (filled > 0) {
             const fillType = price <= strategy.entryPrice ? 'maker' : 'taker';
@@ -509,8 +515,12 @@ async function evaluateStrategies(cycle: ActiveCycle): Promise<void> {
               continue; // Keep waiting for fill
             }
           }
+        } else {
+          console.log(`  [${strategy.name}] Fill check API error: ${statusRes.status} ${statusRes.statusText}`);
         }
-      } catch { /* fall through to placement */ }
+      } catch (fillCheckErr: any) {
+        console.log(`  [${strategy.name}] Fill check ERROR: ${fillCheckErr.message?.slice(0, 100)}`);
+      }
     }
 
     // If we still have a pending order after the check, don't place a new one
