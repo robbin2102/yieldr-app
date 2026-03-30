@@ -32,8 +32,8 @@ for (const envPath of envLocations) {
 }
 
 const BUDGET = 100; // $100 per trade
-const ENTRY_THRESHOLDS = [0.85, 0.90, 0.95];
-const DELTA_FILTERS = [0, 15, 30];
+const ENTRY_THRESHOLDS = [0.75, 0.80, 0.85, 0.90, 0.95];
+const DELTA_FILTERS = [0, 15, 30, 60];
 const WINDOWS = [60, 90]; // seconds before close
 const TRIGGER_SPREAD = 0.01; // trigger when bestAsk >= threshold + 1c
 
