@@ -16,14 +16,20 @@ import dotenv from 'dotenv';
 import path from 'path';
 
 const envPaths = [
-  path.resolve(process.cwd(), 'services/.private/poly-agent/.env.polyagent'),
+  path.resolve(process.cwd(), '.env.polyagent'),           // running from poly-agent/
+  path.resolve(process.cwd(), '.env.local'),               // running from poly-agent/
+  path.resolve(process.cwd(), '.env'),                     // running from poly-agent/
+  path.resolve(process.cwd(), 'services/.private/poly-agent/.env.polyagent'), // from repo root
   path.resolve(process.cwd(), 'services/.private/poly-agent/.env.local'),
-  path.resolve(process.cwd(), '.env.local'),
-  path.resolve(process.cwd(), '.env'),
 ];
 for (const p of envPaths) {
   const r = dotenv.config({ path: p });
   if (r.parsed?.MONGODB_URI) break;
+}
+
+if (!process.env.MONGODB_URI) {
+  console.error('Fatal: MONGODB_URI not found. Run from repo root or poly-agent/ directory.');
+  process.exit(1);
 }
 
 async function main() {
