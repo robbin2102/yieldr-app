@@ -1,15 +1,13 @@
 /**
- * Pass 2+3: Analyze Sports Market Edge — Price Features + Win Rate
+ * Sports Market Edge Validation
  *
- * For each market's price history, computes features at each time point:
- * - Price velocity (slope over trailing window)
- * - Price volatility (stdev of changes)
- * - Regime duration (how long above threshold)
- * - Max drawdown from peak
- * - Price acceleration
- *
- * Then buckets by feature combination and measures actual WR vs entry price
- * to find exploitable edge.
+ * Validates the <80c edge signal found in initial analysis:
+ * 1. Out-of-sample split (60/40 chronological)
+ * 2. Per-sport breakdown
+ * 3. Deep dive on every <80c observation
+ * 4. Survival analysis (drawdown after entry)
+ * 5. 85-90c trap analysis
+ * 6. Price trajectory context (where was price 30m/60m/2hr before?)
  *
  * Usage (from project root):
  *   npx tsx services/.private/poly-agent/src/sports/analyze-sports-edge.ts
@@ -32,26 +30,51 @@ for (const p of envPaths) {
 
 if (!process.env.MONGODB_URI) { console.error('Fatal: MONGODB_URI not set'); process.exit(1); }
 
-// ── Feature computation ─────────────────────────────────────
-
 interface PricePoint { t: number; p: number; minsBeforeClose: number; }
 
-interface Features {
-  price: number;
-  velocity5: number;    // slope over last 5 minutes
-  velocity10: number;   // slope over last 10 minutes
-  velocity20: number;   // slope over last 20 minutes
-  volatility: number;   // stdev of price changes (last 10 min)
-  regimeDuration85: number;  // minutes continuously above 85c
-  regimeDuration90: number;  // minutes continuously above 90c
-  maxDrawdown: number;  // biggest drop from peak so far
-  acceleration: number; // velocity10 - velocity20 (is it speeding up?)
+interface Observation {
+  conditionId: string;
+  sport: string;
+  question: string;
+  endDate: string;
+  winnerIndex: number;
   minsBeforeClose: number;
+  price: number;            // leading side price
+  leadingSideIsYes: boolean;
+  leadingSideWon: boolean;
+  // velocity: price change in cents over last 10 min
+  velocity10: number;
+  // volatility: stdev of 1-min changes over last 30 min
+  volatility: number;
+  // momentum: is current price the highest in last 30 min?
+  momentum: boolean;
+  // regime: consecutive minutes above 80c / 90c
+  regime80: number;
+  regime90: number;
+  // price context
+  price30mAgo: number | null;
+  price60mAgo: number | null;
+  price2hrAgo: number | null;
+  peakPrice: number;         // highest leading-side price ever seen
+  // drawdown after entry (for survival analysis)
+  minPriceAfter: number;     // lowest price after this observation
+  maxDrawdownAfter: number;  // peak-to-trough after entry
+  minsToReach90: number | null; // how many mins after entry to hit 90c
+  minsToReach95: number | null;
+}
+
+function getPriceAtMinsBefore(series: PricePoint[], targetMins: number): number | null {
+  let best: PricePoint | null = null;
+  let bestDist = Infinity;
+  for (const p of series) {
+    const dist = Math.abs(p.minsBeforeClose - targetMins);
+    if (dist < bestDist) { bestDist = dist; best = p; }
+  }
+  return best && bestDist < 5 ? best.p : null;
 }
 
 function computeVelocity(series: PricePoint[], currentIdx: number, windowMins: number): number {
   const current = series[currentIdx];
-  // Find point ~windowMins ago
   const targetTime = current.t - windowMins * 60;
   let pastIdx = currentIdx;
   for (let i = currentIdx - 1; i >= 0; i--) {
@@ -59,73 +82,31 @@ function computeVelocity(series: PricePoint[], currentIdx: number, windowMins: n
     pastIdx = i;
   }
   if (pastIdx === currentIdx) return 0;
-  const dt = (current.t - series[pastIdx].t) / 60; // in minutes
-  if (dt === 0) return 0;
-  return (current.p - series[pastIdx].p) / dt; // price change per minute
+  return (current.p - series[pastIdx].p) * 100; // in cents
 }
 
 function computeVolatility(series: PricePoint[], currentIdx: number, windowMins: number): number {
   const current = series[currentIdx];
   const cutoff = current.t - windowMins * 60;
-
   const changes: number[] = [];
   for (let i = currentIdx; i > 0 && series[i].t >= cutoff; i--) {
-    changes.push(series[i].p - series[i - 1].p);
+    changes.push((series[i].p - series[i - 1].p) * 100); // in cents
   }
   if (changes.length < 2) return 0;
-
   const mean = changes.reduce((a, b) => a + b, 0) / changes.length;
   const variance = changes.reduce((s, c) => s + (c - mean) ** 2, 0) / changes.length;
   return Math.sqrt(variance);
 }
 
-function computeRegimeDuration(series: PricePoint[], currentIdx: number, threshold: number): number {
-  let duration = 0;
-  for (let i = currentIdx; i >= 0; i--) {
+function computeRegime(series: PricePoint[], currentIdx: number, threshold: number): number {
+  let mins = 0;
+  for (let i = currentIdx; i > 0; i--) {
     if (series[i].p >= threshold) {
-      if (i > 0) {
-        duration += (series[i].t - series[i - 1].t) / 60;
-      }
-    } else {
-      break;
-    }
+      mins += (series[i].t - series[i - 1].t) / 60;
+    } else break;
   }
-  return duration;
+  return mins;
 }
-
-function computeMaxDrawdown(series: PricePoint[], currentIdx: number): number {
-  let peak = 0;
-  let maxDd = 0;
-  for (let i = 0; i <= currentIdx; i++) {
-    if (series[i].p > peak) peak = series[i].p;
-    const dd = peak - series[i].p;
-    if (dd > maxDd) maxDd = dd;
-  }
-  return maxDd;
-}
-
-function computeFeatures(series: PricePoint[], idx: number): Features {
-  const p = series[idx];
-  const v5 = computeVelocity(series, idx, 5);
-  const v10 = computeVelocity(series, idx, 10);
-  const v20 = computeVelocity(series, idx, 20);
-  const vol = computeVolatility(series, idx, 10);
-  const r85 = computeRegimeDuration(series, idx, 0.85);
-  const r90 = computeRegimeDuration(series, idx, 0.90);
-  const dd = computeMaxDrawdown(series, idx);
-  const accel = v10 - v20;
-
-  return {
-    price: p.p,
-    velocity5: v5, velocity10: v10, velocity20: v20,
-    volatility: vol,
-    regimeDuration85: r85, regimeDuration90: r90,
-    maxDrawdown: dd, acceleration: accel,
-    minsBeforeClose: p.minsBeforeClose,
-  };
-}
-
-// ── Bucketing ───────────────────────────────────────────────
 
 function bucketPrice(p: number): string {
   if (p >= 0.95) return '95c+';
@@ -136,21 +117,10 @@ function bucketPrice(p: number): string {
 }
 
 function bucketVelocity(v: number): string {
-  if (v > 0.002) return 'rising';
-  if (v < -0.002) return 'falling';
+  if (v > 5) return 'surging';
+  if (v > 2) return 'rising';
+  if (v < -2) return 'falling';
   return 'flat';
-}
-
-function bucketVolatility(v: number): string {
-  if (v > 0.03) return 'high';
-  if (v > 0.01) return 'medium';
-  return 'low';
-}
-
-function bucketRegime(mins: number): string {
-  if (mins >= 30) return '30m+';
-  if (mins >= 10) return '10-30m';
-  return '<10m';
 }
 
 function bucketTime(mins: number): string {
@@ -161,25 +131,33 @@ function bucketTime(mins: number): string {
   return '60m+';
 }
 
-function bucketDrawdown(dd: number): string {
-  if (dd >= 0.10) return '≥10c';
-  if (dd >= 0.05) return '5-10c';
-  return '<5c';
+interface BucketStats { count: number; wins: number; totalPrice: number; }
+
+function addToBucket(map: Map<string, BucketStats>, key: string, price: number, won: boolean) {
+  const b = map.get(key) || { count: 0, wins: 0, totalPrice: 0 };
+  b.count++;
+  if (won) b.wins++;
+  b.totalPrice += price;
+  map.set(key, b);
 }
 
-// ── Analysis ────────────────────────────────────────────────
-
-interface BucketStats {
-  count: number;
-  wins: number;
-  totalPrice: number;
-  totalEdge: number;
-  prices: number[];
+function printBucketTable(map: Map<string, BucketStats>, keys: string[], minN: number = 0) {
+  for (const key of keys) {
+    const b = map.get(key);
+    if (!b) continue;
+    const wr = b.wins / b.count;
+    const avgPrice = b.totalPrice / b.count;
+    const edge = wr - avgPrice;
+    const flag = b.count < 20 ? ' ⚠' : '';
+    if (b.count < minN) continue;
+    const edgeStr = edge >= 0 ? `+${(edge * 100).toFixed(1)}%` : `${(edge * 100).toFixed(1)}%`;
+    console.log(`  ${key.padEnd(30)} | ${String(b.count).padEnd(5)} | ${(wr * 100).toFixed(1).padEnd(6)}% | ${(avgPrice * 100).toFixed(1).padEnd(5)}c | ${edgeStr}${flag}`);
+  }
 }
 
 async function main() {
   console.log('\n╔════════════════════════════════════════════════════════╗');
-  console.log('║   Sports Market Edge Analysis — Price Features         ║');
+  console.log('║   Sports Edge Validation — <80c Signal Analysis        ║');
   console.log('╚════════════════════════════════════════════════════════╝\n');
 
   const mongoUri = process.env.MONGODB_URI!;
@@ -188,242 +166,315 @@ async function main() {
   const dbName = (() => { try { return new URL(mongoUri).pathname.replace('/', '') || 'yieldr'; } catch { return 'yieldr'; } })();
   const db = client.db(dbName);
 
-  const histories = await db.collection('sportPriceHistory').find({ dataPoints: { $gte: 20 } }).toArray();
+  const histories = await db.collection('sportPriceHistory')
+    .find({ dataPoints: { $gte: 20 } })
+    .sort({ endDate: 1 }) // chronological for split
+    .toArray();
+
   console.log(`  Markets with price history: ${histories.length}\n`);
+  if (histories.length === 0) { await client.close(); return; }
 
-  if (histories.length === 0) {
-    console.log('  No data! Run fetch-sports-markets.ts and fetch-price-histories.ts first.');
-    await client.close();
-    return;
-  }
-
-  // ── Pass 2: Compute features at each time point ───────────
-  // Sample at specific intervals before close
-  const SAMPLE_INTERVALS = [5, 10, 15, 30, 60]; // minutes before close
-
-  // Multi-dimensional bucketing
-  const buckets = new Map<string, BucketStats>();
-
-  // Simple price-only buckets for baseline
-  const priceOnlyBuckets = new Map<string, BucketStats>();
-
-  // Feature-combo buckets
-  let totalObservations = 0;
-  let marketsProcessed = 0;
+  // ── Build observations ────────────────────────────────────────
+  const SAMPLE_INTERVALS = [5, 10, 15, 30, 60];
+  const allObs: Observation[] = [];
 
   for (const market of histories) {
     const series: PricePoint[] = market.timeSeries || [];
     if (series.length < 20) continue;
 
-    const winnerIndex = market.winnerIndex;
-
-    // For each sample interval, find the closest data point
     for (const targetMins of SAMPLE_INTERVALS) {
-      // Find snapshot closest to targetMins before close
       let bestIdx = -1;
       let bestDist = Infinity;
       for (let i = 0; i < series.length; i++) {
         const dist = Math.abs(series[i].minsBeforeClose - targetMins);
         if (dist < bestDist) { bestDist = dist; bestIdx = i; }
       }
-      if (bestIdx < 0 || bestDist > 3) continue; // skip if no data within 3 mins
+      if (bestIdx < 0 || bestDist > 3) continue;
 
-      const features = computeFeatures(series, bestIdx);
+      const leadingSideIsYes = series[bestIdx].p > 0.5;
+      const leadingPrice = leadingSideIsYes ? series[bestIdx].p : (1 - series[bestIdx].p);
+      const leadingSideWon = leadingSideIsYes ? (market.winnerIndex === 0) : (market.winnerIndex === 1);
 
-      // Determine if the leading side won
-      // If price > 0.5, outcome 0 (Yes) is leading
-      // If price < 0.5, outcome 1 (No) is leading
-      const leadingSideIsYes = features.price > 0.5;
-      const leadingPrice = leadingSideIsYes ? features.price : (1 - features.price);
-      const leadingSideWon = leadingSideIsYes ? (winnerIndex === 0) : (winnerIndex === 1);
+      if (leadingPrice < 0.60) continue; // only analyze when someone is leading
 
-      if (leadingPrice < 0.75) continue; // Only analyze when a side is clearly leading
+      // Velocity & volatility
+      const vel10 = computeVelocity(series, bestIdx, 10);
+      const vol30 = computeVolatility(series, bestIdx, 30);
 
-      totalObservations++;
+      // Momentum: is current price the max in last 30 min?
+      const cutoff30 = series[bestIdx].t - 1800;
+      let maxInWindow = 0;
+      for (let i = bestIdx; i >= 0 && series[i].t >= cutoff30; i--) {
+        const lp = series[i].p > 0.5 ? series[i].p : (1 - series[i].p);
+        if (lp > maxInWindow) maxInWindow = lp;
+      }
+      const momentum = leadingPrice >= maxInWindow - 0.005;
 
-      // ── Price-only bucket ─────────────────────────────────
-      const priceBucket = bucketPrice(leadingPrice);
-      const timeBucket = bucketTime(targetMins);
-      const priceTimeKey = `${priceBucket}|${timeBucket}`;
-      addToBucket(priceOnlyBuckets, priceTimeKey, leadingPrice, leadingSideWon);
+      // Regime duration
+      const regime80 = computeRegime(series, bestIdx, 0.80);
+      const regime90 = computeRegime(series, bestIdx, 0.90);
 
-      // ── Full feature buckets ──────────────────────────────
-      const velBucket = bucketVelocity(features.velocity10);
-      const volBucket = bucketVolatility(features.volatility);
-      const regBucket = bucketRegime(features.regimeDuration85);
-      const ddBucket = bucketDrawdown(features.maxDrawdown);
+      // Price context
+      const price30m = getPriceAtMinsBefore(series, targetMins + 30);
+      const price60m = getPriceAtMinsBefore(series, targetMins + 60);
+      const price2hr = getPriceAtMinsBefore(series, targetMins + 120);
 
-      // Price + velocity
-      addToBucket(buckets, `${priceBucket}|${velBucket}`, leadingPrice, leadingSideWon);
+      // Peak price ever
+      let peakPrice = 0;
+      for (let i = 0; i <= bestIdx; i++) {
+        const lp = series[i].p > 0.5 ? series[i].p : (1 - series[i].p);
+        if (lp > peakPrice) peakPrice = lp;
+      }
 
-      // Price + volatility
-      addToBucket(buckets, `${priceBucket}|${volBucket}`, leadingPrice, leadingSideWon);
+      // Survival: what happens after entry?
+      let minPriceAfter = leadingPrice;
+      let minsToReach90: number | null = null;
+      let minsToReach95: number | null = null;
+      for (let i = bestIdx + 1; i < series.length; i++) {
+        const lp = leadingSideIsYes ? series[i].p : (1 - series[i].p);
+        if (lp < minPriceAfter) minPriceAfter = lp;
+        const minsAfter = (series[i].t - series[bestIdx].t) / 60;
+        if (lp >= 0.90 && minsToReach90 === null) minsToReach90 = minsAfter;
+        if (lp >= 0.95 && minsToReach95 === null) minsToReach95 = minsAfter;
+      }
+      const maxDrawdownAfter = leadingPrice - minPriceAfter;
 
-      // Price + regime
-      addToBucket(buckets, `${priceBucket}|${regBucket}`, leadingPrice, leadingSideWon);
+      // Adjust context prices for leading side
+      const ctx30 = price30m !== null ? (leadingSideIsYes ? price30m : 1 - price30m) : null;
+      const ctx60 = price60m !== null ? (leadingSideIsYes ? price60m : 1 - price60m) : null;
+      const ctx2hr = price2hr !== null ? (leadingSideIsYes ? price2hr : 1 - price2hr) : null;
 
-      // Price + drawdown
-      addToBucket(buckets, `${priceBucket}|${ddBucket}`, leadingPrice, leadingSideWon);
-
-      // Triple: price + velocity + volatility
-      addToBucket(buckets, `${priceBucket}|${velBucket}|${volBucket}`, leadingPrice, leadingSideWon);
-
-      // Triple: price + velocity + regime
-      addToBucket(buckets, `${priceBucket}|${velBucket}|${regBucket}`, leadingPrice, leadingSideWon);
-
-      // Quad: price + velocity + volatility + regime
-      addToBucket(buckets, `${priceBucket}|${velBucket}|${volBucket}|${regBucket}`, leadingPrice, leadingSideWon);
+      allObs.push({
+        conditionId: market.conditionId, sport: market.sport || '?',
+        question: market.question || '?', endDate: market.endDate || '',
+        winnerIndex: market.winnerIndex, minsBeforeClose: targetMins,
+        price: leadingPrice, leadingSideIsYes, leadingSideWon,
+        velocity10: vel10, volatility: vol30, momentum,
+        regime80, regime90,
+        price30mAgo: ctx30, price60mAgo: ctx60, price2hrAgo: ctx2hr,
+        peakPrice, minPriceAfter, maxDrawdownAfter,
+        minsToReach90, minsToReach95,
+      });
     }
-
-    marketsProcessed++;
   }
 
-  console.log(`  Markets processed: ${marketsProcessed}`);
-  console.log(`  Total observations: ${totalObservations}\n`);
+  console.log(`  Total observations: ${allObs.length}`);
+  const sub80 = allObs.filter(o => o.price < 0.80);
+  console.log(`  <80c observations: ${sub80.length}\n`);
 
-  // ── Pass 3: Measure edge ──────────────────────────────────
-
-  // 1. Baseline: price-only WR by price bucket × time bucket
+  // ── 1. BASELINE ───────────────────────────────────────────────
   console.log('═══════════════════════════════════════════════════════════════');
-  console.log('  BASELINE — Win Rate by Price × Time to Close              ');
+  console.log('  1. BASELINE — Win Rate by Price × Time');
   console.log('═══════════════════════════════════════════════════════════════\n');
 
+  const baseline = new Map<string, BucketStats>();
+  for (const o of allObs) {
+    const key = `${bucketPrice(o.price)}|${bucketTime(o.minsBeforeClose)}`;
+    addToBucket(baseline, key, o.price, o.leadingSideWon);
+  }
+
+  console.log(`  ${'Price|Time'.padEnd(30)} | ${'N'.padEnd(5)} | ${'WR%'.padEnd(7)} | ${'Avg'.padEnd(6)} | Edge`);
+  console.log(`  ${'-'.repeat(65)}`);
+  const priceLabels = ['<80c', '80-85c', '85-90c', '90-95c', '95c+'];
   const timeLabels = ['≤5m', '5-15m', '15-30m', '30-60m', '60m+'];
-  const priceLabels = ['80-85c', '85-90c', '90-95c', '95c+'];
-
-  console.log(`  ${'Price'.padEnd(10)} | ${'Time'.padEnd(8)} | ${'N'.padEnd(5)} | ${'WR%'.padEnd(7)} | ${'AvgPrice'.padEnd(9)} | Edge`);
-  console.log(`  ${'-'.repeat(60)}`);
-
   for (const pl of priceLabels) {
     for (const tl of timeLabels) {
       const key = `${pl}|${tl}`;
-      const b = priceOnlyBuckets.get(key);
+      const b = baseline.get(key);
       if (!b || b.count < 3) continue;
-
       const wr = b.wins / b.count;
-      const avgPrice = b.totalPrice / b.count;
-      const edge = wr - avgPrice;
-      const edgeStr = edge >= 0 ? `+${(edge * 100).toFixed(1)}%` : `${(edge * 100).toFixed(1)}%`;
-
-      console.log(
-        `  ${pl.padEnd(10)} | ${tl.padEnd(8)} | ${String(b.count).padEnd(5)} | ` +
-        `${(wr * 100).toFixed(1).padEnd(6)}% | ${(avgPrice * 100).toFixed(1).padEnd(8)}c | ${edgeStr}`
-      );
+      const avgP = b.totalPrice / b.count;
+      const edge = wr - avgP;
+      const flag = b.count < 20 ? ' ⚠' : '';
+      console.log(`  ${key.padEnd(30)} | ${String(b.count).padEnd(5)} | ${(wr*100).toFixed(1).padEnd(6)}% | ${(avgP*100).toFixed(1).padEnd(5)}c | ${edge >= 0 ? '+' : ''}${(edge*100).toFixed(1)}%${flag}`);
     }
   }
 
-  // 2. Feature-combo analysis — find high-edge buckets
+  // ── 2. OUT-OF-SAMPLE SPLIT ────────────────────────────────────
   console.log('\n═══════════════════════════════════════════════════════════════');
-  console.log('  FEATURE ANALYSIS — Edge by Feature Combination             ');
+  console.log('  2. OUT-OF-SAMPLE — Train (60%) vs Validate (40%)');
   console.log('═══════════════════════════════════════════════════════════════\n');
 
-  // Sort by edge, filter minimum sample size
-  const MIN_SAMPLES = 10;
-  const rankedBuckets = [...buckets.entries()]
-    .filter(([_, b]) => b.count >= MIN_SAMPLES)
-    .map(([key, b]) => {
-      const wr = b.wins / b.count;
-      const avgPrice = b.totalPrice / b.count;
-      const edge = wr - avgPrice;
-      return { key, ...b, wr, avgPrice, edge };
-    })
-    .sort((a, b) => b.edge - a.edge);
+  // Split by market endDate chronologically
+  const sortedMarketIds = histories.map(h => h.conditionId);
+  const splitIdx = Math.floor(sortedMarketIds.length * 0.6);
+  const trainIds = new Set(sortedMarketIds.slice(0, splitIdx));
+  const valIds = new Set(sortedMarketIds.slice(splitIdx));
 
-  console.log('  TOP 20 — Highest Edge Feature Combos (min 10 samples)\n');
-  console.log(`  ${'Rank'.padEnd(5)} | ${'Features'.padEnd(35)} | ${'N'.padEnd(5)} | ${'WR%'.padEnd(7)} | ${'AvgPrice'.padEnd(9)} | Edge`);
-  console.log(`  ${'-'.repeat(75)}`);
+  const trainObs = allObs.filter(o => trainIds.has(o.conditionId));
+  const valObs = allObs.filter(o => valIds.has(o.conditionId));
 
-  for (let i = 0; i < Math.min(20, rankedBuckets.length); i++) {
-    const b = rankedBuckets[i];
-    const edgeStr = b.edge >= 0 ? `+${(b.edge * 100).toFixed(1)}%` : `${(b.edge * 100).toFixed(1)}%`;
+  console.log(`  Train: ${trainIds.size} markets, ${trainObs.length} observations`);
+  console.log(`  Validate: ${valIds.size} markets, ${valObs.length} observations\n`);
+
+  console.log(`  ${'Price'.padEnd(10)} | ${'Train N'.padEnd(8)} | ${'Train WR'.padEnd(9)} | ${'Train Edge'.padEnd(11)} | ${'Val N'.padEnd(7)} | ${'Val WR'.padEnd(9)} | Val Edge | Survived?`);
+  console.log(`  ${'-'.repeat(85)}`);
+
+  for (const pl of priceLabels) {
+    const train = trainObs.filter(o => bucketPrice(o.price) === pl);
+    const val = valObs.filter(o => bucketPrice(o.price) === pl);
+    if (train.length < 3 && val.length < 3) continue;
+
+    const tWr = train.length > 0 ? train.filter(o => o.leadingSideWon).length / train.length : 0;
+    const tAvg = train.length > 0 ? train.reduce((s, o) => s + o.price, 0) / train.length : 0;
+    const tEdge = tWr - tAvg;
+
+    const vWr = val.length > 0 ? val.filter(o => o.leadingSideWon).length / val.length : 0;
+    const vAvg = val.length > 0 ? val.reduce((s, o) => s + o.price, 0) / val.length : 0;
+    const vEdge = vWr - vAvg;
+
+    const survived = tEdge > 0.02 && vEdge > 0.02 ? '✅ YES' : tEdge > 0.02 && vEdge <= 0.02 ? '❌ NO' : '—';
+
     console.log(
-      `  ${String(i + 1).padEnd(5)} | ${b.key.padEnd(35)} | ${String(b.count).padEnd(5)} | ` +
-      `${(b.wr * 100).toFixed(1).padEnd(6)}% | ${(b.avgPrice * 100).toFixed(1).padEnd(8)}c | ${edgeStr}`
+      `  ${pl.padEnd(10)} | ${String(train.length).padEnd(8)} | ${(tWr*100).toFixed(1).padEnd(8)}% | ${(tEdge >= 0 ? '+' : '') + (tEdge*100).toFixed(1) + '%'}`.padEnd(52) +
+      ` | ${String(val.length).padEnd(7)} | ${(vWr*100).toFixed(1).padEnd(8)}% | ${(vEdge >= 0 ? '+' : '') + (vEdge*100).toFixed(1)}% | ${survived}`
     );
   }
 
-  console.log('\n  BOTTOM 10 — Worst Edge (traps to avoid)\n');
-  const worst = rankedBuckets.slice(-10).reverse();
-  for (const b of worst) {
-    const edgeStr = `${(b.edge * 100).toFixed(1)}%`;
-    console.log(
-      `  ${b.key.padEnd(35)} | ${String(b.count).padEnd(5)} | ` +
-      `${(b.wr * 100).toFixed(1).padEnd(6)}% | ${(b.avgPrice * 100).toFixed(1).padEnd(8)}c | ${edgeStr}`
-    );
-  }
-
-  // 3. The key question: does low vol + rising + long regime = edge?
+  // ── 3. PER-SPORT BREAKDOWN ────────────────────────────────────
   console.log('\n═══════════════════════════════════════════════════════════════');
-  console.log('  KEY HYPOTHESIS — Low Vol + Rising + Long Regime = Edge?    ');
+  console.log('  3. PER-SPORT — <80c Edge by Sport');
   console.log('═══════════════════════════════════════════════════════════════\n');
 
-  const hypothesisKeys = [
-    '90-95c|rising|low',        // price rising, low vol
-    '90-95c|flat|low',          // price flat, low vol
-    '90-95c|falling|low',       // price falling, low vol
-    '90-95c|rising|high',       // price rising, high vol
-    '90-95c|falling|high',      // price falling, high vol
-    '95c+|rising|low',
-    '95c+|flat|low',
-    '95c+|falling|low',
-    '95c+|rising|high',
-    '85-90c|rising|low',
-    '85-90c|falling|high',
-    '90-95c|rising|low|30m+',   // quad: all good signals
-    '90-95c|rising|low|10-30m',
-    '90-95c|rising|low|<10m',
-    '90-95c|flat|low|30m+',
-    '95c+|rising|low|30m+',
-    '95c+|flat|low|30m+',
-  ];
+  const sports = [...new Set(allObs.map(o => o.sport))].sort();
+  console.log(`  ${'Sport'.padEnd(12)} | ${'N'.padEnd(5)} | ${'Wins'.padEnd(5)} | ${'WR%'.padEnd(7)} | ${'AvgPrice'.padEnd(9)} | Edge`);
+  console.log(`  ${'-'.repeat(55)}`);
 
-  console.log(`  ${'Features'.padEnd(35)} | ${'N'.padEnd(5)} | ${'WR%'.padEnd(7)} | ${'AvgPrice'.padEnd(9)} | Edge    | Verdict`);
-  console.log(`  ${'-'.repeat(80)}`);
+  for (const sport of sports) {
+    const obs = allObs.filter(o => o.sport === sport && o.price < 0.80);
+    if (obs.length === 0) continue;
+    const wins = obs.filter(o => o.leadingSideWon).length;
+    const avgP = obs.reduce((s, o) => s + o.price, 0) / obs.length;
+    const edge = wins / obs.length - avgP;
+    const flag = obs.length < 20 ? ' ⚠' : '';
+    console.log(`  ${sport.padEnd(12)} | ${String(obs.length).padEnd(5)} | ${String(wins).padEnd(5)} | ${(wins/obs.length*100).toFixed(1).padEnd(6)}% | ${(avgP*100).toFixed(1).padEnd(8)}c | ${edge >= 0 ? '+' : ''}${(edge*100).toFixed(1)}%${flag}`);
+  }
 
-  for (const key of hypothesisKeys) {
-    const b = buckets.get(key);
-    if (!b || b.count < 3) {
-      console.log(`  ${key.padEnd(35)} | ${'—'.padEnd(5)} | ${'—'.padEnd(7)} | ${'—'.padEnd(9)} | —       | no data`);
-      continue;
+  // Also show 90-95c per sport for comparison
+  console.log('\n  90-95c per sport (for comparison):');
+  for (const sport of sports) {
+    const obs = allObs.filter(o => o.sport === sport && o.price >= 0.90 && o.price < 0.95);
+    if (obs.length < 3) continue;
+    const wins = obs.filter(o => o.leadingSideWon).length;
+    const avgP = obs.reduce((s, o) => s + o.price, 0) / obs.length;
+    const edge = wins / obs.length - avgP;
+    console.log(`  ${sport.padEnd(12)} | ${String(obs.length).padEnd(5)} | WR ${(wins/obs.length*100).toFixed(1)}% | Edge ${edge >= 0 ? '+' : ''}${(edge*100).toFixed(1)}%`);
+  }
+
+  // ── 4. DEEP DIVE — Every <80c observation ─────────────────────
+  console.log('\n═══════════════════════════════════════════════════════════════');
+  console.log('  4. DEEP DIVE — All <80c Observations');
+  console.log('═══════════════════════════════════════════════════════════════\n');
+
+  console.log(`  ${'W/L'} | ${'Price'.padEnd(5)} | ${'-Min'.padEnd(4)} | ${'Sport'.padEnd(8)} | ${'30m ago'.padEnd(7)} | ${'60m ago'.padEnd(7)} | ${'2hr ago'.padEnd(7)} | ${'Peak'.padEnd(5)} | ${'MinAfter'.padEnd(8)} | ${'DD'.padEnd(5)} | Market`);
+  console.log(`  ${'-'.repeat(110)}`);
+
+  const sorted80 = sub80.sort((a, b) => a.price - b.price);
+  for (const o of sorted80) {
+    const icon = o.leadingSideWon ? '✅' : '❌';
+    const p30 = o.price30mAgo !== null ? `${(o.price30mAgo * 100).toFixed(0)}c` : '?';
+    const p60 = o.price60mAgo !== null ? `${(o.price60mAgo * 100).toFixed(0)}c` : '?';
+    const p2h = o.price2hrAgo !== null ? `${(o.price2hrAgo * 100).toFixed(0)}c` : '?';
+    const peak = `${(o.peakPrice * 100).toFixed(0)}c`;
+    const minA = `${(o.minPriceAfter * 100).toFixed(0)}c`;
+    const dd = `${(o.maxDrawdownAfter * 100).toFixed(0)}c`;
+    const title = (o.question || '?').slice(0, 35);
+    console.log(`  ${icon} | ${(o.price * 100).toFixed(0).padEnd(4)}c | ${String(o.minsBeforeClose).padEnd(3)}m | ${o.sport.padEnd(8)} | ${p30.padEnd(7)} | ${p60.padEnd(7)} | ${p2h.padEnd(7)} | ${peak.padEnd(5)} | ${minA.padEnd(8)} | ${dd.padEnd(5)} | ${title}`);
+  }
+
+  // ── 5. SURVIVAL ANALYSIS ──────────────────────────────────────
+  console.log('\n═══════════════════════════════════════════════════════════════');
+  console.log('  5. SURVIVAL — What happens after entry at <80c?');
+  console.log('═══════════════════════════════════════════════════════════════\n');
+
+  if (sub80.length > 0) {
+    const dropBelow70 = sub80.filter(o => o.minPriceAfter < 0.70).length;
+    const dropBelow60 = sub80.filter(o => o.minPriceAfter < 0.60).length;
+    const dropBelow50 = sub80.filter(o => o.minPriceAfter < 0.50).length;
+    const avgDD = sub80.reduce((s, o) => s + o.maxDrawdownAfter, 0) / sub80.length;
+    const maxDD = Math.max(...sub80.map(o => o.maxDrawdownAfter));
+    const reachesG90 = sub80.filter(o => o.minsToReach90 !== null);
+    const reaches95 = sub80.filter(o => o.minsToReach95 !== null);
+
+    console.log(`  Drop below 70c after entry: ${dropBelow70}/${sub80.length} (${(dropBelow70/sub80.length*100).toFixed(0)}%)`);
+    console.log(`  Drop below 60c after entry: ${dropBelow60}/${sub80.length} (${(dropBelow60/sub80.length*100).toFixed(0)}%)`);
+    console.log(`  Drop below 50c after entry: ${dropBelow50}/${sub80.length} (${(dropBelow50/sub80.length*100).toFixed(0)}%)`);
+    console.log(`  Avg max drawdown: ${(avgDD * 100).toFixed(1)}c | Worst: ${(maxDD * 100).toFixed(1)}c`);
+    console.log(`  Reaches 90c before close: ${reachesG90.length}/${sub80.length} (${(reachesG90.length/sub80.length*100).toFixed(0)}%)`);
+    if (reachesG90.length > 0) {
+      const avgMinsTo90 = reachesG90.reduce((s, o) => s + (o.minsToReach90 || 0), 0) / reachesG90.length;
+      console.log(`  Avg time to reach 90c: ${avgMinsTo90.toFixed(0)} min after entry`);
     }
+    console.log(`  Reaches 95c before close: ${reaches95.length}/${sub80.length} (${(reaches95.length/sub80.length*100).toFixed(0)}%)`);
+
+    // Price 2hr before tells us if this was pre-game or in-game
+    const withCtx = sub80.filter(o => o.price2hrAgo !== null);
+    if (withCtx.length > 0) {
+      const wasAbove80 = withCtx.filter(o => o.price2hrAgo! > 0.80).length;
+      const wasBelow80 = withCtx.filter(o => o.price2hrAgo! <= 0.80).length;
+      console.log(`\n  Context: 2 hours before entry...`);
+      console.log(`    Price was >80c: ${wasAbove80} (in-game decline to <80c)`);
+      console.log(`    Price was ≤80c: ${wasBelow80} (was already below 80c — pre-game or early-game)`);
+    }
+  }
+
+  // ── 6. THE 85-90c TRAP ────────────────────────────────────────
+  console.log('\n═══════════════════════════════════════════════════════════════');
+  console.log('  6. THE 85-90c TRAP — Why does this bucket fail?');
+  console.log('═══════════════════════════════════════════════════════════════\n');
+
+  const trap = allObs.filter(o => o.price >= 0.85 && o.price < 0.90);
+  if (trap.length > 0) {
+    const trapWins = trap.filter(o => o.leadingSideWon);
+    const trapLosses = trap.filter(o => !o.leadingSideWon);
+    console.log(`  Total 85-90c observations: ${trap.length} | WR: ${(trapWins.length/trap.length*100).toFixed(1)}%`);
+    console.log(`\n  Losses (${trapLosses.length}):`);
+    for (const o of trapLosses.slice(0, 15)) {
+      const p30 = o.price30mAgo !== null ? `${(o.price30mAgo * 100).toFixed(0)}c` : '?';
+      console.log(`    ${(o.price*100).toFixed(0)}c | -${o.minsBeforeClose}m | ${o.sport.padEnd(8)} | 30m ago: ${p30} | vel: ${o.velocity10 >= 0 ? '+' : ''}${o.velocity10.toFixed(1)}c | ${(o.question || '').slice(0, 40)}`);
+    }
+  }
+
+  // ── 7. FEATURE COMBOS for <80c ────────────────────────────────
+  console.log('\n═══════════════════════════════════════════════════════════════');
+  console.log('  7. FEATURE COMBOS — Which <80c entries have highest edge?');
+  console.log('═══════════════════════════════════════════════════════════════\n');
+
+  const featureBuckets = new Map<string, BucketStats>();
+  for (const o of sub80) {
+    const vel = bucketVelocity(o.velocity10);
+    const mom = o.momentum ? 'at-peak' : 'off-peak';
+    const reg = o.regime80 >= 30 ? 'long-regime' : o.regime80 >= 10 ? 'mid-regime' : 'new-regime';
+
+    addToBucket(featureBuckets, `vel:${vel}`, o.price, o.leadingSideWon);
+    addToBucket(featureBuckets, `mom:${mom}`, o.price, o.leadingSideWon);
+    addToBucket(featureBuckets, `reg:${reg}`, o.price, o.leadingSideWon);
+    addToBucket(featureBuckets, `${vel}|${mom}`, o.price, o.leadingSideWon);
+    addToBucket(featureBuckets, `${vel}|${reg}`, o.price, o.leadingSideWon);
+  }
+
+  console.log(`  ${'Feature'.padEnd(30)} | ${'N'.padEnd(5)} | ${'WR%'.padEnd(7)} | ${'Avg'.padEnd(6)} | Edge`);
+  console.log(`  ${'-'.repeat(60)}`);
+  const sortedFeatures = [...featureBuckets.entries()]
+    .filter(([_, b]) => b.count >= 3)
+    .sort((a, b) => (b[1].wins / b[1].count - b[1].totalPrice / b[1].count) - (a[1].wins / a[1].count - a[1].totalPrice / a[1].count));
+  for (const [key, b] of sortedFeatures) {
     const wr = b.wins / b.count;
-    const avgPrice = b.totalPrice / b.count;
-    const edge = wr - avgPrice;
-    const edgeStr = edge >= 0 ? `+${(edge * 100).toFixed(1)}%` : `${(edge * 100).toFixed(1)}%`;
-    const verdict = edge >= 0.05 ? '✅ EDGE' : edge >= 0.02 ? '⚠️ marginal' : edge >= 0 ? '➖ neutral' : '❌ negative';
-    console.log(
-      `  ${key.padEnd(35)} | ${String(b.count).padEnd(5)} | ` +
-      `${(wr * 100).toFixed(1).padEnd(6)}% | ${(avgPrice * 100).toFixed(1).padEnd(8)}c | ${edgeStr.padEnd(8)} | ${verdict}`
-    );
+    const avg = b.totalPrice / b.count;
+    const edge = wr - avg;
+    const flag = b.count < 20 ? ' ⚠' : '';
+    console.log(`  ${key.padEnd(30)} | ${String(b.count).padEnd(5)} | ${(wr*100).toFixed(1).padEnd(6)}% | ${(avg*100).toFixed(1).padEnd(5)}c | ${edge >= 0 ? '+' : ''}${(edge*100).toFixed(1)}%${flag}`);
   }
 
-  // 4. Summary statistics
-  console.log('\n═══════════════════════════════════════════════════════════════');
-  console.log('  SUMMARY                                                     ');
-  console.log('═══════════════════════════════════════════════════════════════\n');
-
-  const positiveEdge = rankedBuckets.filter(b => b.edge > 0.03 && b.count >= 20);
-  console.log(`  Feature combos with >3% edge (n≥20): ${positiveEdge.length}`);
-  if (positiveEdge.length > 0) {
-    console.log(`  Best: ${positiveEdge[0].key} | Edge: +${(positiveEdge[0].edge * 100).toFixed(1)}% | n=${positiveEdge[0].count}`);
-  }
-
-  const negativeEdge = rankedBuckets.filter(b => b.edge < -0.05 && b.count >= 20);
-  console.log(`  Feature combos with <-5% edge (n≥20): ${negativeEdge.length} (traps to avoid)`);
-
-  console.log(`\n  Total markets: ${marketsProcessed} | Observations: ${totalObservations}`);
+  // ── SUMMARY ───────────────────────────────────────────────────
+  console.log('\n╔════════════════════════════════════════════════════════╗');
+  console.log('║   SUMMARY                                              ║');
+  console.log('╚════════════════════════════════════════════════════════╝\n');
+  console.log(`  Markets: ${histories.length} | Observations: ${allObs.length}`);
+  console.log(`  <80c signal: ${sub80.length} obs | WR: ${sub80.length > 0 ? (sub80.filter(o=>o.leadingSideWon).length/sub80.length*100).toFixed(1) : '?'}% | Avg price: ${sub80.length > 0 ? (sub80.reduce((s,o)=>s+o.price,0)/sub80.length*100).toFixed(1) : '?'}c`);
   console.log('');
 
   await client.close();
-}
-
-function addToBucket(map: Map<string, BucketStats>, key: string, price: number, won: boolean) {
-  const b = map.get(key) || { count: 0, wins: 0, totalPrice: 0, totalEdge: 0, prices: [] };
-  b.count++;
-  if (won) b.wins++;
-  b.totalPrice += price;
-  b.prices.push(price);
-  map.set(key, b);
 }
 
 main().catch(err => { console.error('Fatal:', err.message); process.exit(1); });

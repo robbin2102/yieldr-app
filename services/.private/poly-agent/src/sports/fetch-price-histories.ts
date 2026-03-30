@@ -101,9 +101,11 @@ async function main() {
   );
 
   // Sort by most recent, prioritize high volume
-  const markets = await marketsCol.find({}).sort({ endDate: -1, volume: -1 }).toArray();
+  const sportFilter = args.includes('--nba') ? { sport: 'nba' } : {};
+  const markets = await marketsCol.find(sportFilter).sort({ endDate: -1, volume: -1 }).toArray();
   const toFetch = markets.filter(m => !existingIds.has(m.conditionId)).slice(0, FETCH_LIMIT);
 
+  console.log(`  Sport filter: ${args.includes('--nba') ? 'NBA only' : 'all'}`);
   console.log(`  Markets to fetch: ${toFetch.length}\n`);
 
   let fetched = 0;
@@ -188,9 +190,9 @@ async function main() {
     fetched++;
     passedQuality++;
 
-    if (fetched % 20 === 0) {
+    if (fetched % 5 === 0) {
       const errTotal = errors.noTokens + errors.noEndDate + errors.emptyHistory + errors.belowQuality;
-      console.log(`  [${fetched}/${toFetch.length}] Fetched (${passedQuality} passed quality) | ${errTotal} skipped | ${market.question?.slice(0, 45)}`);
+      console.log(`  [${fetched}/${toFetch.length}] ✅ ${passedQuality} passed | ${errTotal} skipped | ${market.question?.slice(0, 50)}`);
     }
   }
 
