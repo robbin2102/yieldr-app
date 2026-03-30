@@ -249,26 +249,31 @@ async function main() {
     console.log('');
   }
 
-  // 4. BY CATEGORY
+  // 4. BY CATEGORY × THRESHOLD
   console.log('═══════════════════════════════════════════════════════════════');
-  console.log('  4. BY CATEGORY (entry at 85c)');
+  console.log('  4. BY CATEGORY × THRESHOLD');
   console.log('═══════════════════════════════════════════════════════════════\n');
 
   const categories = [...new Set(allTouches.map(t => t.category))].sort();
-  console.log(`  ${'Category'.padEnd(15)} | ${'N'.padEnd(5)} | ${'WR%'.padEnd(7)} | ${'Hrs→Res'.padEnd(8)} | ${'Rev%'.padEnd(6)} | ${'AvgDD'.padEnd(6)} | EV/$100`);
-  console.log(`  ${'-'.repeat(65)}`);
 
-  for (const cat of categories) {
-    const touches = allTouches.filter(t => t.threshold === 0.85 && t.category === cat);
-    if (touches.length < 2) continue;
-    const w = touches.filter(t => t.sideWon).length;
-    const wr = w / touches.length;
-    const avgHrs = touches.reduce((s, t) => s + t.hoursBeforeClose, 0) / touches.length;
-    const rev = touches.filter(t => t.reversed).length;
-    const avgDD = touches.reduce((s, t) => s + t.maxDrawdown, 0) / touches.length;
-    const ev = wr * (100 / 0.85 - 100) - (1 - wr) * 100;
-    const flag = touches.length < 10 ? ' ⚠' : '';
-    console.log(`  ${cat.padEnd(15)} | ${String(touches.length).padEnd(5)} | ${(wr*100).toFixed(1).padEnd(6)}% | ${avgHrs.toFixed(0).padEnd(7)}h | ${(rev/touches.length*100).toFixed(0).padEnd(5)}% | ${(avgDD*100).toFixed(1).padEnd(5)}c | $${ev.toFixed(2)}${flag}`);
+  for (const thresh of THRESHOLDS) {
+    console.log(`  Entry at ${(thresh*100).toFixed(0)}c:`);
+    console.log(`  ${'Category'.padEnd(15)} | ${'N'.padEnd(5)} | ${'WR%'.padEnd(7)} | ${'Hrs→Res'.padEnd(8)} | ${'Rev%'.padEnd(6)} | ${'AvgDD'.padEnd(6)} | EV/$100`);
+    console.log(`  ${'-'.repeat(65)}`);
+
+    for (const cat of categories) {
+      const touches = allTouches.filter(t => t.threshold === thresh && t.category === cat);
+      if (touches.length < 2) continue;
+      const w = touches.filter(t => t.sideWon).length;
+      const wr = w / touches.length;
+      const avgHrs = touches.reduce((s, t) => s + t.hoursBeforeClose, 0) / touches.length;
+      const rev = touches.filter(t => t.reversed).length;
+      const avgDD = touches.reduce((s, t) => s + t.maxDrawdown, 0) / touches.length;
+      const ev = wr * (100 / thresh - 100) - (1 - wr) * 100;
+      const flag = touches.length < 10 ? ' ⚠' : '';
+      console.log(`  ${cat.padEnd(15)} | ${String(touches.length).padEnd(5)} | ${(wr*100).toFixed(1).padEnd(6)}% | ${avgHrs.toFixed(0).padEnd(7)}h | ${(rev/touches.length*100).toFixed(0).padEnd(5)}% | ${(avgDD*100).toFixed(1).padEnd(5)}c | $${ev.toFixed(2)}${flag}`);
+    }
+    console.log('');
   }
 
   // 5. OOS VALIDATION
