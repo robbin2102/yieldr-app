@@ -15,16 +15,16 @@ import { MongoClient } from 'mongodb';
 import dotenv from 'dotenv';
 import path from 'path';
 
+// Same env loading as btc-5m-bot.ts
 const envPaths = [
-  path.resolve(process.cwd(), '.env.polyagent'),           // running from poly-agent/
-  path.resolve(process.cwd(), '.env.local'),               // running from poly-agent/
-  path.resolve(process.cwd(), '.env'),                     // running from poly-agent/
-  path.resolve(process.cwd(), 'services/.private/poly-agent/.env.polyagent'), // from repo root
+  path.resolve(process.cwd(), 'services/.private/poly-agent/.env.polyagent'),
   path.resolve(process.cwd(), 'services/.private/poly-agent/.env.local'),
+  path.resolve(process.cwd(), '.env.local'),
+  path.resolve(process.cwd(), '.env'),
 ];
 for (const p of envPaths) {
   const r = dotenv.config({ path: p });
-  if (r.parsed?.MONGODB_URI) break;
+  if (r.parsed?.BOT_PRIVATE_KEY) break;
 }
 
 if (!process.env.MONGODB_URI) {
