@@ -161,10 +161,10 @@ async function main() {
 
   // 1. FIRST-TOUCH WIN RATE BY THRESHOLD
   console.log('═══════════════════════════════════════════════════════════════');
-  console.log('  1. FIRST-TOUCH WIN RATE (entry at threshold price)');
+  console.log('  1. FIRST-TOUCH WIN RATE (actual entry price at crossing)');
   console.log('═══════════════════════════════════════════════════════════════\n');
 
-  console.log(`  ${'Entry'.padEnd(6)} | ${'N'.padEnd(5)} | ${'Wins'.padEnd(5)} | ${'WR%'.padEnd(7)} | ${'AvgEntry'.padEnd(9)} | ${'Hrs→Res'.padEnd(8)} | ${'Reversed'.padEnd(9)} | ${'AvgDD'.padEnd(6)} | Edge    | EV/$100`);
+  console.log(`  ${'Thresh'.padEnd(7)} | ${'N'.padEnd(5)} | ${'Wins'.padEnd(5)} | ${'WR%'.padEnd(7)} | ${'AvgEntry'.padEnd(9)} | ${'Hrs→Res'.padEnd(8)} | ${'Reversed'.padEnd(9)} | ${'AvgDD'.padEnd(6)} | Edge    | EV/$100`);
   console.log(`  ${'-'.repeat(95)}`);
 
   for (const thresh of THRESHOLDS) {
@@ -176,9 +176,9 @@ async function main() {
     const avgHrs = touches.reduce((s, t) => s + t.hoursBeforeClose, 0) / touches.length;
     const reversals = touches.filter(t => t.reversed).length;
     const avgDD = touches.reduce((s, t) => s + t.maxDrawdown, 0) / touches.length;
-    // EV using THRESHOLD as entry price (limit order)
-    const evAtThresh = wr * (100 / thresh - 100) - (1 - wr) * 100;
-    // Edge using actual entry price
+    // EV using ACTUAL avg entry price (not threshold)
+    const evAtEntry = wr * (100 / avgEntry - 100) - (1 - wr) * 100;
+    // Edge = WR - avgEntry
     const edge = wr - avgEntry;
 
     console.log(
@@ -186,7 +186,7 @@ async function main() {
       `| ${String(touches.length).padEnd(5)} | ${String(wins).padEnd(5)} | ${(wr*100).toFixed(1).padEnd(6)}% | ` +
       `${(avgEntry*100).toFixed(1).padEnd(8)}c | ${avgHrs.toFixed(0).padEnd(7)}h | ` +
       `${String(reversals).padEnd(4)}(${(reversals/touches.length*100).toFixed(0)}%)  | ` +
-      `${(avgDD*100).toFixed(1).padEnd(5)}c | ${edge >= 0 ? '+' : ''}${(edge*100).toFixed(1).padEnd(6)}% | $${evAtThresh.toFixed(2)}`
+      `${(avgDD*100).toFixed(1).padEnd(5)}c | ${edge >= 0 ? '+' : ''}${(edge*100).toFixed(1).padEnd(6)}% | $${evAtEntry.toFixed(2)}`
     );
   }
 
@@ -269,7 +269,8 @@ async function main() {
       const avgHrs = touches.reduce((s, t) => s + t.hoursBeforeClose, 0) / touches.length;
       const rev = touches.filter(t => t.reversed).length;
       const avgDD = touches.reduce((s, t) => s + t.maxDrawdown, 0) / touches.length;
-      const ev = wr * (100 / thresh - 100) - (1 - wr) * 100;
+      const catAvgE = touches.reduce((s, t) => s + t.entryPrice, 0) / touches.length;
+      const ev = wr * (100 / catAvgE - 100) - (1 - wr) * 100;
       const flag = touches.length < 10 ? ' ⚠' : '';
       console.log(`  ${cat.padEnd(15)} | ${String(touches.length).padEnd(5)} | ${(wr*100).toFixed(1).padEnd(6)}% | ${avgHrs.toFixed(0).padEnd(7)}h | ${(rev/touches.length*100).toFixed(0).padEnd(5)}% | ${(avgDD*100).toFixed(1).padEnd(5)}c | $${ev.toFixed(2)}${flag}`);
     }
@@ -296,8 +297,11 @@ async function main() {
 
     const tWr = train.filter(t => t.sideWon).length / train.length;
     const vWr = val.filter(t => t.sideWon).length / val.length;
-    const tEv = tWr * (100 / thresh - 100) - (1 - tWr) * 100;
-    const vEv = vWr * (100 / thresh - 100) - (1 - vWr) * 100;
+    // EV using actual avg entry price per set
+    const tAvgE = train.reduce((s, t) => s + t.entryPrice, 0) / train.length;
+    const vAvgE = val.reduce((s, t) => s + t.entryPrice, 0) / val.length;
+    const tEv = tWr * (100 / tAvgE - 100) - (1 - tWr) * 100;
+    const vEv = vWr * (100 / vAvgE - 100) - (1 - vWr) * 100;
     const survived = tEv > 0 && vEv > 0 ? '✅ YES' : tEv > 0 && vEv <= 0 ? '❌ NO' : '—';
 
     console.log(
@@ -309,16 +313,20 @@ async function main() {
 
   // 6. PnL SIMULATION
   console.log('\n═══════════════════════════════════════════════════════════════');
-  console.log('  6. PnL SIMULATION — $100 limit order at threshold');
+  console.log('  6. PnL SIMULATION — $100 at actual entry price per market');
   console.log('═══════════════════════════════════════════════════════════════\n');
 
   for (const thresh of THRESHOLDS) {
     const touches = allTouches.filter(t => t.threshold === thresh);
     if (touches.length === 0) continue;
     const wins = touches.filter(t => t.sideWon).length;
-    const profitPerWin = 100 / thresh - 100;
-    const pnl = wins * profitPerWin - (touches.length - wins) * 100;
-    console.log(`  ${(thresh*100).toFixed(0)}c: ${touches.length} markets | ${wins}W/${touches.length-wins}L | WR ${(wins/touches.length*100).toFixed(1)}% | Profit/win $${profitPerWin.toFixed(2)} | PnL $${pnl.toFixed(0)} (${(pnl/(touches.length*100)*100).toFixed(1)}% ROI)`);
+    const avgEntry = touches.reduce((s, t) => s + t.entryPrice, 0) / touches.length;
+    // PnL using each market's actual entry price
+    let pnl = 0;
+    for (const t of touches) {
+      pnl += t.sideWon ? (100 / t.entryPrice - 100) : -100;
+    }
+    console.log(`  ${(thresh*100).toFixed(0)}c: ${touches.length} markets | ${wins}W/${touches.length-wins}L | WR ${(wins/touches.length*100).toFixed(1)}% | AvgEntry ${(avgEntry*100).toFixed(1)}c | PnL $${pnl.toFixed(0)} (${(pnl/(touches.length*100)*100).toFixed(1)}% ROI)`);
   }
 
   // 7. LOSS DETAIL
@@ -347,8 +355,9 @@ async function main() {
     const t = allTouches.filter(x => x.threshold === thresh);
     if (t.length === 0) continue;
     const w = t.filter(x => x.sideWon).length;
-    const ev = (w/t.length) * (100/thresh - 100) - (1 - w/t.length) * 100;
-    console.log(`  ${(thresh*100).toFixed(0)}c: ${t.length} markets | WR ${(w/t.length*100).toFixed(1)}% | EV $${ev.toFixed(2)}/bet | ${t.filter(x=>x.reversed).length} reversals`);
+    const avgE = t.reduce((s, x) => s + x.entryPrice, 0) / t.length;
+    const ev = (w/t.length) * (100/avgE - 100) - (1 - w/t.length) * 100;
+    console.log(`  ${(thresh*100).toFixed(0)}c: ${t.length} markets | WR ${(w/t.length*100).toFixed(1)}% | AvgEntry ${(avgE*100).toFixed(1)}c | EV $${ev.toFixed(2)}/bet | ${t.filter(x=>x.reversed).length} reversals`);
   }
   console.log('');
 
@@ -370,27 +379,23 @@ function findFirstTouch(
     let side: 'Yes' | 'No' | null = null;
     let sidePrice = 0;
 
-    // Check if Yes side crosses threshold for the FIRST time
-    if (yesPrice >= threshold) {
-      // Verify it wasn't already above in previous point
-      if (i === 0 || history[i - 1].p < threshold) {
-        side = 'Yes';
-        sidePrice = yesPrice;
-      }
-    }
-    // Check No side
-    if (!side && noPrice >= threshold) {
-      if (i === 0 || (1 - history[i - 1].p) < threshold) {
-        side = 'No';
-        sidePrice = noPrice;
-      }
-    }
+    // Only count TRUE first touch: previous point was BELOW threshold, current is AT/ABOVE
+    // Skip i===0 entirely — if the first data point is already above threshold,
+    // the real cross happened before our window and we can't measure it accurately
+    if (i === 0) continue;
 
-    // If first data point is already above threshold, count it
-    // (the actual first cross happened before our window)
-    if (i === 0 && !side) {
-      if (yesPrice >= threshold) { side = 'Yes'; sidePrice = yesPrice; }
-      else if (noPrice >= threshold) { side = 'No'; sidePrice = noPrice; }
+    const prevYes = history[i - 1].p;
+    const prevNo = 1 - history[i - 1].p;
+
+    // Yes side crosses threshold from below
+    if (yesPrice >= threshold && prevYes < threshold) {
+      side = 'Yes';
+      sidePrice = yesPrice;
+    }
+    // No side crosses threshold from below
+    if (!side && noPrice >= threshold && prevNo < threshold) {
+      side = 'No';
+      sidePrice = noPrice;
     }
 
     if (!side) continue;
