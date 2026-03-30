@@ -40,11 +40,12 @@ const FORCE = args.includes('--force');
 
 async function fetchPriceHistory(tokenId: string, endTs?: number): Promise<{ t: number; p: number }[]> {
   try {
-    // Fetch last 24 hours of history before market end
+    // Fetch last 6 hours of history before market end (covers full game)
     const end = endTs || Math.floor(Date.now() / 1000);
-    const start = end - 86400; // 24 hours before close
+    const start = end - 21600; // 6 hours before close
 
-    const url = `${CLOB_API}/prices-history?market=${tokenId}&startTs=${start}&endTs=${end}&fidelity=1`;
+    // fidelity=5 = 5-minute intervals (faster fetch, sufficient for feature analysis)
+    const url = `${CLOB_API}/prices-history?market=${tokenId}&startTs=${start}&endTs=${end}&fidelity=5`;
     const res = await fetch(url);
     if (!res.ok) return [];
     const data = await res.json() as { history: { t: number; p: number }[] };

@@ -1,8 +1,8 @@
 /**
- * Pass 1A: Fetch Resolved Sports Markets from Polymarket
+ * Pass 1A: Fetch Resolved NBA Markets from Polymarket
  *
- * Pulls 500+ resolved binary sports markets from Gamma API,
- * stores them in MongoDB `sportMarkets` collection.
+ * Fetches closed binary markets, filters for NBA by question text.
+ * Targets 100 resolved NBA markets.
  *
  * Usage (from project root):
  *   npx tsx services/.private/poly-agent/src/sports/fetch-sports-markets.ts
@@ -27,70 +27,27 @@ if (!process.env.MONGODB_URI) { console.error('Fatal: MONGODB_URI not set'); pro
 
 const GAMMA_API = 'https://gamma-api.polymarket.com';
 const RATE_LIMIT_MS = 350;
+const TARGET_COUNT = 100;
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
-// Sport-related tags to search
-const SPORT_TAGS = [
-  'sports', 'nba', 'nfl', 'ufc', 'mma', 'soccer', 'football',
-  'mlb', 'nhl', 'tennis', 'boxing', 'f1', 'cricket', 'golf',
-  'premier-league', 'champions-league', 'la-liga', 'serie-a',
-  'college-football', 'college-basketball', 'march-madness',
+const NBA_TEAMS = [
+  'lakers', 'celtics', 'warriors', 'bucks', 'nuggets', '76ers', 'sixers', 'suns',
+  'heat', 'knicks', 'nets', 'clippers', 'mavericks', 'cavaliers', 'thunder',
+  'timberwolves', 'grizzlies', 'kings', 'pelicans', 'rockets', 'spurs', 'hawks',
+  'hornets', 'pacers', 'magic', 'raptors', 'pistons', 'wizards', 'bulls',
+  'blazers', 'trail blazers', 'jazz', 'pistons',
 ];
 
-interface StoredMarket {
-  conditionId: string;
-  slug: string;
-  question: string;
-  outcomes: string[];
-  tokenIds: string[];
-  endDate: string;
-  volume: number;
-  resolved: boolean;
-  outcomePrices: string;
-  winner: string;       // outcome that won
-  winnerIndex: number;   // 0 or 1
-  tag: string;
-  fetchedAt: Date;
-}
-
-async function fetchMarketsByTag(tag: string): Promise<any[]> {
-  const markets: any[] = [];
-  let offset = 0;
-  const limit = 100;
-
-  while (true) {
-    const url = `${GAMMA_API}/markets?closed=true&limit=${limit}&offset=${offset}&tag=${tag}&volume_num_min=1000`;
-    try {
-      const res = await fetch(url);
-      if (!res.ok) { console.log(`  [${tag}] API ${res.status} at offset ${offset}`); break; }
-      const data = await res.json() as any[];
-      if (!Array.isArray(data) || data.length === 0) break;
-
-      // Filter: binary markets only (2 outcomes), resolved
-      const binary = data.filter((m: any) => {
-        try {
-          const outcomes = typeof m.outcomes === 'string' ? JSON.parse(m.outcomes) : m.outcomes;
-          return Array.isArray(outcomes) && outcomes.length === 2 && m.outcomePrices;
-        } catch { return false; }
-      });
-
-      markets.push(...binary.map((m: any) => ({ ...m, _tag: tag })));
-
-      if (data.length < limit) break;
-      offset += limit;
-      if (offset > 2000) break;
-    } catch (err: any) {
-      console.log(`  [${tag}] Error: ${err.message}`);
-      break;
-    }
-    await sleep(RATE_LIMIT_MS);
-  }
-  return markets;
+function isNbaMarket(question: string): boolean {
+  const q = question.toLowerCase();
+  if (q.includes('nba')) return true;
+  if (q.includes('basketball') && !q.includes('college')) return true;
+  return NBA_TEAMS.some(team => q.includes(team));
 }
 
 async function main() {
   console.log('\n╔════════════════════════════════════════════════════════╗');
-  console.log('║   Fetch Resolved Sports Markets — Polymarket           ║');
+  console.log('║   Fetch Resolved NBA Markets — Polymarket              ║');
   console.log('╚════════════════════════════════════════════════════════╝\n');
 
   const mongoUri = process.env.MONGODB_URI!;
@@ -100,126 +57,94 @@ async function main() {
   const db = client.db(dbName);
   const collection = db.collection('sportMarkets');
 
-  // Check existing
-  const existing = await collection.countDocuments();
-  console.log(`  Existing markets in DB: ${existing}\n`);
+  console.log(`  DB: ${dbName}`);
+  const existing = await collection.countDocuments({ sport: 'nba' });
+  console.log(`  Existing NBA markets: ${existing}`);
+  console.log(`  Target: ${TARGET_COUNT}\n`);
 
-  const allMarkets = new Map<string, any>(); // dedupe by conditionId
-
-  for (const tag of SPORT_TAGS) {
-    process.stdout.write(`  Fetching [${tag}]...`);
-    const markets = await fetchMarketsByTag(tag);
-    let newCount = 0;
-    for (const m of markets) {
-      if (!allMarkets.has(m.conditionId)) {
-        allMarkets.set(m.conditionId, m);
-        newCount++;
-      }
-    }
-    console.log(` ${markets.length} found, ${newCount} new (total: ${allMarkets.size})`);
-    await sleep(RATE_LIMIT_MS);
-  }
-
-  // Also try fetching without tag filter to catch sports markets not tagged
-  console.log('\n  Fetching recent closed markets (no tag filter)...');
+  const nbaMarkets = new Map<string, any>();
   let offset = 0;
-  while (allMarkets.size < 800 && offset < 3000) {
+  let scanned = 0;
+
+  while (nbaMarkets.size < TARGET_COUNT && offset < 5000) {
+    const url = `${GAMMA_API}/markets?closed=true&limit=100&offset=${offset}&volume_num_min=100`;
     try {
-      const res = await fetch(`${GAMMA_API}/markets?closed=true&limit=100&offset=${offset}&volume_num_min=5000`);
-      if (!res.ok) break;
+      const res = await fetch(url);
+      if (!res.ok) { console.log(`  API ${res.status} at offset ${offset}`); break; }
       const data = await res.json() as any[];
       if (!Array.isArray(data) || data.length === 0) break;
+      scanned += data.length;
 
       for (const m of data) {
+        if (nbaMarkets.size >= TARGET_COUNT) break;
         try {
           const outcomes = typeof m.outcomes === 'string' ? JSON.parse(m.outcomes) : m.outcomes;
           if (!Array.isArray(outcomes) || outcomes.length !== 2 || !m.outcomePrices) continue;
+          if (!isNbaMarket(m.question || '')) continue;
 
-          // Check if sport-related by question keywords
-          const q = (m.question || '').toLowerCase();
-          const sportKeywords = ['win', 'beat', 'score', 'game', 'match', 'fight', 'round', 'set',
-            'goal', 'touchdown', 'knockout', 'decision', 'points', 'nba', 'nfl', 'ufc',
-            'premier league', 'champions league', 'series', 'playoff', 'championship',
-            'vs', 'v.', 'over', 'under', 'spread', 'moneyline', 'total'];
-          const isSport = sportKeywords.some(kw => q.includes(kw));
-          if (isSport && !allMarkets.has(m.conditionId)) {
-            allMarkets.set(m.conditionId, { ...m, _tag: 'auto-detected' });
-          }
+          nbaMarkets.set(m.conditionId, m);
         } catch {}
       }
 
       if (data.length < 100) break;
       offset += 100;
-    } catch { break; }
+
+      if (offset % 500 === 0) {
+        console.log(`  Scanned ${scanned} markets | NBA found: ${nbaMarkets.size}/${TARGET_COUNT}`);
+      }
+    } catch (err: any) {
+      console.log(`  Error: ${err.message}`);
+      break;
+    }
     await sleep(RATE_LIMIT_MS);
   }
 
-  console.log(`\n  Total unique markets found: ${allMarkets.size}`);
+  console.log(`\n  Scanned: ${scanned} | NBA found: ${nbaMarkets.size}`);
 
-  // Process and store
-  const toStore: StoredMarket[] = [];
-  for (const [conditionId, m] of allMarkets) {
+  // Store
+  let inserted = 0;
+  for (const [conditionId, m] of nbaMarkets) {
     try {
       const outcomes = typeof m.outcomes === 'string' ? JSON.parse(m.outcomes) : m.outcomes;
       let tokenIds: string[] = [];
-      try { tokenIds = typeof m.clobTokenIds === 'string' ? JSON.parse(m.clobTokenIds) : m.clobTokenIds; }
+      try { tokenIds = typeof m.clobTokenIds === 'string' ? JSON.parse(m.clobTokenIds) : m.clobTokenIds || []; }
       catch { tokenIds = (m.clobTokenIds || '').split(',').map((s: string) => s.trim()); }
 
-      // Determine winner from outcomePrices
       let outcomePrices: number[] = [];
       try { outcomePrices = typeof m.outcomePrices === 'string' ? JSON.parse(m.outcomePrices) : m.outcomePrices; }
       catch { continue; }
-
       if (outcomePrices.length !== 2) continue;
       const winnerIndex = outcomePrices[0] > outcomePrices[1] ? 0 : 1;
-      const winner = outcomes[winnerIndex] || '?';
 
-      toStore.push({
-        conditionId,
-        slug: m.slug || m.market_slug || '',
-        question: m.question || '',
-        outcomes,
-        tokenIds,
-        endDate: m.endDate || m.endDateIso || '',
-        volume: m.volumeNum || parseFloat(m.volume) || 0,
-        resolved: true,
-        outcomePrices: JSON.stringify(outcomePrices),
-        winner,
-        winnerIndex,
-        tag: m._tag || '',
-        fetchedAt: new Date(),
-      });
-    } catch {}
-  }
-
-  console.log(`  Markets ready to store: ${toStore.length}`);
-
-  if (toStore.length > 0) {
-    // Upsert to avoid duplicates
-    let inserted = 0;
-    for (const m of toStore) {
       const result = await collection.updateOne(
-        { conditionId: m.conditionId },
-        { $set: m },
+        { conditionId },
+        {
+          $set: {
+            conditionId, slug: m.slug || '',
+            question: m.question || '', outcomes, tokenIds,
+            endDate: m.endDate || m.endDateIso || '',
+            volume: m.volumeNum || parseFloat(m.volume) || 0,
+            resolved: true, outcomePrices: JSON.stringify(outcomePrices),
+            winner: outcomes[winnerIndex] || '?', winnerIndex,
+            sport: 'nba', fetchedAt: new Date(),
+          },
+        },
         { upsert: true }
       );
       if (result.upsertedCount > 0) inserted++;
-    }
-    console.log(`  Inserted: ${inserted} new | Updated: ${toStore.length - inserted}`);
+    } catch {}
   }
 
-  // Summary by tag
-  const tagCounts = new Map<string, number>();
-  for (const m of toStore) {
-    tagCounts.set(m.tag, (tagCounts.get(m.tag) || 0) + 1);
-  }
-  console.log('\n  By tag:');
-  for (const [tag, count] of [...tagCounts.entries()].sort((a, b) => b[1] - a[1])) {
-    console.log(`    ${tag.padEnd(20)} ${count}`);
-  }
+  console.log(`  Stored: ${inserted} new | ${nbaMarkets.size - inserted} updated`);
+  const total = await collection.countDocuments({ sport: 'nba' });
+  console.log(`  Total NBA in DB: ${total}\n`);
 
-  const totalInDb = await collection.countDocuments();
-  console.log(`\n  Total in sportMarkets collection: ${totalInDb}\n`);
+  // Show samples
+  console.log('  Sample markets:');
+  for (const m of [...nbaMarkets.values()].slice(0, 10)) {
+    console.log(`    ${(m.question || '?').slice(0, 75)}`);
+  }
+  console.log('');
 
   await client.close();
 }
