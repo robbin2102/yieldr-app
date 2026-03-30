@@ -42,7 +42,8 @@ function isNbaMarket(question: string): boolean {
   const q = question.toLowerCase();
   if (q.includes('nba')) return true;
   if (q.includes('basketball') && !q.includes('college')) return true;
-  return NBA_TEAMS.some(team => q.includes(team));
+  // Word-boundary match to avoid "Seahawks" matching "hawks", "internet" matching "nets", etc.
+  return NBA_TEAMS.some(team => new RegExp(`\\b${team}\\b`).test(q));
 }
 
 async function main() {
@@ -67,7 +68,8 @@ async function main() {
   let scanned = 0;
 
   while (nbaMarkets.size < TARGET_COUNT && offset < 5000) {
-    const url = `${GAMMA_API}/markets?closed=true&limit=100&offset=${offset}&volume_num_min=100`;
+    // Sort by most recent first (end_date_min filters out ancient markets with no CLOB data)
+    const url = `${GAMMA_API}/markets?closed=true&limit=100&offset=${offset}&volume_num_min=1000&end_date_min=2024-01-01T00:00:00Z`;
     try {
       const res = await fetch(url);
       if (!res.ok) { console.log(`  API ${res.status} at offset ${offset}`); break; }

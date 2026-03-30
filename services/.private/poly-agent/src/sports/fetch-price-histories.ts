@@ -80,7 +80,8 @@ async function main() {
     (await historyCol.find({}, { projection: { conditionId: 1 } }).toArray()).map(h => h.conditionId)
   );
 
-  const markets = await marketsCol.find({}).toArray();
+  // Sort by most recent endDate first (newer markets more likely to have CLOB data)
+  const markets = await marketsCol.find({ sport: 'nba' }).sort({ endDate: -1 }).toArray();
   const toFetch = markets.filter(m => !existingIds.has(m.conditionId)).slice(0, FETCH_LIMIT);
 
   console.log(`  Markets to fetch: ${toFetch.length}\n`);
@@ -106,7 +107,7 @@ async function main() {
 
       if (noHistory.length === 0) {
         errors++;
-        if (errors % 10 === 0) console.log(`  [${fetched}/${toFetch.length}] ${errors} errors so far`);
+        if (errors % 10 === 0) console.log(`  [${fetched}/${toFetch.length}] ${errors} errors | last: ${market.question?.slice(0, 40)}`);
         continue;
       }
 
