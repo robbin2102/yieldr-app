@@ -134,6 +134,8 @@ async function main() {
     let active = 0;
     const samples: string[] = [];
 
+    process.stdout.write(`  🔍 Searching [${config.series}] (${config.keywords.length} keywords)...`);
+
     for (const kw of config.keywords) {
       const results = await searchMarkets(kw);
 
@@ -171,8 +173,8 @@ async function main() {
 
     seriesSummary.push({ series: config.series, freq: config.freq, resolved, active, samples });
     const total = resolved + active;
+    console.log(` ${total} found (${resolved}R/${active}A)`);
     if (total > 0) {
-      console.log(`  ${config.series.padEnd(20)} | ${String(resolved).padEnd(4)} resolved | ${String(active).padEnd(4)} active | freq: ${config.freq}`);
       for (const s of samples) console.log(`    → ${s}`);
     }
   }
@@ -184,7 +186,8 @@ async function main() {
   // ── Step 2: Fetch price histories for resolved markets ────────
   const resolvedMarkets = [...allFound.values()].filter(m => m.closed && m.outcomePrices && Math.max(...m.outcomePrices) >= 0.9);
 
-  console.log(`  Step 2: Fetching price histories for ${resolvedMarkets.length} resolved markets...\n`);
+  console.log(`  Step 2: Fetching price histories for ${resolvedMarkets.length} resolved markets...`);
+  console.log(`  (est. ${Math.ceil(resolvedMarkets.length * 0.7 / 60)} min at 300ms/request)\n`);
 
   interface AnalyzedMarket extends FoundMarket {
     leadingPrice: number;
@@ -246,12 +249,14 @@ async function main() {
     });
     fetched++;
 
-    if (fetched % 10 === 0) {
-      console.log(`  [${fetched}] ${errors} errors | ${qualityFail} quality-fail | ${market.question?.slice(0, 50)}`);
+    if (fetched % 5 === 0 || (fetched + errors + qualityFail) % 10 === 0) {
+      const progress = fetched + errors + qualityFail;
+      const pct = ((progress / resolvedMarkets.length) * 100).toFixed(0);
+      console.log(`  [${progress}/${resolvedMarkets.length}] ${pct}% | ✅${fetched} fetched | ❌${errors} errors | ⚠${qualityFail} quality-fail | ${market.series}: ${market.question?.slice(0, 40)}`);
     }
   }
 
-  console.log(`\n  Fetched: ${fetched} | Errors: ${errors} | Quality-fail: ${qualityFail}\n`);
+  console.log(`\n  Step 2 done: ${fetched} fetched | ${errors} errors | ${qualityFail} quality-fail\n`);
 
   // Store to MongoDB (minimal)
   for (const m of analyzed) {
