@@ -1,15 +1,14 @@
 /**
  * Pass 1B: Fetch Price Histories for Sports Markets
  *
- * For each market in `sportMarkets`, pulls minute-level price history
- * from CLOB API and stores in `sportPriceHistory` collection.
+ * For each market in `sportMarkets`, pulls 1-minute price history
+ * from CLOB API (last 6 hours before resolution). Stores in
+ * `sportPriceHistory` collection.
  *
  * Usage (from project root):
  *   npx tsx services/.private/poly-agent/src/sports/fetch-price-histories.ts
- *
- * Options:
- *   --limit=50    Process only first N markets without history
- *   --force       Re-fetch even if history exists
+ *   npx tsx services/.private/poly-agent/src/sports/fetch-price-histories.ts --limit=200
+ *   npx tsx services/.private/poly-agent/src/sports/fetch-price-histories.ts --force
  */
 
 import { MongoClient } from 'mongodb';
@@ -35,17 +34,25 @@ const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
 const args = process.argv.slice(2);
 const limitArg = args.find(a => a.startsWith('--limit='));
-const FETCH_LIMIT = limitArg ? parseInt(limitArg.split('=')[1]) : 100;
+const FETCH_LIMIT = limitArg ? parseInt(limitArg.split('=')[1]) : 500;
 const FORCE = args.includes('--force');
 
-async function fetchPriceHistory(tokenId: string, endTs?: number): Promise<{ t: number; p: number }[]> {
-  try {
-    // Fetch last 6 hours of history before market end (covers full game)
-    const end = endTs || Math.floor(Date.now() / 1000);
-    const start = end - 21600; // 6 hours before close
+// Data quality thresholds
+const MIN_POINTS_2HR = 20;   // minimum data points in last 2 hours
+const MIN_POINTS_30MIN = 10; // minimum data points in last 30 minutes
 
-    // fidelity=5 = 5-minute intervals (faster fetch, sufficient for feature analysis)
-    const url = `${CLOB_API}/prices-history?market=${tokenId}&startTs=${start}&endTs=${end}&fidelity=5`;
+interface ErrorCategory {
+  noTokens: number;
+  noEndDate: number;
+  emptyHistory: number;
+  apiError: number;
+  belowQuality: number;
+}
+
+async function fetchPriceHistory(tokenId: string, endTs: number): Promise<{ t: number; p: number }[]> {
+  try {
+    const start = endTs - 21600; // 6 hours before close
+    const url = `${CLOB_API}/prices-history?market=${tokenId}&startTs=${start}&endTs=${endTs}&fidelity=1`;
     const res = await fetch(url);
     if (!res.ok) return [];
     const data = await res.json() as { history: { t: number; p: number }[] };
@@ -53,9 +60,21 @@ async function fetchPriceHistory(tokenId: string, endTs?: number): Promise<{ t: 
   } catch { return []; }
 }
 
+function checkQuality(
+  history: { t: number; p: number; minsBeforeClose: number }[],
+): { passes: boolean; pts2hr: number; pts30min: number } {
+  const pts2hr = history.filter(p => p.minsBeforeClose <= 120).length;
+  const pts30min = history.filter(p => p.minsBeforeClose <= 30).length;
+  return {
+    passes: pts2hr >= MIN_POINTS_2HR && pts30min >= MIN_POINTS_30MIN,
+    pts2hr,
+    pts30min,
+  };
+}
+
 async function main() {
   console.log('\n╔════════════════════════════════════════════════════════╗');
-  console.log('║   Fetch Price Histories — Sports Markets               ║');
+  console.log('║   Fetch Price Histories — 1min Resolution              ║');
   console.log('╚════════════════════════════════════════════════════════╝\n');
 
   const mongoUri = process.env.MONGODB_URI!;
@@ -71,111 +90,140 @@ async function main() {
 
   const totalMarkets = await marketsCol.countDocuments();
   const existingHistories = await historyCol.countDocuments();
+  console.log(`  DB: ${dbName}`);
   console.log(`  Markets in DB: ${totalMarkets}`);
   console.log(`  Histories already fetched: ${existingHistories}`);
-  console.log(`  Fetch limit: ${FETCH_LIMIT} | Force: ${FORCE}\n`);
+  console.log(`  Fetch limit: ${FETCH_LIMIT} | Force: ${FORCE}`);
+  console.log(`  Quality gate: ≥${MIN_POINTS_2HR} pts in 2hr, ≥${MIN_POINTS_30MIN} pts in 30min\n`);
 
-  // Find markets without price history
   const existingIds = FORCE ? new Set<string>() : new Set(
     (await historyCol.find({}, { projection: { conditionId: 1 } }).toArray()).map(h => h.conditionId)
   );
 
-  // Sort by most recent endDate first (newer markets more likely to have CLOB data)
-  const markets = await marketsCol.find({ sport: 'nba' }).sort({ endDate: -1 }).toArray();
+  // Sort by most recent, prioritize high volume
+  const markets = await marketsCol.find({}).sort({ endDate: -1, volume: -1 }).toArray();
   const toFetch = markets.filter(m => !existingIds.has(m.conditionId)).slice(0, FETCH_LIMIT);
 
   console.log(`  Markets to fetch: ${toFetch.length}\n`);
 
   let fetched = 0;
-  let skipped = 0;
-  let errors = 0;
+  let passedQuality = 0;
+  const errors: ErrorCategory = { noTokens: 0, noEndDate: 0, emptyHistory: 0, apiError: 0, belowQuality: 0 };
 
   for (const market of toFetch) {
     const tokenIds = market.tokenIds || [];
-    if (tokenIds.length < 2) { skipped++; continue; }
-
-    const endTs = market.endDate ? Math.floor(new Date(market.endDate).getTime() / 1000) : undefined;
-
-    // Fetch price history for the YES/first outcome token
-    const yesHistory = await fetchPriceHistory(tokenIds[0], endTs);
-    await sleep(RATE_LIMIT_MS);
-
-    if (yesHistory.length === 0) {
-      // Try second token
-      const noHistory = await fetchPriceHistory(tokenIds[1], endTs);
-      await sleep(RATE_LIMIT_MS);
-
-      if (noHistory.length === 0) {
-        errors++;
-        if (errors % 10 === 0) console.log(`  [${fetched}/${toFetch.length}] ${errors} errors | last: ${market.question?.slice(0, 40)}`);
-        continue;
-      }
-
-      // Invert No prices to get Yes prices
-      const invertedHistory = noHistory.map(p => ({ t: p.t, p: Math.round((1 - p.p) * 1000) / 1000 }));
-      await storeHistory(historyCol, market, invertedHistory, 'inverted');
-      fetched++;
-    } else {
-      await storeHistory(historyCol, market, yesHistory, 'direct');
-      fetched++;
+    if (tokenIds.length < 2 || !tokenIds[0]) {
+      errors.noTokens++;
+      continue;
     }
 
-    if (fetched % 10 === 0) {
-      console.log(`  [${fetched}/${toFetch.length}] Fetched | ${errors} errors | ${market.question?.slice(0, 50)}`);
+    const endDate = market.endDate;
+    if (!endDate) { errors.noEndDate++; continue; }
+    const endTs = Math.floor(new Date(endDate).getTime() / 1000);
+    if (isNaN(endTs) || endTs <= 0) { errors.noEndDate++; continue; }
+
+    // Try YES token first, then NO token
+    let history = await fetchPriceHistory(tokenIds[0], endTs);
+    await sleep(RATE_LIMIT_MS);
+
+    if (history.length === 0 && tokenIds[1]) {
+      history = await fetchPriceHistory(tokenIds[1], endTs);
+      await sleep(RATE_LIMIT_MS);
+
+      if (history.length > 0) {
+        // Invert NO prices to get YES prices
+        history = history.map(p => ({ t: p.t, p: Math.round((1 - p.p) * 1000) / 1000 }));
+      }
+    }
+
+    if (history.length === 0) {
+      errors.emptyHistory++;
+      continue;
+    }
+
+    // Sort and add minsBeforeClose
+    history.sort((a, b) => a.t - b.t);
+    const timeSeries = history.map(p => ({
+      t: p.t,
+      p: p.p,
+      minsBeforeClose: Math.round((endTs - p.t) / 60),
+    }));
+
+    // Quality gate
+    const quality = checkQuality(timeSeries);
+    if (!quality.passes) {
+      errors.belowQuality++;
+      continue;
+    }
+
+    // Store
+    const durationMins = timeSeries.length > 1
+      ? Math.round((timeSeries[timeSeries.length - 1].t - timeSeries[0].t) / 60)
+      : 0;
+
+    await historyCol.updateOne(
+      { conditionId: market.conditionId },
+      {
+        $set: {
+          conditionId: market.conditionId,
+          slug: market.slug,
+          question: market.question,
+          outcomes: market.outcomes,
+          winner: market.winner,
+          winnerIndex: market.winnerIndex,
+          endDate: market.endDate,
+          volume: market.volume,
+          sport: market.sport,
+          dataPoints: timeSeries.length,
+          durationMins,
+          pts2hr: quality.pts2hr,
+          pts30min: quality.pts30min,
+          timeSeries,
+          fetchedAt: new Date(),
+        },
+      },
+      { upsert: true }
+    );
+
+    fetched++;
+    passedQuality++;
+
+    if (fetched % 20 === 0) {
+      const errTotal = errors.noTokens + errors.noEndDate + errors.emptyHistory + errors.belowQuality;
+      console.log(`  [${fetched}/${toFetch.length}] Fetched (${passedQuality} passed quality) | ${errTotal} skipped | ${market.question?.slice(0, 45)}`);
     }
   }
 
+  const errTotal = errors.noTokens + errors.noEndDate + errors.emptyHistory + errors.belowQuality;
+  console.log(`\n  Done!`);
+  console.log(`  Fetched & passed quality: ${passedQuality}`);
+  console.log(`  Skipped: ${errTotal} total`);
+  console.log(`    No tokens:        ${errors.noTokens}`);
+  console.log(`    No end date:      ${errors.noEndDate}`);
+  console.log(`    Empty history:    ${errors.emptyHistory}`);
+  console.log(`    Below quality:    ${errors.belowQuality} (<${MIN_POINTS_2HR} pts in 2hr or <${MIN_POINTS_30MIN} pts in 30min)`);
+
   const finalCount = await historyCol.countDocuments();
-  console.log(`\n  Done! Fetched: ${fetched} | Errors: ${errors} | Skipped: ${skipped}`);
-  console.log(`  Total histories in DB: ${finalCount}\n`);
+  console.log(`\n  Total histories in DB: ${finalCount}`);
 
+  // Quality summary
+  if (finalCount > 0) {
+    const allHist = await historyCol.find({}, { projection: { sport: 1, pts30min: 1, dataPoints: 1 } }).toArray();
+    const bySport = new Map<string, number>();
+    for (const h of allHist) {
+      bySport.set(h.sport || '?', (bySport.get(h.sport || '?') || 0) + 1);
+    }
+    console.log('\n  By sport (quality-passed):');
+    for (const [sport, count] of [...bySport.entries()].sort((a, b) => b[1] - a[1])) {
+      console.log(`    ${sport.padEnd(12)} ${count}`);
+    }
+    const avgPts = allHist.reduce((s, h) => s + (h.dataPoints || 0), 0) / allHist.length;
+    const avg30 = allHist.reduce((s, h) => s + (h.pts30min || 0), 0) / allHist.length;
+    console.log(`\n  Avg data points/market: ${avgPts.toFixed(0)} | Avg pts in last 30min: ${avg30.toFixed(0)}`);
+  }
+
+  console.log('');
   await client.close();
-}
-
-async function storeHistory(
-  col: any,
-  market: any,
-  history: { t: number; p: number }[],
-  source: string
-) {
-  // Sort by timestamp
-  history.sort((a, b) => a.t - b.t);
-
-  // Compute basic stats
-  const endTs = market.endDate ? Math.floor(new Date(market.endDate).getTime() / 1000) : (history[history.length - 1]?.t || 0);
-  const durationMins = history.length > 1
-    ? Math.round((history[history.length - 1].t - history[0].t) / 60)
-    : 0;
-
-  // Convert to time series with minutesBeforeClose
-  const timeSeries = history.map(p => ({
-    t: p.t,
-    p: p.p,
-    minsBeforeClose: Math.round((endTs - p.t) / 60),
-  }));
-
-  await col.updateOne(
-    { conditionId: market.conditionId },
-    {
-      $set: {
-        conditionId: market.conditionId,
-        slug: market.slug,
-        question: market.question,
-        outcomes: market.outcomes,
-        winner: market.winner,
-        winnerIndex: market.winnerIndex,
-        endDate: market.endDate,
-        volume: market.volume,
-        tag: market.tag,
-        source,
-        dataPoints: timeSeries.length,
-        durationMins,
-        timeSeries,
-        fetchedAt: new Date(),
-      },
-    },
-    { upsert: true }
-  );
 }
 
 main().catch(err => { console.error('Fatal:', err.message); process.exit(1); });
