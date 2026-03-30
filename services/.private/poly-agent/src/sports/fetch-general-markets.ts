@@ -91,7 +91,7 @@ function classifyCategory(question: string): string {
 async function fetchPriceHistory(tokenId: string, endTs: number): Promise<{ t: number; p: number }[]> {
   try {
     const start = endTs - 21600; // 6 hours
-    const url = `${CLOB_API}/prices-history?market=${tokenId}&startTs=${start}&endTs=${endTs}&fidelity=5`;
+    const url = `${CLOB_API}/prices-history?market=${tokenId}&startTs=${start}&endTs=${endTs}&fidelity=1`;
     const res = await fetch(url);
     if (!res.ok) return [];
     const data = await res.json() as { history: { t: number; p: number }[] };
@@ -234,7 +234,7 @@ async function main() {
     // Quality gate
     const pts2hr = timeSeries.filter(p => p.minsBeforeClose <= 120).length;
     const pts30min = timeSeries.filter(p => p.minsBeforeClose <= 30).length;
-    if (pts2hr < 10 || pts30min < 3) { qualityFail++; continue; }
+    if (pts2hr < 20 || pts30min < 10) { qualityFail++; continue; }
 
     await historyCol.updateOne(
       { conditionId: market.conditionId },
