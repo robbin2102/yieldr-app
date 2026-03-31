@@ -1746,8 +1746,15 @@ export async function profileTrader(
     console.log('═══════════════════════════════════════════════════════════════\n');
   }
 
-  // ── Build and return profile document ─────────────────────
-  return {
+  // ── Strip dailyPnLSeries from timeframePnL for core doc ───────────────────
+  const timeframePnLCore: Record<string, unknown> = {};
+  for (const [key, val] of Object.entries(timeframePnL)) {
+    const { dailyPnLSeries: _omit, ...rest } = val as Record<string, unknown> & { dailyPnLSeries: unknown };
+    timeframePnLCore[key] = rest;
+  }
+
+  // ── Core profile document (lean — stored in polymarket-traderProfiles) ────
+  const core = {
     wallet: cleanWallet,
     traderLabel,
     profiledAt,
@@ -1767,7 +1774,7 @@ export async function profileTrader(
     buyRatio,
     strategyLabel,
 
-    // Win rate (CORRECTED — primary metric)
+    // Win rate
     win_rate,
     win_rate_sample_size,
     wins_closed,
@@ -1780,7 +1787,7 @@ export async function profileTrader(
     totalRealizedPnl,
     totalUnrealizedPnl,
     totalCapitalDeployed,
-    timeframePnL,
+    timeframePnL: timeframePnLCore,  // no dailyPnLSeries
     capital_trend,
     drawdown_trend,
     tradingConsistency,
@@ -1792,18 +1799,15 @@ export async function profileTrader(
     maxTradeSize,
     avg_bet_size_usdc,
 
-    // High conviction trades
+    // High conviction summary (counts only — full list in positions doc)
     asymmetricThreshold,
     asymmetricTradesCount: asymmetricTrades.length,
     asymmetricVolume,
     asymmetricVolumePercent,
-    recentHighConvictionTrades,
 
-    // Market specialization (from 1000 closed positions)
-    strengths,
-    weaknesses,
+    // Market specialization summary
     specialty,
-    entryOddsBreakdown,
+    category_breakdown,
 
     // Streak
     currentStreak,
@@ -1833,19 +1837,13 @@ export async function profileTrader(
     avg_entry_price_wins,
     avg_entry_price_losses,
 
-    // Category & market breakdown
-    category_breakdown,
-    market_titles_summary,
-
     // Insider detection
     insider_score,
     insider_probability,
     insider_signals_fired,
-    // Pre-computed rank_score multiplier for filter-alpha-traders.ts:
-    // insider whales are statistically undersold by small n — boost their rank.
     insider_rank_multiplier: insider_probability === 'high' ? 1.5 : 1.0,
 
-    // Baseline snapshot (for monitoring drift)
+    // Baseline snapshot
     baseline_snapshot,
 
     // LLM placeholder fields — populated by edge-discovery-batch.ts
@@ -1859,11 +1857,31 @@ export async function profileTrader(
     follow_rules: null,
     llm_analyzed_at: null,
 
-    // Display data
     label,
+  };
+
+  // ── Positions document (heavy arrays — stored in polymarket-traderPositions) ─
+  // dailyPnLSeries per timeframe stored here for charting/analytics
+  const dailyPnLByFrame: Record<string, number[]> = {};
+  for (const [key, val] of Object.entries(timeframePnL)) {
+    const v = val as Record<string, unknown>;
+    if (Array.isArray(v.dailyPnLSeries)) dailyPnLByFrame[key] = v.dailyPnLSeries as number[];
+  }
+
+  const positions = {
+    wallet: cleanWallet,
+    profiledAt,
     topOpenPositions,
     recentClosedPositions,
+    recentHighConvictionTrades,
+    market_titles_summary,
+    entryOddsBreakdown,
+    strengths,
+    weaknesses,
+    dailyPnLByFrame,
   };
+
+  return { core, positions };
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1885,22 +1903,20 @@ async function main() {
   }
 
   // Run the profiler
-  const profileData = await profileTrader(wallet, { convictionMultiplier, verbose: true });
+  const { core, positions } = await profileTrader(wallet, { convictionMultiplier, verbose: true });
 
   if (!mongoUri) {
     console.log('\n⚠ Skipping MongoDB save (no MONGODB_URI). Profile computed successfully.');
     return;
   }
 
-  // Extract db name from URI — same logic as lib/mongodb.ts
+  // Extract db name from URI
   function extractDbName(uri: string): string {
     try {
       const url = new URL(uri);
-      const name = url.pathname.replace('/', '');
-      return name || 'polymarket-test';
+      return url.pathname.replace('/', '') || 'polymarket-test';
     } catch {
-      const match = uri.match(/\/([^/?]+)(\?|$)/);
-      return match?.[1] || 'polymarket-test';
+      return uri.match(/\/([^/?]+)(\?|$)/)?.[1] ?? 'polymarket-test';
     }
   }
   const dbName = extractDbName(mongoUri);
@@ -1910,17 +1926,14 @@ async function main() {
   await client.connect();
   console.log(`Connected → db: ${dbName}\n`);
 
-  // Save to polymarket-traderProfiles (production collection)
   const db = client.db(dbName);
-  const collection = db.collection('polymarket-traderProfiles');
+  const walletKey = (wallet as string).toLowerCase();
 
-  console.log('Saving to MongoDB (polymarket-traderProfiles)...');
-  await collection.updateOne(
-    { wallet: (wallet as string).toLowerCase() },
-    { $set: profileData },
-    { upsert: true }
-  );
-  console.log('  ✅ Saved successfully');
+  console.log('Saving to MongoDB...');
+  await db.collection('polymarket-traderProfiles').replaceOne({ wallet: walletKey }, core, { upsert: true });
+  console.log('  ✅ polymarket-traderProfiles saved');
+  await db.collection('polymarket-traderPositions').replaceOne({ wallet: walletKey }, positions, { upsert: true });
+  console.log('  ✅ polymarket-traderPositions saved');
   console.log(`  Wallet: ${wallet}`);
 
   await client.close();

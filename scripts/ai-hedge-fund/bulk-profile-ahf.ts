@@ -168,7 +168,9 @@ async function main() {
   console.log(`\nProcessing ${total} wallets...\n`);
 
   // ── Batch processing ───────────────────────────────────────────────────────
-  const destCollection = db.collection(CONFIG.DEST_COLLECTION);
+  const destCollection     = db.collection(CONFIG.DEST_COLLECTION);
+  const positionsCollection = db.collection('polymarket-traderPositions');
+  await positionsCollection.createIndex({ wallet: 1 }, { unique: true, background: true });
 
   let succeeded = 0;
   let failed = 0;
@@ -184,34 +186,31 @@ async function main() {
     const ticker = setInterval(() => process.stdout.write('.'), 5000);
 
     try {
-      const profileData = await profileTrader(wallet, {
+      const { core, positions } = await profileTrader(wallet, {
         convictionMultiplier: CONFIG.CONVICTION_MULTIPLIER,
         verbose: false,
       });
       clearInterval(ticker);
       const elapsed = ((Date.now() - startMs) / 1000).toFixed(1);
 
-      // Upsert into destination collection
-      await destCollection.updateOne(
-        { wallet },
-        { $set: profileData },
-        { upsert: true }
-      );
+      // Replace both collection docs cleanly (no stale fields from old format)
+      await destCollection.replaceOne({ wallet }, core, { upsert: true });
+      await positionsCollection.replaceOne({ wallet }, positions, { upsert: true });
 
       // ── Per-trader summary line ──
-      const wr          = profileData.win_rate as number;
-      const sample      = profileData.win_rate_sample_size as number;
-      const pf          = profileData.profitFactor as number;
-      const tf30        = profileData.timeframePnL as Record<string, { roce: number; maxDrawdownPct?: number | null }>;
-      const roce30      = tf30?.['30d']?.roce ?? 0;
-      const dd30        = tf30?.['30d']?.maxDrawdownPct ?? null;
-      const capTrend    = (profileData.capital_trend as string | null) ?? 'n/a';
-      const ddTrend     = (profileData.drawdown_trend as string | null) ?? 'n/a';
-      const consistency = profileData.tradingConsistency as { daysWonRate: number; sortinoRatio: number | null } | null;
+      const wr          = core.win_rate;
+      const sample      = core.win_rate_sample_size;
+      const pf          = core.profitFactor;
+      const tf30        = core.timeframePnL?.['30d'] as { roce: number; maxDrawdownPct?: number | null } | undefined;
+      const roce30      = tf30?.roce ?? 0;
+      const dd30        = tf30?.maxDrawdownPct ?? null;
+      const capTrend    = core.capital_trend ?? 'n/a';
+      const ddTrend     = core.drawdown_trend ?? 'n/a';
+      const consistency = core.tradingConsistency as { daysWonRate: number; sortinoRatio: number | null } | null;
       const daysWon     = consistency?.daysWonRate ?? 0;
       const sortino     = consistency?.sortinoRatio != null ? consistency.sortinoRatio.toFixed(2) : 'n/a';
-      const identity    = profileData.display_name ? 'yes' : 'no';
-      const insider     = (profileData.insider_probability as string | null) ?? 'n/a';
+      const identity    = core.display_name ? 'yes' : 'no';
+      const insider     = core.insider_probability ?? 'n/a';
 
       console.log(
         ` OK ${elapsed}s | wr:${wr.toFixed(1)}% n:${sample} ` +
