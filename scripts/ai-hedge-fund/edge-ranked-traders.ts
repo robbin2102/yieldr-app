@@ -47,7 +47,11 @@ function parseArg(flag: string): string | null {
   return null;
 }
 function hasFlag(flag: string) { return process.argv.slice(2).includes(`--${flag}`); }
-function fmtAge(days: number | null | undefined): string {
+function fmtPval(p: number): string {
+  if (p < 0.0001) return p.toExponential(1);   // e.g. 3.2e-8
+  if (p < 0.001)  return p.toFixed(4);
+  return p.toFixed(3);
+}
   if (days == null) return '—';
   if (days < 1) return Math.max(1, Math.round(days * 24)) + 'h';
   return Math.round(days) + 'd';
@@ -317,7 +321,7 @@ async function main() {
       (t.expected_wr * 100).toFixed(1).padEnd(7),
       String(t.n).padEnd(5),
       t.edge.toFixed(3).padEnd(7),
-      t.p_val.toFixed(3).padEnd(7),
+      fmtPval(t.p_val).padEnd(7),
       t.confidence.padEnd(11),
       (t.roce_30d.toFixed(0) + '%').padEnd(8),
       ('$' + (t.pnl_30d / 1000).toFixed(1) + 'k').padEnd(10),
