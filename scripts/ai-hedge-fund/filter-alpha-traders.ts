@@ -117,7 +117,8 @@ interface TraderProfile {
   // v3: tradingConsistency replaces pnlConsistency
   tradingConsistency?: { daysWonRate: number; sortinoRatio: number | null; tradingDays: number };
   max_drawdown_30d_pct?: number | null;
-  activities_per_day_30d?: number | null;   // raw activities / 30 — best bot detection metric
+  totalActivities?: number | null;          // raw activity count for the 30d window
+  periodDays?: number | null;               // actual days covered (usually 30)
   avg_unique_markets_per_day_7d?: { value: number; sample_days: number; is_low_sample: boolean } | null;
   fragmentation_ratio?: number | null;
   wins_closed?: number;
@@ -248,9 +249,12 @@ export async function filterAlphaTraders(db: Db): Promise<FilterResult> {
       continue;
     }
     // Bot filter on raw trade frequency (activities/day over 30d window)
-    // Bot filter: activities_per_day_30d = raw buy/sell/redeem count / 30
-    // More accurate than closed-positions/day — catches bots that churn activities without closing
-    const activitiesPerDay = profile.activities_per_day_30d ?? tf30?.tradesPerDay;  // fallback for old profiles
+    // Bot filter: totalActivities / periodDays = raw activities/day (buys + sells + redeems)
+    // profile.tradesPerDay (top-level) = buyCount/30 only — do NOT use that field
+    const periodDays = profile.periodDays ?? 30;
+    const activitiesPerDay = profile.totalActivities != null
+      ? profile.totalActivities / periodDays
+      : tf30?.tradesPerDay;   // fallback for any profile missing totalActivities
     if (activitiesPerDay != null && activitiesPerDay > THRESHOLDS.maxTradesPerDay) {
       botFiltered++;
       continue;

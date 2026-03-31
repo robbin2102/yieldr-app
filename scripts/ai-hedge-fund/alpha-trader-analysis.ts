@@ -162,23 +162,25 @@ async function main() {
     .find(query)
     .toArray();
 
-  // ── Join traderProfiles for activities_per_day_30d ────────────────────────────
-  // This is raw activity count (buys+sells+redeems) / 30 — best bot vs human metric.
-  // Newly added field; old profiles fall back to timeframePnL['30d'].tradesPerDay.
+  // ── Join traderProfiles for activities/day ────────────────────────────────────
+  // totalActivities = all buy+sell+redeem events in the 30d window (already stored).
+  // activitiesPerDay = totalActivities / 30 — the true human vs bot activity rate.
+  // Note: profile.tradesPerDay (top-level) = buyCount/30 only — do NOT use that.
   const wallets = traders.map(t => t.wallet);
   const profiles = await db
     .collection('polymarket-traderProfiles')
     .find(
       { wallet: { $in: wallets } },
-      { projection: { wallet: 1, activities_per_day_30d: 1, timeframePnL: 1 } }
+      { projection: { wallet: 1, totalActivities: 1, periodDays: 1 } }
     )
     .toArray();
   const tpdMap = new Map<string, number>();
   for (const p of profiles) {
-    // Prefer new activities_per_day_30d, fall back to closed-positions/day for old profiles
-    const apd = (p.activities_per_day_30d as number | undefined)
-      ?? (p.timeframePnL as Record<string, { tradesPerDay?: number }>)?.['30d']?.tradesPerDay;
-    if (apd != null) tpdMap.set(p.wallet as string, apd);
+    const total = p.totalActivities as number | undefined;
+    if (total != null) {
+      const days = (p.periodDays as number | undefined) ?? 30;
+      tpdMap.set(p.wallet as string, total / days);
+    }
   }
 
   await client.close();

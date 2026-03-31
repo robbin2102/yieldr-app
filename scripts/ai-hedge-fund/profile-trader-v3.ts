@@ -1395,10 +1395,8 @@ export async function profileTrader(
     ? activities.length / total_unique_markets_30d
     : null;
 
-  // activities_per_day_30d: raw activity count (buys + sells + redeems) / 30
-  // Best proxy for "how many times per day does this trader interact with markets"
-  // Use this for bot detection — bots typically show >50 activities/day
-  const activities_per_day_30d = activities.length / 30;
+  // Note: activities_per_day = totalActivities / periodDays (computed at read-time)
+  // totalActivities is already stored — no need for a separate pre-computed field
 
   // ── Max drawdown 30d ───────────────────────────────────────
   const { maxDrawdown30dPct, maxDrawdown, maxDrawdownPercent } = computeMaxDrawdown30d(activities);
@@ -1860,7 +1858,6 @@ export async function profileTrader(
     roce_trend,
 
     // Market activity metrics
-    activities_per_day_30d,
     avg_unique_markets_per_day_7d,
     fragmentation_ratio,
     isWhaleConcentrator,
