@@ -117,6 +117,7 @@ async function fetchActivities(wallet: string, days: number): Promise<Activity[]
   const periodStart = now - (days * 24 * 60 * 60);
   const LIMIT = 500;
   const API_OFFSET_CAP = 3500; // Polymarket's hard server-side offset cap
+  const MAX_ACTIVITIES = 30000; // Bot guard — anything beyond this is not copy-tradeable
 
   const seen = new Set<string>();
   const allActivities: Activity[] = [];
@@ -154,6 +155,12 @@ async function fetchActivities(wallet: string, days: number): Promise<Activity[]
           allActivities.push(activity);
           lastTsInWindow = activity.timestamp;
         }
+      }
+
+      // Bot guard — skip profiling if activity count exceeds threshold
+      if (allActivities.length >= MAX_ACTIVITIES) {
+        console.log(`  ⚠️  Activity cap hit (${MAX_ACTIVITIES}) — bot wallet, skipping`);
+        return [];
       }
 
       if (batch.length < LIMIT) break outer; // Last page — all data collected
@@ -1118,6 +1125,11 @@ export async function profileTrader(
     console.log('\nFetching activities (30d)...');
   }
   const activities = await fetchActivities(cleanWallet, 30);
+  if (activities.length === 0 && verbose) console.log('  ⚠️  0 activities — bot cap hit or inactive wallet');
+  // Bot guard: fetchActivities returns [] when cap exceeded — skip this wallet
+  if (activities.length === 0) {
+    throw new Error('BOT_SKIP: activity cap exceeded or no activity in window');
+  }
   if (verbose) console.log(`  Found ${activities.length} activities\n`);
 
   if (verbose) console.log('Fetching open positions...');
@@ -1247,7 +1259,7 @@ export async function profileTrader(
   tradeSizes.sort((a, b) => a - b);
   const avgTradeSize = tradeSizes.length > 0 ? tradeSizes.reduce((a, b) => a + b, 0) / tradeSizes.length : 0;
   const medianTradeSize = tradeSizes.length > 0 ? tradeSizes[Math.floor(tradeSizes.length / 2)] : 0;
-  const maxTradeSize = tradeSizes.length > 0 ? Math.max(...tradeSizes) : 0;
+  const maxTradeSize = tradeSizes.length > 0 ? tradeSizes.reduce((a, b) => (b > a ? b : a), 0) : 0;
 
   // ── P&L (Method A — closedPositions-based) ────────────────
   const timeframePnL: Record<string, ReturnType<typeof computeTimeframePnL>> = {
