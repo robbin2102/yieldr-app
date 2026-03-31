@@ -265,9 +265,25 @@ function methodC(activities: Activity[], open: OpenPosition[], days: number | nu
  *
  * portfolioValue_at_WINDOW_START is computed by:
  *   1. Reconstructing share-count for each position at window start from activities
+ *      NOTE: grouped by ASSET (tokenId), not conditionId — each Yes/No outcome is separate
  *   2. Fetching the market price at window start from CLOB price history
  *   3. Falling back to last-known activity price if CLOB unavailable
  */
+
+interface PositionDebug {
+  asset: string;
+  conditionId: string;
+  title: string;
+  outcome: string;
+  sharesAtStart: number;
+  priceAtStart: number | null;
+  valueAtStart: number;
+  priceSource: 'clob' | 'fallback' | 'missing';
+  stillOpen: boolean;
+  currentValue: number;
+  cashFlowInWindow: number; // positive = net outflow for this position
+}
+
 async function methodD(
   activities: Activity[],
   open: OpenPosition[],
@@ -281,6 +297,7 @@ async function methodD(
   clobUsed: number;
   fallbackUsed: number;
   missingPrice: number;
+  debug: PositionDebug[];
 }> {
   const now   = Math.floor(Date.now() / 1000);
   const start = windowStart(days);
@@ -294,7 +311,7 @@ async function methodD(
       if (a.type === 'REDEEM')                      redeems += a.usdcSize;
     }
     const valueNow = open.reduce((s, p) => s + p.currentValue, 0);
-    return { pnl: valueNow + sells + redeems - buys, valueNow, valueAtStart: 0, netCashOut: sells + redeems - buys, positionsAtStart: 0, clobUsed: 0, fallbackUsed: 0, missingPrice: 0 };
+    return { pnl: valueNow + sells + redeems - buys, valueNow, valueAtStart: 0, netCashOut: sells + redeems - buys, positionsAtStart: 0, clobUsed: 0, fallbackUsed: 0, missingPrice: 0, debug: [] };
   }
 
   // ── Net cash flows within window ─────────────────────────────────────────
@@ -311,15 +328,16 @@ async function methodD(
   const valueNow = open.reduce((s, p) => s + p.currentValue, 0);
 
   // ── Reconstruct positions at window start from pre-window activities ──────
-  // Track (shares, asset, title, last-activity-price) per conditionId
-  type Pos = { shares: number; asset: string; title: string; lastPrice: number };
-  const posAtStart = new Map<string, Pos>();
+  // KEY: group by ASSET (tokenId), not conditionId. Each Yes/No outcome has
+  // a different asset. Grouping by conditionId would merge Yes+No shares and
+  // use the wrong price for one side.
+  type Pos = { shares: number; asset: string; conditionId: string; title: string; outcome: string; lastPrice: number };
+  const posAtStart = new Map<string, Pos>(); // keyed by asset (tokenId)
 
-  // Walk all activities sorted oldest-first, stop before window start
   const preWindow = activities.filter(a => a.timestamp < start).sort((a, b) => a.timestamp - b.timestamp);
 
   for (const a of preWindow) {
-    const cur = posAtStart.get(a.conditionId) ?? { shares: 0, asset: a.asset, title: a.title, lastPrice: 0 };
+    const cur = posAtStart.get(a.asset) ?? { shares: 0, asset: a.asset, conditionId: a.conditionId, title: a.title, outcome: a.outcome, lastPrice: 0 };
 
     if (a.type === 'TRADE' && a.side === 'BUY') {
       cur.shares    += a.size;
@@ -328,48 +346,79 @@ async function methodD(
       cur.shares    -= a.size;
       cur.lastPrice  = a.price;
     } else if (a.type === 'REDEEM') {
-      cur.shares = 0; // fully redeemed = closed
+      cur.shares = 0;
     }
 
-    posAtStart.set(a.conditionId, cur);
+    posAtStart.set(a.asset, cur);
   }
 
   // Filter to positions with meaningful share count at window start
   const activeAtStart = Array.from(posAtStart.entries()).filter(([, v]) => v.shares > 0.001);
 
+  // ── Per-position cash flows within window (for debug) ─────────────────────
+  const assetCashFlowInWindow = new Map<string, number>();
+  for (const a of windowActs) {
+    const cur = assetCashFlowInWindow.get(a.asset) ?? 0;
+    if (a.type === 'TRADE' && a.side === 'BUY')  assetCashFlowInWindow.set(a.asset, cur - a.usdcSize);
+    if (a.type === 'TRADE' && a.side === 'SELL') assetCashFlowInWindow.set(a.asset, cur + a.usdcSize);
+    if (a.type === 'REDEEM')                      assetCashFlowInWindow.set(a.asset, cur + a.usdcSize);
+  }
+
   // ── Fetch CLOB price history for each unique asset ────────────────────────
-  const assetsNeeded = new Set(activeAtStart.map(([, v]) => v.asset));
+  const assetsNeeded = new Set(activeAtStart.map(([asset]) => asset));
+  // Also fetch for open positions (needed for debug table)
+  for (const p of open) assetsNeeded.add(p.asset);
   await Promise.all(Array.from(assetsNeeded).map(asset => fetchPriceHistory(asset)));
 
   // ── Compute portfolio value at window start ───────────────────────────────
   let valueAtStart = 0;
   let clobUsed = 0, fallbackUsed = 0, missingPrice = 0;
+  const debug: PositionDebug[] = [];
 
-  for (const [condId, pos] of activeAtStart) {
-    const history = _priceCache.get(pos.asset) ?? [];
+  const openByAsset = new Map(open.map(p => [p.asset, p]));
+
+  for (const [asset, pos] of activeAtStart) {
+    const history = _priceCache.get(asset) ?? [];
     let price = priceAt(history, start);
+    let priceSource: 'clob' | 'fallback' | 'missing' = 'clob';
 
     if (price !== null) {
       clobUsed++;
     } else {
-      // Fallback: last-known activity price before window start
       price = pos.lastPrice > 0 ? pos.lastPrice : null;
       if (price !== null) {
         fallbackUsed++;
-        console.log(`  [D fallback] ${pos.title.slice(0, 45)} — using last activity price ${price.toFixed(3)}`);
+        priceSource = 'fallback';
       } else {
         missingPrice++;
-        console.log(`  [D missing ] ${pos.title.slice(0, 45)} — no price available, skipping`);
+        priceSource = 'missing';
       }
     }
 
-    if (price !== null) {
-      valueAtStart += pos.shares * price;
-    }
+    const posValue = price !== null ? pos.shares * price : 0;
+    valueAtStart += posValue;
+
+    const openPos = openByAsset.get(asset);
+    debug.push({
+      asset,
+      conditionId: pos.conditionId,
+      title: pos.title,
+      outcome: pos.outcome,
+      sharesAtStart: pos.shares,
+      priceAtStart: price,
+      valueAtStart: posValue,
+      priceSource,
+      stillOpen: !!openPos,
+      currentValue: openPos?.currentValue ?? 0,
+      cashFlowInWindow: assetCashFlowInWindow.get(asset) ?? 0,
+    });
   }
 
+  // Sort debug by valueAtStart desc
+  debug.sort((a, b) => b.valueAtStart - a.valueAtStart);
+
   const pnl = (valueNow - valueAtStart) + netCashOut;
-  return { pnl, valueNow, valueAtStart, netCashOut, positionsAtStart: activeAtStart.length, clobUsed, fallbackUsed, missingPrice };
+  return { pnl, valueNow, valueAtStart, netCashOut, positionsAtStart: activeAtStart.length, clobUsed, fallbackUsed, missingPrice, debug };
 }
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
@@ -471,10 +520,10 @@ async function main() {
     );
   }
 
-  // ── Open positions at window start (debug) ─────────────────────────────────
-  console.log('\n' + '═'.repeat(90));
-  console.log('  OPEN POSITIONS (current) — used as valueNow in Method D');
-  console.log('═'.repeat(90));
+  // ── Open positions (current) ─────────────────────────────────────────────
+  console.log('\n' + '═'.repeat(110));
+  console.log('  CURRENT OPEN POSITIONS — used as valueNow in Method D');
+  console.log('═'.repeat(110));
   const sortedOpen = [...open].sort((a, b) => b.currentValue - a.currentValue);
   for (const p of sortedOpen) {
     const clobHistory = _priceCache.get(p.asset) ?? [];
@@ -485,13 +534,74 @@ async function main() {
     console.log(
       `  ${p.title.slice(0, 42).padEnd(42)} [${p.outcome.slice(0,3)}]` +
       `  size=${p.size.toFixed(1).padStart(8)}` +
+      `  val=$${p.currentValue.toFixed(0).padStart(6)}` +
       `  cur=${cur.toFixed(3)}` +
-      `  1dAgo=${p1d !== null ? p1d.toFixed(3) : ' N/A '}` +
-      `  7dAgo=${p7d !== null ? p7d.toFixed(3) : ' N/A '}` +
-      `  30dAgo=${p30d !== null ? p30d.toFixed(3) : ' N/A'}`
+      `  1d=${p1d !== null ? p1d.toFixed(3) : 'N/A  '}` +
+      `  7d=${p7d !== null ? p7d.toFixed(3) : 'N/A  '}` +
+      `  30d=${p30d !== null ? p30d.toFixed(3) : 'N/A  '}`
     );
   }
-  console.log('');
+  const totalValueNow = open.reduce((s, p) => s + p.currentValue, 0);
+  console.log(`  ${'─'.repeat(108)}`);
+  console.log(`  TOTAL valueNow: $${totalValueNow.toFixed(0)}`);
+
+  // ── Method D per-position debug for each timeframe ─────────────────────────
+  for (const { label, days } of frames) {
+    if (days === null) continue; // skip all-time
+    const d = dResults[label];
+    if (d.debug.length === 0) continue;
+
+    console.log('\n' + '═'.repeat(110));
+    console.log(`  METHOD D DEBUG — ${label} window (${d.positionsAtStart} positions at window start)`);
+    console.log('═'.repeat(110));
+    console.log(
+      `  ${'Title'.padEnd(35)}` +
+      `${'Outc'.padEnd(5)}` +
+      `${'Shares'.padStart(10)}` +
+      `${'P@Start'.padStart(9)}` +
+      `${'Val@Start'.padStart(11)}` +
+      `${'StillOpen'.padStart(11)}` +
+      `${'CurVal'.padStart(10)}` +
+      `${'CashFlow'.padStart(10)}` +
+      `${'Source'.padStart(10)}`
+    );
+    console.log(`  ${'─'.repeat(108)}`);
+
+    let totalValAtStart = 0;
+    let totalCurVal = 0;
+    let totalCashFlow = 0;
+    for (const p of d.debug) {
+      totalValAtStart += p.valueAtStart;
+      totalCurVal     += p.currentValue;
+      totalCashFlow   += p.cashFlowInWindow;
+      console.log(
+        `  ${p.title.slice(0, 34).padEnd(35)}` +
+        `${p.outcome.slice(0, 4).padEnd(5)}` +
+        `${p.sharesAtStart.toFixed(1).padStart(10)}` +
+        `${p.priceAtStart !== null ? p.priceAtStart.toFixed(3).padStart(9) : '   N/A  '}` +
+        `${('$' + p.valueAtStart.toFixed(0)).padStart(11)}` +
+        `${(p.stillOpen ? 'YES' : 'no').padStart(11)}` +
+        `${('$' + p.currentValue.toFixed(0)).padStart(10)}` +
+        `${((p.cashFlowInWindow >= 0 ? '+' : '') + '$' + p.cashFlowInWindow.toFixed(0)).padStart(10)}` +
+        `${p.priceSource.padStart(10)}`
+      );
+    }
+    console.log(`  ${'─'.repeat(108)}`);
+    console.log(
+      `  ${'TOTAL'.padEnd(35)}` +
+      `${''.padEnd(5)}` +
+      `${''.padStart(10)}` +
+      `${''.padStart(9)}` +
+      `${('$' + totalValAtStart.toFixed(0)).padStart(11)}` +
+      `${''.padStart(11)}` +
+      `${('$' + totalCurVal.toFixed(0)).padStart(10)}` +
+      `${((totalCashFlow >= 0 ? '+' : '') + '$' + totalCashFlow.toFixed(0)).padStart(10)}`
+    );
+    console.log(`\n  PnL = valueNow($${d.valueNow.toFixed(0)}) - valueAtStart($${d.valueAtStart.toFixed(0)}) + netCashOut($${d.netCashOut.toFixed(0)}) = $${d.pnl.toFixed(0)}`);
+    console.log(`  Poly UI: ${POLY_UI[label] !== null ? '$' + POLY_UI[label] : 'N/A'}  |  Diff: ${POLY_UI[label] !== null ? '$' + (d.pnl - POLY_UI[label]!).toFixed(0) : 'N/A'}`);
+  }
+
+  console.log('\n' + '═'.repeat(110) + '\n');
 }
 
 main().catch(console.error);
