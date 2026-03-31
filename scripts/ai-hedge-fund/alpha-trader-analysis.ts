@@ -162,21 +162,23 @@ async function main() {
     .find(query)
     .toArray();
 
-  // ── Join traderProfiles for tradesPerDay (stored in timeframePnL['30d']) ──────
-  // ahf-alphaTraders.trades_per_day was null due to a now-fixed bug in filter-alpha.
-  // Read directly from source profiles for accurate data.
+  // ── Join traderProfiles for activities_per_day_30d ────────────────────────────
+  // This is raw activity count (buys+sells+redeems) / 30 — best bot vs human metric.
+  // Newly added field; old profiles fall back to timeframePnL['30d'].tradesPerDay.
   const wallets = traders.map(t => t.wallet);
   const profiles = await db
     .collection('polymarket-traderProfiles')
     .find(
       { wallet: { $in: wallets } },
-      { projection: { wallet: 1, timeframePnL: 1 } }
+      { projection: { wallet: 1, activities_per_day_30d: 1, timeframePnL: 1 } }
     )
     .toArray();
   const tpdMap = new Map<string, number>();
   for (const p of profiles) {
-    const tpd = (p.timeframePnL as Record<string, { tradesPerDay?: number }>)?.['30d']?.tradesPerDay;
-    if (tpd != null) tpdMap.set(p.wallet as string, tpd);
+    // Prefer new activities_per_day_30d, fall back to closed-positions/day for old profiles
+    const apd = (p.activities_per_day_30d as number | undefined)
+      ?? (p.timeframePnL as Record<string, { tradesPerDay?: number }>)?.['30d']?.tradesPerDay;
+    if (apd != null) tpdMap.set(p.wallet as string, apd);
   }
 
   await client.close();
@@ -222,7 +224,7 @@ async function main() {
     'Edge'.padEnd(7),
     'P-val'.padEnd(7),
     'EdgeConf'.padEnd(10),
-    'Trd/d'.padEnd(7),            // avg trades/day (30d window, from traderProfiles)
+    'Act/d'.padEnd(7),            // raw activities/day 30d (buys+sells+redeems)
     'Last'.padEnd(6),             // last active (h or d)
     'Insider'.padEnd(8),
     'Specialty',
@@ -284,7 +286,7 @@ async function main() {
   console.log('\n── Specialty Summary ──────────────────────────────────────────────────────────────');
   console.log([
     'Specialty'.padEnd(16), 'Count'.padEnd(7), 'AvgROCE30'.padEnd(11),
-    'AvgSpcWR%'.padEnd(11), 'TotalSpcPnL'.padEnd(14), 'AvgTrd/d'.padEnd(10), 'AvgLastAct',
+    'AvgSpcWR%'.padEnd(11), 'TotalSpcPnL'.padEnd(14), 'AvgAct/d'.padEnd(10), 'AvgLastAct',
   ].join(''));
   console.log('─'.repeat(85));
 
