@@ -344,8 +344,30 @@ function categorizeMarket(title: string): string {
     'borussia', 'olympique', 'hamburger sv', ' az '];
   if (soccerTeams.some(team => lower.includes(team))) return 'Soccer';
 
-  // MLB
-  if (lower.includes('mlb') || lower.includes('baseball')) return 'MLB';
+  // NCAA Basketball — check before MLB to catch college team names first
+  const ncaaKeywords = ['ncaa', 'ncaam', 'march madness', 'college basketball', 'college football',
+    'cornhuskers', 'hawkeyes', 'tar heels', 'fighting illini', 'gonzaga', 'bulldogs',
+    'hoosiers', 'wildcats', 'jayhawks', 'wolverines', 'spartans', 'buckeyes', 'longhorns',
+    'cougars', 'aggies', 'hurricanes', 'gators', 'seminoles', 'huskies', 'terrapins',
+    'orangemen', 'scarlet knights', 'mountaineers', 'cardinal', 'blue devils', 'boilermakers',
+    'volunteers', 'razorbacks', 'gamecocks', 'sooners', 'ducks', 'beavers', 'utes',
+    'lobos', 'aztecs', 'rainbow warriors', 'tiger', 'bears',
+    'zags', 'friars', 'fighting irish', 'notre dame', 'creighton', 'marquette',
+    'villanova', 'providence', 'seton hall', 'depaul', 'georgetown', 'st. john'];
+  // Only classify NCAA if not an NHL/NBA team (ducks/kings/cougars/wildcats overlap)
+  const isNhlOverlap = nhlTeams.some(t => lower.includes(t));
+  const isNbaOverlap = nbaTeams.some(t => lower.includes(t));
+  if (!isNhlOverlap && !isNbaOverlap && ncaaKeywords.some(k => lower.includes(k))) return 'NCAA';
+
+  // MLB — team names + generic keywords
+  const mlbTeams = ['mlb', 'baseball', 'world series',
+    'yankees', 'red sox', 'blue jays', 'orioles', 'rays',
+    'white sox', 'guardians', 'tigers', 'royals', 'twins',
+    'astros', 'athletics', 'mariners', 'rangers', 'angels',
+    'mets', 'phillies', 'braves', 'marlins', 'nationals',
+    'cubs', 'brewers', 'cardinals', 'reds', 'pirates',
+    'dodgers', 'giants', 'padres', 'rockies', 'diamondbacks'];
+  if (mlbTeams.some(k => lower.includes(k))) return 'MLB';
 
   // Tennis — NEW
   const tennisKeywords = ['tennis', 'atp', 'wta', 'wimbledon', 'us open', 'french open', 'australian open', 'grand slam'];
@@ -486,7 +508,7 @@ function computeTimeframePnL(
   const closedInWindow = closedPositions.filter(p => p.timestamp >= startTs);
 
   if (closedInWindow.length === 0 && openPositions.length === 0) {
-    return { timeframe: `${days}d`, days, pnl: 0, capitalDeployed: 0, roce: 0, tradeCount: 0, tradesPerDay: 0, positionCount: 0, tradingDays: 0, wins: 0, losses: 0, winRate: 0, hasData: false, hitApiLimit: false, maxDrawdownAmt: null, maxDrawdownPct: null, realizedPnl: 0, unrealizedPnl: 0 };
+    return { timeframe: `${days}d`, days, pnl: 0, capitalDeployed: 0, totalCapitalDeployed: 0, roce: 0, tradeCount: 0, tradesPerDay: 0, positionCount: 0, tradingDays: 0, wins: 0, losses: 0, winRate: 0, hasData: false, hitApiLimit: false, maxDrawdownAmt: null, maxDrawdownPct: null, realizedPnl: 0, unrealizedPnl: 0 };
   }
 
   // Realized: closed positions whose close_timestamp falls in window
@@ -507,10 +529,14 @@ function computeTimeframePnL(
   wins   += openPositions.filter(p => p.curPrice >= 0.99).length;
   losses += openPositions.filter(p => p.curPrice <= 0.001).length;
 
-  const pnl            = realizedPnl + unrealizedPnl;
-  const capitalDeployed = capitalClosed + capitalOpen;
-  const roce           = capitalDeployed > 0 ? (pnl / capitalDeployed) * 100 : 0;
-  const winRate        = (wins + losses) > 0 ? (wins / (wins + losses)) * 100 : 0;
+  const pnl                  = realizedPnl + unrealizedPnl;
+  const totalCapitalDeployed = capitalClosed + capitalOpen;
+  // Avg capital per position — prevents penalising high-frequency traders who
+  // cycle the same capital through many bets; ROCE reflects per-bet efficiency
+  const posCount             = closedInWindow.length + openPositions.length;
+  const capitalDeployed      = posCount > 0 ? totalCapitalDeployed / posCount : 0;
+  const roce                 = capitalDeployed > 0 ? (pnl / capitalDeployed) * 100 : 0;
+  const winRate              = (wins + losses) > 0 ? (wins / (wins + losses)) * 100 : 0;
 
   // Drawdown: daily realized PnL series from closed positions in window (3-day gate)
   let maxDrawdownAmt: number | null = null;
@@ -537,7 +563,7 @@ function computeTimeframePnL(
     }
   }
 
-  return { timeframe: `${days}d`, days, pnl, realizedPnl, unrealizedPnl, capitalDeployed, roce, tradeCount, tradesPerDay: tradeCount / days, positionCount: closedInWindow.length, tradingDays, wins, losses, winRate, hasData: closedInWindow.length > 0 || openPositions.length > 0, hitApiLimit: false, maxDrawdownAmt, maxDrawdownPct };
+  return { timeframe: `${days}d`, days, pnl, realizedPnl, unrealizedPnl, capitalDeployed, totalCapitalDeployed, roce, tradeCount, tradesPerDay: tradeCount / days, positionCount: closedInWindow.length, tradingDays, wins, losses, winRate, hasData: closedInWindow.length > 0 || openPositions.length > 0, hitApiLimit: false, maxDrawdownAmt, maxDrawdownPct };
 }
 
 
@@ -1520,7 +1546,7 @@ export async function profileTrader(
         const ddStr = data.maxDrawdownAmt !== null && data.maxDrawdownPct !== null
           ? ` | Drawdown=$${data.maxDrawdownAmt.toFixed(0)} (${data.maxDrawdownPct.toFixed(1)}%)`
           : ' | Drawdown=n/a';
-        console.log(`    ${frame.padEnd(4)}: PnL=$${data.pnl.toFixed(0).padStart(10)} | ROCE=${data.roce.toFixed(1)}% | Capital=$${data.capitalDeployed.toFixed(0)}${ddStr} | TradingDays=${data.tradingDays}`);
+        console.log(`    ${frame.padEnd(4)}: PnL=$${data.pnl.toFixed(0).padStart(10)} | ROCE=${data.roce.toFixed(1)}% | AvgCap=$${data.capitalDeployed.toFixed(0)} | TotalCap=$${data.totalCapitalDeployed.toFixed(0)}${ddStr} | TradingDays=${data.tradingDays}`);
       } else {
         console.log(`    ${frame.padEnd(4)}: no data`);
       }
