@@ -52,6 +52,7 @@ function fmtPval(p: number): string {
   if (p < 0.001)  return p.toFixed(4);
   return p.toFixed(3);
 }
+function fmtAge(days: number | null | undefined): string {
   if (days == null) return '—';
   if (days < 1) return Math.max(1, Math.round(days * 24)) + 'h';
   return Math.round(days) + 'd';
