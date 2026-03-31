@@ -1,29 +1,26 @@
 /**
- * PnL Method Comparison — with timeframe breakdown + Method D (Modified Dietz)
+ * PnL Method Comparison — A vs B vs F (combined)
  *
- *   Method A — Positions-based (Polymarket-style):
- *     PnL = sum(closedPosition.realizedPnl where closed in window)
- *           + sum(openPosition.cashPnl)   ← total unrealized (not delta)
- *     Problem: unrealized is all-time, not delta-in-window → overstates short frames
+ *   Method A — Positions-based:
+ *     realized  = sum(closedPosition.realizedPnl where close_timestamp in window)
+ *     unrealized = sum(openPosition.cashPnl)  ← all-time, not delta → overstates short windows
  *
- *   Method B — Cash-flow window (current profiler approach):
- *     PnL = sells + redeems + endingValue - buys   (activities in window only)
- *     Problem: redeems from pre-window buys inflate short timeframes massively
+ *   Method B — Cash-flow window (current profiler):
+ *     PnL = sells + redeems + endingValue - buys  (activities in window only)
+ *     Problem: redeems from pre-window positions inflate short windows massively
  *
- *   Method C — Cost-corrected cash-flow:
- *     PnL = proceeds_in_window - total_historical_cost_for_exited_positions + unrealized_open
- *     Problem: still uses all-time unrealized, same as Method A for that component
- *
- *   Method D — Modified Dietz (correct approach):
- *     PnL = portfolioValue_NOW - portfolioValue_at_WINDOW_START + netCashOut_in_window
- *     Uses CLOB price history API to get market prices at window start.
- *     Falls back to last-known activity price if CLOB unavailable.
- *
- * Known Polymarket UI values (hardcoded for this wallet):
- *   1d: $264  |  7d: $576  |  30d: $12,868  |  all: $38,077
+ *   Method F — Combined (proposed fix):
+ *     realized  = Method A realized (closedPositions by timestamp) — same for all windows
+ *     unrealized:
+ *       1d / 7d  → CLOB delta: size × (curPrice − price_N_days_ago)   [accurate]
+ *       30d / all → full cashPnl                                        [CLOB stale for resolved markets]
  *
  * Usage:
- *   npx tsx scripts/ai-hedge-fund/compare-pnl-methods.ts <wallet>
+ *   npx tsx scripts/ai-hedge-fund/compare-pnl-methods.ts <wallet> [1d_ui] [7d_ui] [30d_ui] [all_ui]
+ *
+ * Examples:
+ *   npx tsx scripts/ai-hedge-fund/compare-pnl-methods.ts 0xabc...
+ *   npx tsx scripts/ai-hedge-fund/compare-pnl-methods.ts 0xabc... 264 576 12868 38077
  */
 
 const DATA_API  = 'https://data-api.polymarket.com';
@@ -35,11 +32,12 @@ if (!wallet) {
   process.exit(1);
 }
 
+// Optional Poly UI reference values — pass as CLI args, or leave null
 const POLY_UI: Record<string, number | null> = {
-  '1d':  264,
-  '7d':  576,
-  '30d': 12868,
-  'all': 38077,
+  '1d':  process.argv[3] ? Number(process.argv[3]) : null,
+  '7d':  process.argv[4] ? Number(process.argv[4]) : null,
+  '30d': process.argv[5] ? Number(process.argv[5]) : null,
+  'all': process.argv[6] ? Number(process.argv[6]) : null,
 };
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -597,76 +595,87 @@ async function main() {
     { label: 'all', days: null },
   ] as const;
 
-  // Pre-compute Method E for all frames (needs async CLOB fetch)
-  console.log('Computing Method E (Method A + CLOB delta)...');
+  // Pre-compute Method E for 1d and 7d only (CLOB delta unrealized)
+  console.log('Computing Method F (combined: A realized + CLOB unrealized for 1d/7d)...');
   const eResults: Record<string, Awaited<ReturnType<typeof methodE>>> = {};
   for (const { label, days } of frames) {
     eResults[label] = await methodE(closed, open, activities, days);
     await sleep(50);
   }
 
-  // ── Comparison table ──────────────────────────────────────────────────────
-  const W   = 12;
-  const pad = (s: string | number, w = W) => String(s).padStart(w);
-  const fmt = (n: number) => `$${n.toFixed(0)}`;
-  const fmtDiff = (d: number | null) =>
-    d === null ? pad('N/A') : (d >= 0 ? `+${fmt(d)}` : fmt(d)).padStart(W);
+  // Method F: A realized + CLOB unrealized for 1d/7d, A unrealized for 30d/all
+  function methodF(label: string) {
+    const e = eResults[label];
+    const a = methodA(closed, open, label === 'all' ? null : Number(label.replace('d', '')));
+    // 1d/7d: use CLOB delta unrealized from Method E
+    // 30d/all: use full cashPnl (CLOB stale for resolved markets)
+    if (label === '1d' || label === '7d') {
+      return { pnl: e.realizedInWindow + e.unrealizedDelta, realized: e.realizedInWindow, unrealized: e.unrealizedDelta, note: 'A-realized + CLOB-delta' };
+    }
+    return { pnl: a.realized + a.unrealized, realized: a.realized, unrealized: a.unrealized, note: 'Method A (CLOB stale)' };
+  }
 
-  console.log('\n' + '═'.repeat(100));
+  // ── Comparison table ──────────────────────────────────────────────────────
+  const pad = (s: string | number, w = 12) => String(s).padStart(w);
+  const fmt = (n: number) => `$${n.toFixed(0)}`;
+  const fmtDiff = (d: number | null, w = 12) =>
+    d === null ? 'N/A'.padStart(w) : (d >= 0 ? `+${fmt(d)}` : fmt(d)).padStart(w);
+
+  console.log('\n' + '═'.repeat(96));
   console.log('  PnL COMPARISON TABLE');
-  console.log('═'.repeat(100));
+  console.log('═'.repeat(96));
   console.log(
     `  ${'Frame'.padEnd(6)}` +
-    `${pad('Method A')}` +
-    `${pad('Method B')}` +
-    `${pad('Method E')}` +
-    `${pad('Poly UI')}` +
-    `  ${pad('A-UI', 10)}  ${pad('E-UI', 10)}  ${pad('E-err%', 10)}`
+    `${'Method A'.padStart(12)}` +
+    `${'Method B'.padStart(12)}` +
+    `${'Method F'.padStart(12)}` +
+    `${'Poly UI'.padStart(12)}` +
+    `${'A-UI'.padStart(12)}` +
+    `${'F-UI'.padStart(12)}`
   );
   console.log(
     `  ${''.padEnd(6)}` +
-    `${pad('(positions)')}` +
-    `${pad('(cashflow)')}` +
-    `${pad('(A+CLOB)')}` +
-    `${pad('(ref)')}` +
-    `  ${''.padStart(10)}  ${''.padStart(10)}  ${''.padStart(10)}`
+    `${'(positions)'.padStart(12)}` +
+    `${'(cashflow)'.padStart(12)}` +
+    `${'(combined)'.padStart(12)}` +
+    `${'(ref)'.padStart(12)}` +
+    `${''.padStart(12)}` +
+    `${''.padStart(12)}`
   );
-  console.log('  ' + '─'.repeat(98));
+  console.log('  ' + '─'.repeat(94));
 
   for (const { label, days } of frames) {
     const a  = methodA(closed, open, days);
     const b  = methodB(activities, open, days);
-    const e  = eResults[label];
+    const f  = methodF(label);
     const ui = POLY_UI[label];
-
-    const diffA = ui !== null ? a.pnl - ui : null;
-    const diffE = ui !== null ? e.pnl - ui : null;
-    const errPct = ui !== null && ui !== 0 ? ((e.pnl - ui) / ui * 100) : null;
-
     console.log(
       `  ${label.padEnd(6)}` +
       `${pad(fmt(a.pnl))}` +
       `${pad(fmt(b.pnl))}` +
-      `${pad(fmt(e.pnl))}` +
+      `${pad(fmt(f.pnl))}` +
       `${pad(ui !== null ? fmt(ui) : 'N/A')}` +
-      `  ${fmtDiff(diffA)}  ${fmtDiff(diffE)}  ${errPct !== null ? (errPct >= 0 ? '+' : '') + errPct.toFixed(1) + '%' : 'N/A'.padStart(10)}`
+      `${fmtDiff(ui !== null ? a.pnl - ui : null)}` +
+      `${fmtDiff(ui !== null ? f.pnl - ui : null)}`
     );
   }
-  console.log('  ' + '─'.repeat(98));
-  console.log('  Method E = Method A with CLOB-corrected realized + delta unrealized\n');
+  console.log('  ' + '─'.repeat(94));
+  console.log('  Method F: 1d/7d = A-realized + CLOB-delta-unrealized | 30d/all = Method A\n');
 
-  // ── Method E detail ────────────────────────────────────────────────────────
-  console.log('═'.repeat(100));
-  console.log('  METHOD E SUMMARY');
-  console.log('═'.repeat(100));
-  for (const { label, days } of frames) {
+  // ── Method F detail ────────────────────────────────────────────────────────
+  console.log('═'.repeat(96));
+  console.log('  METHOD F BREAKDOWN');
+  console.log('═'.repeat(96));
+  for (const { label } of frames) {
+    const f = methodF(label);
     const e = eResults[label];
     console.log(
       `  ${label.padEnd(5)} ` +
-      `realizedInWindow=${fmt(e.realizedInWindow)}  ` +
-      `unrealizedDelta=${fmt(e.unrealizedDelta)}  ` +
-      `→ PnL=${fmt(e.pnl)}` +
-      `  [${e.closedCount} closed + ${e.openCount} open]`
+      `realized=${fmt(f.realized).padStart(10)}  ` +
+      `unrealized=${fmt(f.unrealized).padStart(10)}  ` +
+      `→ PnL=${fmt(f.pnl).padStart(10)}` +
+      `  [${e.closedCount} closed + ${e.openCount} open]` +
+      `  (${f.note})`
     );
   }
 
