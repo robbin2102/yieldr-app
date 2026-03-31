@@ -177,14 +177,15 @@ export async function filterAlphaTraders(db: Db): Promise<FilterResult> {
   console.log(`    ROCE30 >= ${THRESHOLDS.minRoce30d}% | daysWonRate >= ${THRESHOLDS.minDaysWonRate}% | maxDD(trough) <= ${THRESHOLDS.maxDrawdown30d}%`);
   console.log(`    inactive <= ${THRESHOLDS.maxInactiveDays}d | max_markets/day <= ${THRESHOLDS.maxMarketsPerDay} | pos7d:${THRESHOLDS.requirePos7d} pos30d:${THRESHOLDS.requirePos30d}`);
 
-  console.log('\n  Loading profiles...');
+  // Only load v3 profiles (must have tradingConsistency — old v2 profiles lack this field)
+  console.log('\n  Loading v3 profiles (tradingConsistency present)...');
   const profiles = await db
     .collection<TraderProfile>('polymarket-traderProfiles')
-    .find({})
+    .find({ tradingConsistency: { $exists: true } })
     .toArray();
 
   const scanned = profiles.length;
-  console.log(`  Loaded ${scanned} profiles\n`);
+  console.log(`  Loaded ${scanned} v3 profiles\n`);
 
   const alphaTraders: Record<string, unknown>[] = [];
   let staleFiltered = 0;

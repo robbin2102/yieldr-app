@@ -661,15 +661,12 @@ function computeMaxDrawdown30d(activities: Activity[]): { maxDrawdown30dPct: num
   }
 
   if (!firstPositiveSeen || peak <= 0) {
-    console.log(`  [MaxDrawdown Debug] cumPnl never positive → no drawdown baseline (days=${dayMap.size})`);
     return { maxDrawdown30dPct: null, maxDrawdown: 0, maxDrawdownPercent: 0 };
   }
 
   const rawPct = (maxDrawdown / peak) * 100;
   // Clamp: drawdown cannot exceed 100% of peak capital
   const pct = Math.min(rawPct, 100);
-
-  console.log(`  [MaxDrawdown Debug] peak=$${peak.toFixed(0)} | trough=$${troughAtMaxDrawdown.toFixed(0)} | rawDrop=$${maxDrawdown.toFixed(0)} | raw=${rawPct.toFixed(1)}% → clamped=${pct.toFixed(1)}%`);
 
   return { maxDrawdown30dPct: pct, maxDrawdown, maxDrawdownPercent: pct };
 }
