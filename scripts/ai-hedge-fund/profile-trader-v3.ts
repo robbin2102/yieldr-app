@@ -746,6 +746,7 @@ function buildCategoryBreakdown(closedPositions: ClosedPosition[]) {
     wins: number;
     losses: number;
     total_pnl: number;
+    capital_deployed: number;   // sum of totalBought per position in this category
     avg_prices: number[];
   }>();
 
@@ -764,12 +765,14 @@ function buildCategoryBreakdown(closedPositions: ClosedPosition[]) {
       wins: 0,
       losses: 0,
       total_pnl: 0,
+      capital_deployed: 0,
       avg_prices: [],
     };
 
     entry.titles.add(pos.title.toLowerCase());
     entry.closed_positions++;
     entry.total_pnl += pos.realizedPnl;
+    entry.capital_deployed += pos.totalBought;
     if (pos.realizedPnl >= 0) entry.wins++;
     else entry.losses++;
     entry.avg_prices.push(pos.avgPrice);
@@ -779,18 +782,27 @@ function buildCategoryBreakdown(closedPositions: ClosedPosition[]) {
   }
 
   return Array.from(groupMap.values())
-    .map(g => ({
-      category: g.category,
-      sub_league: g.sub_league,
-      unique_events: g.titles.size,
-      closed_positions: g.closed_positions,
-      wins: g.wins,
-      losses: g.losses,
-      win_rate: (g.wins + g.losses) > 0 ? (g.wins / (g.wins + g.losses)) * 100 : 0,
-      total_pnl: g.total_pnl,
-      pnl_share: totalAbsPnl > 0 ? (g.total_pnl / totalAbsPnl) * 100 : 0,
-      avg_entry_price: g.avg_prices.length > 0 ? g.avg_prices.reduce((a, b) => a + b, 0) / g.avg_prices.length : 0,
-    }))
+    .map(g => {
+      const roce = g.capital_deployed > 0
+        ? (g.total_pnl / g.capital_deployed) * 100
+        : null;
+      return {
+        category: g.category,
+        sub_league: g.sub_league,
+        unique_events: g.titles.size,
+        closed_positions: g.closed_positions,
+        wins: g.wins,
+        losses: g.losses,
+        win_rate: (g.wins + g.losses) > 0 ? (g.wins / (g.wins + g.losses)) * 100 : 0,
+        total_pnl: g.total_pnl,
+        capital_deployed: g.capital_deployed,
+        roce,
+        pnl_share: totalAbsPnl > 0 ? (g.total_pnl / totalAbsPnl) * 100 : 0,
+        avg_entry_price: g.avg_prices.length > 0
+          ? g.avg_prices.reduce((a, b) => a + b, 0) / g.avg_prices.length
+          : 0,
+      };
+    })
     .sort((a, b) => Math.abs(b.total_pnl) - Math.abs(a.total_pnl));
 }
 

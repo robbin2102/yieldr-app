@@ -160,13 +160,11 @@ export async function filterAlphaTraders(db: Db): Promise<FilterResult> {
     minSampleSize:     getEnvNum('FILTER_MIN_WIN_RATE_SAMPLE_SIZE', 8),
     minWinRate:        getEnvNum('FILTER_MIN_WIN_RATE', 50),
     minProfitFactor:   getEnvNum('FILTER_MIN_PROFIT_FACTOR', 1.1),
-    // v3 ROCE: avgDailyCapital-based — 20% means total PnL = 20% of avg daily capital
     minRoce30d:        getEnvNum('FILTER_MIN_ROCE_30D', 20),
-    // v3: days won rate (% of trading days with positive realized PnL), replaces pnlConsistency score
     minDaysWonRate:    getEnvNum('FILTER_MIN_DAYS_WON_RATE', 40),
-    maxInactiveDays:   getEnvNum('FILTER_MAX_INACTIVE_DAYS', 14),
+    maxInactiveDays:   getEnvNum('FILTER_MAX_INACTIVE_DAYS', 7),       // 14 → 7: active traders only
     maxMarketsPerDay:  getEnvNum('FILTER_MAX_MARKETS_PER_DAY_7D', 15),
-    // v3: trough % of avgDailyCapital (absolute value); 50 = lost up to 50% of avg daily cap at worst
+    maxTradesPerDay:   getEnvNum('FILTER_MAX_TRADES_PER_DAY', 50),     // bot guard on raw trade count
     maxDrawdown30d:    getEnvNum('FILTER_MAX_DRAWDOWN_30D_PCT', 50),
     requirePos7d:      getEnvBool('FILTER_REQUIRE_POSITIVE_7D', true),
     requirePos30d:     getEnvBool('FILTER_REQUIRE_POSITIVE_30D', true),
@@ -175,7 +173,7 @@ export async function filterAlphaTraders(db: Db): Promise<FilterResult> {
   console.log('  Thresholds:');
   console.log(`    win_rate >= ${THRESHOLDS.minWinRate}% | sample >= ${THRESHOLDS.minSampleSize} | PF >= ${THRESHOLDS.minProfitFactor}`);
   console.log(`    ROCE30 >= ${THRESHOLDS.minRoce30d}% | daysWonRate >= ${THRESHOLDS.minDaysWonRate}% | maxDD(trough) <= ${THRESHOLDS.maxDrawdown30d}%`);
-  console.log(`    inactive <= ${THRESHOLDS.maxInactiveDays}d | max_markets/day <= ${THRESHOLDS.maxMarketsPerDay} | pos7d:${THRESHOLDS.requirePos7d} pos30d:${THRESHOLDS.requirePos30d}`);
+  console.log(`    inactive <= ${THRESHOLDS.maxInactiveDays}d | max_markets/day <= ${THRESHOLDS.maxMarketsPerDay} | max_trades/day <= ${THRESHOLDS.maxTradesPerDay} | pos7d:${THRESHOLDS.requirePos7d} pos30d:${THRESHOLDS.requirePos30d}`);
 
   // Only load v3 profiles (must have tradingConsistency — old v2 profiles lack this field)
   console.log('\n  Loading v3 profiles (tradingConsistency present)...');
@@ -185,7 +183,20 @@ export async function filterAlphaTraders(db: Db): Promise<FilterResult> {
     .toArray();
 
   const scanned = profiles.length;
-  console.log(`  Loaded ${scanned} v3 profiles\n`);
+  console.log(`  Loaded ${scanned} v3 profiles`);
+
+  // Load leaderboard categories for "Other" specialty fallback
+  const consistentDocs = await db
+    .collection('polymarket-consistentTraders')
+    .find({}, { projection: { wallet: 1, consistent_categories: 1 } })
+    .toArray();
+  const leaderboardCats = new Map<string, string[]>();
+  for (const doc of consistentDocs) {
+    if (doc.wallet && Array.isArray(doc.consistent_categories)) {
+      leaderboardCats.set(doc.wallet as string, doc.consistent_categories as string[]);
+    }
+  }
+  console.log(`  Loaded leaderboard categories for ${leaderboardCats.size} wallets\n`);
 
   const alphaTraders: Record<string, unknown>[] = [];
   let staleFiltered = 0;
@@ -230,11 +241,15 @@ export async function filterAlphaTraders(db: Db): Promise<FilterResult> {
 
     // Bot filter — skip if null
     const marketsPerDay = profile.avg_unique_markets_per_day_7d?.value;
-    if (marketsPerDay != null) {
-      if (marketsPerDay > THRESHOLDS.maxMarketsPerDay) {
-        botFiltered++;
-        continue;
-      }
+    if (marketsPerDay != null && marketsPerDay > THRESHOLDS.maxMarketsPerDay) {
+      botFiltered++;
+      continue;
+    }
+    // Bot filter on raw trade frequency (activities/day over 30d window)
+    const tradesPerDay = (profile as Record<string, unknown>).tradesPerDay as number | undefined;
+    if (tradesPerDay != null && tradesPerDay > THRESHOLDS.maxTradesPerDay) {
+      botFiltered++;
+      continue;
     }
 
     // v3: use trough % from timeframePnL (negative number → abs value)
@@ -272,9 +287,13 @@ export async function filterAlphaTraders(db: Db): Promise<FilterResult> {
     const n               = profile.win_rate_sample_size;
     const actual_wins     = Math.round(actual_win_rate * n);
 
-    const p_value       = computePValue(n, actual_wins, expected_win_rate);
+    const p_value        = computePValue(n, actual_wins, expected_win_rate);
     const edge_magnitude = actual_win_rate - expected_win_rate;
-    const rank_score    = edge_magnitude * Math.log(n + 1) * (1 - Math.min(p_value, 1));
+    // rank_score: boost when specialty ROCE is available (rewards focused specialists)
+    const roceBoost = specialty_roce != null && specialty_roce > 0
+      ? Math.log(1 + specialty_roce / 100)   // log(1 + 2.0) ≈ 1.1 for 200% ROCE
+      : Math.log(1 + tf30.roce / 100);
+    const rank_score = edge_magnitude * Math.log(n + 1) * (1 - Math.min(p_value, 1)) * roceBoost;
 
     let edge_confidence: string;
     if (n < 8) {
@@ -294,15 +313,39 @@ export async function filterAlphaTraders(db: Db): Promise<FilterResult> {
     }
 
     // ── Track stats ───────────────────────────────────────────────────────────
-    if (profile.last_active_days_ago != null && profile.last_active_days_ago <= 14) {
+    if (profile.last_active_days_ago != null && profile.last_active_days_ago <= 7) {
       stats.activeCount++;
     }
     if (profile.insider_probability === 'high')        stats.insiderHigh++;
     else if (profile.insider_probability === 'medium') stats.insiderMedium++;
     else if (profile.insider_probability === 'low')    stats.insiderLow++;
 
-    const specialty = profile.specialty ?? 'Other';
+    // Specialty: use profile specialty, fall back to leaderboard category if "Other"/null
+    let specialty = profile.specialty ?? 'Other';
+    if (specialty === 'Other' || specialty === null) {
+      const lbCats = leaderboardCats.get(profile.wallet) ?? [];
+      // Prefer actionable categories over CRYPTO/CULTURE/MENTIONS
+      const actionable = lbCats.filter(c => !['CRYPTO', 'CULTURE', 'MENTIONS', 'TECH'].includes(c));
+      if (actionable.length > 0) {
+        // Map leaderboard category names to profile specialty names
+        const catMap: Record<string, string> = {
+          POLITICS: 'Politics', SPORTS: 'Sports', FINANCE: 'Finance',
+          ECONOMICS: 'Economics', WEATHER: 'Weather',
+        };
+        specialty = catMap[actionable[0]] ?? actionable[0];
+      }
+    }
     specialties[specialty] = (specialties[specialty] ?? 0) + 1;
+
+    // Specialty-level ROCE: find category_breakdown entry matching specialty
+    const catBreakdown = (profile.category_breakdown ?? []) as Array<{
+      category: string; total_pnl: number; capitalDeployed?: number; roce?: number;
+    }>;
+    const specialtyEntry = catBreakdown.find(c =>
+      c.category?.toLowerCase() === specialty.toLowerCase() ||
+      c.category?.toLowerCase().includes(specialty.toLowerCase())
+    );
+    const specialty_roce = specialtyEntry?.roce ?? null;
 
     // ── STAGE 3: BUILD ahf-alphaTraders DOCUMENT ──────────────────────────────
     alphaTraders.push({
@@ -333,6 +376,8 @@ export async function filterAlphaTraders(db: Db): Promise<FilterResult> {
       p_value,
       rank_score,
       edge_confidence,
+      specialty_roce,
+      trades_per_day: tradesPerDay ?? null,
 
       // Insider
       insider_probability:   profile.insider_probability  ?? 'none',
@@ -391,15 +436,19 @@ export async function filterAlphaTraders(db: Db): Promise<FilterResult> {
     (a, b) => (b.rank_score as number) - (a.rank_score as number)
   );
 
-  const COL = [5, 12, 20, 9, 8, 7, 9, 14, 12, 10, 0];
-  const headers = ['Rank', 'Wallet', 'Name', 'WinRate', 'Sample', 'PF', 'ROCE30', 'PnL30', 'EdgeConf', 'Insider', 'Specialty'];
-  const divider = '─'.repeat(116);
+  //                Rank  Wallet  Name   WinR  n    PF   ROCE30  SpcROCE  PnL30  Edge   P-val  Conf      Ins   Specialty
+  const COL =     [5,    12,     20,    9,    7,   7,   9,      9,       12,    8,     7,     10,       7,    0];
+  const headers = ['Rank','Wallet','Name','WinRate','n','PF','ROCE30','SpcROCE','PnL30','Edge','P-val','EdgeConf','Insider','Specialty'];
+  const divider = '─'.repeat(COL.reduce((a, b) => a + b, 0) + 20);
 
   console.log('\n' + divider);
   console.log(headers.map((h, i) => i < COL.length - 1 ? h.padEnd(COL[i]) : h).join(''));
   console.log(divider);
 
   sorted.slice(0, 100).forEach((t, i) => {
+    const sRoce = t.specialty_roce != null
+      ? (t.specialty_roce as number).toFixed(0) + '%'
+      : '—';
     const cells = [
       String(i + 1),
       (t.wallet as string).slice(0, 10),
@@ -407,8 +456,11 @@ export async function filterAlphaTraders(db: Db): Promise<FilterResult> {
       (t.win_rate as number).toFixed(1) + '%',
       String(t.win_rate_sample_size),
       (t.profit_factor as number).toFixed(2),
-      (t.roce_30d as number).toFixed(1) + '%',
+      (t.roce_30d as number).toFixed(0) + '%',
+      sRoce,
       '$' + ((t.pnl_30d as number) / 1000).toFixed(1) + 'k',
+      (t.edge_magnitude as number).toFixed(3),
+      (t.p_value as number).toFixed(3),
       t.edge_confidence as string,
       (t.insider_probability as string) ?? 'none',
       t.specialty as string,
@@ -422,7 +474,7 @@ export async function filterAlphaTraders(db: Db): Promise<FilterResult> {
   console.log(`\nScanned ${scanned} profiles → passed filters: ${alphaTraders.length}`);
   console.log(`Confidence: confirmed=${stats.confirmed}, likely=${stats.likely}, watch=${stats.watch}`);
   console.log(`Insider: high=${stats.insiderHigh}, medium=${stats.insiderMedium}, low=${stats.insiderLow}`);
-  console.log(`Active (<=14d): ${stats.activeCount} | Filtered stale: ${staleFiltered}`);
+  console.log(`Active (<=7d): ${stats.activeCount} | Filtered stale: ${staleFiltered}`);
   console.log(`Bot filtered (>15 mkts/day): ${botFiltered}`);
 
   const specOrder = ['Soccer', 'NBA', 'NFL', 'Politics', 'Crypto', 'Other'];
