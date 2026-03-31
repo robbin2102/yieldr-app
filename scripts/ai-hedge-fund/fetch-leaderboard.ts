@@ -206,13 +206,16 @@ async function main() {
       }
 
       if (!isDryRun && docsToUpsert.length > 0) {
-        for (const doc of docsToUpsert) {
-          await col.updateOne(
-            { wallet: doc.wallet, category: doc.category, timePeriod: doc.timePeriod },
-            { $set: doc },
-            { upsert: true },
-          );
-        }
+        process.stdout.write(`  Writing ${docsToUpsert.length} docs to MongoDB... `);
+        const bulkOps = docsToUpsert.map(doc => ({
+          updateOne: {
+            filter: { wallet: doc.wallet, category: doc.category, timePeriod: doc.timePeriod },
+            update: { $set: doc },
+            upsert: true,
+          },
+        }));
+        await col.bulkWrite(bulkOps, { ordered: false });
+        process.stdout.write('done\n');
         totalUpserts += docsToUpsert.length;
       }
 
