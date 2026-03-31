@@ -214,6 +214,160 @@ function methodA(closed: ClosedPosition[], open: OpenPosition[], days: number | 
   return { pnl: realized + unrealized, realized, unrealized, closedCount: inWindow.length };
 }
 
+/**
+ * Method E — Method A + CLOB delta (fixes both realized and unrealized)
+ *
+ * For closed positions closed in window:
+ *   shares ≈ totalBought / avgPrice
+ *   If position existed at window start (CLOB price available):
+ *     preWindowGain = shares × priceAtStart - totalBought
+ *     inWindowPnl = realizedPnl - preWindowGain
+ *   Else (opened during window):
+ *     inWindowPnl = realizedPnl (full amount is in-window)
+ *
+ * For open positions:
+ *   If existed at window start:
+ *     deltaUnrealized = size × (curPrice - priceAtStart)
+ *   Else (opened during window):
+ *     deltaUnrealized = cashPnl (full unrealized is in-window)
+ */
+interface MethodEDebug {
+  type: 'closed' | 'open';
+  title: string;
+  outcome: string;
+  shares: number;
+  allTimePnl: number;
+  priceAtStart: number | null;
+  preWindowGain: number | null;
+  inWindowPnl: number;
+  source: 'clob' | 'no_clob_opened_in_window' | 'no_clob_fallback';
+}
+
+async function methodE(
+  closed: ClosedPosition[],
+  open: OpenPosition[],
+  activities: Activity[],
+  days: number | null,
+): Promise<{
+  pnl: number;
+  realizedInWindow: number;
+  unrealizedDelta: number;
+  closedCount: number;
+  openCount: number;
+  debug: MethodEDebug[];
+}> {
+  const start = windowStart(days);
+  const debug: MethodEDebug[] = [];
+
+  // ── All-time: same as Method A ────────────────────────────────────────────
+  if (start === 0) {
+    const realized   = closed.reduce((s, p) => s + p.realizedPnl, 0);
+    const unrealized = open.reduce((s, p) => s + p.cashPnl, 0);
+    return { pnl: realized + unrealized, realizedInWindow: realized, unrealizedDelta: unrealized, closedCount: closed.length, openCount: open.length, debug: [] };
+  }
+
+  // ── Fetch CLOB prices for closed positions in window + open positions ─────
+  const closedInWindow = closed.filter(p => p.timestamp >= start);
+  const allAssets = new Set<string>();
+  for (const p of closedInWindow) allAssets.add(p.asset);
+  for (const p of open) allAssets.add(p.asset);
+  await Promise.all(Array.from(allAssets).map(a => fetchPriceHistory(a)));
+
+  // ── Build set of assets with pre-window buys (to know if position existed before window) ──
+  const preWindowBuyAssets = new Set<string>();
+  for (const a of activities) {
+    if (a.timestamp < start && a.type === 'TRADE' && a.side === 'BUY') {
+      preWindowBuyAssets.add(a.asset);
+    }
+  }
+
+  // ── Realized: adjust closed positions for pre-window gains ────────────────
+  let realizedInWindow = 0;
+  for (const pos of closedInWindow) {
+    const shares = pos.avgPrice > 0 ? pos.totalBought / pos.avgPrice : 0;
+    const history = _priceCache.get(pos.asset) ?? [];
+    const pAtStart = priceAt(history, start);
+    const existedBefore = preWindowBuyAssets.has(pos.asset);
+
+    let inWindowPnl: number;
+    let preWindowGain: number | null = null;
+    let source: MethodEDebug['source'];
+
+    if (existedBefore && pAtStart !== null) {
+      // Position existed before window — subtract pre-window gain
+      preWindowGain = shares * pAtStart - pos.totalBought;
+      inWindowPnl = pos.realizedPnl - preWindowGain;
+      source = 'clob';
+    } else if (!existedBefore) {
+      // Position opened during window — full realizedPnl is in-window
+      inWindowPnl = pos.realizedPnl;
+      source = 'no_clob_opened_in_window';
+    } else {
+      // Existed before but no CLOB price — use full realizedPnl as fallback
+      inWindowPnl = pos.realizedPnl;
+      source = 'no_clob_fallback';
+    }
+
+    realizedInWindow += inWindowPnl;
+    debug.push({
+      type: 'closed',
+      title: pos.title,
+      outcome: pos.outcome,
+      shares,
+      allTimePnl: pos.realizedPnl,
+      priceAtStart: pAtStart,
+      preWindowGain,
+      inWindowPnl,
+      source,
+    });
+  }
+
+  // ── Unrealized: delta for open positions using CLOB prices ────────────────
+  let unrealizedDelta = 0;
+  for (const pos of open) {
+    const history = _priceCache.get(pos.asset) ?? [];
+    const pAtStart = priceAt(history, start);
+    const existedBefore = preWindowBuyAssets.has(pos.asset);
+
+    let delta: number;
+    let source: MethodEDebug['source'];
+
+    if (existedBefore && pAtStart !== null) {
+      delta = pos.size * (pos.curPrice - pAtStart);
+      source = 'clob';
+    } else if (!existedBefore) {
+      // Opened during window — full cashPnl is in-window
+      delta = pos.cashPnl;
+      source = 'no_clob_opened_in_window';
+    } else {
+      delta = pos.cashPnl;
+      source = 'no_clob_fallback';
+    }
+
+    unrealizedDelta += delta;
+    debug.push({
+      type: 'open',
+      title: pos.title,
+      outcome: pos.outcome,
+      shares: pos.size,
+      allTimePnl: pos.cashPnl,
+      priceAtStart: pAtStart,
+      preWindowGain: existedBefore && pAtStart !== null ? pos.size * pAtStart - pos.initialValue : null,
+      inWindowPnl: delta,
+      source,
+    });
+  }
+
+  return {
+    pnl: realizedInWindow + unrealizedDelta,
+    realizedInWindow,
+    unrealizedDelta,
+    closedCount: closedInWindow.length,
+    openCount: open.length,
+    debug,
+  };
+}
+
 /** Method B: cash-flow window (current profiler) */
 function methodB(activities: Activity[], open: OpenPosition[], days: number | null) {
   const start = windowStart(days);
@@ -443,11 +597,11 @@ async function main() {
     { label: 'all', days: null },
   ] as const;
 
-  // Pre-compute Method D for all frames (needs async CLOB fetch)
-  console.log('Computing Method D (Modified Dietz)...');
-  const dResults: Record<string, Awaited<ReturnType<typeof methodD>>> = {};
+  // Pre-compute Method E for all frames (needs async CLOB fetch)
+  console.log('Computing Method E (Method A + CLOB delta)...');
+  const eResults: Record<string, Awaited<ReturnType<typeof methodE>>> = {};
   for (const { label, days } of frames) {
-    dResults[label] = await methodD(activities, open, days);
+    eResults[label] = await methodE(closed, open, activities, days);
     await sleep(50);
   }
 
@@ -458,150 +612,118 @@ async function main() {
   const fmtDiff = (d: number | null) =>
     d === null ? pad('N/A') : (d >= 0 ? `+${fmt(d)}` : fmt(d)).padStart(W);
 
-  console.log('\n' + '═'.repeat(90));
+  console.log('\n' + '═'.repeat(100));
   console.log('  PnL COMPARISON TABLE');
-  console.log('═'.repeat(90));
+  console.log('═'.repeat(100));
   console.log(
     `  ${'Frame'.padEnd(6)}` +
     `${pad('Method A')}` +
     `${pad('Method B')}` +
-    `${pad('Method C')}` +
-    `${pad('Method D')}` +
+    `${pad('Method E')}` +
     `${pad('Poly UI')}` +
-    `  ${pad('A-UI', 10)}  ${pad('D-UI', 10)}`
+    `  ${pad('A-UI', 10)}  ${pad('E-UI', 10)}  ${pad('E-err%', 10)}`
   );
   console.log(
     `  ${''.padEnd(6)}` +
     `${pad('(positions)')}` +
     `${pad('(cashflow)')}` +
-    `${pad('(corrected)')}` +
-    `${pad('(mod.dietz)')}` +
+    `${pad('(A+CLOB)')}` +
     `${pad('(ref)')}` +
-    `  ${''.padStart(10)}  ${''.padStart(10)}`
+    `  ${''.padStart(10)}  ${''.padStart(10)}  ${''.padStart(10)}`
   );
-  console.log('  ' + '─'.repeat(88));
+  console.log('  ' + '─'.repeat(98));
 
   for (const { label, days } of frames) {
     const a  = methodA(closed, open, days);
     const b  = methodB(activities, open, days);
-    const c  = methodC(activities, open, days);
-    const d  = dResults[label];
+    const e  = eResults[label];
     const ui = POLY_UI[label];
 
     const diffA = ui !== null ? a.pnl - ui : null;
-    const diffD = ui !== null ? d.pnl - ui : null;
+    const diffE = ui !== null ? e.pnl - ui : null;
+    const errPct = ui !== null && ui !== 0 ? ((e.pnl - ui) / ui * 100) : null;
 
     console.log(
       `  ${label.padEnd(6)}` +
       `${pad(fmt(a.pnl))}` +
       `${pad(fmt(b.pnl))}` +
-      `${pad(fmt(c.pnl))}` +
-      `${pad(fmt(d.pnl))}` +
+      `${pad(fmt(e.pnl))}` +
       `${pad(ui !== null ? fmt(ui) : 'N/A')}` +
-      `  ${fmtDiff(diffA)}  ${fmtDiff(diffD)}`
+      `  ${fmtDiff(diffA)}  ${fmtDiff(diffE)}  ${errPct !== null ? (errPct >= 0 ? '+' : '') + errPct.toFixed(1) + '%' : 'N/A'.padStart(10)}`
     );
   }
-  console.log('  ' + '─'.repeat(88));
-  console.log('  Closest to 0 in the diff columns = best match to Polymarket UI\n');
+  console.log('  ' + '─'.repeat(98));
+  console.log('  Method E = Method A with CLOB-corrected realized + delta unrealized\n');
 
-  // ── Detailed breakdown ─────────────────────────────────────────────────────
-  console.log('═'.repeat(90));
-  console.log('  METHOD D DETAIL (Modified Dietz)');
-  console.log('═'.repeat(90));
+  // ── Method E detail ────────────────────────────────────────────────────────
+  console.log('═'.repeat(100));
+  console.log('  METHOD E SUMMARY');
+  console.log('═'.repeat(100));
   for (const { label, days } of frames) {
-    const d = dResults[label];
+    const e = eResults[label];
     console.log(
       `  ${label.padEnd(5)} ` +
-      `valueNow=${fmt(d.valueNow)}  ` +
-      `valueAtStart=${fmt(d.valueAtStart)}  ` +
-      `netCashOut=${fmt(d.netCashOut)}  ` +
-      `→ PnL=${fmt(d.pnl)}` +
-      (label !== 'all' ? `  [${d.positionsAtStart} positions at start: ${d.clobUsed} CLOB / ${d.fallbackUsed} fallback / ${d.missingPrice} missing]` : '')
+      `realizedInWindow=${fmt(e.realizedInWindow)}  ` +
+      `unrealizedDelta=${fmt(e.unrealizedDelta)}  ` +
+      `→ PnL=${fmt(e.pnl)}` +
+      `  [${e.closedCount} closed + ${e.openCount} open]`
     );
   }
 
-  // ── Open positions (current) ─────────────────────────────────────────────
-  console.log('\n' + '═'.repeat(110));
-  console.log('  CURRENT OPEN POSITIONS — used as valueNow in Method D');
-  console.log('═'.repeat(110));
-  const sortedOpen = [...open].sort((a, b) => b.currentValue - a.currentValue);
-  for (const p of sortedOpen) {
-    const clobHistory = _priceCache.get(p.asset) ?? [];
-    const p1d  = priceAt(clobHistory, Math.floor(Date.now() / 1000) - 1  * 86400);
-    const p7d  = priceAt(clobHistory, Math.floor(Date.now() / 1000) - 7  * 86400);
-    const p30d = priceAt(clobHistory, Math.floor(Date.now() / 1000) - 30 * 86400);
-    const cur  = p.curPrice;
-    console.log(
-      `  ${p.title.slice(0, 42).padEnd(42)} [${p.outcome.slice(0,3)}]` +
-      `  size=${p.size.toFixed(1).padStart(8)}` +
-      `  val=$${p.currentValue.toFixed(0).padStart(6)}` +
-      `  cur=${cur.toFixed(3)}` +
-      `  1d=${p1d !== null ? p1d.toFixed(3) : 'N/A  '}` +
-      `  7d=${p7d !== null ? p7d.toFixed(3) : 'N/A  '}` +
-      `  30d=${p30d !== null ? p30d.toFixed(3) : 'N/A  '}`
-    );
-  }
-  const totalValueNow = open.reduce((s, p) => s + p.currentValue, 0);
-  console.log(`  ${'─'.repeat(108)}`);
-  console.log(`  TOTAL valueNow: $${totalValueNow.toFixed(0)}`);
-
-  // ── Method D per-position debug for each timeframe ─────────────────────────
+  // ── Method E per-position debug for each timeframe ──────────────────────────
   for (const { label, days } of frames) {
-    if (days === null) continue; // skip all-time
-    const d = dResults[label];
-    if (d.debug.length === 0) continue;
+    if (days === null) continue;
+    const e = eResults[label];
+    if (e.debug.length === 0) continue;
 
-    console.log('\n' + '═'.repeat(110));
-    console.log(`  METHOD D DEBUG — ${label} window (${d.positionsAtStart} positions at window start)`);
-    console.log('═'.repeat(110));
+    console.log('\n' + '═'.repeat(120));
+    console.log(`  METHOD E DEBUG — ${label} window`);
+    console.log('═'.repeat(120));
     console.log(
-      `  ${'Title'.padEnd(35)}` +
+      `  ${'Type'.padEnd(7)}` +
+      `${'Title'.padEnd(38)}` +
       `${'Outc'.padEnd(5)}` +
       `${'Shares'.padStart(10)}` +
+      `${'AllTimePnl'.padStart(12)}` +
       `${'P@Start'.padStart(9)}` +
-      `${'Val@Start'.padStart(11)}` +
-      `${'StillOpen'.padStart(11)}` +
-      `${'CurVal'.padStart(10)}` +
-      `${'CashFlow'.padStart(10)}` +
-      `${'Source'.padStart(10)}`
+      `${'PreWinGain'.padStart(12)}` +
+      `${'InWinPnl'.padStart(12)}` +
+      `${'Source'.padStart(14)}`
     );
-    console.log(`  ${'─'.repeat(108)}`);
+    console.log(`  ${'─'.repeat(118)}`);
 
-    let totalValAtStart = 0;
-    let totalCurVal = 0;
-    let totalCashFlow = 0;
-    for (const p of d.debug) {
-      totalValAtStart += p.valueAtStart;
-      totalCurVal     += p.currentValue;
-      totalCashFlow   += p.cashFlowInWindow;
+    // Show closed positions first, then open
+    const sorted = [...e.debug].sort((a, b) => {
+      if (a.type !== b.type) return a.type === 'closed' ? -1 : 1;
+      return Math.abs(b.inWindowPnl) - Math.abs(a.inWindowPnl);
+    });
+
+    let totalInWindow = 0;
+    let lastType = '';
+    for (const p of sorted) {
+      if (p.type !== lastType && lastType !== '') {
+        console.log(`  ${'─'.repeat(118)}`);
+      }
+      lastType = p.type;
+      totalInWindow += p.inWindowPnl;
       console.log(
-        `  ${p.title.slice(0, 34).padEnd(35)}` +
+        `  ${p.type.toUpperCase().padEnd(7)}` +
+        `${p.title.slice(0, 37).padEnd(38)}` +
         `${p.outcome.slice(0, 4).padEnd(5)}` +
-        `${p.sharesAtStart.toFixed(1).padStart(10)}` +
-        `${p.priceAtStart !== null ? p.priceAtStart.toFixed(3).padStart(9) : '   N/A  '}` +
-        `${('$' + p.valueAtStart.toFixed(0)).padStart(11)}` +
-        `${(p.stillOpen ? 'YES' : 'no').padStart(11)}` +
-        `${('$' + p.currentValue.toFixed(0)).padStart(10)}` +
-        `${((p.cashFlowInWindow >= 0 ? '+' : '') + '$' + p.cashFlowInWindow.toFixed(0)).padStart(10)}` +
-        `${p.priceSource.padStart(10)}`
+        `${p.shares.toFixed(1).padStart(10)}` +
+        `${('$' + p.allTimePnl.toFixed(0)).padStart(12)}` +
+        `${p.priceAtStart !== null ? p.priceAtStart.toFixed(3).padStart(9) : '     N/A'}` +
+        `${p.preWindowGain !== null ? ('$' + p.preWindowGain.toFixed(0)).padStart(12) : '         N/A'}` +
+        `${((p.inWindowPnl >= 0 ? '+' : '') + '$' + p.inWindowPnl.toFixed(0)).padStart(12)}` +
+        `${p.source.padStart(14)}`
       );
     }
-    console.log(`  ${'─'.repeat(108)}`);
-    console.log(
-      `  ${'TOTAL'.padEnd(35)}` +
-      `${''.padEnd(5)}` +
-      `${''.padStart(10)}` +
-      `${''.padStart(9)}` +
-      `${('$' + totalValAtStart.toFixed(0)).padStart(11)}` +
-      `${''.padStart(11)}` +
-      `${('$' + totalCurVal.toFixed(0)).padStart(10)}` +
-      `${((totalCashFlow >= 0 ? '+' : '') + '$' + totalCashFlow.toFixed(0)).padStart(10)}`
-    );
-    console.log(`\n  PnL = valueNow($${d.valueNow.toFixed(0)}) - valueAtStart($${d.valueAtStart.toFixed(0)}) + netCashOut($${d.netCashOut.toFixed(0)}) = $${d.pnl.toFixed(0)}`);
-    console.log(`  Poly UI: ${POLY_UI[label] !== null ? '$' + POLY_UI[label] : 'N/A'}  |  Diff: ${POLY_UI[label] !== null ? '$' + (d.pnl - POLY_UI[label]!).toFixed(0) : 'N/A'}`);
+    console.log(`  ${'─'.repeat(118)}`);
+    console.log(`  TOTAL in-window PnL: $${totalInWindow.toFixed(0)}  (realized=${fmt(e.realizedInWindow)} + unrealized=${fmt(e.unrealizedDelta)})`);
+    console.log(`  Poly UI: ${POLY_UI[label] !== null ? '$' + POLY_UI[label] : 'N/A'}  |  Diff: ${POLY_UI[label] !== null ? '$' + (e.pnl - POLY_UI[label]!).toFixed(0) : 'N/A'}`);
   }
 
-  console.log('\n' + '═'.repeat(110) + '\n');
+  console.log('\n' + '═'.repeat(120) + '\n');
 }
 
 main().catch(console.error);
