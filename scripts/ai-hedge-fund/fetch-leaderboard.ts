@@ -26,7 +26,7 @@ import { MongoClient } from 'mongodb';
 const envLocations = [
   path.resolve(process.cwd(), '.env.local'),
   path.resolve(process.cwd(), '.env'),
-  path.resolve(process.cwd(), 'services/.private/poly-agent/.env.polyagent'),
+  path.resolve(process.cwd(), 'services/.private/poly-agent/env.polyagent'),
 ];
 for (const envPath of envLocations) {
   const result = dotenv.config({ path: envPath });
@@ -35,7 +35,7 @@ for (const envPath of envLocations) {
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const API_BASE = 'https://data-api.polymarket.com';
+const API_BASE = (process.env.DATA_API_BASE ?? 'https://data-api.polymarket.com').replace(/\/$/, '');
 
 const ALL_CATEGORIES = [
   'POLITICS', 'SPORTS', 'CRYPTO', 'CULTURE',
@@ -153,7 +153,8 @@ async function main() {
   await client.connect();
   const db = client.db(extractDbName(mongoUri));
   const col = db.collection('polymarket-leaderboardSnapshots');
-  console.log(`Connected → db: ${extractDbName(mongoUri)}\n`);
+  console.log(`Connected → db: ${extractDbName(mongoUri)}`);
+  console.log(`API base:        ${API_BASE}\n`);
 
   if (!isDryRun) {
     // Index for fast upsert + lookup

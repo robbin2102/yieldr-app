@@ -18,7 +18,7 @@ import { MongoClient, Db } from 'mongodb';
 const envLocations = [
   path.resolve(process.cwd(), '.env.local'),
   path.resolve(process.cwd(), '.env'),
-  path.resolve(process.cwd(), 'services/.private/poly-agent/.env.polyagent'),
+  path.resolve(process.cwd(), 'services/.private/poly-agent/env.polyagent'),
 ];
 for (const envPath of envLocations) {
   const result = dotenv.config({ path: envPath });

@@ -37,7 +37,7 @@ import { MongoClient } from 'mongodb';
 const envLocations = [
   path.resolve(process.cwd(), '.env.local'),
   path.resolve(process.cwd(), '.env'),
-  path.resolve(process.cwd(), 'services/.private/poly-agent/.env.polyagent'),
+  path.resolve(process.cwd(), 'services/.private/poly-agent/env.polyagent'),
 ];
 for (const envPath of envLocations) {
   const result = dotenv.config({ path: envPath });
@@ -284,16 +284,17 @@ async function main() {
   }
 
   // ── Upsert into polymarket-consistentTraders ──────────────────────────────
-  console.log(`\nUpserting ${consistentTraders.length} documents...`);
-  let upserted = 0;
-  for (const doc of consistentTraders) {
-    await outCol.updateOne(
-      { wallet: doc.wallet },
-      { $set: doc },
-      { upsert: true },
-    );
-    upserted++;
-  }
+  process.stdout.write(`\nUpserting ${consistentTraders.length} documents to MongoDB... `);
+  const bulkOps = consistentTraders.map(doc => ({
+    updateOne: {
+      filter: { wallet: doc.wallet },
+      update: { $set: doc },
+      upsert: true,
+    },
+  }));
+  await outCol.bulkWrite(bulkOps, { ordered: false });
+  const upserted = consistentTraders.length;
+  process.stdout.write('done\n');
 
   // ── Summary ────────────────────────────────────────────────────────────────
   console.log('\n═══════════════════════════════════════════════════════════════');

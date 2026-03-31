@@ -28,7 +28,7 @@ import { profileTrader } from './profile-trader-v3.js';
 const envLocations = [
   path.resolve(process.cwd(), '.env.local'),
   path.resolve(process.cwd(), '.env'),
-  path.resolve(process.cwd(), 'services/.private/poly-agent/.env.polyagent'),
+  path.resolve(process.cwd(), 'services/.private/poly-agent/env.polyagent'),
 ];
 for (const envPath of envLocations) {
   const result = dotenv.config({ path: envPath });
@@ -178,13 +178,18 @@ async function main() {
     const position = `[${i + 1}/${total}]`;
     const isBatchEnd = (i + 1) % CONFIG.BATCH_SIZE === 0;
 
-    process.stdout.write(`${position} ${wallet} ... `);
+    process.stdout.write(`${position} ${wallet.slice(0, 10)}... `);
+    const startMs = Date.now();
+    // Heartbeat: print a dot every 5s so terminal doesn't appear frozen
+    const ticker = setInterval(() => process.stdout.write('.'), 5000);
 
     try {
       const profileData = await profileTrader(wallet, {
         convictionMultiplier: CONFIG.CONVICTION_MULTIPLIER,
         verbose: false,
       });
+      clearInterval(ticker);
+      const elapsed = ((Date.now() - startMs) / 1000).toFixed(1);
 
       // Upsert into destination collection
       await destCollection.updateOne(
@@ -209,12 +214,11 @@ async function main() {
       const insider     = (profileData.insider_probability as string | null) ?? 'n/a';
 
       console.log(
-        `OK (wr:${wr.toFixed(1)}% sample:${sample} ` +
+        ` OK ${elapsed}s | wr:${wr.toFixed(1)}% n:${sample} ` +
         `pf:${pf.toFixed(2)} roce30:${roce30.toFixed(1)}% ` +
         `dd30:${dd30 != null ? dd30.toFixed(1) + '%' : 'n/a'} ` +
         `daysWon:${daysWon.toFixed(1)}% sortino:${sortino} ` +
-        `capital:${capTrend} dd_trend:${ddTrend} ` +
-        `identity:${identity} insider:${insider})`
+        `cap:${capTrend} dd:${ddTrend} id:${identity} ins:${insider}`
       );
 
       // Mark as processed
@@ -226,8 +230,10 @@ async function main() {
       succeeded++;
 
     } catch (err: unknown) {
+      clearInterval(ticker);
+      const elapsed = ((Date.now() - startMs) / 1000).toFixed(1);
       const msg = err instanceof Error ? err.message : String(err);
-      console.log(`FAILED — ${msg}`);
+      console.log(` FAILED ${elapsed}s — ${msg}`);
 
       failedSet.add(wallet);
       progress.failedWallets = Array.from(failedSet);
