@@ -96,6 +96,7 @@ interface TimeframeBucket {
   roce: number;
   pnl: number;
   hasData: boolean;
+  tradesPerDay?: number;
   // v3: trough as % of avgDailyCapital (negative number, e.g. -59.6)
   maxDrawdownAmt?: number | null;
   maxDrawdownPct?: number | null;
@@ -246,7 +247,7 @@ export async function filterAlphaTraders(db: Db): Promise<FilterResult> {
       continue;
     }
     // Bot filter on raw trade frequency (activities/day over 30d window)
-    const tradesPerDay = (profile as Record<string, unknown>).tradesPerDay as number | undefined;
+    const tradesPerDay = tf30?.tradesPerDay;   // stored in timeframePnL['30d'], not top-level
     if (tradesPerDay != null && tradesPerDay > THRESHOLDS.maxTradesPerDay) {
       botFiltered++;
       continue;

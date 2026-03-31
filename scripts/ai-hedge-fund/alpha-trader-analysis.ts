@@ -162,6 +162,23 @@ async function main() {
     .find(query)
     .toArray();
 
+  // ── Join traderProfiles for tradesPerDay (stored in timeframePnL['30d']) ──────
+  // ahf-alphaTraders.trades_per_day was null due to a now-fixed bug in filter-alpha.
+  // Read directly from source profiles for accurate data.
+  const wallets = traders.map(t => t.wallet);
+  const profiles = await db
+    .collection('polymarket-traderProfiles')
+    .find(
+      { wallet: { $in: wallets } },
+      { projection: { wallet: 1, timeframePnL: 1 } }
+    )
+    .toArray();
+  const tpdMap = new Map<string, number>();
+  for (const p of profiles) {
+    const tpd = (p.timeframePnL as Record<string, { tradesPerDay?: number }>)?.['30d']?.tradesPerDay;
+    if (tpd != null) tpdMap.set(p.wallet as string, tpd);
+  }
+
   await client.close();
 
   if (traders.length === 0) {
@@ -183,23 +200,30 @@ async function main() {
     rows.sort((a, b) => b.trader.rank_score - a.trader.rank_score);
   }
 
+  // ── Helpers ─────────────────────────────────────────────────────────────────
+  // Format fractional days as human-readable: 0.04d → "1h", 2.5d → "2d"
+  function fmtAge(days: number | null | undefined): string {
+    if (days == null) return '—';
+    if (days < 1) return Math.max(1, Math.round(days * 24)) + 'h';
+    return Math.round(days) + 'd';
+  }
+
   // ── Print table ─────────────────────────────────────────────────────────────
   const header = [
     'Rank'.padEnd(5),
-    'Wallet'.padEnd(12),
-    'Name'.padEnd(20),
+    'Wallet'.padEnd(44),          // full 42-char address
     'WinRate'.padEnd(9),
     'n'.padEnd(5),
     'PF'.padEnd(6),
     'ROCE30'.padEnd(8),
-    'SpcWR%'.padEnd(8),   // specialty win rate (last ~1000 positions)
-    'SpcPnL'.padEnd(10),  // specialty total PnL (last ~1000 positions)
+    'SpcWR%'.padEnd(8),           // specialty win rate (last ~1000 positions)
+    'SpcPnL'.padEnd(10),          // specialty total PnL (last ~1000 positions)
     'PnL30'.padEnd(10),
     'Edge'.padEnd(7),
     'P-val'.padEnd(7),
     'EdgeConf'.padEnd(10),
-    'AvgTrd'.padEnd(8),   // avg trades/day
-    'LastAct'.padEnd(9),  // days since last active
+    'Trd/d'.padEnd(7),            // avg trades/day (30d window, from traderProfiles)
+    'Last'.padEnd(6),             // last active (h or d)
     'Insider'.padEnd(8),
     'Specialty',
   ].join('');
@@ -216,20 +240,19 @@ async function main() {
   console.log(divider);
 
   rows.forEach(({ trader: t, spc }, i) => {
-    const name = (t.display_name ?? t.pseudonym ?? t.x_username ?? '') as string;
     const spcWr  = spc.win_rate  != null ? spc.win_rate.toFixed(1) + '%' : '—';
     const spcPnl = spc.total_pnl != null
       ? (spc.total_pnl >= 0 ? '+' : '') + '$' + (spc.total_pnl / 1000).toFixed(1) + 'k'
       : '—';
-    const avgTrd  = t.trades_per_day != null ? t.trades_per_day.toFixed(1) : '—';
-    const lastAct = t.last_active_days_ago != null ? t.last_active_days_ago + 'd' : '—';
-    // Flag traders with negative edge
+    // trades/day: prefer joined profile data, fall back to stored field
+    const tpdRaw = tpdMap.get(t.wallet) ?? t.trades_per_day ?? null;
+    const trdPerDay = tpdRaw != null ? tpdRaw.toFixed(1) : '—';
+    const lastAct = fmtAge(t.last_active_days_ago);
     const edgeFlag = t.edge_magnitude < 0 ? '*' : ' ';
 
     const cells = [
       (String(i + 1) + edgeFlag).padEnd(5),
-      t.wallet.slice(0, 10).padEnd(12),
-      name.slice(0, 18).padEnd(20),
+      t.wallet.padEnd(44),
       (t.win_rate.toFixed(1) + '%').padEnd(9),
       String(t.win_rate_sample_size).padEnd(5),
       t.profit_factor.toFixed(2).padEnd(6),
@@ -240,8 +263,8 @@ async function main() {
       t.edge_magnitude.toFixed(3).padEnd(7),
       t.p_value.toFixed(3).padEnd(7),
       (t.edge_confidence ?? '?').padEnd(10),
-      avgTrd.padEnd(8),
-      lastAct.padEnd(9),
+      trdPerDay.padEnd(7),
+      lastAct.padEnd(6),
       (t.insider_probability ?? 'none').padEnd(8),
       t.specialty,
     ].join('');
@@ -273,12 +296,11 @@ async function main() {
       ? withWr.reduce((s, r) => s + r.spc.win_rate!, 0) / withWr.length
       : null;
     const totalSpcPnl = group.reduce((s, r) => s + (r.spc.total_pnl ?? 0), 0);
-    const withTrd = group.filter(r => r.trader.trades_per_day != null);
-    const avgTrd  = withTrd.length > 0
-      ? withTrd.reduce((s, r) => s + r.trader.trades_per_day!, 0) / withTrd.length
-      : null;
+    // trades/day from joined profile data
+    const tpdVals = group.map(r => tpdMap.get(r.trader.wallet) ?? r.trader.trades_per_day).filter(v => v != null) as number[];
+    const avgTrd  = tpdVals.length > 0 ? tpdVals.reduce((s, v) => s + v, 0) / tpdVals.length : null;
     const withAct = group.filter(r => r.trader.last_active_days_ago != null);
-    const avgAct  = withAct.length > 0
+    const avgActDays = withAct.length > 0
       ? withAct.reduce((s, r) => s + r.trader.last_active_days_ago!, 0) / withAct.length
       : null;
 
@@ -288,8 +310,8 @@ async function main() {
       (avgRoce.toFixed(0) + '%').padEnd(11),
       avgSpcWr != null ? (avgSpcWr.toFixed(1) + '%').padEnd(11) : '—'.padEnd(11),
       ((totalSpcPnl >= 0 ? '+' : '') + '$' + (totalSpcPnl / 1000).toFixed(1) + 'k').padEnd(14),
-      avgTrd  != null ? (avgTrd.toFixed(1) + '/d').padEnd(10) : '—'.padEnd(10),
-      avgAct  != null ? avgAct.toFixed(1) + 'd ago' : '—',
+      avgTrd     != null ? (avgTrd.toFixed(1) + '/d').padEnd(10) : '—'.padEnd(10),
+      avgActDays != null ? fmtAge(avgActDays) + ' ago' : '—',
     ].join(''));
   }
 
