@@ -1,9 +1,9 @@
 /**
  * AI Hedge Fund — Bulk Profile (AHF)
  *
- * Reads unique wallets from polyMarketHolders collection, runs profileTrader()
- * from profile-trader-v2.ts on each, and upserts results into
- * polymarket-traderProfiles.
+ * Reads wallets from polymarket-consistentTraders (where should_profile=true),
+ * runs profileTrader() from profile-trader-v3.ts on each, and upserts results
+ * into polymarket-traderProfiles.
  *
  * Features:
  *   - Batch processing with configurable concurrency delay
@@ -13,6 +13,7 @@
  * Usage:
  *   npx tsx scripts/ai-hedge-fund/bulk-profile-ahf.ts
  *   npx tsx scripts/ai-hedge-fund/bulk-profile-ahf.ts --sample=10
+ *   npx tsx scripts/ai-hedge-fund/bulk-profile-ahf.ts --reset-progress
  */
 
 import dotenv from 'dotenv';
@@ -21,9 +22,9 @@ import { fileURLToPath } from 'url';
 import { MongoClient } from 'mongodb';
 import fs from 'fs';
 
-import { profileTrader } from './profile-trader-v2.js';
+import { profileTrader } from './profile-trader-v3.js';
 
-// ── Env loading (same order as profile-trader-v2.ts) ──────────────────────────
+// ── Env loading (same order as profile-trader-v3.ts) ──────────────────────────
 const envLocations = [
   path.resolve(process.cwd(), '.env.local'),
   path.resolve(process.cwd(), '.env'),
@@ -40,7 +41,7 @@ const CONFIG = {
   DELAY_BETWEEN_WALLETS_MS: 3000,                 // ms between wallets
   DELAY_BETWEEN_BATCHES_MS: 5000,                 // extra ms between batches
   PROGRESS_FILE: path.resolve(process.cwd(), '.bulk-profile-ahf-progress.json'),
-  SOURCE_COLLECTION: 'polyMarketHolders',
+  SOURCE_COLLECTION: 'polymarket-consistentTraders',
   DEST_COLLECTION: 'polymarket-traderProfiles',
   CONVICTION_MULTIPLIER: 10,
 };
@@ -94,10 +95,15 @@ function parseSampleArg(): number | null {
   return null;
 }
 
+function hasFlag(flag: string): boolean {
+  return process.argv.slice(2).includes(`--${flag}`);
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 async function main() {
-  const sampleLimit = parseSampleArg();
+  const sampleLimit    = parseSampleArg();
+  const resetProgress  = hasFlag('reset-progress');
 
   const mongoUri = process.env.MONGODB_URI;
   if (!mongoUri) {
@@ -109,7 +115,8 @@ async function main() {
   console.log('               BULK PROFILE — AI HEDGE FUND                   ');
   console.log('═══════════════════════════════════════════════════════════════');
   if (sampleLimit !== null) console.log(`  Mode:     SAMPLE (first ${sampleLimit} wallets)`);
-  else console.log('  Mode:     FULL');
+  else if (resetProgress) console.log('  Mode:     FULL (progress reset)');
+  else console.log('  Mode:     FULL (resume)');
   console.log(`  Source:   ${CONFIG.SOURCE_COLLECTION}`);
   console.log(`  Dest:     ${CONFIG.DEST_COLLECTION}`);
   console.log(`  Batch:    ${CONFIG.BATCH_SIZE} wallets | ${CONFIG.DELAY_BETWEEN_WALLETS_MS}ms delay`);
@@ -124,23 +131,22 @@ async function main() {
   const db = client.db(dbName);
   console.log(`Connected → db: ${dbName}\n`);
 
-  // ── Load unique wallets from polyMarketHolders ─────────────────────────────
-  console.log(`Loading unique wallets from ${CONFIG.SOURCE_COLLECTION}...`);
-  const agg = await db
+  // ── Load wallets from polymarket-consistentTraders (should_profile=true) ──
+  console.log(`Loading wallets from ${CONFIG.SOURCE_COLLECTION} where should_profile=true...`);
+  const traderDocs = await db
     .collection(CONFIG.SOURCE_COLLECTION)
-    .aggregate([
-      { $unwind: '$holders' },
-      { $group: { _id: { $toLower: '$holders.proxyWallet' } } },
-      { $match: { _id: { $ne: null, $ne: '' } } },
-      { $sort: { _id: 1 } },
-    ])
+    .find({ should_profile: true })
+    .project({ wallet: 1 })
+    .sort({ wallet: 1 })
     .toArray();
 
-  let allWallets: string[] = agg.map(doc => doc._id as string);
-  console.log(`  Found ${allWallets.length} unique wallets`);
+  let allWallets: string[] = traderDocs.map(doc => doc.wallet as string).filter(Boolean);
+  console.log(`  Found ${allWallets.length} wallets to profile`);
 
   // ── Load progress / resume ─────────────────────────────────────────────────
-  const progress = loadProgress();
+  const progress = resetProgress
+    ? { processedWallets: [], failedWallets: [], lastRunAt: '' }
+    : loadProgress();
   const processedSet = new Set(progress.processedWallets);
   const failedSet = new Set(progress.failedWallets);
 
@@ -191,17 +197,23 @@ async function main() {
       const wr          = profileData.win_rate as number;
       const sample      = profileData.win_rate_sample_size as number;
       const pf          = profileData.profitFactor as number;
-      const tf30        = profileData.timeframePnL as Record<string, { roce: number }>;
-      const roce30      = tf30['30d']?.roce ?? 0;
+      const tf30        = profileData.timeframePnL as Record<string, { roce: number; maxDrawdownPct?: number | null }>;
+      const roce30      = tf30?.['30d']?.roce ?? 0;
+      const dd30        = tf30?.['30d']?.maxDrawdownPct ?? null;
       const capTrend    = (profileData.capital_trend as string | null) ?? 'n/a';
-      const ddTrend     = profileData.drawdown_trend as string;
+      const ddTrend     = (profileData.drawdown_trend as string | null) ?? 'n/a';
+      const consistency = profileData.tradingConsistency as { daysWonRate: number; sortinoRatio: number | null } | null;
+      const daysWon     = consistency?.daysWonRate ?? 0;
+      const sortino     = consistency?.sortinoRatio != null ? consistency.sortinoRatio.toFixed(2) : 'n/a';
       const identity    = profileData.display_name ? 'yes' : 'no';
-      const insider     = profileData.insider_probability as string;
+      const insider     = (profileData.insider_probability as string | null) ?? 'n/a';
 
       console.log(
         `OK (wr:${wr.toFixed(1)}% sample:${sample} ` +
-        `pf:${pf.toFixed(2)} roce:${roce30.toFixed(1)}% ` +
-        `capital:${capTrend} drawdown:${ddTrend} ` +
+        `pf:${pf.toFixed(2)} roce30:${roce30.toFixed(1)}% ` +
+        `dd30:${dd30 != null ? dd30.toFixed(1) + '%' : 'n/a'} ` +
+        `daysWon:${daysWon.toFixed(1)}% sortino:${sortino} ` +
+        `capital:${capTrend} dd_trend:${ddTrend} ` +
         `identity:${identity} insider:${insider})`
       );
 

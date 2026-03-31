@@ -96,6 +96,7 @@ interface TimeframeBucket {
   roce: number;
   pnl: number;
   hasData: boolean;
+  // v3: trough as % of avgDailyCapital (negative number, e.g. -59.6)
   maxDrawdownAmt?: number | null;
   maxDrawdownPct?: number | null;
 }
@@ -112,7 +113,8 @@ interface TraderProfile {
   win_rate_sample_size: number;
   profitFactor: number;
   timeframePnL?: Record<string, TimeframeBucket>;
-  pnlConsistency?: { score: number };
+  // v3: tradingConsistency replaces pnlConsistency
+  tradingConsistency?: { daysWonRate: number; sortinoRatio: number | null; tradingDays: number };
   max_drawdown_30d_pct?: number | null;
   avg_unique_markets_per_day_7d?: { value: number; sample_days: number; is_low_sample: boolean } | null;
   fragmentation_ratio?: number | null;
@@ -158,18 +160,21 @@ export async function filterAlphaTraders(db: Db): Promise<FilterResult> {
     minSampleSize:     getEnvNum('FILTER_MIN_WIN_RATE_SAMPLE_SIZE', 8),
     minWinRate:        getEnvNum('FILTER_MIN_WIN_RATE', 50),
     minProfitFactor:   getEnvNum('FILTER_MIN_PROFIT_FACTOR', 1.1),
+    // v3 ROCE: avgDailyCapital-based — 20% means total PnL = 20% of avg daily capital
     minRoce30d:        getEnvNum('FILTER_MIN_ROCE_30D', 20),
-    minConsistency:    getEnvNum('FILTER_MIN_PNL_CONSISTENCY', 30),
+    // v3: days won rate (% of trading days with positive realized PnL), replaces pnlConsistency score
+    minDaysWonRate:    getEnvNum('FILTER_MIN_DAYS_WON_RATE', 40),
     maxInactiveDays:   getEnvNum('FILTER_MAX_INACTIVE_DAYS', 14),
     maxMarketsPerDay:  getEnvNum('FILTER_MAX_MARKETS_PER_DAY_7D', 15),
-    maxDrawdown30d:    getEnvNum('FILTER_MAX_DRAWDOWN_30D_PCT', 40),
+    // v3: trough % of avgDailyCapital (absolute value); 50 = lost up to 50% of avg daily cap at worst
+    maxDrawdown30d:    getEnvNum('FILTER_MAX_DRAWDOWN_30D_PCT', 50),
     requirePos7d:      getEnvBool('FILTER_REQUIRE_POSITIVE_7D', true),
     requirePos30d:     getEnvBool('FILTER_REQUIRE_POSITIVE_30D', true),
   };
 
   console.log('  Thresholds:');
   console.log(`    win_rate >= ${THRESHOLDS.minWinRate}% | sample >= ${THRESHOLDS.minSampleSize} | PF >= ${THRESHOLDS.minProfitFactor}`);
-  console.log(`    ROCE30 >= ${THRESHOLDS.minRoce30d}% | consistency >= ${THRESHOLDS.minConsistency} | maxDD <= ${THRESHOLDS.maxDrawdown30d}%`);
+  console.log(`    ROCE30 >= ${THRESHOLDS.minRoce30d}% | daysWonRate >= ${THRESHOLDS.minDaysWonRate}% | maxDD(trough) <= ${THRESHOLDS.maxDrawdown30d}%`);
   console.log(`    inactive <= ${THRESHOLDS.maxInactiveDays}d | max_markets/day <= ${THRESHOLDS.maxMarketsPerDay} | pos7d:${THRESHOLDS.requirePos7d} pos30d:${THRESHOLDS.requirePos30d}`);
 
   console.log('\n  Loading profiles...');
@@ -210,7 +215,9 @@ export async function filterAlphaTraders(db: Db): Promise<FilterResult> {
     if (!tf30?.hasData) continue;
     if ((tf30.roce ?? -Infinity) < THRESHOLDS.minRoce30d) continue;
 
-    if ((profile.pnlConsistency?.score ?? -Infinity) < THRESHOLDS.minConsistency) continue;
+    // v3: daysWonRate = % of trading days with positive realized PnL
+    const daysWonRate = profile.tradingConsistency?.daysWonRate ?? -Infinity;
+    if (daysWonRate < THRESHOLDS.minDaysWonRate) continue;
 
     // Skip if inactive too long (skip filter if null)
     if (profile.last_active_days_ago != null) {
@@ -229,8 +236,12 @@ export async function filterAlphaTraders(db: Db): Promise<FilterResult> {
       }
     }
 
-    // Skip if null
-    const maxDD = profile.max_drawdown_30d_pct;
+    // v3: use trough % from timeframePnL (negative number → abs value)
+    // fallback to legacy top-level field for v2 profiles still in DB
+    const troughPct = tf30?.maxDrawdownPct;
+    const maxDD = troughPct != null
+      ? Math.abs(troughPct)
+      : (profile.max_drawdown_30d_pct ?? null);
     if (maxDD != null && maxDD > THRESHOLDS.maxDrawdown30d) continue;
 
     if (THRESHOLDS.requirePos7d && tf7?.hasData && tf7.pnl <= 0) continue;
@@ -309,7 +320,8 @@ export async function filterAlphaTraders(db: Db): Promise<FilterResult> {
       roce_30d:              tf30.roce,
       pnl_7d:                tf7?.pnl  ?? 0,
       pnl_30d:               tf30.pnl,
-      pnl_consistency_score: profile.pnlConsistency?.score ?? 0,
+      days_won_rate:  profile.tradingConsistency?.daysWonRate  ?? null,
+      sortino_ratio:  profile.tradingConsistency?.sortinoRatio ?? null,
       max_drawdown_30d_pct:  profile.max_drawdown_30d_pct  ?? null,
       avg_unique_markets_per_day_7d: profile.avg_unique_markets_per_day_7d ?? null,
       fragmentation_ratio:   profile.fragmentation_ratio   ?? null,
