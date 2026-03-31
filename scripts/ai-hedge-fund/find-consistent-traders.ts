@@ -57,8 +57,8 @@ const EXCLUDE_FROM_PROFILING = new Set(['CRYPTO', 'CULTURE']);
 // Minimum PnL thresholds per time period to count as "consistent"
 const MIN_PNL: Record<string, number> = {
   DAY:   50,
-  WEEK:  100,
-  MONTH: 500,
+  WEEK:  500,
+  MONTH: 5000,
 };
 
 // ── Types ─────────────────────────────────────────────────────────────────────
