@@ -508,7 +508,7 @@ function computeTimeframePnL(
   const closedInWindow = closedPositions.filter(p => p.timestamp >= startTs);
 
   if (closedInWindow.length === 0 && openPositions.length === 0) {
-    return { timeframe: `${days}d`, days, pnl: 0, capitalDeployed: 0, totalCapitalDeployed: 0, roce: 0, tradeCount: 0, tradesPerDay: 0, positionCount: 0, tradingDays: 0, wins: 0, losses: 0, winRate: 0, hasData: false, hitApiLimit: false, maxDrawdownAmt: null, maxDrawdownPct: null, realizedPnl: 0, unrealizedPnl: 0 };
+    return { timeframe: `${days}d`, days, pnl: 0, capitalDeployed: 0, totalCapitalDeployed: 0, roce: 0, tradeCount: 0, tradesPerDay: 0, positionCount: 0, tradingDays: 0, wins: 0, losses: 0, winRate: 0, hasData: false, hitApiLimit: false, maxDrawdownAmt: null, maxDrawdownPct: null, realizedPnl: 0, unrealizedPnl: 0, dailyPnLSeries: [] as number[] };
   }
 
   // Realized: closed positions whose close_timestamp falls in window
@@ -531,75 +531,80 @@ function computeTimeframePnL(
 
   const pnl                  = realizedPnl + unrealizedPnl;
   const totalCapitalDeployed = capitalClosed + capitalOpen;
-  // Avg capital per position — prevents penalising high-frequency traders who
-  // cycle the same capital through many bets; ROCE reflects per-bet efficiency
-  const posCount             = closedInWindow.length + openPositions.length;
-  const capitalDeployed      = posCount > 0 ? totalCapitalDeployed / posCount : 0;
-  const roce                 = capitalDeployed > 0 ? (pnl / capitalDeployed) * 100 : 0;
-  const winRate              = (wins + losses) > 0 ? (wins / (wins + losses)) * 100 : 0;
+  // Avg capital per active trading day — correct ROCE base for sports/prediction
+  // traders who recycle capital across sequential same-day bets. Total capital
+  // is misleading because it accumulates across sequential positions using the
+  // same dollars.
+  const capitalDeployed = tradingDays > 0
+    ? totalCapitalDeployed / tradingDays
+    : (totalCapitalDeployed > 0 ? totalCapitalDeployed : 0);
+  const roce    = capitalDeployed > 0 ? (pnl / capitalDeployed) * 100 : 0;
+  const winRate = (wins + losses) > 0 ? (wins / (wins + losses)) * 100 : 0;
 
-  // Drawdown: daily realized PnL series from closed positions in window (3-day gate)
+  // Daily realized PnL series (chronological) — used for drawdown + consistency
+  const ddDayMap = new Map<string, number>();
+  for (const p of closedInWindow) {
+    const day = new Date(p.timestamp * 1000).toISOString().split('T')[0];
+    ddDayMap.set(day, (ddDayMap.get(day) ?? 0) + p.realizedPnl);
+  }
+  const dailyPnLSeries = Array.from(ddDayMap.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([, v]) => v);
+
+  // Drawdown: worst cumulative realized PnL trough in the window.
+  // Expressed as the trough value itself (e.g. -$119k) and as % of avg daily
+  // capital — tells you how much the trader was potentially down at worst.
   let maxDrawdownAmt: number | null = null;
   let maxDrawdownPct: number | null = null;
 
-  if (tradingDays >= 3) {
-    const ddDayMap = new Map<string, number>();
-    for (const p of closedInWindow) {
-      const day = new Date(p.timestamp * 1000).toISOString().split('T')[0];
-      ddDayMap.set(day, (ddDayMap.get(day) ?? 0) + p.realizedPnl);
-    }
-    const sorted = Array.from(ddDayMap.entries()).sort(([a], [b]) => a.localeCompare(b));
-    let cumPnl = 0, peak = 0, ddMax = 0, firstPos = false;
-    for (const [, daily] of sorted) {
+  if (tradingDays >= 2) {
+    let cumPnl = 0, troughCumPnl = 0;
+    for (const daily of dailyPnLSeries) {
       cumPnl += daily;
-      if (!firstPos) { if (cumPnl > 0) { firstPos = true; peak = cumPnl; } continue; }
-      if (cumPnl > peak) peak = cumPnl;
-      const dd = peak - cumPnl;
-      if (dd > ddMax) ddMax = dd;
+      if (cumPnl < troughCumPnl) troughCumPnl = cumPnl;
     }
-    if (firstPos && peak > 0) {
-      maxDrawdownAmt = ddMax;
-      maxDrawdownPct = Math.min((ddMax / peak) * 100, 100);
-    }
+    maxDrawdownAmt = troughCumPnl; // 0 if realized PnL never went negative
+    maxDrawdownPct = capitalDeployed > 0 ? (troughCumPnl / capitalDeployed) * 100 : null;
   }
 
-  return { timeframe: `${days}d`, days, pnl, realizedPnl, unrealizedPnl, capitalDeployed, totalCapitalDeployed, roce, tradeCount, tradesPerDay: tradeCount / days, positionCount: closedInWindow.length, tradingDays, wins, losses, winRate, hasData: closedInWindow.length > 0 || openPositions.length > 0, hitApiLimit: false, maxDrawdownAmt, maxDrawdownPct };
+  return { timeframe: `${days}d`, days, pnl, realizedPnl, unrealizedPnl, capitalDeployed, totalCapitalDeployed, roce, tradeCount, tradesPerDay: tradeCount / days, positionCount: closedInWindow.length, tradingDays, wins, losses, winRate, hasData: closedInWindow.length > 0 || openPositions.length > 0, hitApiLimit: false, maxDrawdownAmt, maxDrawdownPct, dailyPnLSeries };
 }
 
 
-function computePnlConsistency(timeframePnL: Record<string, ReturnType<typeof computeTimeframePnL>>) {
-  const frames = ['1d', '7d', '15d', '30d'];
-  const available = frames.filter(f => timeframePnL[f].hasData);
-
-  if (available.length === 0) {
-    return { timeframesAvailable: 0, allPositive: false, positiveCount: 0, avgRoce: 0, roceVariance: 0, score: 0 };
+// computeTradingConsistency — replaces the old avgROCE/variance score.
+// Uses the 30d daily realized PnL series from closed positions.
+//
+// daysWon / daysWonRate: how often the trader had a net-positive realized day
+// sortinoRatio: avgDailyReturn% / downsideDeviation% — only negative days
+//   contribute to the denominator, so it rewards consistent earners who
+//   rarely blow up. Dimensionless % ratio for cross-trader comparison.
+//   > 1.0 = excellent, > 0.5 = good, < 0.2 = inconsistent / high downside risk
+function computeTradingConsistency(dailyPnLSeries: number[], avgDailyCapital: number) {
+  if (dailyPnLSeries.length === 0) {
+    return { daysWon: 0, daysLost: 0, daysWonRate: 0, avgDailyPnl: 0, sortinoRatio: null, tradingDays: 0 };
   }
 
-  const roces = available.map(f => timeframePnL[f].roce);
-  const positiveCount = available.filter(f => timeframePnL[f].pnl > 0).length;
-  const allPositive = positiveCount === available.length;
-  const avgRoce = roces.reduce((a, b) => a + b, 0) / roces.length;
+  const tradingDays = dailyPnLSeries.length;
+  const daysWon  = dailyPnLSeries.filter(d => d > 0).length;
+  const daysLost = tradingDays - daysWon;
+  const daysWonRate = (daysWon / tradingDays) * 100;
 
-  const variance = roces.length > 1
-    ? Math.sqrt(roces.reduce((sum, r) => sum + Math.pow(r - avgRoce, 2), 0) / roces.length)
-    : 0;
+  const totalPnl   = dailyPnLSeries.reduce((a, b) => a + b, 0);
+  const avgDailyPnl = totalPnl / tradingDays;
 
-  const score = avgRoce / (1 + variance / 100);
+  // Sortino uses daily return % (relative to avg daily capital) so it is
+  // comparable across traders of different sizes.
+  let sortinoRatio: number | null = null;
+  if (avgDailyCapital > 0) {
+    const dailyRetPct = dailyPnLSeries.map(d => (d / avgDailyCapital) * 100);
+    const avgRetPct   = dailyRetPct.reduce((a, b) => a + b, 0) / tradingDays;
+    // Downside deviation: sqrt(mean of squared negative returns)
+    const negSquares  = dailyRetPct.map(r => Math.pow(Math.min(r, 0), 2));
+    const downsideDev = Math.sqrt(negSquares.reduce((a, b) => a + b, 0) / tradingDays);
+    sortinoRatio = downsideDev > 0 ? avgRetPct / downsideDev : null;
+  }
 
-  // Daily PnL components — avgDailyPnl from 30d frame; stdDev across timeframe daily rates
-  const frame30 = timeframePnL['30d'];
-  const avgDailyPnl = frame30.hasData ? frame30.pnl / 30 : 0;
-  const dailyRates = available.map(f => timeframePnL[f].pnl / timeframePnL[f].days);
-  const avgDailyRate = dailyRates.reduce((a, b) => a + b, 0) / dailyRates.length;
-  const stdDev = dailyRates.length > 1
-    ? Math.sqrt(dailyRates.reduce((sum, r) => sum + Math.pow(r - avgDailyRate, 2), 0) / dailyRates.length)
-    : 0;
-
-  const tradingDays7d = timeframePnL['7d'].tradingDays;
-  const tradingDays15d = timeframePnL['15d'].tradingDays;
-  const tradingDays30d = timeframePnL['30d'].tradingDays;
-
-  return { timeframesAvailable: available.length, allPositive, positiveCount, avgRoce, roceVariance: variance, score, avgDailyPnl, stdDev, tradingDays7d, tradingDays15d, tradingDays30d };
+  return { daysWon, daysLost, daysWonRate, avgDailyPnl, sortinoRatio, tradingDays };
 }
 
 // computeMaxDrawdown30d — from daily cash-flow series
@@ -1255,7 +1260,10 @@ export async function profileTrader(
     '30d': computeTimeframePnL(closedPositions1000, allOpenPositions, 30),
   };
 
-  const pnlConsistency = computePnlConsistency(timeframePnL);
+  const tradingConsistency = computeTradingConsistency(
+    timeframePnL['30d'].dailyPnLSeries,
+    timeframePnL['30d'].capitalDeployed,
+  );
 
   // ── Capital trend ──────────────────────────────────────────
   const capital_trend: 'scaling_up' | 'scaling_down' | 'stable' | 'inactive' | null =
@@ -1265,12 +1273,13 @@ export async function profileTrader(
     timeframePnL['15d'].capitalDeployed < timeframePnL['30d'].capitalDeployed * 0.3 ? 'scaling_down' :
     'stable';
 
-  const _dd15 = timeframePnL['15d'].maxDrawdownPct;
-  const _dd30 = timeframePnL['30d'].maxDrawdownPct;
+  // drawdown_trend: compare absolute trough depths (more negative = worse)
+  const _dd15abs = timeframePnL['15d'].maxDrawdownPct !== null ? Math.abs(timeframePnL['15d'].maxDrawdownPct) : null;
+  const _dd30abs = timeframePnL['30d'].maxDrawdownPct !== null ? Math.abs(timeframePnL['30d'].maxDrawdownPct) : null;
   const drawdown_trend: 'improving' | 'worsening' | 'stable' | 'insufficient_data' =
-    (_dd15 === null || _dd30 === null) ? 'insufficient_data' :
-    _dd15 < _dd30 * 0.7 ? 'improving' :
-    _dd15 > _dd30 * 1.3 ? 'worsening' :
+    (_dd15abs === null || _dd30abs === null) ? 'insufficient_data' :
+    _dd15abs < _dd30abs * 0.7 ? 'improving' :
+    _dd15abs > _dd30abs * 1.3 ? 'worsening' :
     'stable';
 
   // ── ROCE trend ──────────────────────────────────────────────
@@ -1426,7 +1435,8 @@ export async function profileTrader(
     profit_factor: profitFactor,
     roce_30d: timeframePnL['30d'].roce,
     roce_trend,
-    pnl_consistency_score: pnlConsistency.score,
+    days_won_rate: tradingConsistency.daysWonRate,
+    sortino_ratio: tradingConsistency.sortinoRatio,
     avg_unique_markets_per_day_7d,
     max_drawdown_15d_amt: timeframePnL['15d'].maxDrawdownAmt,
     max_drawdown_15d_pct: timeframePnL['15d'].maxDrawdownPct,
@@ -1543,10 +1553,10 @@ export async function profileTrader(
     console.log('\n  Timeframe P&L:');
     for (const [frame, data] of Object.entries(timeframePnL)) {
       if (data.hasData) {
-        const ddStr = data.maxDrawdownAmt !== null && data.maxDrawdownPct !== null
-          ? ` | Drawdown=$${data.maxDrawdownAmt.toFixed(0)} (${data.maxDrawdownPct.toFixed(1)}%)`
-          : ' | Drawdown=n/a';
-        console.log(`    ${frame.padEnd(4)}: PnL=$${data.pnl.toFixed(0).padStart(10)} | ROCE=${data.roce.toFixed(1)}% | AvgCap=$${data.capitalDeployed.toFixed(0)} | TotalCap=$${data.totalCapitalDeployed.toFixed(0)}${ddStr} | TradingDays=${data.tradingDays}`);
+        const troughStr = data.maxDrawdownAmt !== null && data.maxDrawdownPct !== null && data.maxDrawdownAmt < 0
+          ? ` | Trough=$${data.maxDrawdownAmt.toFixed(0)} (${data.maxDrawdownPct.toFixed(1)}% of avgDailyCap)`
+          : ' | Trough=none';
+        console.log(`    ${frame.padEnd(4)}: PnL=$${data.pnl.toFixed(0).padStart(10)} | ROCE=${data.roce.toFixed(1)}% | AvgDailyCap=$${data.capitalDeployed.toFixed(0)} | TotalCap=$${data.totalCapitalDeployed.toFixed(0)}${troughStr} | TradingDays=${data.tradingDays}`);
       } else {
         console.log(`    ${frame.padEnd(4)}: no data`);
       }
@@ -1559,15 +1569,14 @@ export async function profileTrader(
     console.log(`  Capital Trend: ${capital_trend ?? 'n/a'}`);
     console.log(`  Drawdown Trend: ${drawdown_trend}`);
 
-    const lowSampleWarning = (pnlConsistency.tradingDays30d ?? 0) < 15
-      ? `  ⚠️ LOW SAMPLE (${pnlConsistency.tradingDays30d ?? 0} trading days — need 15+ for reliable score)`
+    const lowSampleWarn = tradingConsistency.tradingDays < 15
+      ? `  ⚠️ LOW SAMPLE (${tradingConsistency.tradingDays} trading days — need 15+ for reliable signal)`
       : '';
-    console.log(`\n  PnL Consistency:`);
-    console.log(`    Score:          ${pnlConsistency.score.toFixed(1)}${lowSampleWarning}`);
-    console.log(`    Avg daily PnL:  $${(pnlConsistency.avgDailyPnl ?? 0).toFixed(0)}`);
-    console.log(`    Std deviation:  $${(pnlConsistency.stdDev ?? 0).toFixed(0)}`);
-    console.log(`    Trading days:   7d=${pnlConsistency.tradingDays7d}  15d=${pnlConsistency.tradingDays15d}  30d=${pnlConsistency.tradingDays30d}`);
-    console.log(`    (avgROCE=${pnlConsistency.avgRoce.toFixed(1)}%  variance=${pnlConsistency.roceVariance.toFixed(1)})`);
+    console.log(`\n  Trading Consistency (30d realized):${lowSampleWarn}`);
+    console.log(`    Days Won:       ${tradingConsistency.daysWon}/${tradingConsistency.tradingDays} (${tradingConsistency.daysWonRate.toFixed(1)}%)`);
+    console.log(`    Avg Daily PnL:  $${tradingConsistency.avgDailyPnl.toFixed(0)}`);
+    console.log(`    Sortino Ratio:  ${tradingConsistency.sortinoRatio !== null ? tradingConsistency.sortinoRatio.toFixed(3) : 'n/a'}  (>0.5 good, >1.0 excellent)`);
+    console.log(`    Trading days:   7d=${timeframePnL['7d'].tradingDays}  15d=${timeframePnL['15d'].tradingDays}  30d=${timeframePnL['30d'].tradingDays}`);
 
     // ── OPEN POSITIONS ──
     console.log('\n═══════════════════════════════════════════════════════════════');
@@ -1777,7 +1786,7 @@ export async function profileTrader(
     timeframePnL,
     capital_trend,
     drawdown_trend,
-    pnlConsistency,
+    tradingConsistency,
     profitFactor,
 
     // Trade sizing
