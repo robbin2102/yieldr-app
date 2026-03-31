@@ -269,6 +269,43 @@ export async function filterAlphaTraders(db: Db): Promise<FilterResult> {
     const lossesCount = (profile.losses_closed ?? 0) + (profile.losses_open_resolved ?? 0);
     const total = winsCount + lossesCount;
 
+    // Specialty: use profile specialty, fall back to leaderboard category if "Other"/null
+    // Must be computed before rank_score (needed for roceBoost)
+    let specialty = profile.specialty ?? 'Other';
+    if (specialty === 'Other' || specialty === null) {
+      const lbCats = leaderboardCats.get(profile.wallet) ?? [];
+      // Prefer actionable categories over CRYPTO/CULTURE/MENTIONS
+      const actionable = lbCats.filter(c => !['CRYPTO', 'CULTURE', 'MENTIONS', 'TECH'].includes(c));
+      if (actionable.length > 0) {
+        // Map leaderboard category names to profile specialty names
+        const catMap: Record<string, string> = {
+          POLITICS: 'Politics', SPORTS: 'Sports', FINANCE: 'Finance',
+          ECONOMICS: 'Economics', WEATHER: 'Weather',
+        };
+        specialty = catMap[actionable[0]] ?? actionable[0];
+      }
+    }
+
+    // Specialty-level ROCE: aggregate ALL matching rows (handles sub-league splits:
+    // Soccer → Premier League + La Liga + general; NBA → Conf + Playoffs + Regular, etc.)
+    const catBreakdown = (profile.category_breakdown ?? []) as Array<{
+      category: string; total_pnl: number; capital_deployed?: number; roce?: number;
+    }>;
+    const matchingRows = catBreakdown.filter(c =>
+      c.category?.toLowerCase() === specialty.toLowerCase() ||
+      c.category?.toLowerCase().includes(specialty.toLowerCase()) ||
+      specialty.toLowerCase().includes(c.category?.toLowerCase() ?? '__none__')
+    );
+    let specialty_roce: number | null = null;
+    if (matchingRows.length === 1) {
+      specialty_roce = matchingRows[0].roce ?? null;
+    } else if (matchingRows.length > 1) {
+      // Aggregate: re-derive ROCE from summed PnL / summed capital
+      const aggPnl = matchingRows.reduce((s, c) => s + (c.total_pnl ?? 0), 0);
+      const aggCap = matchingRows.reduce((s, c) => s + (c.capital_deployed ?? 0), 0);
+      specialty_roce = aggCap > 0 ? (aggPnl / aggCap) * 100 : null;
+    }
+
     let expected_win_rate: number;
     const haveWinPrice  = profile.avg_entry_price_wins  != null;
     const haveLossPrice = profile.avg_entry_price_losses != null;
@@ -291,7 +328,7 @@ export async function filterAlphaTraders(db: Db): Promise<FilterResult> {
     const edge_magnitude = actual_win_rate - expected_win_rate;
     // rank_score: boost when specialty ROCE is available (rewards focused specialists)
     const roceBoost = specialty_roce != null && specialty_roce > 0
-      ? Math.log(1 + specialty_roce / 100)   // log(1 + 2.0) ≈ 1.1 for 200% ROCE
+      ? Math.log(1 + specialty_roce / 100)
       : Math.log(1 + tf30.roce / 100);
     const rank_score = edge_magnitude * Math.log(n + 1) * (1 - Math.min(p_value, 1)) * roceBoost;
 
@@ -320,32 +357,7 @@ export async function filterAlphaTraders(db: Db): Promise<FilterResult> {
     else if (profile.insider_probability === 'medium') stats.insiderMedium++;
     else if (profile.insider_probability === 'low')    stats.insiderLow++;
 
-    // Specialty: use profile specialty, fall back to leaderboard category if "Other"/null
-    let specialty = profile.specialty ?? 'Other';
-    if (specialty === 'Other' || specialty === null) {
-      const lbCats = leaderboardCats.get(profile.wallet) ?? [];
-      // Prefer actionable categories over CRYPTO/CULTURE/MENTIONS
-      const actionable = lbCats.filter(c => !['CRYPTO', 'CULTURE', 'MENTIONS', 'TECH'].includes(c));
-      if (actionable.length > 0) {
-        // Map leaderboard category names to profile specialty names
-        const catMap: Record<string, string> = {
-          POLITICS: 'Politics', SPORTS: 'Sports', FINANCE: 'Finance',
-          ECONOMICS: 'Economics', WEATHER: 'Weather',
-        };
-        specialty = catMap[actionable[0]] ?? actionable[0];
-      }
-    }
     specialties[specialty] = (specialties[specialty] ?? 0) + 1;
-
-    // Specialty-level ROCE: find category_breakdown entry matching specialty
-    const catBreakdown = (profile.category_breakdown ?? []) as Array<{
-      category: string; total_pnl: number; capitalDeployed?: number; roce?: number;
-    }>;
-    const specialtyEntry = catBreakdown.find(c =>
-      c.category?.toLowerCase() === specialty.toLowerCase() ||
-      c.category?.toLowerCase().includes(specialty.toLowerCase())
-    );
-    const specialty_roce = specialtyEntry?.roce ?? null;
 
     // ── STAGE 3: BUILD ahf-alphaTraders DOCUMENT ──────────────────────────────
     alphaTraders.push({
