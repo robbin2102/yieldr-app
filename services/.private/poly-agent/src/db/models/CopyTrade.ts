@@ -22,7 +22,8 @@ export type SkipReason =
   | 'ORDER_FAILED'
   | 'NON_TRADE'
   | 'PRICE_DRIFT'
-  | 'SIDE_CONFLICT';
+  | 'SIDE_CONFLICT'
+  | 'NO_RATIO';       // copyRatio not yet computed for this trader (startup race or new trader)
 
 export type TradeStatus = 'DETECTED' | 'SKIPPED' | 'EXECUTING' | 'FILLED' | 'PARTIAL' | 'FAILED';
 

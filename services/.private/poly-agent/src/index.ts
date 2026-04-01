@@ -6,6 +6,7 @@ import { ensureAllowances } from './clob/allowances';
 import { MultiDetector } from './modules/multiDetector';
 import { GTTExecutor } from './modules/gttExecutor';
 import { ExecutionTracker } from './modules/executionTracker';
+import { RatioScheduler } from './modules/ratioScheduler';
 import { CopyTrader } from './db/models/CopyTrader';
 
 /**
@@ -57,16 +58,21 @@ async function main() {
   // ── 3. Token approvals (one-time on-chain setup) ──────────────────────────
   await ensureAllowances(config.botPrivateKey, config.polygonRpcUrl, config.chainId);
 
-  // ── 4. GTT Executor (listens for trade:detected events) ───────────────────
+  // ── 4. Ratio Scheduler — compute fixed daily copy ratios before trading ─────
+  console.log('[Main] Computing copy ratios (fixed daily snapshot)...');
+  const ratioScheduler = new RatioScheduler();
+  await ratioScheduler.start();  // blocks until all ratios computed, then schedules midnight refresh
+
+  // ── 5. GTT Executor (listens for trade:detected events) ───────────────────
   console.log('[Main] Starting GTT Executor...');
   new GTTExecutor(clobClient);
 
-  // ── 5. Multi-trader Detector ───────────────────────────────────────────────
+  // ── 6. Multi-trader Detector ───────────────────────────────────────────────
   console.log('[Main] Starting Multi-Trader Detector...');
   const detector = new MultiDetector();
   await detector.start();
 
-  // ── 6. Execution Tracker (prints reports on interval) ─────────────────────
+  // ── 7. Execution Tracker (prints reports on interval) ─────────────────────
   console.log('[Main] Starting Execution Tracker...');
   const tracker = new ExecutionTracker(config.reportIntervalMs);
   tracker.start();
@@ -81,6 +87,7 @@ async function main() {
     console.log(`\n[Main] ${signal} — shutting down...`);
     detector.stop();
     tracker.stop();
+    ratioScheduler.stop();
     // Print final report before exit
     try { await tracker.printAllReports(24); } catch { /* ignore if DB already closing */ }
     await mongoose.connection.close();

@@ -78,14 +78,12 @@ export class GTTExecutor {
 
     await TraderLoader.recordDetected(traderConfig.wallet);
 
-    // ── 2. Fresh trader state + open positions ────────────────────────────────
+    // ── 2. Fresh trader state (copyRatio already stored by ratioScheduler) ────
     const freshTrader = await TraderLoader.get(traderConfig.wallet);
     if (!freshTrader) return;
 
-    const traderOpenUsdc = await positionFetcher.getTotalOpenUsdc(traderConfig.wallet);
-
-    // ── 3. Portfolio-proportional bet sizing ──────────────────────────────────
-    const sizing = calcCopyBet(traderBetUsdc, freshTrader, traderOpenUsdc);
+    // ── 3. Portfolio-proportional bet sizing using fixed daily copyRatio ──────
+    const sizing = calcCopyBet(traderBetUsdc, freshTrader);
 
     if (sizing.skip) {
       await this.skipDoc(tradeDoc, sizing.skipReason!, sizing.skipDetail, freshTrader.wallet);
@@ -111,12 +109,13 @@ export class GTTExecutor {
     );
 
     const tsA = new Date().toISOString().slice(11, 19);
+    const ratioStr = freshTrader.copyRatio ? `${(freshTrader.copyRatio * 100).toFixed(2)}%` : 'n/a';
     console.log(
       `[${tsA}]     📥 accumulating ${tokenId.slice(0, 12)}... ` +
       `scaled+$${sizing.scaledBetUsdc.toFixed(2)} → total $${entry.scaledTotalUsdc.toFixed(2)} ` +
       `(${entry.tradeCount} trade${entry.tradeCount === 1 ? '' : 's'}, ` +
       `trader total $${entry.traderTotalUsdc.toFixed(0)}, ` +
-      `open positions $${traderOpenUsdc.toFixed(0)})`
+      `ratio ${ratioStr})`
     );
 
     // ── 6. Check if accumulator threshold crossed ─────────────────────────────
@@ -186,7 +185,7 @@ export class GTTExecutor {
 
     // ── SELL guard: verify we hold this position ──────────────────────────────
     if (side === 'SELL') {
-      const ourShares = await this.getOurPosition(tokenId);
+      const ourShares = await positionFetcher.getOurShares(tokenId);
       const targetShares = entry.scaledTotalUsdc / safeBook.bestBid;
       if (ourShares < targetShares * 0.5) {
         const detail = `have ${ourShares.toFixed(2)} shares, need ~${targetShares.toFixed(2)}`;
@@ -250,13 +249,8 @@ export class GTTExecutor {
         }
       );
 
-      // Record fill against trader's allocation
-      const freshTrader = await TraderLoader.get(wallet);
-      if (freshTrader) {
-        await TraderLoader.recordFill(wallet, filledUsdc);
-        // Invalidate position cache — our positions changed
-        positionFetcher.invalidate(wallet);
-      }
+      // Record fill against trader's allocation (spentUsdc += filledUsdc)
+      await TraderLoader.recordFill(wallet, filledUsdc);
 
       const tsF = new Date().toISOString().slice(11, 19);
       console.log(
@@ -392,19 +386,6 @@ export class GTTExecutor {
     }
 
     return { filled: 0, price: 0 };
-  }
-
-  private async getOurPosition(tokenId: string): Promise<number> {
-    try {
-      const url = `${config.dataApiBase}/positions?user=${config.botWalletAddress}&sizeThreshold=0.01&limit=100`;
-      const res = await fetch(url);
-      if (!res.ok) return 0;
-      const data = await res.json() as any[];
-      const pos = data.find((p: any) => p.asset === tokenId || p.tokenId === tokenId);
-      return pos ? parseFloat(pos.size ?? '0') : 0;
-    } catch {
-      return 0;
-    }
   }
 
   /** Skip a single doc */

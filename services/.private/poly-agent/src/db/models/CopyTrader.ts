@@ -34,9 +34,14 @@ export interface ICopyTrader extends Document {
   // Undefined = use global DETECTOR_INTERVAL_MS from config
   detectorIntervalMs?: number;
 
-  // Cached total open position value in USDC (updated each poll cycle by positionFetcher)
-  // Used as the denominator for portfolio-proportional copy sizing
+  // Cached total open position value in USDC (updated by ratioScheduler at startup + midnight)
   openPositionsUsdc?: number;
+
+  // Fixed copy ratio for the day: allocationUsdc / openPositionsUsdc at last snapshot
+  // Recomputed once at session start and again at midnight each day.
+  // All trades use this ratio — stable mirroring regardless of intra-day book changes.
+  copyRatio?: number;
+  copyRatioComputedAt?: Date;
 
   // Aggregate counters (updated after each trade event)
   tradesDetected: number;
@@ -64,11 +69,13 @@ const copyTraderSchema = new mongoose.Schema<ICopyTrader>({
   allocationUsdc: { type: Number, required: true },
   spentUsdc:      { type: Number, default: 0 },
 
-  active:              { type: Boolean, default: true, index: true },
-  lastSeenTs:          { type: Number, default: () => Math.floor(Date.now() / 1000) },
-  lastPolledAt:        { type: Date },
-  detectorIntervalMs:  { type: Number },
-  openPositionsUsdc:   { type: Number },
+  active:                { type: Boolean, default: true, index: true },
+  lastSeenTs:            { type: Number, default: () => Math.floor(Date.now() / 1000) },
+  lastPolledAt:          { type: Date },
+  detectorIntervalMs:    { type: Number },
+  openPositionsUsdc:     { type: Number },
+  copyRatio:             { type: Number },
+  copyRatioComputedAt:   { type: Date },
 
   tradesDetected:   { type: Number, default: 0 },
   tradesAboveAvg:   { type: Number, default: 0 },
