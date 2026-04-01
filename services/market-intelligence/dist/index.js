@@ -111,11 +111,17 @@ async function main() {
     await (0, db_1.connectDB)();
     // Probe external connectivity — logs the actual err.cause so we can diagnose
     // network failures (DNS, TLS, TCP timeout, etc.) immediately on startup.
-    for (const [name, url] of [
+    const probes = [
         ['TAAPI', 'https://api.taapi.io/'],
-        ['CoinGlass', 'https://open-api-v4.coinglass.com/'],
         ['Binance', 'https://api.binance.com/api/v3/ping'],
-    ]) {
+    ];
+    if (config_1.config.coinglass.enabled) {
+        probes.push(['CoinGlass', 'https://open-api-v4.coinglass.com/']);
+    }
+    else {
+        logger_1.logger.info('Connectivity', 'CoinGlass disabled (COINGLASS_ENABLED != true) — skipping probe');
+    }
+    for (const [name, url] of probes) {
         try {
             const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
             logger_1.logger.info('Connectivity', `${name} reachable — HTTP ${res.status}`);
