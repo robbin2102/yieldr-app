@@ -82,10 +82,10 @@ const TRADERS = [
     allocationUsdc:44,
   },
   {
-    wallet:        '0x71ab2546df30c9e3e1a8fbebdb5c8f2d72fce7e9',
-    label:         'T3-BuyHold',
+    wallet:        '0x71abe97b83eaba3f06cb04fd4d9a03ee37d2f015',
+    label:         'T3-Active',
     specialty:     'Other',
-    strategyLabel: 'BUY_AND_HOLD',
+    strategyLabel: 'ACTIVE_TRADER',
     roce:          0,
     actsPerDay:    0,
     avgBet:        98,
