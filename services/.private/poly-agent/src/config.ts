@@ -29,81 +29,65 @@ if (existsSync(envPolyagentPath)) {
 }
 
 export const config = {
-  // Target trader wallet (comma-separated for multiple)
-  targetWallet: process.env.TARGET_WALLET?.trim()!,
-
-  // Bot wallet (our wallet)
+  // ── Bot identity (never move to DB) ────────────────────────────────────────
   botWalletAddress: process.env.BOT_WALLET_ADDRESS?.trim()!,
-  botPrivateKey: process.env.BOT_PRIVATE_KEY?.trim()!,
+  botPrivateKey:    process.env.BOT_PRIVATE_KEY?.trim()!,
 
-  // Polymarket API credentials
-  apiKey: process.env.POLYMARKET_API_KEY?.trim()!,
-  apiSecret: process.env.POLYMARKET_API_SECRET?.trim()!,
-  passphrase: process.env.POLYMARKET_PASSPHRASE?.trim()!,
+  // ── Polymarket API credentials ─────────────────────────────────────────────
+  apiKey:      process.env.POLYMARKET_API_KEY?.trim()!,
+  apiSecret:   process.env.POLYMARKET_API_SECRET?.trim()!,
+  passphrase:  process.env.POLYMARKET_PASSPHRASE?.trim()!,
 
-  // MongoDB connection
-  mongoUri: process.env.MONGODB_URI!,
+  // ── Infrastructure ─────────────────────────────────────────────────────────
+  mongoUri:      process.env.MONGODB_URI!,
+  polygonRpcUrl: process.env.POLYGON_RPC_URL!,
+  chainId:       parseInt(process.env.CHAIN_ID || '137'),
 
-  // Agent parameters
-  copyRatio: parseFloat(process.env.COPY_RATIO || '0.01'),
-  maxPositionUsdc: parseFloat(process.env.MAX_POSITION_USDC || '2000'),
-  minTradeSize: parseFloat(process.env.MIN_TRADE_SIZE || '0'),  // DEPRECATED: Not used anymore
-
-  // Allocation (pro-rata based on max allocation per trader)
-  maxAllocationUsdc: parseFloat(process.env.MAX_ALLOCATION_USDC || '100'),
-
-  // Drift thresholds (percentage)
-  driftThresholdNew: parseFloat(process.env.DRIFT_THRESHOLD_NEW || '10'),         // New positions: copy if drift < 10%
-  driftThresholdExisting: parseFloat(process.env.DRIFT_THRESHOLD_EXISTING || '20'), // Existing: sync if drift < 20%
-  driftThresholdUnderwater: parseFloat(process.env.DRIFT_THRESHOLD_UNDERWATER || '-10'), // Skip if underwater > 10%
-
-  // Order execution
-  orderRetryDelayMs: parseInt(process.env.ORDER_RETRY_DELAY_MS || '500'),
-  maxOrderRetries: parseInt(process.env.MAX_ORDER_RETRIES || '5'),
-
-  // Initial sync
-  enableInitialSync: process.env.ENABLE_INITIAL_SYNC !== 'false',
-
-  // Polling intervals
-  detectorIntervalMs: parseInt(process.env.DETECTOR_INTERVAL_MS || '30000'),  // 30s default
-  reconcilerIntervalMs: parseInt(process.env.RECONCILER_INTERVAL_MS || '60000'),
-
-  // Polymarket endpoints
+  // ── Polymarket endpoints (defaults work for mainnet) ───────────────────────
   dataApiBase: process.env.DATA_API_BASE || 'https://data-api.polymarket.com',
   clobApiBase: process.env.CLOB_API_BASE || 'https://clob.polymarket.com',
-  wssMarket: process.env.WSS_MARKET || 'wss://ws-subscriptions-clob.polymarket.com/ws/market',
-  wssUser: process.env.WSS_USER || 'wss://ws-subscriptions-clob.polymarket.com/ws/user',
-  chainId: parseInt(process.env.CHAIN_ID || '137'),
+  wssMarket:   process.env.WSS_MARKET    || 'wss://ws-subscriptions-clob.polymarket.com/ws/market',
+  wssUser:     process.env.WSS_USER      || 'wss://ws-subscriptions-clob.polymarket.com/ws/user',
 
-  // Polygon RPC endpoint (for on-chain transactions like approvals)
-  polygonRpcUrl: process.env.POLYGON_RPC_URL!,
+  // ── Detector ──────────────────────────────────────────────────────────────
+  // Default poll interval. Individual traders can override via detectorIntervalMs
+  // in their ahf-copyTraders document (e.g. 300 for BTC 5m markets).
+  detectorIntervalMs: parseInt(process.env.DETECTOR_INTERVAL_MS || '60000'),  // 1m default
+
+  // ── GTT order execution ────────────────────────────────────────────────────
+  maxOrderRetries:   parseInt(process.env.MAX_ORDER_RETRIES   || '3'),
+  orderRetryDelayMs: parseInt(process.env.ORDER_RETRY_DELAY_MS || '500'),
+  gttExpirySeconds:  parseInt(process.env.GTT_EXPIRY_SECONDS  || '8'),
+
+  // ── Global safety cap per single copy order ────────────────────────────────
+  // Per-trader maxBetUsdc in DB overrides this for bet sizing.
+  // This is the hard ceiling regardless of any per-trader setting.
+  maxPositionUsdc: parseFloat(process.env.MAX_POSITION_USDC || '25'),
+
+  // ── Execution reporting interval ──────────────────────────────────────────
+  reportIntervalMs: parseInt(process.env.REPORT_INTERVAL_MS || '300000'),  // 5m
 };
 
 // Validate required environment variables
 const required = [
-  'targetWallet',
   'botWalletAddress',
   'botPrivateKey',
   'apiKey',
   'apiSecret',
   'passphrase',
   'mongoUri',
-  'polygonRpcUrl'
-];
+  'polygonRpcUrl',
+] as const;
 
 for (const key of required) {
-  if (!config[key as keyof typeof config]) {
+  if (!config[key]) {
     throw new Error(`Missing required config: ${key}. Please check your .env.polyagent file.`);
   }
 }
 
-// Validate wallet addresses format (basic check)
-if (config.targetWallet && !config.targetWallet.startsWith('0x')) {
-  throw new Error('TARGET_WALLET must be a valid Ethereum address starting with 0x');
-}
-if (config.botWalletAddress && !config.botWalletAddress.startsWith('0x')) {
+if (!config.botWalletAddress.startsWith('0x')) {
   throw new Error('BOT_WALLET_ADDRESS must be a valid Ethereum address starting with 0x');
 }
-if (config.botPrivateKey && !config.botPrivateKey.startsWith('0x')) {
+if (!config.botPrivateKey.startsWith('0x')) {
   throw new Error('BOT_PRIVATE_KEY must start with 0x');
 }
