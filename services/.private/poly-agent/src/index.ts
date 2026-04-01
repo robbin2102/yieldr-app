@@ -88,15 +88,23 @@ async function main() {
     detector.stop();
     tracker.stop();
     ratioScheduler.stop();
-    // Print final report before exit
+
+    // Force exit after 5s if shutdown hangs (e.g. slow DB query on final report)
+    const forceExit = setTimeout(() => {
+      console.log('[Main] Force exit after 5s timeout.');
+      process.exit(0);
+    }, 5000);
+    forceExit.unref();  // don't let this timer itself keep the process alive
+
     try { await tracker.printAllReports(24); } catch { /* ignore if DB already closing */ }
     await mongoose.connection.close();
     console.log('[Main] Shutdown complete.\n');
     process.exit(0);
   };
 
-  process.on('SIGINT',  () => shutdown('SIGINT'));
-  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  // process.once — prevents double-fire if Ctrl+C is pressed twice
+  process.once('SIGINT',  () => shutdown('SIGINT'));
+  process.once('SIGTERM', () => shutdown('SIGTERM'));
 }
 
 main().catch(err => {
