@@ -206,7 +206,7 @@ export class MultiDetector {
         tokenId: act.asset,
         title: act.title,
         outcome: act.outcome,
-        side: act.side ?? 'BUY',
+        side: (act.side || 'BUY') as 'BUY' | 'SELL',
         traderBetUsdc: act.usdcSize,
         traderPrice: act.price,
         traderSize: act.size,

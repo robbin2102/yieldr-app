@@ -327,7 +327,7 @@ export class GTTExecutor {
           price: limitPrice,
           size: shares,
           side: side === 'BUY' ? Side.BUY : Side.SELL,
-          feeRateBps: 0,
+          feeRateBps: config.feeRateBps,
           nonce: 0,
           expiration,
         });
