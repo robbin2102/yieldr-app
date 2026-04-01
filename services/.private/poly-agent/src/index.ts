@@ -74,7 +74,7 @@ async function main() {
   console.log('\n✅ Poly-Agent v3 running.');
   console.log('   Per-poll heartbeat:  every 60s per trader (👁 = quiet, 🔔 = activity)');
   console.log('   Trade detected:      ━━━ immediate log with doc ID');
-  console.log('   Execution summary:   printed every 1m\n');
+  console.log('   Execution summary:   printed every 10m\n');
 
   // ── Graceful shutdown ──────────────────────────────────────────────────────
   const shutdown = async (signal: string) => {
@@ -82,7 +82,7 @@ async function main() {
     detector.stop();
     tracker.stop();
     // Print final report before exit
-    await tracker.printAllReports(24);
+    try { await tracker.printAllReports(24); } catch { /* ignore if DB already closing */ }
     await mongoose.connection.close();
     console.log('[Main] Shutdown complete.\n');
     process.exit(0);

@@ -65,7 +65,7 @@ export const config = {
   maxPositionUsdc: parseFloat(process.env.MAX_POSITION_USDC || '25'),
 
   // ── Execution reporting interval ──────────────────────────────────────────
-  reportIntervalMs: parseInt(process.env.REPORT_INTERVAL_MS || '300000'),  // 5m
+  reportIntervalMs: parseInt(process.env.REPORT_INTERVAL_MS || '600000'),  // 10m
 };
 
 // Validate required environment variables
