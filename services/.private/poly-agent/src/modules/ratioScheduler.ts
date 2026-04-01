@@ -13,11 +13,13 @@ import { TraderLoader } from './traderLoader';
  * Triggers:
  *   1. Session start — computes for all active traders before detector begins
  *   2. Daily at midnight — refreshes ratios so next day reflects current book sizes
- *   3. On-demand via recompute(wallet) — used when a new trader is activated
+ *   3. On-demand via recompute(wallet) — when NO_RATIO is hit mid-session
  *
- * Fallback when openPositionsUsdc = 0 (trader has no open positions):
- *   copyRatio is set to null — trades are skipped with NO_RATIO until midnight recompute.
- *   This avoids over-copying a trader who just re-entered the market at unknown scale.
+ * Fallback when openPositionsUsdc = 0 (genuine fresh re-entry or API returned nothing):
+ *   ratio = baseBetUsdc / avgBet  → one avg-sized trader bet = one min-bet copy from us
+ *   Guard: if avgBet = 0          → ratio = allocationUsdc / 1000  (0.1% absolute floor)
+ *   This means a fresh re-entering trader is still copied conservatively rather than skipped.
+ *   Midnight recompute will replace the fallback with a real portfolio ratio once positions exist.
  */
 export class RatioScheduler {
   private midnightTimer: NodeJS.Timeout | null = null;
@@ -62,14 +64,20 @@ export class RatioScheduler {
     const now = new Date();
 
     if (openUsdc <= 0) {
-      // No open positions — cannot compute a meaningful ratio
-      // Clear copyRatio so trades are skipped with NO_RATIO
+      // No open positions — use fallback ratio so fresh re-entries are still copied.
+      // fallback = baseBetUsdc / avgBet: one avg-sized bet → one min-bet copy.
+      const fallbackRatio = trader.avgBet > 0
+        ? trader.baseBetUsdc / trader.avgBet
+        : trader.allocationUsdc / 1000;  // 0.1% absolute floor if avgBet missing
+
       await CopyTrader.updateOne(
         { wallet: wallet.toLowerCase() },
-        { $set: { openPositionsUsdc: 0, copyRatio: null, copyRatioComputedAt: now } }
+        { $set: { openPositionsUsdc: 0, copyRatio: fallbackRatio, copyRatioComputedAt: now } }
       );
       console.log(
-        `[RatioScheduler] ${trader.label.padEnd(24)} — no open positions, ratio=null (trades will skip with NO_RATIO until midnight)`
+        `[RatioScheduler] ${trader.label.padEnd(24)} — no open positions, ` +
+        `fallback ratio=${(fallbackRatio * 100).toFixed(2)}% ` +
+        `(baseBet $${trader.baseBetUsdc} / avgBet $${trader.avgBet || '?'})`
       );
       return;
     }

@@ -7,6 +7,7 @@ import { TraderLoader } from './traderLoader';
 import { calcCopyBet } from './betSizer';
 import { positionAccumulator, AccumulatorEntry } from './positionAccumulator';
 import { positionFetcher } from './positionFetcher';
+import { ratioScheduler } from './ratioScheduler';
 import { DetectedTradeEvent } from './multiDetector';
 
 /**
@@ -83,7 +84,21 @@ export class GTTExecutor {
     if (!freshTrader) return;
 
     // ── 3. Portfolio-proportional bet sizing using fixed daily copyRatio ──────
-    const sizing = calcCopyBet(traderBetUsdc, freshTrader);
+    let sizing = calcCopyBet(traderBetUsdc, freshTrader);
+
+    // NO_RATIO: ratio not yet computed (new trader or startup race).
+    // Trigger immediate recompute — this sets a fallback ratio if still no positions.
+    if (sizing.skipReason === 'NO_RATIO') {
+      const ts0 = new Date().toISOString().slice(11, 19);
+      console.log(`[${ts0}]     🔄 NO_RATIO — triggering immediate ratio recompute for ${freshTrader.label}`);
+      await ratioScheduler.recompute(freshTrader.wallet);
+      const reloadedTrader = await TraderLoader.get(freshTrader.wallet);
+      if (reloadedTrader) {
+        sizing = calcCopyBet(traderBetUsdc, reloadedTrader);
+        // Replace freshTrader reference for the rest of this handler
+        Object.assign(freshTrader, reloadedTrader);
+      }
+    }
 
     if (sizing.skip) {
       await this.skipDoc(tradeDoc, sizing.skipReason!, sizing.skipDetail, freshTrader.wallet);
