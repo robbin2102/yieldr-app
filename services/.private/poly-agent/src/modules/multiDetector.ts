@@ -140,9 +140,15 @@ export class MultiDetector {
 
     // Filter to only new activities (after lastSeenTs)
     const newActivities = activities.filter(a => a.timestamp > trader.lastSeenTs);
-    if (newActivities.length === 0) return;
 
-    console.log(`[MultiDetector] ${trader.label}: ${newActivities.length} new activities`);
+    const ts = new Date().toISOString().slice(11, 19);  // HH:MM:SS
+    if (newActivities.length === 0) {
+      // Heartbeat — proves polling is alive even when quiet
+      console.log(`[${ts}] 👁  ${trader.label.padEnd(20)} — no new activity (lastSeen: ${new Date(trader.lastSeenTs * 1000).toISOString().slice(0, 16)})`);
+      return;
+    }
+
+    console.log(`[${ts}] 🔔 ${trader.label}: ${newActivities.length} new activit${newActivities.length === 1 ? 'y' : 'ies'} detected`);
 
     // Advance cursor to the most recent timestamp
     const maxTs = Math.max(...newActivities.map(a => a.timestamp));

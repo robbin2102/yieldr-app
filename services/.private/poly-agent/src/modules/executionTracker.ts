@@ -20,7 +20,7 @@ export class ExecutionTracker {
   private reportIntervalMs: number;
   private timer: NodeJS.Timeout | null = null;
 
-  constructor(reportIntervalMs = 300_000) {  // default: print every 5 minutes
+  constructor(reportIntervalMs = 60_000) {  // default: print every 1 minute
     this.reportIntervalMs = reportIntervalMs;
   }
 

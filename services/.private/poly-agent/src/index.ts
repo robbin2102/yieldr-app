@@ -71,7 +71,10 @@ async function main() {
   const tracker = new ExecutionTracker(config.reportIntervalMs);
   tracker.start();
 
-  console.log('\n✅ Poly-Agent v3 running. Monitoring traders...\n');
+  console.log('\n✅ Poly-Agent v3 running.');
+  console.log('   Per-poll heartbeat:  every 60s per trader (👁 = quiet, 🔔 = activity)');
+  console.log('   Trade detected:      ━━━ immediate log with doc ID');
+  console.log('   Execution summary:   printed every 1m\n');
 
   // ── Graceful shutdown ──────────────────────────────────────────────────────
   const shutdown = async (signal: string) => {

@@ -44,7 +44,8 @@ export class GTTExecutor {
     const { traderConfig, txHash, side, traderBetUsdc, traderPrice, traderSize,
             tokenId, conditionId, title, outcome, traderTs, detectedAt, discoveryLatencyMs } = event;
 
-    console.log(`\n[GTTExecutor] ${traderConfig.label} ${side} $${traderBetUsdc.toFixed(0)} — ${title.slice(0, 40)}`);
+    const ts = new Date().toISOString().slice(11, 19);
+    console.log(`\n[${ts}] ━━━ ${traderConfig.label} ${side} $${traderBetUsdc.toFixed(0)} | "${title.slice(0, 40)}" | lag ${discoveryLatencyMs}ms`);
 
     // ── 1. Dedup via unique txHash ────────────────────────────────────────────
     let tradeDoc;
@@ -58,9 +59,10 @@ export class GTTExecutor {
         status: 'DETECTED',
         copyBetUsdc: 0,
       });
+      console.log(`[${ts}]     📋 doc: ${tradeDoc._id}  tx: ${txHash.slice(0, 12)}...`);
     } catch (err: any) {
       if (err.code === 11000) {
-        console.log('[GTTExecutor] Skip: duplicate txHash');
+        console.log(`[${ts}]     ⏭  duplicate txHash — skipping`);
         return;
       }
       throw err;
@@ -147,10 +149,12 @@ export class GTTExecutor {
 
       await TraderLoader.recordFill(freshTrader.wallet, filledUsdc);
 
+      const tsF = new Date().toISOString().slice(11, 19);
       console.log(
-        `[GTTExecutor] ✅ ${tradeDoc.status}: ${result.filledSize.toFixed(2)} shares ` +
-        `@ $${result.avgPrice.toFixed(4)} | drift ${priceDrift.toFixed(2)}% | ` +
-        `latency ${totalLatencyMs}ms | ${result.attempts} attempt(s)`
+        `[${tsF}]     ✅ ${tradeDoc.status} [${tradeDoc._id}]\n` +
+        `          ${result.filledSize.toFixed(2)} shares @ $${result.avgPrice.toFixed(4)}` +
+        ` | drift ${priceDrift >= 0 ? '+' : ''}${priceDrift.toFixed(2)}%` +
+        ` | total latency ${totalLatencyMs}ms | ${result.attempts} attempt(s)`
       );
 
       eventBus.emit('trade:filled', {
@@ -167,7 +171,8 @@ export class GTTExecutor {
 
       await TraderLoader.recordSkip(freshTrader.wallet, 'ORDER_FAILED');
 
-      console.log(`[GTTExecutor] ❌ Order failed after ${result.attempts} attempts`);
+      const tsX = new Date().toISOString().slice(11, 19);
+      console.log(`[${tsX}]     ❌ FAILED [${tradeDoc._id}]  GTT unfilled after ${result.attempts} attempts`);
       eventBus.emit('trade:failed', { txHash, traderLabel: traderConfig.label });
     }
   }
@@ -309,8 +314,9 @@ export class GTTExecutor {
     tradeDoc.skipDetail = detail ?? '';
     await tradeDoc.save();
     await TraderLoader.recordSkip(wallet, reason);
-    console.log(`[GTTExecutor] Skip (${reason}): ${detail ?? ''}`);
-    eventBus.emit('trade:skipped', { skipReason: reason, skipDetail: detail });
+    const ts = new Date().toISOString().slice(11, 19);
+    console.log(`[${ts}]     ⏭  SKIP [${tradeDoc._id}]  reason=${reason}  ${detail ?? ''}`);
+    eventBus.emit('trade:skipped', { skipReason: reason, skipDetail: detail, docId: tradeDoc._id });
   }
 
   private sleep(ms: number): Promise<void> {
