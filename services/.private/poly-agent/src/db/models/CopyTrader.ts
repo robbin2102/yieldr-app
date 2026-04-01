@@ -4,51 +4,38 @@ import mongoose, { Document } from 'mongoose';
  * CopyTrader — ahf-copyTraders
  *
  * One document per target trader wallet. All per-trader config (allocation,
- * bet sizing params, activity stats) lives here. Adding a new trader = one
- * DB insert. No env changes, no restart needed (watchdog picks it up).
+ * bet sizing, activity stats) lives here. Adding a new trader = one DB insert.
+ * No env changes, no restart needed (watchdog picks it up within 60s).
  */
 export interface ICopyTrader extends Document {
-  // Identity
-  wallet: string;
-  label: string;            // human label e.g. "T2-BuyHold-869%"
-  specialty: string;
-  strategyLabel: string;    // BUY_AND_HOLD | SWING_TRADER | ACTIVE_TRADER
-  roce: number;
-  actsPerDay: number;
+  wallet:        string;
+  label:         string;
+  specialty:     string;
+  strategyLabel: string;
+  roce:          number;
+  actsPerDay:    number;
 
-  // Bet sizing (from behavior analysis)
-  avgBet: number;           // skip trader bets below this
-  baseBetUsdc: number;      // $5 default — minimum copy bet
-  maxBetUsdc: number;       // $20 default — cap from MAX_POSITION_USDC
+  // Bet sizing
+  avgBet:      number;   // skip trader bets below this; conviction anchor
+  baseBetUsdc: number;   // $5 — minimum copy bet (floor)
+  maxBetUsdc:  number;   // $20 — maximum copy bet (cap)
 
-  // Allocation (no daily cap — just lifetime per trader)
-  allocationUsdc: number;
-  spentUsdc: number;        // running total filled; never exceeds allocationUsdc
+  // Allocation
+  allocationUsdc: number;  // lifetime cap for this trader
+  spentUsdc:      number;  // running total filled; never exceeds allocationUsdc
 
   // Polling state
-  active: boolean;
-  lastSeenTs: number;       // last activity timestamp seen (unix seconds)
+  active:       boolean;
+  lastSeenTs:   number;    // unix seconds — last activity timestamp seen
   lastPolledAt?: Date;
-
-  // Per-trader detector interval override (ms)
-  // Undefined = use global DETECTOR_INTERVAL_MS from config
   detectorIntervalMs?: number;
 
-  // Cached total open position value in USDC (updated by ratioScheduler at startup + midnight)
-  openPositionsUsdc?: number;
-
-  // Fixed copy ratio for the day: allocationUsdc / openPositionsUsdc at last snapshot
-  // Recomputed once at session start and again at midnight each day.
-  // All trades use this ratio — stable mirroring regardless of intra-day book changes.
-  copyRatio?: number;
-  copyRatioComputedAt?: Date;
-
-  // Aggregate counters (updated after each trade event)
-  tradesDetected: number;
-  tradesAboveAvg: number;   // passed avg filter
-  tradesExecuted: number;   // filled (full or partial)
-  tradesSkipped: number;
-  skipReasonCounts: Record<string, number>;  // { BELOW_AVG: 5, ALLOCATION_FULL: 2, ... }
+  // Aggregate counters
+  tradesDetected:  number;
+  tradesAboveAvg:  number;
+  tradesExecuted:  number;
+  tradesSkipped:   number;
+  skipReasonCounts: Record<string, number>;
 
   createdAt: Date;
   updatedAt: Date;
@@ -62,20 +49,17 @@ const copyTraderSchema = new mongoose.Schema<ICopyTrader>({
   roce:          { type: Number, default: 0 },
   actsPerDay:    { type: Number, default: 0 },
 
-  avgBet:     { type: Number, required: true },
-  baseBetUsdc:{ type: Number, default: 5 },
-  maxBetUsdc: { type: Number, default: 20 },
+  avgBet:      { type: Number, required: true },
+  baseBetUsdc: { type: Number, default: 5 },
+  maxBetUsdc:  { type: Number, default: 20 },
 
   allocationUsdc: { type: Number, required: true },
   spentUsdc:      { type: Number, default: 0 },
 
-  active:                { type: Boolean, default: true, index: true },
-  lastSeenTs:            { type: Number, default: () => Math.floor(Date.now() / 1000) },
-  lastPolledAt:          { type: Date },
-  detectorIntervalMs:    { type: Number },
-  openPositionsUsdc:     { type: Number },
-  copyRatio:             { type: Number },
-  copyRatioComputedAt:   { type: Date },
+  active:             { type: Boolean, default: true, index: true },
+  lastSeenTs:         { type: Number, default: () => Math.floor(Date.now() / 1000) },
+  lastPolledAt:       { type: Date },
+  detectorIntervalMs: { type: Number },
 
   tradesDetected:   { type: Number, default: 0 },
   tradesAboveAvg:   { type: Number, default: 0 },

@@ -3,7 +3,6 @@ import { eventBus } from '../state/eventBus';
 import { TraderLoader } from './traderLoader';
 import { ICopyTrader } from '../db/models/CopyTrader';
 import { CopyTrade } from '../db/models/CopyTrade';
-import { positionAccumulator } from './positionAccumulator';
 
 interface ActivityResponse {
   timestamp: number;
@@ -144,11 +143,7 @@ export class MultiDetector {
 
     const ts = new Date().toISOString().slice(11, 19);  // HH:MM:SS
     if (newActivities.length === 0) {
-      // Show accumulator hint if we're mid-accumulation for this trader
-      const accKeys = positionAccumulator.activeKeys()
-        .filter(k => k.startsWith(trader.wallet.toLowerCase()));
-      const accHint = accKeys.length > 0 ? `  [acc: ${accKeys.length} position(s)]` : '';
-      console.log(`[${ts}] 👁  ${trader.label.padEnd(20)} — no new activity (lastSeen: ${new Date(trader.lastSeenTs * 1000).toISOString().slice(0, 16)})${accHint}`);
+      console.log(`[${ts}] 👁  ${trader.label.padEnd(20)} — no new activity (lastSeen: ${new Date(trader.lastSeenTs * 1000).toISOString().slice(0, 16)})`);
       return;
     }
 

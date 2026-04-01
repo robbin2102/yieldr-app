@@ -1,17 +1,18 @@
 /**
- * Seed ahf-copyTraders with the 6 shortlisted traders.
+ * Seed ahf-copyTraders with 7 shortlisted traders.
  *
- * Allocation: $200 total
- *   T2  $50  — 869% ROCE, BUY_AND_HOLD, 9 acts/d,   avg $185
- *   T4  $45  — 448% ROCE, BUY_AND_HOLD, 1.1 acts/d, avg $5700
- *   T1  $40  — 665% ROCE, SWING_TRADER, 34 acts/d,  avg $23
- *   T7  $30  — 352% ROCE, BUY_AND_HOLD, 8 acts/d,   avg $429
- *   T6  $25  — 267% ROCE, SWING_TRADER, 4.6 acts/d, avg $3200
- *   T5  $10  — 241% ROCE, SWING_TRADER, 18.8 acts/d,avg $173
+ * Allocation: $200 total  (edge × log(n+1) weighted)
+ *   T1  $62  — 665% ROCE, SWING_TRADER,   34 acts/d,  avg $23
+ *   T2  $44  — 869% ROCE, BUY_AND_HOLD,   9 acts/d,   avg $185
+ *   T3  $26  — (ROCE),    BUY_AND_HOLD,   acts/d,     avg $98
+ *   T4  $16  — 448% ROCE, BUY_AND_HOLD,   1.1 acts/d, avg $5700
+ *   T5  $22  — 241% ROCE, SWING_TRADER,   18.8 acts/d,avg $173
+ *   T6  $16  — 267% ROCE, SWING_TRADER,   4.6 acts/d, avg $3200
+ *   T7  $14  — 352% ROCE, BUY_AND_HOLD,   8 acts/d,   avg $429
  *
  * Bet sizing rule (all traders):
  *   - Skip if trader bet < avgBet
- *   - Copy bet = baseBetUsdc × (traderBet / avgBet), capped at maxBetUsdc
+ *   - copy_bet = baseBetUsdc × (traderBet / avgBet), capped at maxBetUsdc
  *
  * Safe to re-run: uses upsert, never resets spentUsdc or lastSeenTs.
  *
@@ -57,6 +58,18 @@ function hasFlag(flag: string) { return process.argv.slice(2).includes(`--${flag
 
 const TRADERS = [
   {
+    wallet:        '0xbb0bd109b9f0c2a59b8819c466f064cf65ab3790',
+    label:         'T1-Swing-665%',
+    specialty:     'Soccer',
+    strategyLabel: 'SWING_TRADER',
+    roce:          665,
+    actsPerDay:    34,
+    avgBet:        23,
+    baseBetUsdc:   5,
+    maxBetUsdc:    20,
+    allocationUsdc:62,
+  },
+  {
     wallet:        '0x2d4bf8f846bf68f43b9157bf30810d334ac6ca7a',
     label:         'T2-BuyHold-869%',
     specialty:     'Other',
@@ -66,7 +79,19 @@ const TRADERS = [
     avgBet:        185,
     baseBetUsdc:   5,
     maxBetUsdc:    20,
-    allocationUsdc:50,
+    allocationUsdc:44,
+  },
+  {
+    wallet:        '0x71ab2546df30c9e3e1a8fbebdb5c8f2d72fce7e9',
+    label:         'T3-BuyHold',
+    specialty:     'Other',
+    strategyLabel: 'BUY_AND_HOLD',
+    roce:          0,
+    actsPerDay:    0,
+    avgBet:        98,
+    baseBetUsdc:   5,
+    maxBetUsdc:    20,
+    allocationUsdc:26,
   },
   {
     wallet:        '0x1ba1bb6aa2490adbbbbb314bc07ff21a8cc71ce4',
@@ -78,43 +103,7 @@ const TRADERS = [
     avgBet:        5700,
     baseBetUsdc:   5,
     maxBetUsdc:    20,
-    allocationUsdc:45,
-  },
-  {
-    wallet:        '0xbb0bd109b9f0c2a59b8819c466f064cf65ab3790',
-    label:         'T1-Swing-665%',
-    specialty:     'Soccer',
-    strategyLabel: 'SWING_TRADER',
-    roce:          665,
-    actsPerDay:    34,
-    avgBet:        23,
-    baseBetUsdc:   5,
-    maxBetUsdc:    20,
-    allocationUsdc:40,
-  },
-  {
-    wallet:        '0x843630d1b37be01868022d153ef1959dfcef4c19',
-    label:         'T7-BuyHold-352%',
-    specialty:     'NBA',
-    strategyLabel: 'BUY_AND_HOLD',
-    roce:          352,
-    actsPerDay:    8,
-    avgBet:        429,
-    baseBetUsdc:   5,
-    maxBetUsdc:    20,
-    allocationUsdc:30,
-  },
-  {
-    wallet:        '0x25e28169faea17421fcd4cc361f6436d1e449a09',
-    label:         'T6-Swing-267%',
-    specialty:     'Other',
-    strategyLabel: 'SWING_TRADER',
-    roce:          267,
-    actsPerDay:    4.6,
-    avgBet:        3200,
-    baseBetUsdc:   5,
-    maxBetUsdc:    20,
-    allocationUsdc:25,
+    allocationUsdc:16,
   },
   {
     wallet:        '0xcca90a5d3c8f2d6663817e3650d6adbe9ab44c9f',
@@ -126,7 +115,31 @@ const TRADERS = [
     avgBet:        173,
     baseBetUsdc:   5,
     maxBetUsdc:    20,
-    allocationUsdc:10,
+    allocationUsdc:22,
+  },
+  {
+    wallet:        '0x25e28169faea17421fcd4cc361f6436d1e449a09',
+    label:         'T6-Swing-267%',
+    specialty:     'Other',
+    strategyLabel: 'SWING_TRADER',
+    roce:          267,
+    actsPerDay:    4.6,
+    avgBet:        3200,
+    baseBetUsdc:   5,
+    maxBetUsdc:    20,
+    allocationUsdc:16,
+  },
+  {
+    wallet:        '0x843630d1b37be01868022d153ef1959dfcef4c19',
+    label:         'T7-BuyHold-352%',
+    specialty:     'NBA',
+    strategyLabel: 'BUY_AND_HOLD',
+    roce:          352,
+    actsPerDay:    8,
+    avgBet:        429,
+    baseBetUsdc:   5,
+    maxBetUsdc:    20,
+    allocationUsdc:14,
   },
 ];
 

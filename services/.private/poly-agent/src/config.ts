@@ -69,13 +69,6 @@ export const config = {
 
   // ── Execution reporting interval ──────────────────────────────────────────
   reportIntervalMs: parseInt(process.env.REPORT_INTERVAL_MS || '600000'),  // 10m
-
-  // ── Portfolio-proportional copy sizing ────────────────────────────────────
-  // Max price drift (%) vs trader's avg fill price before discarding accumulated position
-  priceDriftPct: parseFloat(process.env.PRICE_DRIFT_PCT || '2'),
-
-  // How long (ms) to reuse cached trader open positions before re-fetching
-  positionsCacheTtlMs: parseInt(process.env.POSITIONS_CACHE_TTL_MS || '60000'),
 };
 
 // Validate required environment variables
