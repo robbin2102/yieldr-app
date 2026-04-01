@@ -94,11 +94,13 @@ export class GTTExecutor {
       await this.skip(tradeDoc, 'NO_ORDERBOOK', 'orderbook fetch failed or empty', freshTrader.wallet);
       return;
     }
+    // Narrow to non-null after the guard above
+    const safeBook = book as { bestAsk: number; bestBid: number };
 
     // ── 4. SELL guard: verify we hold this position ───────────────────────────
     if (side === 'SELL') {
       const ourShares = await this.getOurPosition(tokenId);
-      const targetShares = sizing.betUsdc / book.bestBid;
+      const targetShares = sizing.betUsdc / safeBook.bestBid;
       if (ourShares < targetShares * 0.5) {  // at least 50% of what we need
         await this.skip(
           tradeDoc,
@@ -123,7 +125,7 @@ export class GTTExecutor {
     eventBus.emit('trade:executing', { txHash, traderLabel: traderConfig.label, betUsdc: sizing.betUsdc });
 
     // ── 6. GTT order with progressive retry ──────────────────────────────────
-    const result = await this.executeGTT(side, tokenId, sizing.betUsdc, book);
+    const result = await this.executeGTT(side, tokenId, sizing.betUsdc, safeBook);
     const filledAt = Date.now();
 
     if (result.filledSize > 0) {
@@ -230,7 +232,8 @@ export class GTTExecutor {
           expiration,
         });
 
-        const postResp = await this.clobClient.postOrder(order, OrderType.GTT);
+        // GTD = Good Till Date — the Polymarket clob-client v3 name for time-limited orders
+        const postResp = await this.clobClient.postOrder(order, OrderType.GTD);
         const orderId: string = (postResp as any).orderID ?? (postResp as any).id ?? '';
 
         if (!orderId) {
