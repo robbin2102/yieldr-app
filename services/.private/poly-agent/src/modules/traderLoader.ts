@@ -17,11 +17,11 @@ export class TraderLoader {
    * cache the result for the duration of a single poll cycle if needed.
    */
   static async getActive(): Promise<ICopyTrader[]> {
-    return CopyTrader.find({ active: true }).lean() as Promise<ICopyTrader[]>;
+    return (await CopyTrader.find({ active: true }).lean()) as unknown as ICopyTrader[];
   }
 
   static async get(wallet: string): Promise<ICopyTrader | null> {
-    return CopyTrader.findOne({ wallet: wallet.toLowerCase() }).lean() as Promise<ICopyTrader | null>;
+    return (await CopyTrader.findOne({ wallet: wallet.toLowerCase() }).lean()) as unknown as ICopyTrader | null;
   }
 
   /**
@@ -94,10 +94,10 @@ export class TraderLoader {
    * Used for a final guard before order submission to handle concurrent fills.
    */
   static async hasAllocation(wallet: string, needed: number): Promise<boolean> {
-    const trader = await CopyTrader.findOne(
+    const trader = (await CopyTrader.findOne(
       { wallet: wallet.toLowerCase() },
       { allocationUsdc: 1, spentUsdc: 1 }
-    ).lean();
+    ).lean()) as unknown as { allocationUsdc: number; spentUsdc: number } | null;
     if (!trader) return false;
     return (trader.allocationUsdc - trader.spentUsdc) >= needed;
   }

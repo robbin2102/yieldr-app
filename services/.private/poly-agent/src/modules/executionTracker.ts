@@ -1,5 +1,5 @@
-import { CopyTrade } from '../db/models/CopyTrade';
-import { CopyTrader } from '../db/models/CopyTrader';
+import { CopyTrade, ICopyTrade } from '../db/models/CopyTrade';
+import { CopyTrader, ICopyTrader } from '../db/models/CopyTrader';
 
 /**
  * ExecutionTracker — per-trader execution efficiency reports.
@@ -34,7 +34,7 @@ export class ExecutionTracker {
   }
 
   async printAllReports(windowHours = 24): Promise<void> {
-    const traders = await CopyTrader.find({}).lean();
+    const traders = (await CopyTrader.find({}).lean()) as unknown as ICopyTrader[];
     if (traders.length === 0) return;
 
     const since = new Date(Date.now() - windowHours * 60 * 60 * 1000);
@@ -50,13 +50,13 @@ export class ExecutionTracker {
   }
 
   async printTraderReport(wallet: string, since: Date, div: string): Promise<void> {
-    const trader = await CopyTrader.findOne({ wallet }).lean();
+    const trader = (await CopyTrader.findOne({ wallet }).lean()) as unknown as ICopyTrader | null;
     if (!trader) return;
 
-    const trades = await CopyTrade.find({
+    const trades = (await CopyTrade.find({
       sourceWallet: wallet,
       createdAt: { $gte: since },
-    }).lean();
+    }).lean()) as unknown as ICopyTrade[];
 
     const detected  = trades.length;
     const skipped   = trades.filter(t => t.status === 'SKIPPED');
