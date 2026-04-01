@@ -120,14 +120,14 @@ async function main() {
   const h1 = [
     'Rank'.padEnd(5), 'Wallet'.padEnd(44), 'Strategy'.padEnd(16),
     'Volume'.padEnd(8), 'Buys'.padEnd(6), 'Sells'.padEnd(6),
-    'Redeem'.padEnd(8), 'Other'.padEnd(7), 'Total'.padEnd(7),
-    'Buy%'.padEnd(7), 'Sell%'.padEnd(7), 'Rdm%'.padEnd(7),
+    'Redeem'.padEnd(8), 'Merge'.padEnd(7), 'Split'.padEnd(7), 'Other'.padEnd(7), 'Total'.padEnd(7),
+    'Buy%'.padEnd(7), 'Sell%'.padEnd(7), 'Rdm%'.padEnd(7), 'Mrg%'.padEnd(7), 'Spl%'.padEnd(7),
     'Specialty',
   ].join('');
   const div = '─'.repeat(h1.length);
 
   console.log(div);
-  console.log('  ACTIVITY BREAKDOWN (buy/sell/redeem as % of total activities in 30d window)');
+  console.log('  ACTIVITY BREAKDOWN (buy/sell/redeem/merge/split as % of total activities in 30d window)');
   console.log(div);
   console.log(h1);
   console.log(div);
@@ -138,10 +138,17 @@ async function main() {
     const buys    = (p.buyCount    as number) ?? 0;
     const sells   = (p.sellCount   as number) ?? 0;
     const redeems = (p.redeemCount as number) ?? 0;
+    const merges  = (p.mergeCount  as number) ?? 0;
+    const splits  = (p.splitCount  as number) ?? 0;
     const other   = (p.otherCount  as number) ?? 0;
-    const total   = (p.totalActivities as number) ?? (buys + sells + redeems + other);
+    const total   = (p.totalActivities as number) ?? (buys + sells + redeems + merges + splits + other);
     const strategy = ((p.strategyLabel as string) ?? '—').replace(/_/g, ' ');
     const volume   = (p.volumeLabel as string) ?? '—';
+
+    // Flag if mergeCount/splitCount not yet profiled (old profiles have otherCount only)
+    const hasBreakdown = p.mergeCount != null || p.splitCount != null;
+    const mergeDisplay = hasBreakdown ? String(merges) : '?';
+    const splitDisplay = hasBreakdown ? String(splits) : '?';
 
     console.log([
       String(rank).padEnd(5),
@@ -151,15 +158,20 @@ async function main() {
       String(buys).padEnd(6),
       String(sells).padEnd(6),
       String(redeems).padEnd(8),
+      mergeDisplay.padEnd(7),
+      splitDisplay.padEnd(7),
       String(other).padEnd(7),
       String(total).padEnd(7),
       pct(buys, total).padEnd(7),
       pct(sells, total).padEnd(7),
       pct(redeems, total).padEnd(7),
+      (hasBreakdown ? pct(merges, total) : '?').padEnd(7),
+      (hasBreakdown ? pct(splits, total) : '?').padEnd(7),
       (edge?.specialty as string) ?? (p.specialty as string) ?? '—',
     ].join(''));
   }
   console.log(div);
+  console.log('  NOTE: Merge/Split show ? for traders not yet re-profiled. Run profile-trader-v3.ts --wallets=... to update.');
 
   // ── Print bet sizing table ─────────────────────────────────────────────────
   const h2 = [
@@ -203,22 +215,29 @@ async function main() {
   for (const p of profiles) {
     const edge  = edgeMap.get(p.wallet as string);
     const rank  = (edge?.overall_rank as number) ?? '?';
-    const buys  = (p.buyCount    as number) ?? 0;
-    const sells = (p.sellCount   as number) ?? 0;
-    const total = (p.totalActivities as number) ?? 0;
+    const buys   = (p.buyCount    as number) ?? 0;
+    const sells  = (p.sellCount   as number) ?? 0;
+    const merges = (p.mergeCount  as number) ?? 0;
+    const splits = (p.splitCount  as number) ?? 0;
+    const total  = (p.totalActivities as number) ?? 0;
+    const hasBreakdown = p.mergeCount != null || p.splitCount != null;
+
     const sellRatio  = total > 0 ? (sells / total) * 100 : 0;
+    const mergeRatio = total > 0 ? (merges / total) * 100 : 0;
+    const splitRatio = total > 0 ? (splits / total) * 100 : 0;
+    const exitRatio  = total > 0 ? ((sells + merges) / total) * 100 : 0; // combined exits
     const strategy   = (p.strategyLabel as string) ?? '';
     const avgBet     = p.avgTradeSize as number | null;
     const specialty  = (edge?.specialty ?? p.specialty) as string;
     const roce       = (edge?.roce_30d as number) ?? 0;
 
-    const holdBehavior = sellRatio < 5
+    const holdBehavior = exitRatio < 5
       ? 'BUY & HOLD to resolution'
-      : sellRatio < 20
+      : exitRatio < 20
         ? 'Mostly holds, occasional early exits'
-        : sellRatio < 40
-          ? 'Active exits — must track sells to copy correctly'
-          : 'Heavy selling — complex to copy (follow every sell)';
+        : exitRatio < 40
+          ? 'Active exits — must track sells+merges to copy correctly'
+          : 'Heavy exiting — complex to copy (follow every sell+merge)';
 
     const sizeNote = avgBet != null
       ? avgBet > 10000
@@ -228,19 +247,31 @@ async function main() {
           : `Small bets (~${fmtUsdc(avgBet)} avg) — may copy 1:1`
       : 'Bet size unknown';
 
+    const mergeNote = hasBreakdown && merges > 0
+      ? `  ⚠️  MERGE exits: ${merges} (${mergeRatio.toFixed(1)}%) — implicit exits not visible as SELLs`
+      : '';
+    const splitNote = hasBreakdown && splits > 0
+      ? `  ⚠️  SPLIT entries: ${splits} (${splitRatio.toFixed(1)}%) — implicit buys not visible as BUYs (must watch splits)`
+      : '';
+
     console.log(`  [${rank}] ${(p.wallet as string).slice(0, 10)}...  ${specialty}  |  ROCE: ${roce.toFixed(0)}%`);
     console.log(`      Strategy : ${strategy.replace(/_/g, ' ')}`);
-    console.log(`      Hold     : ${holdBehavior}  (sell%: ${sellRatio.toFixed(1)}%)`);
+    console.log(`      Exits    : ${holdBehavior}  (sell: ${sellRatio.toFixed(1)}%, merge: ${hasBreakdown ? mergeRatio.toFixed(1) : '?'}%)`);
+    console.log(`      Entries  : Buys=${buys}/30d${hasBreakdown && splits > 0 ? `, Splits=${splits}` : ''}`);
     console.log(`      Sizing   : ${sizeNote}`);
-    console.log(`      Buys/30d : ${buys}  |  Acts/30d: ${total}`);
+    if (mergeNote) console.log(`     ${mergeNote}`);
+    if (splitNote) console.log(`     ${splitNote}`);
     console.log('');
   }
 
-  console.log('── Notes for copy system design ────────────────────────────────────────────────');
-  console.log('  BUY_AND_HOLD traders: only need to monitor new BUY activities → copy immediately');
-  console.log('  Traders with sells: must also monitor SELL activities → copy exit at same price');
-  console.log('  Redeems: resolution events — no action needed (position expires to 0 or 1)');
-  console.log('  Other/Merge/Split: rare Polymarket mechanics — safe to ignore for v1 copy system');
+  console.log('── Copy system design notes ────────────────────────────────────────────────────');
+  console.log('  BUY (TRADE):  primary entry — copy immediately');
+  console.log('  SELL (TRADE): active exit — copy if you hold the same position');
+  console.log('  MERGE:        exit via YES+NO pair — same as SELL for copy purposes, must track');
+  console.log('  SPLIT:        creates YES+NO from USDC — followed by SELL of unwanted side');
+  console.log('                → held side = implicit BUY. Must watch splits to catch these entries');
+  console.log('  REDEEM:       position resolves to $1 — no copy action needed (market settled)');
+  console.log('  REWARD/OTHER: airdrop/incentive — ignore');
   console.log('  Sizing: scale copy bet proportionally to your capital vs trader avg bet size\n');
 }
 

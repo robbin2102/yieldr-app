@@ -1236,7 +1236,7 @@ export async function profileTrader(
     : null;
 
   // ── Activity counts ────────────────────────────────────────
-  let buyCount = 0, sellCount = 0, redeemCount = 0, otherCount = 0;
+  let buyCount = 0, sellCount = 0, redeemCount = 0, mergeCount = 0, splitCount = 0, otherCount = 0;
   const tradeSizes: number[] = [];
 
   for (const a of activities) {
@@ -1246,8 +1246,12 @@ export async function profileTrader(
       else if (a.side === 'SELL') sellCount++;
     } else if (a.type === 'REDEEM') {
       redeemCount++;
+    } else if (a.type === 'MERGE') {
+      mergeCount++;
+    } else if (a.type === 'SPLIT') {
+      splitCount++;
     } else {
-      otherCount++;
+      otherCount++; // REWARD, CONVERSION
     }
   }
 
@@ -1545,7 +1549,9 @@ export async function profileTrader(
     console.log(`  TRADE (BUY):        ${buyCount}`);
     console.log(`  TRADE (SELL):       ${sellCount}`);
     console.log(`  REDEEM:             ${redeemCount}`);
-    console.log(`  Other:              ${otherCount}`);
+    console.log(`  MERGE:              ${mergeCount}`);
+    console.log(`  SPLIT:              ${splitCount}`);
+    console.log(`  Other (Reward/etc): ${otherCount}`);
     console.log('');
     const activityLevelDisplay = isWhaleConcentrator
       ? `WHALE_CONCENTRATOR (${total_unique_markets_30d} markets, avg bet $${avg_bet_size_usdc.toFixed(0)}, ${tradesPerDay.toFixed(1)} trades/day — scaling entries not fragmentation)`
@@ -1793,7 +1799,9 @@ export async function profileTrader(
     buyCount,
     sellCount,
     redeemCount,
-    otherCount,
+    mergeCount,
+    splitCount,
+    otherCount, // REWARD, CONVERSION
 
     // Classification
     tradesPerDay,
