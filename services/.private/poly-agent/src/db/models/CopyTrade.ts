@@ -3,7 +3,6 @@ import mongoose, { Document } from 'mongoose';
 /**
  * Skip reason codes — every skip is logged with a reason for post-analysis.
  *
- * BELOW_AVG        — trader bet < their avgBet threshold (intentional filter)
  * ALLOCATION_FULL  — trader's lifetime allocationUsdc exhausted (missed opportunity)
  * MIN_BET          — computed copy bet rounds below $5 minimum
  * NO_ORDERBOOK     — failed to fetch orderbook after retries
@@ -11,16 +10,19 @@ import mongoose, { Document } from 'mongoose';
  * DUPLICATE        — txHash already processed (dedup guard)
  * ORDER_FAILED     — GTT failed after all retries (execution failure)
  * NON_TRADE        — activity type was REDEEM/MERGE/SPLIT (not a trade)
+ * PRICE_DRIFT      — accumulated position discarded: price moved >priceDriftPct% before threshold hit
+ * SIDE_CONFLICT    — BUY accumulation discarded because SELL detected on same token
  */
 export type SkipReason =
-  | 'BELOW_AVG'
   | 'ALLOCATION_FULL'
   | 'MIN_BET'
   | 'NO_ORDERBOOK'
   | 'SELL_NO_POSITION'
   | 'DUPLICATE'
   | 'ORDER_FAILED'
-  | 'NON_TRADE';
+  | 'NON_TRADE'
+  | 'PRICE_DRIFT'
+  | 'SIDE_CONFLICT';
 
 export type TradeStatus = 'DETECTED' | 'SKIPPED' | 'EXECUTING' | 'FILLED' | 'PARTIAL' | 'FAILED';
 
@@ -64,6 +66,11 @@ export interface ICopyTrade extends Document {
   priceDrift?: number;         // (ourPrice - traderPrice) / traderPrice × 100
   attempts?: number;           // GTT retry count
 
+  // Accumulation — set on the batch execution doc when multiple small trades are merged
+  accumulatedDocIds?: string[];  // doc IDs of constituent trades merged into this order
+  isAccumulatedBatch?: boolean;  // true = this doc represents the executed batch order
+  batchTradeCount?: number;      // how many trader txs were accumulated
+
   status: TradeStatus;
   failReason?: string;
 
@@ -105,6 +112,10 @@ const copyTradeSchema = new mongoose.Schema<ICopyTrade>({
   filledUsdc:    { type: Number },
   priceDrift:    { type: Number },
   attempts:      { type: Number },
+
+  accumulatedDocIds: [{ type: String }],
+  isAccumulatedBatch:{ type: Boolean },
+  batchTradeCount:   { type: Number },
 
   status:     { type: String, enum: ['DETECTED','SKIPPED','EXECUTING','FILLED','PARTIAL','FAILED'], default: 'DETECTED', index: true },
   failReason: { type: String },
