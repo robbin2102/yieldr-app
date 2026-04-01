@@ -59,6 +59,7 @@ exports.config = {
         rateDelayMs: parseInt(process.env.TAAPI_RATE_DELAY_MS || '600'),
     },
     coinglass: {
+        enabled: process.env.COINGLASS_ENABLED === 'true',
         get apiKey() { return required('COINGLASS_API_KEY'); },
         baseUrl: 'https://open-api-v4.coinglass.com',
         rateDelayMs: parseInt(process.env.COINGLASS_RATE_DELAY_MS || '2200'),

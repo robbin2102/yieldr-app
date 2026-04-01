@@ -6,6 +6,7 @@ const config_1 = require("../config");
 const logger_1 = require("../utils/logger");
 const models_1 = require("../models");
 const TAAPI_EXCHANGE_SYMBOLS_URL = `${config_1.config.taapi.baseUrl}/exchange-symbols`;
+// Only used when CoinGlass is enabled
 const CG_COINS_MARKETS_URL = `${config_1.config.coinglass.baseUrl}/api/futures/coins-markets`;
 // Stablecoins and tokens we never want to track
 const EXCLUDE_SYMBOLS = new Set([
@@ -38,8 +39,8 @@ async function refreshTrackedCoins() {
     logger_1.logger.info('Tracker', 'Refreshing tracked coins list...');
     const taapiSymbols = await fetchTaapiSymbols();
     logger_1.logger.info('Tracker', `TAAPI binancefutures symbols: ${taapiSymbols.size}`);
-    const cgCoins = await fetchCoinGlassMarkets();
-    logger_1.logger.info('Tracker', `CoinGlass coins: ${cgCoins.length}`);
+    const cgCoins = config_1.config.coinglass.enabled ? await fetchCoinGlassMarkets() : [];
+    logger_1.logger.info('Tracker', `CoinGlass coins: ${cgCoins.length}${!config_1.config.coinglass.enabled ? ' (disabled)' : ''}`);
     let all;
     let excluded = [];
     if (cgCoins.length > 0) {

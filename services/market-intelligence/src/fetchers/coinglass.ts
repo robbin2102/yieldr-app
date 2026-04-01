@@ -108,6 +108,11 @@ export async function fetchAggregateData(trackedCoins: string[]): Promise<Map<st
     });
   }
 
+  if (!config.coinglass.enabled) {
+    logger.info('CoinGlass', 'CoinGlass disabled (COINGLASS_ENABLED != true) — skipping aggregate fetch');
+    return result;
+  }
+
   const trackedSet = new Set(trackedCoins.map(c => c.toUpperCase()));
 
   // 1. funding-rate/exchange-list → current funding rates
@@ -173,6 +178,10 @@ export async function fetchPerCoinData(symbol: string): Promise<CoinPerCoinData>
     errors: [],
   };
 
+  if (!config.coinglass.enabled) {
+    return result;
+  }
+
   const pair = `${symbol}USDT`; // e.g. BTCUSDT — required by pair-level endpoints
 
   // NOTE: Funding rate, OI history, and long/short ratios are now sourced from the
@@ -226,6 +235,10 @@ export async function fetchPerCoinData(symbol: string): Promise<CoinPerCoinData>
 export async function fetchCoinbasePremium(): Promise<{ btc: number | null; eth: number | null }> {
   const result = { btc: null as number | null, eth: null as number | null };
 
+  if (!config.coinglass.enabled) {
+    return result;
+  }
+
   const data = await cgGet('/api/coinbase-premium-index?interval=4h&limit=1');
   if (data && Array.isArray(data) && data.length > 0) {
     const latest = data[data.length - 1];
@@ -247,6 +260,11 @@ export async function fetchMacroData(): Promise<{
   fearGreed: any;
   stablecoinMcap: any;
 }> {
+  if (!config.coinglass.enabled) {
+    logger.info('CoinGlass', 'CoinGlass disabled — skipping macro data fetch');
+    return { btcEtfFlows: null, ethEtfFlows: null, btcEtfNetAssets: null, fearGreed: null, stablecoinMcap: null };
+  }
+
   logger.info('CoinGlass', 'Fetching daily macro data');
 
   const [btcEtfFlows, ethEtfFlows, btcEtfNetAssets, fearGreed, stablecoinMcap] = await Promise.all([

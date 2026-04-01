@@ -4,6 +4,11 @@ import { fetchPerCoinData } from './coinglass';
 import MarketSnapshot from '../models/MarketSnapshot';
 
 export async function fetchOnDemand(symbol: string): Promise<Record<string, unknown> | null> {
+  if (!config.coinglass.enabled) {
+    logger.info('OnDemand', 'CoinGlass disabled — on-demand fetch skipped');
+    return null;
+  }
+
   const upperSym = symbol.toUpperCase();
 
   const existing = await (MarketSnapshot as any).findOne({ symbol: upperSym })
