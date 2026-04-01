@@ -137,8 +137,8 @@ async function main() {
   const resumeAll     = hasFlag('resume-all');
 
   const mongoUri = process.env.MONGODB_URI!;
-  await mongoose.connect(mongoUri);
-  console.log('Connected to MongoDB\n');
+  await mongoose.connect(mongoUri, { dbName: 'yieldr' });
+  console.log('Connected to MongoDB (yieldr database)\n');
 
   const collection = mongoose.connection.collection('ahf-copyTraders');
 

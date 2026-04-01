@@ -73,7 +73,7 @@ async function resolve(col: mongoose.Collection, query: string): Promise<any | n
 
 async function main() {
   const col = mongoose.connection.collection('ahf-copyTrades');
-  await mongoose.connect(process.env.MONGODB_URI!);
+  await mongoose.connect(process.env.MONGODB_URI!, { dbName: 'yieldr' });
   const traders = mongoose.connection.collection('ahf-copyTraders');
 
   const listFlag     = process.argv.includes('--list');
