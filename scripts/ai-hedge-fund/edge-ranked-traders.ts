@@ -14,7 +14,7 @@
  * Usage:
  *   npx tsx scripts/ai-hedge-fund/edge-ranked-traders.ts
  *   npx tsx scripts/ai-hedge-fund/edge-ranked-traders.ts --top=100
- *   npx tsx scripts/ai-hedge-fund/edge-ranked-traders.ts --confidence=confirmed
+ *   npx tsx scripts/ai-hedge-fund/edge-ranked-traders.ts --confidence=confirmed --max-act=50 --min-roce=75 --min-edge=0.15
  *   npx tsx scripts/ai-hedge-fund/edge-ranked-traders.ts --specialty=Soccer
  *   npx tsx scripts/ai-hedge-fund/edge-ranked-traders.ts --dry-run
  */
@@ -147,10 +147,20 @@ function specialtyWinRate(profile: Profile): number | null {
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 async function main() {
-  const topN       = parseInt(parseArg('top') ?? '50', 10);
-  const confFilter = parseArg('confidence') ?? null;  // confirmed | likely | both (default both)
-  const spFilter   = parseArg('specialty')  ?? null;
+  const topN       = parseInt(parseArg('top')        ?? '50',   10);
+  const confFilter = parseArg('confidence') ?? null;   // confirmed | likely  (default: both)
+  const spFilter   = parseArg('specialty')  ?? null;   // e.g. Soccer
   const isDryRun   = hasFlag('dry-run');
+
+  // ── Configurable post-edge filters (all optional, off by default) ─────────
+  const maxAct     = parseArg('max-act')    != null ? parseFloat(parseArg('max-act')!)    : null;  // act/d ceiling
+  const minRoce    = parseArg('min-roce')   != null ? parseFloat(parseArg('min-roce')!)   : null;  // ROCE30 floor %
+  const minEdge    = parseArg('min-edge')   != null ? parseFloat(parseArg('min-edge')!)   : null;  // edge magnitude floor
+  const minPf      = parseArg('min-pf')     != null ? parseFloat(parseArg('min-pf')!)     : null;  // profit factor floor
+  const minPnl     = parseArg('min-pnl')    != null ? parseFloat(parseArg('min-pnl')!)    : null;  // PnL30 floor ($)
+  const minN       = parseArg('min-n')      != null ? parseInt(parseArg('min-n')!, 10)    : null;  // sample size floor
+  const maxLast    = parseArg('max-last')   != null ? parseFloat(parseArg('max-last')!)   : null;  // days since active ceiling
+  const minDaysW   = parseArg('min-days-w') != null ? parseFloat(parseArg('min-days-w')!) : null;  // DaysWonRate% floor
 
   const mongoUri = process.env.MONGODB_URI;
   if (!mongoUri) { console.error('MONGODB_URI not set'); process.exit(1); }
@@ -273,6 +283,31 @@ async function main() {
   // Sort by rank_score descending
   scored.sort((a, b) => b.rank_score - a.rank_score);
 
+  // ── Apply optional post-edge filters ──────────────────────────────────────
+  // These are applied AFTER scoring so rank order reflects full pool,
+  // and filtered rows are excluded from display/save but pool count shows pre-filter total.
+  const fullPoolSize = scored.length;
+  const filtered = scored.filter(t => {
+    if (maxAct   != null && t.act_per_day  != null && t.act_per_day  > maxAct)   return false;
+    if (minRoce  != null && t.roce_30d                               < minRoce)  return false;
+    if (minEdge  != null && t.edge                                   < minEdge)  return false;
+    if (minPf    != null && t.pf                                     < minPf)    return false;
+    if (minPnl   != null && t.pnl_30d                                < minPnl)   return false;
+    if (minN     != null && t.n                                      < minN)     return false;
+    if (maxLast  != null && t.last_active != null && t.last_active   > maxLast)  return false;
+    if (minDaysW != null && t.days_won_rate != null && t.days_won_rate < minDaysW) return false;
+    return true;
+  });
+  const activeFilters: string[] = [];
+  if (maxAct   != null) activeFilters.push(`act/d<=${maxAct}`);
+  if (minRoce  != null) activeFilters.push(`ROCE>=${minRoce}%`);
+  if (minEdge  != null) activeFilters.push(`edge>=${minEdge}`);
+  if (minPf    != null) activeFilters.push(`PF>=${minPf}`);
+  if (minPnl   != null) activeFilters.push(`PnL30>=$${minPnl}`);
+  if (minN     != null) activeFilters.push(`n>=${minN}`);
+  if (maxLast  != null) activeFilters.push(`last<=${maxLast}d`);
+  if (minDaysW != null) activeFilters.push(`DaysW>=${minDaysW}%`);
+
   // ── Print table ─────────────────────────────────────────────────────────────
   const header = [
     'Rank'.padEnd(5),
@@ -296,12 +331,16 @@ async function main() {
   ].join('');
   const div = '─'.repeat(header.length);
 
-  const confLabel = confFilter ?? 'confirmed+likely';
-  const totalInPool = scored.length;
+  const confLabel   = confFilter ?? 'confirmed+likely';
+  const displayPool = filtered;
+  const totalInPool = displayPool.length;
 
   console.log('\n' + div);
-  console.log(`  EDGE-RANKED TRADERS  |  pool: ${totalInPool}  |  showing top: ${Math.min(topN, totalInPool)}  |  filter: ${confLabel}${spFilter ? ' / ' + spFilter : ''}`);
-  console.log(`  Source: ALL ${profiles.length} v3 profiles — no hard filters on ROCE/win_rate/PF`);
+  console.log(`  EDGE-RANKED TRADERS  |  edge pool: ${fullPoolSize}  |  after filters: ${totalInPool}  |  showing: ${Math.min(topN, totalInPool)}  |  conf: ${confLabel}${spFilter ? ' / ' + spFilter : ''}`);
+  console.log(`  Source: ALL ${profiles.length} v3 profiles`);
+  if (activeFilters.length > 0) {
+    console.log(`  Filters: ${activeFilters.join('  |  ')}`);
+  }
   console.log(`  Edge = actual win rate beats implied odds (avg entry price) at p<0.05 (confirmed) or p<0.15 (likely)`);
   console.log(div);
   console.log(header);
@@ -311,7 +350,7 @@ async function main() {
   const confCounts: Record<string, number> = {};
   const spCounts:   Record<string, number> = {};
 
-  scored.slice(0, topN).forEach((t, i) => {
+  displayPool.slice(0, topN).forEach((t, i) => {
     confCounts[t.confidence] = (confCounts[t.confidence] ?? 0) + 1;
     spCounts[t.specialty]    = (spCounts[t.specialty] ?? 0) + 1;
 
@@ -346,7 +385,8 @@ async function main() {
     .sort((a, b) => b[1] - a[1])
     .map(([k, v]) => `${k}=${v}`)
     .join(', ');
-  console.log(`\nTotal in edge pool: ${totalInPool} | Showing: ${Math.min(topN, totalInPool)}`);
+  console.log(`\nFull edge pool: ${fullPoolSize} | After filters: ${totalInPool} | Showing: ${Math.min(topN, totalInPool)}`);
+  if (activeFilters.length > 0) console.log(`Active filters: ${activeFilters.join(', ')}`);
   console.log(`Confidence: ${confStr}`);
   console.log(`Specialties (top ${Math.min(topN, totalInPool)}): ${spStr}`);
 
@@ -357,10 +397,10 @@ async function main() {
   }
 
   // ── Upsert to ahf-edgeRankedTraders ───────────────────────────────────────
-  process.stdout.write(`\nSaving ${scored.length} edge traders to ahf-edgeRankedTraders... `);
+  process.stdout.write(`\nSaving ${displayPool.length} edge traders to ahf-edgeRankedTraders... `);
   const col  = db.collection('ahf-edgeRankedTraders');
   const now  = new Date();
-  const ops  = scored.map((t, i) => ({
+  const ops  = displayPool.map((t, i) => ({
     updateOne: {
       filter: { wallet: t.wallet },
       update: { $set: { ...t, overall_rank: i + 1, updatedAt: now } },
@@ -377,12 +417,22 @@ async function main() {
   if (deleted.deletedCount > 0) console.log(`(removed ${deleted.deletedCount} stale) `);
   process.stdout.write('done\n');
 
-  console.log(`\nUsage:`);
-  console.log(`  --top=100              show top 100`);
+  console.log(`\nAll flags:`);
+  console.log(`  --top=N                show top N (default 50)`);
   console.log(`  --confidence=confirmed only confirmed (p<0.05, n>=20)`);
   console.log(`  --confidence=likely    only likely (p<0.15, n>=10)`);
-  console.log(`  --specialty=Soccer     filter to specialty`);
-  console.log(`  --dry-run              skip DB write\n`);
+  console.log(`  --specialty=Soccer     match specialty name`);
+  console.log(`  --max-act=50           max activities/day  (e.g. bot filter)`);
+  console.log(`  --min-roce=75          min ROCE30 % floor`);
+  console.log(`  --min-edge=0.15        min edge magnitude floor`);
+  console.log(`  --min-pf=1.05          min profit factor floor`);
+  console.log(`  --min-pnl=5000         min PnL30 in $ floor`);
+  console.log(`  --min-n=30             min sample size floor`);
+  console.log(`  --max-last=7           max days since last active`);
+  console.log(`  --min-days-w=60        min DaysWonRate% floor`);
+  console.log(`  --dry-run              skip DB write`);
+  console.log(`\nExample (Tier 1 copy pool):`);
+  console.log(`  npx tsx scripts/ai-hedge-fund/edge-ranked-traders.ts --confidence=confirmed --max-act=50 --min-roce=75 --min-edge=0.15 --min-pf=1.05 --top=50\n`);
 
   await client.close();
 }
