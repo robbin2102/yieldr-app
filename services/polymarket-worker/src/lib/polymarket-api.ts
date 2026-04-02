@@ -55,16 +55,55 @@ export async function fetchActivitiesSince(
   limit: number = 100
 ): Promise<Activity[]> {
   const url = `${API_BASE}/activity?user=${wallet}&limit=${limit}&sortBy=TIMESTAMP&sortDirection=DESC`;
+
+  console.log(
+    `[API] fetchActivitiesSince wallet=${wallet} sinceTimestamp=${sinceTimestamp} (${new Date(sinceTimestamp * 1000).toISOString()}) limit=${limit}`
+  );
+  console.log(`[API] Fetching URL: ${url}`);
+
+  const fetchStart = Date.now();
   const response = await fetch(url);
+  const fetchMs = Date.now() - fetchStart;
 
   if (!response.ok) {
+    console.error(`[API] HTTP error ${response.status} for ${url} (${fetchMs}ms)`);
     throw new Error(`API error: ${response.status}`);
   }
 
   const activities = await response.json() as Activity[];
 
+  console.log(
+    `[API] Received ${activities.length}/${limit} activities in ${fetchMs}ms` +
+    (activities.length > 0
+      ? ` | timestamps: ${new Date(activities[activities.length - 1].timestamp * 1000).toISOString()} → ${new Date(activities[0].timestamp * 1000).toISOString()}`
+      : '')
+  );
+
+  // WARN: if the API returned exactly `limit` items, earlier trades in the window may have been truncated
+  if (activities.length === limit) {
+    console.warn(
+      `[API] WARNING: fetchActivitiesSince hit the limit cap (${limit}) for wallet=${wallet}. ` +
+      `Trades before ${new Date(activities[activities.length - 1].timestamp * 1000).toISOString()} may be MISSING. ` +
+      `Consider adding a start= time param or increasing the limit.`
+    );
+  }
+
   // Filter to only activities after the timestamp
-  return activities.filter(a => a.timestamp > sinceTimestamp);
+  const filtered = activities.filter(a => a.timestamp > sinceTimestamp);
+  const dropped = activities.length - filtered.length;
+
+  if (dropped > 0) {
+    console.log(`[API] Filtered out ${dropped} activities with timestamp <= sinceTimestamp (${sinceTimestamp})`);
+  }
+  if (filtered.length === 0 && activities.length > 0) {
+    console.warn(
+      `[API] All ${activities.length} fetched activities are older than sinceTimestamp=${sinceTimestamp}. ` +
+      `Oldest fetched: ${new Date(activities[activities.length - 1].timestamp * 1000).toISOString()}`
+    );
+  }
+
+  console.log(`[API] Returning ${filtered.length} new activities for wallet=${wallet}`);
+  return filtered;
 }
 
 /**

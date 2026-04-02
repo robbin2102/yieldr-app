@@ -24,6 +24,12 @@ async function checkTraderForNewTrades(trader: TrackedTrader): Promise<number> {
   let newAlertsCount = 0;
 
   try {
+    const now = Math.floor(Date.now() / 1000);
+    const gapSeconds = now - trader.lastSeenTimestamp;
+    console.log(
+      `[Alert] Checking ${trader.label} (${trader.wallet}) | lastSeenTimestamp=${trader.lastSeenTimestamp} (${new Date(trader.lastSeenTimestamp * 1000).toISOString()}) | gap=${gapSeconds}s`
+    );
+
     // Fetch activities since last seen
     const activities = await fetchActivitiesSince(
       trader.wallet,
@@ -31,12 +37,38 @@ async function checkTraderForNewTrades(trader: TrackedTrader): Promise<number> {
       50 // Limit per check
     );
 
+    console.log(
+      `[Alert] ${trader.label}: fetched ${activities.length} activities since last check` +
+      (activities.length > 0
+        ? ` | types: ${[...new Set(activities.map(a => `${a.type}/${a.side ?? '-'}`)]).join(', ')}`
+        : '')
+    );
+
     // Filter to only BUY trades (the ones we want to alert on)
     const newTrades = activities.filter(
       a => a.type === 'TRADE' && a.side === 'BUY'
     );
 
-    if (newTrades.length === 0) return 0;
+    const nonBuyCount = activities.length - newTrades.length;
+    if (nonBuyCount > 0) {
+      console.log(`[Alert] ${trader.label}: skipping ${nonBuyCount} non-BUY activities (SELL/REDEEM/etc)`);
+    }
+
+    if (newTrades.length === 0) {
+      // Still advance lastSeenTimestamp based on all activities to avoid re-fetching them
+      const latestActivity = activities.reduce<number>((max, a) => Math.max(max, a.timestamp), trader.lastSeenTimestamp);
+      if (latestActivity > trader.lastSeenTimestamp) {
+        const tradersCollection = db.collection(COLLECTIONS.TRACKED_TRADERS);
+        await tradersCollection.updateOne(
+          { wallet: trader.wallet.toLowerCase() },
+          { $set: { lastSeenTimestamp: latestActivity, lastUpdatedAt: new Date() } }
+        );
+        console.log(
+          `[Alert] ${trader.label}: no BUY trades but advanced lastSeenTimestamp to ${latestActivity} (${new Date(latestActivity * 1000).toISOString()})`
+        );
+      }
+      return 0;
+    }
 
     // Create alerts for each new trade
     const alertsCollection = db.collection(COLLECTIONS.TRADE_ALERTS);
@@ -83,7 +115,11 @@ async function checkTraderForNewTrades(trader: TrackedTrader): Promise<number> {
         wsManager.broadcastAlert(alert);
 
         console.log(
-          `[Alert] ${trader.label}: ${trade.side} ${trade.outcome} - ${trade.title.substring(0, 40)}... ($${trade.usdcSize.toFixed(2)})`
+          `[Alert] NEW: ${trader.label}: ${trade.side} ${trade.outcome} - ${trade.title.substring(0, 40)}... ($${trade.usdcSize.toFixed(2)}) txHash=${trade.transactionHash}`
+        );
+      } else {
+        console.log(
+          `[Alert] DUPLICATE skipped: ${trader.label} txHash=${trade.transactionHash} (already exists)`
         );
       }
 
@@ -115,7 +151,10 @@ async function checkTraderForNewTrades(trader: TrackedTrader): Promise<number> {
     }
 
   } catch (error: any) {
-    console.error(`[Alert] Error checking ${trader.label}:`, error.message);
+    console.error(
+      `[Alert] Error checking ${trader.label} (${trader.wallet}): ${error.message}`,
+      '\nStack:', error.stack ?? '(no stack)'
+    );
   }
 
   return newAlertsCount;
@@ -152,7 +191,7 @@ async function runAlertCheck(): Promise<void> {
     }
 
   } catch (error: any) {
-    console.error('[Alert] Monitor error:', error.message);
+    console.error('[Alert] Monitor error:', error.message, '\nStack:', error.stack ?? '(no stack)');
   } finally {
     isRunning = false;
   }

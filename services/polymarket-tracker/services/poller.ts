@@ -72,24 +72,38 @@ export class TradePoller {
     }
 
     this.isPolling = true;
+    const pollStart = Date.now();
 
     try {
+      const now = Math.floor(Date.now() / 1000);
+      const gapSeconds = now - this.lastSeenTimestamp;
+      logger.debug(
+        `Poll start for ${this.walletAddress} | lastSeenTimestamp=${this.lastSeenTimestamp} (${new Date(this.lastSeenTimestamp * 1000).toISOString()}) | gap=${gapSeconds}s`
+      );
+
       // Fetch new activities since last seen timestamp
       const activities = await fetchNewActivity(
         this.walletAddress,
         this.lastSeenTimestamp
       );
 
+      const pollMs = Date.now() - pollStart;
+
       if (activities.length === 0) {
-        logger.debug(`No new activities for ${this.walletAddress}`);
+        logger.debug(`No new activities for ${this.walletAddress} (${pollMs}ms)`);
         return;
       }
 
-      logger.info(`Found ${activities.length} new activities for ${this.walletAddress}`);
+      logger.info(`Found ${activities.length} new activities for ${this.walletAddress} (${pollMs}ms)`);
 
       // Update last seen timestamp
       const maxTimestamp = Math.max(...activities.map((a) => a.timestamp));
+      const prevTimestamp = this.lastSeenTimestamp;
       this.lastSeenTimestamp = maxTimestamp + 1; // Add 1 to avoid duplicates
+
+      logger.debug(
+        `lastSeenTimestamp updated: ${prevTimestamp} → ${this.lastSeenTimestamp} (${new Date(this.lastSeenTimestamp * 1000).toISOString()})`
+      );
 
       // Save to MongoDB
       await this.saveTrades(activities);
@@ -108,7 +122,10 @@ export class TradePoller {
       // Note: Open positions are refreshed every 5 minutes by refreshPositions()
       // We don't fetch them here to avoid excessive API calls
     } catch (error: any) {
-      logger.error(`Poll error for ${this.walletAddress}: ${error.message}`);
+      logger.error(
+        `Poll error for ${this.walletAddress}: ${error.message}` +
+        `\nStack: ${error.stack ?? '(no stack)'}`
+      );
     } finally {
       this.isPolling = false;
     }
@@ -182,8 +199,13 @@ export class TradePoller {
     if (operations.length > 0) {
       const result = await PolymarketTrade.bulkWrite(operations);
       logger.debug(
-        `Saved: ${result.upsertedCount} new, ${result.modifiedCount} updated`
+        `bulkWrite: ${result.upsertedCount} inserted, ${result.modifiedCount} updated, ${operations.length - result.upsertedCount - result.modifiedCount} unchanged`
       );
+      if (result.upsertedCount === 0 && operations.length > 0) {
+        logger.warn(
+          `bulkWrite: 0 new trades inserted out of ${operations.length} operations — all were duplicates or already existed`
+        );
+      }
     }
   }
 

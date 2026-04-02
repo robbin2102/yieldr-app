@@ -68,8 +68,17 @@ export async function fetchNewActivity(
   // For polling, use a precise window: last 60 seconds
   const windowStart = Math.max(sinceTimestamp, now - 60);
 
+  // WARN: if sinceTimestamp is older than 60s, the window gets clamped and trades in the gap may be missed
+  if (sinceTimestamp < now - 60) {
+    logger.warn(
+      `fetchNewActivity: sinceTimestamp=${sinceTimestamp} (${new Date(sinceTimestamp * 1000).toISOString()}) is ${now - sinceTimestamp}s ago, ` +
+      `but window is capped at 60s (windowStart=${windowStart}). ` +
+      `Trades between ${new Date(sinceTimestamp * 1000).toISOString()} and ${new Date(windowStart * 1000).toISOString()} may be MISSED.`
+    );
+  }
+
   logger.debug(
-    `Polling ${walletAddress}: ${new Date(windowStart * 1000).toISOString()} to ${new Date(now * 1000).toISOString()}`
+    `Polling ${walletAddress}: sinceTimestamp=${sinceTimestamp} windowStart=${new Date(windowStart * 1000).toISOString()} now=${new Date(now * 1000).toISOString()} gapSeconds=${now - sinceTimestamp}`
   );
 
   const url = buildUrl('/activity', {
@@ -82,7 +91,24 @@ export async function fetchNewActivity(
     sortDirection: 'ASC', // Ascending to get oldest first
   });
 
+  logger.debug(`fetchNewActivity URL: ${url}`);
+
   const activities = await fetchWithDelay<ActivityResponse[]>(url, 0); // No delay for polling
+
+  logger.debug(
+    `fetchNewActivity returned ${activities.length} activities for ${walletAddress}` +
+    (activities.length > 0
+      ? ` | first=${new Date(activities[0].timestamp * 1000).toISOString()} last=${new Date(activities[activities.length - 1].timestamp * 1000).toISOString()}`
+      : '')
+  );
+
+  // WARN: if we hit the limit, earlier trades in the window may have been truncated
+  if (activities.length === 50) {
+    logger.warn(
+      `fetchNewActivity hit limit cap (50) for ${walletAddress}. ` +
+      `Some trades in window may have been TRUNCATED. Consider increasing the limit.`
+    );
+  }
 
   if (activities.length > 0) {
     logger.success(`Found ${activities.length} new activities`);

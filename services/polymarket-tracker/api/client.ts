@@ -23,27 +23,33 @@ export async function fetchWithDelay<T>(
 
     logger.debug(`Fetching: ${url}`);
 
+    const fetchStart = Date.now();
     const response = await axios.get<T>(url, {
       timeout: 30000, // 30 second timeout
       headers: {
         'Accept': 'application/json',
       },
     });
+    const fetchMs = Date.now() - fetchStart;
+
+    const dataLength = Array.isArray(response.data) ? (response.data as unknown[]).length : 1;
+    logger.debug(`Response: ${response.status} | items=${dataLength} | ${fetchMs}ms | url=${url}`);
 
     return response.data;
   } catch (error: any) {
     if (error.response) {
       logger.error(
-        `API error: ${error.response.status} - ${error.response.statusText}`
+        `API error: ${error.response.status} - ${error.response.statusText} | url=${url}` +
+        (error.response.data ? ` | body=${JSON.stringify(error.response.data).substring(0, 200)}` : '')
       );
       throw new Error(
-        `Polymarket API error: ${error.response.status} - ${error.response.statusText}`
+        `Polymarket API error: ${error.response.status} - ${error.response.statusText} | url=${url}`
       );
     } else if (error.request) {
-      logger.error('No response from API');
-      throw new Error('No response from Polymarket API');
+      logger.error(`No response from API | url=${url} | code=${error.code ?? 'unknown'}`);
+      throw new Error(`No response from Polymarket API | url=${url}`);
     } else {
-      logger.error(`Request error: ${error.message}`);
+      logger.error(`Request error: ${error.message} | url=${url}`);
       throw error;
     }
   }
