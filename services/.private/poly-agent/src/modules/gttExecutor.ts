@@ -272,7 +272,7 @@ export class GTTExecutor {
         // e.g. "invalid fee rate (0), current market's maker fee: 1000"
         const errText = err.message ?? '';
         const errData = err.data?.error ?? err.response?.data?.error ?? '';
-        const feeMatch = (errText + ' ' + errData).match(/current market's maker fee:\s*(\d+)/i);
+        const feeMatch = (errText + ' ' + errData).match(/current market's (?:taker|maker) fee:\s*(\d+)/i);
         if (feeMatch) {
           const correctFee = parseInt(feeMatch[1]);
           if (correctFee !== feeRateBps) {
