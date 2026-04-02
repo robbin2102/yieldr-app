@@ -11,6 +11,14 @@ import { buildStateInjection, updateState } from '@/lib/agent-test/state';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+// Startup check — logs which keys are loaded so misconfiguration is obvious
+console.log('[agent-test] env check:', {
+  ANTHROPIC: !!process.env.ANTHROPIC_API_KEY,
+  GPT: !!(process.env.GPT_API_KEY || process.env.OPENAI_API_KEY),
+  XAI: !!process.env.XAI_API_KEY,
+  MONGODB: !!process.env.MONGODB_URI,
+});
+
 export async function POST(req: NextRequest) {
   const { session_id, message, test_label } = await req.json();
 

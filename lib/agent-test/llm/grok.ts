@@ -13,9 +13,13 @@ export async function streamGrok(
   let promptTokens = 0;
   let completionTokens = 0;
 
-  // Instantiate at call time so env vars are guaranteed to be loaded
+  const apiKey = process.env.XAI_API_KEY;
+  if (!apiKey) {
+    callbacks.onError(new Error('XAI_API_KEY is not set in .env.local'));
+    return;
+  }
   const grokClient = new OpenAI({
-    apiKey: process.env.XAI_API_KEY,
+    apiKey,
     baseURL: 'https://api.x.ai/v1',
   });
 

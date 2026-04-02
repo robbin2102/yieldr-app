@@ -13,8 +13,13 @@ export async function streamOpenAI(
   let promptTokens = 0;
   let completionTokens = 0;
 
-  // Instantiate at call time so env vars are guaranteed to be loaded
-  const openaiClient = new OpenAI({ apiKey: process.env.GPT_API_KEY });
+  // Accepts GPT_API_KEY (custom) or OPENAI_API_KEY (SDK default)
+  const apiKey = process.env.GPT_API_KEY || process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    callbacks.onError(new Error('GPT_API_KEY (or OPENAI_API_KEY) is not set in .env.local'));
+    return;
+  }
+  const openaiClient = new OpenAI({ apiKey });
 
   try {
     const stream = await openaiClient.chat.completions.create({
