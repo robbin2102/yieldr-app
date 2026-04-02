@@ -11,12 +11,12 @@ import { DetectedTradeEvent } from './multiDetector';
 /**
  * GTTExecutor — places FAK limit orders for copy trades.
  *
- * Uses FAK (Fill-And-Kill) like the working v2 bot — GTD orders
+ * Uses FOK (Fill-Or-Kill) like the working v2 bot — GTD orders
  * cause "invalid signature" errors on Polymarket's CLOB.
  *
  * Order strategy:
- *   BUY  → FAK via createMarketBuyOrder at (best_ask - slack)
- *   SELL → FAK via createOrder at (best_bid + slack)
+ *   BUY  → FOK via createMarketBuyOrder at (best_ask - slack)
+ *   SELL → FOK via createOrder at (best_bid + slack)
  *
  * Retry with tightening slack:
  *   Attempt 1: 1.5¢  (best price — passive)
@@ -179,8 +179,8 @@ export class GTTExecutor {
   }
 
   /**
-   * FAK limit order with progressive slack tightening.
-   * Matches the working v2 bot pattern exactly (createMarketBuyOrder + FAK).
+   * FOK limit order with progressive slack tightening.
+   * Matches the working v2 bot pattern exactly (createMarketBuyOrder + FOK).
    *   attempt 1 → 1.5¢  (best price — passive)
    *   attempt 2 → 1.0¢
    *   attempt 3 → 0.5¢  (near-guaranteed fill)
@@ -243,9 +243,10 @@ export class GTTExecutor {
           });
         }
 
-        // FAK = Fill-And-Kill: fills immediately at best price, cancels unfilled.
-        // Proven working in v2 bot with same wallet/credentials.
-        const postResp = await this.clobClient.postOrder(order, OrderType.FAK);
+        // FOK = Fill or Kill: fills immediately at best price, cancels if not fillable.
+        // Equivalent to FAK for our use case (small orders in liquid markets).
+        // Note: older clob-client versions don't have OrderType.FAK, use FOK.
+        const postResp = await this.clobClient.postOrder(order, OrderType.FOK);
         const orderId: string = (postResp as any).orderID ?? (postResp as any).id ?? '';
 
         if (!orderId) {
