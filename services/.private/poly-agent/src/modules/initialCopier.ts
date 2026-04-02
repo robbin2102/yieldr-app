@@ -12,7 +12,7 @@ import PolymarketOpenPosition from '../../../../../models/PolymarketOpenPosition
  * 1. Fetch trader's open positions via /positions API
  * 2. Check our MongoDB for existing mirrored positions
  * 3. Calculate drift and pro-rata allocation
- * 4. Execute FAK orders with retry for positions within drift threshold
+ * 4. Execute GTD maker orders with retry for positions within drift threshold
  *
  * Drift logic:
  * - New positions: copy if |drift| < DRIFT_THRESHOLD_NEW (10%)
@@ -126,7 +126,10 @@ export class InitialCopier {
   }
 
   /**
-   * Execute FAK order with retry for 100% fills
+   * Execute GTD maker order with retry for 100% fills.
+   *
+   * Maker pricing: BUY at best_bid, SELL at best_ask — never cross the spread.
+   * postOnly: true guarantees rejection over taking if the price crosses on arrival.
    */
   private async executeWithRetry(
     side: 'BUY' | 'SELL',
@@ -144,53 +147,41 @@ export class InitialCopier {
     let totalCost = 0;
     let attempts = 0;
 
-    console.log(`[InitialCopier] Executing ${side} ${targetSize.toFixed(4)} shares with FAK...`);
+    console.log(`[InitialCopier] Executing ${side} ${targetSize.toFixed(4)} shares with GTD maker...`);
 
     while (remainingSize > 0.01 && attempts < config.maxOrderRetries) {
       attempts++;
 
-      // Get current best price
-      const bestPrice = await orderbookCache.getBestPrice(tokenId, side);
+      // Get both bid and ask for maker pricing
+      const { bestBid, bestAsk } = await orderbookCache.getBothPrices(tokenId);
+      const makerPrice = side === 'BUY' ? bestBid : bestAsk;
 
-      if (!bestPrice) {
-        console.error(`[InitialCopier] Failed to get best price for ${tokenId}`);
+      if (!makerPrice) {
+        console.error(`[InitialCopier] Failed to get orderbook for ${tokenId}`);
         break;
       }
 
-      console.log(`[InitialCopier] Attempt ${attempts}: ${side} ${remainingSize.toFixed(4)} @ $${bestPrice.toFixed(4)}`);
+      const expiration = Math.floor(Date.now() / 1000) + config.gttExpirySeconds;
+
+      console.log(`[InitialCopier] Attempt ${attempts}: GTD ${side} ${remainingSize.toFixed(4)} @ $${makerPrice.toFixed(4)} (maker)`);
 
       try {
-        // Create order based on side
-        let order;
-        const orderCost = remainingSize * bestPrice;
+        const order = await this.clobClient.createOrder({
+          tokenID: tokenId,
+          price: makerPrice,
+          size: remainingSize,
+          side: side === 'BUY' ? Side.BUY : Side.SELL,
+          feeRateBps: 0,
+          nonce: 0,
+          expiration,
+        });
 
-        if (side === 'BUY') {
-          // BUY: amount in USDC
-          order = await this.clobClient.createMarketBuyOrder({
-            tokenID: tokenId,
-            amount: Math.max(orderCost, 1), // Min $1 for buy orders
-            price: bestPrice,
-            feeRateBps: 0,
-            nonce: 0,
-          });
-        } else {
-          // SELL: size in shares
-          order = await this.clobClient.createOrder({
-            tokenID: tokenId,
-            price: bestPrice,
-            size: remainingSize,
-            side: Side.SELL,
-            feeRateBps: 0,
-            nonce: 0,
-          });
-        }
-
-        // Submit as FAK (Fill-And-Kill)
-        const response = await this.clobClient.postOrder(order, OrderType.FAK);
+        // Submit as GTD with postOnly=true — rests on book as maker, never takes
+        const response = await this.clobClient.postOrder(order, OrderType.GTD, true);
 
         if (response && response.orderID) {
-          // Wait for fill status
-          const fill = await this.waitForFill(response.orderID, side === 'BUY' ? orderCost : remainingSize);
+          // Wait for fill status (up to GTD expiry)
+          const fill = await this.waitForFill(response.orderID, remainingSize);
 
           if (fill.filledSize > 0) {
             totalFilled += fill.filledSize;
@@ -222,15 +213,14 @@ export class InitialCopier {
   }
 
   /**
-   * Wait for order fill status
+   * Wait for GTD order fill status (up to gttExpirySeconds + 2s buffer)
    */
   private async waitForFill(orderId: string, expectedSize: number): Promise<{
     filledSize: number;
     avgPrice: number;
   }> {
-    // Simple polling for fill status
-    const maxAttempts = 10;
-    const pollInterval = 200; // 200ms
+    const maxAttempts = Math.ceil((config.gttExpirySeconds + 2) * 1000 / 500);
+    const pollInterval = 500; // 500ms — GTD orders take longer than FAK
 
     for (let i = 0; i < maxAttempts; i++) {
       try {

@@ -6,7 +6,7 @@ import { PolyAgentTrade } from '../db/models/PolyAgentTrade';
 import { DetectedTrade } from '../types';
 
 /**
- * Executor - Executes copy trades with FAK orders + retry
+ * Executor - Executes copy trades with GTD (Good Till Date) maker orders + retry
  *
  * CRITICAL FINANCIAL SYSTEM BEHAVIOR:
  * - NEVER skip trades - every trade the target wallet makes is copied
@@ -19,11 +19,12 @@ import { DetectedTrade } from '../types';
  * 3. Calculate copy size based on pro-rata allocation
  * 4. Check drift threshold before executing
  * 5. Get best price from orderbook (fetch if not cached)
- * 6. Build and submit FAK order with retry for 100% fills
+ * 6. Build and submit GTD maker order with retry for 100% fills
  * 7. Emit 'trade:submitted' for Confirmer to track fills
  *
  * Order Execution:
- * - Uses FAK (Fill-And-Kill) with retry for partial fills
+ * - Uses GTD (Good Till Date) with postOnly=true — always maker, never taker
+ * - BUY at best_bid, SELL at best_ask (join the queue, don't cross the spread)
  * - Retries up to MAX_ORDER_RETRIES times with ORDER_RETRY_DELAY_MS between
  * - Tracks avg fill price across all attempts
  */
@@ -111,22 +112,23 @@ export class Executor {
     // Check 1: Calculate copy size (fractional shares allowed)
     let copySize = trade.size * config.copyRatio;
 
-    // Check 2: Get best price from orderbook (fetches from REST API if not cached)
-    // This automatically handles cache miss and TTL expiration
-    const bestPrice = await orderbookCache.getBestPrice(trade.tokenId, trade.side);
+    // Check 2: Get both bid and ask for maker pricing (fetches from REST API if not cached)
+    // BUY maker = post at best_bid; SELL maker = post at best_ask (never cross the spread)
+    const { bestBid, bestAsk } = await orderbookCache.getBothPrices(trade.tokenId);
+    const makerPrice = trade.side === 'BUY' ? bestBid : bestAsk;
 
-    if (!bestPrice) {
+    if (!makerPrice) {
       // Only fails if REST API fetch failed or orderbook is empty
       await this.skipTrade(tradeRecord, 'CRITICAL: Failed to fetch orderbook or orderbook empty');
       return;
     }
 
     // Check 3: Cap at max position size
-    let orderCost = copySize * bestPrice;
+    let orderCost = copySize * makerPrice;
 
     if (orderCost > config.maxPositionUsdc) {
-      copySize = Math.floor(config.maxPositionUsdc / bestPrice);
-      orderCost = copySize * bestPrice;
+      copySize = Math.floor(config.maxPositionUsdc / makerPrice);
+      orderCost = copySize * makerPrice;
       console.log(`[Executor] Capped to ${copySize} shares ($${orderCost.toFixed(2)})`);
     }
 
@@ -135,7 +137,7 @@ export class Executor {
     if (trade.side === 'BUY' && orderCost < 1) {
       console.log(`[Executor] ⚠️ Order below $1 minimum ($${orderCost.toFixed(2)}) - rounding up to $1`);
       orderCost = 1;
-      copySize = orderCost / bestPrice;  // Recalculate shares based on $1 spend
+      copySize = orderCost / makerPrice;  // Recalculate shares based on $1 spend
     }
 
     // Check 5: For SELL orders, verify we have enough shares
@@ -154,23 +156,23 @@ export class Executor {
     }
 
     // ═══════════════════════════════════════════════════════════════
-    // EXECUTE FAK ORDER WITH RETRY
+    // EXECUTE GTD MAKER ORDER WITH RETRY
     // ═══════════════════════════════════════════════════════════════
 
     tradeRecord.status = 'EXECUTING';
     tradeRecord.copy = {
       side: trade.side,
       targetSize: copySize,
-      targetPrice: bestPrice,
+      targetPrice: makerPrice,
     };
     await tradeRecord.save();
 
-    eventBus.emit('trade:executing', { tradeId: tradeRecord._id, trade, copySize, bestPrice });
+    eventBus.emit('trade:executing', { tradeId: tradeRecord._id, trade, copySize, bestPrice: makerPrice });
 
     try {
-      console.log(`[Executor] Placing FAK with retry: ${trade.side} ${copySize} @ $${bestPrice.toFixed(4)}`);
+      console.log(`[Executor] Placing GTD maker with retry: ${trade.side} ${copySize} @ $${makerPrice.toFixed(4)} (maker price)`);
 
-      // Execute with FAK and retry for 100% fills
+      // Execute with GTD maker orders and retry for 100% fills
       const result = await this.executeWithRetry(trade.side, trade.tokenId, copySize, orderCost);
 
       const latencyMs = Date.now() - startTime;
@@ -242,7 +244,10 @@ export class Executor {
   }
 
   /**
-   * Execute FAK order with retry for 100% fills
+   * Execute GTD maker order with retry for 100% fills.
+   *
+   * Maker pricing: BUY at best_bid, SELL at best_ask — never cross the spread.
+   * postOnly: true guarantees rejection over taking if the price crosses on arrival.
    */
   private async executeWithRetry(
     side: 'BUY' | 'SELL',
@@ -266,47 +271,38 @@ export class Executor {
     while (remainingSize > 0.01 && attempts < config.maxOrderRetries) {
       attempts++;
 
-      // Get fresh best price for each attempt
-      const bestPrice = await orderbookCache.getBestPrice(tokenId, side);
+      // Get fresh bid and ask for maker pricing on each attempt
+      const { bestBid, bestAsk } = await orderbookCache.getBothPrices(tokenId);
+      const makerPrice = side === 'BUY' ? bestBid : bestAsk;
 
-      if (!bestPrice) {
-        console.error(`[Executor] Failed to get best price, attempt ${attempts}`);
+      if (!makerPrice) {
+        console.error(`[Executor] Failed to get orderbook, attempt ${attempts}`);
         await this.sleep(config.orderRetryDelayMs);
         continue;
       }
 
-      console.log(`[Executor] Attempt ${attempts}: ${side} ${remainingSize.toFixed(4)} @ $${bestPrice.toFixed(4)}`);
+      const expiration = Math.floor(Date.now() / 1000) + config.gttExpirySeconds;
+
+      console.log(`[Executor] Attempt ${attempts}: GTD ${side} ${remainingSize.toFixed(4)} @ $${makerPrice.toFixed(4)} (maker)`);
 
       try {
-        let order;
-        const currentOrderCost = remainingSize * bestPrice;
+        const order = await this.clobClient.createOrder({
+          tokenID: tokenId,
+          price: makerPrice,
+          size: remainingSize,
+          side: side === 'BUY' ? Side.BUY : Side.SELL,
+          feeRateBps: 0,
+          nonce: 0,
+          expiration,
+        });
 
-        if (side === 'BUY') {
-          order = await this.clobClient.createMarketBuyOrder({
-            tokenID: tokenId,
-            amount: Math.max(currentOrderCost, 1), // Min $1 for buy orders
-            price: bestPrice,
-            feeRateBps: 0,
-            nonce: 0,
-          });
-        } else {
-          order = await this.clobClient.createOrder({
-            tokenID: tokenId,
-            price: bestPrice,
-            size: remainingSize,
-            side: Side.SELL,
-            feeRateBps: 0,
-            nonce: 0,
-          });
-        }
-
-        // Submit as FAK (Fill-And-Kill)
-        const response = await this.clobClient.postOrder(order, OrderType.FAK);
+        // Submit as GTD with postOnly=true — rests on book as maker, never takes
+        const response = await this.clobClient.postOrder(order, OrderType.GTD, true);
 
         if (response && response.orderID) {
           lastOrderId = response.orderID;
 
-          // Wait for fill status
+          // Wait for fill status (up to GTD expiry)
           const fill = await this.waitForFillStatus(response.orderID);
 
           if (fill.filledSize > 0) {
@@ -338,14 +334,14 @@ export class Executor {
   }
 
   /**
-   * Wait for order fill status via polling
+   * Wait for GTD order fill status via polling (up to gttExpirySeconds + 2s buffer)
    */
   private async waitForFillStatus(orderId: string): Promise<{
     filledSize: number;
     avgPrice: number;
   }> {
-    const maxAttempts = 10;
-    const pollInterval = 200; // 200ms
+    const maxAttempts = Math.ceil((config.gttExpirySeconds + 2) * 1000 / 500);
+    const pollInterval = 500; // 500ms — GTD orders take longer than FAK
 
     for (let i = 0; i < maxAttempts; i++) {
       try {

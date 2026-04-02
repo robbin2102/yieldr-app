@@ -9,19 +9,20 @@ import { positionFetcher } from './positionFetcher';
 import { DetectedTradeEvent } from './multiDetector';
 
 /**
- * GTTExecutor — places FAK limit orders for copy trades.
+ * GTTExecutor — places GTD (Good Till Date) limit orders for copy trades.
  *
- * Uses FOK (Fill-Or-Kill) like the working v2 bot — GTD orders
- * cause "invalid signature" errors on Polymarket's CLOB.
+ * Uses GTD (maker) orders so we add liquidity and pay zero maker fees.
+ * Orders rest on the book until filled or the GTT expiry is reached.
  *
- * Order strategy:
- *   BUY  → FOK via createMarketBuyOrder at (best_ask - slack)
- *   SELL → FOK via createOrder at (best_bid + slack)
+ * Order strategy (maker pricing — never cross the spread):
+ *   BUY  → GTD via createOrder at best_bid  (join the bid queue)
+ *   SELL → GTD via createOrder at best_ask  (join the ask queue)
  *
- * Retry with tightening slack:
- *   Attempt 1: 1.5¢  (best price — passive)
- *   Attempt 2: 1.0¢
- *   Attempt 3: 0.5¢  (near-guaranteed fill)
+ * postOnly: true guarantees the order is rejected rather than taking
+ * if the market moves and our price would cross by the time it lands.
+ *
+ * Retry: if a GTD expires unfilled, retry up to maxOrderRetries times
+ * with a fresh orderbook price each attempt.
  *
  * Skip reasons:
  *   BELOW_AVG        — trader bet < avgBet
@@ -29,7 +30,7 @@ import { DetectedTradeEvent } from './multiDetector';
  *   NO_ORDERBOOK     — can't fetch orderbook
  *   SELL_NO_POSITION — we don't hold the position
  *   DUPLICATE        — txHash already processed
- *   ORDER_FAILED     — FAK failed after all retries
+ *   ORDER_FAILED     — GTD unfilled after all retries
  *   NON_TRADE        — REDEEM/MERGE/SPLIT activity
  */
 export class GTTExecutor {
@@ -166,24 +167,30 @@ export class GTTExecutor {
 
     } else {
       tradeDoc.status     = 'FAILED';
-      tradeDoc.failReason = `FAK unfilled after ${result.attempts} attempts`;
+      tradeDoc.failReason = `GTD unfilled after ${result.attempts} attempts`;
       tradeDoc.attempts   = result.attempts;
       await tradeDoc.save();
 
       await TraderLoader.recordSkip(freshTrader.wallet, 'ORDER_FAILED');
 
       const tsX = new Date().toISOString().slice(11, 19);
-      console.log(`[${tsX}]     ❌ FAILED [${tradeDoc._id}]  FAK unfilled after ${result.attempts} attempts`);
+      console.log(`[${tsX}]     ❌ FAILED [${tradeDoc._id}]  GTD unfilled after ${result.attempts} attempts`);
       eventBus.emit('trade:failed', { txHash, traderLabel: traderConfig.label });
     }
   }
 
   /**
-   * FOK limit order with progressive slack tightening.
-   * Matches the working v2 bot pattern exactly (createMarketBuyOrder + FOK).
-   *   attempt 1 → 1.5¢  (best price — passive)
-   *   attempt 2 → 1.0¢
-   *   attempt 3 → 0.5¢  (near-guaranteed fill)
+   * GTD (Good Till Date) maker limit order with retry on expiry.
+   *
+   * Maker pricing: join the existing bid/ask queue — never cross the spread.
+   *   BUY  → post at best_bid  (join the bid side)
+   *   SELL → post at best_ask  (join the ask side)
+   *
+   * postOnly: true ensures the order is rejected (not converted to taker)
+   * if it would cross the spread when it reaches the matching engine.
+   *
+   * Each attempt waits up to gttExpirySeconds for a fill. If the GTD
+   * expires unfilled, retry up to maxOrderRetries times with a fresh price.
    */
   private async executeGTT(
     side: 'BUY' | 'SELL',
@@ -191,62 +198,50 @@ export class GTTExecutor {
     targetUsdc: number,
     initialBook: { bestAsk: number; bestBid: number }
   ): Promise<{ filledSize: number; avgPrice: number; attempts: number }> {
-    const slackSchedule = [0.015, 0.010, 0.005];
-    const maxAttempts   = Math.min(config.maxOrderRetries, slackSchedule.length);
+    const maxAttempts = config.maxOrderRetries;
 
     let totalFilled = 0;
     let totalCost   = 0;
     let attempts    = 0;
 
-    // feeRateBps: starts at 0 (most markets), auto-corrected on fee error.
+    // feeRateBps: maker fee. Auto-corrected from API error if wrong.
     let feeRateBps = config.feeRateBps;
 
     for (let i = 0; i < maxAttempts; i++) {
       attempts++;
-      const slack = slackSchedule[i];
 
-      const book     = await orderbookCache.getBothPrices(tokenId);
-      const refPrice = side === 'BUY'
-        ? (book.bestAsk ?? initialBook.bestAsk)
-        : (book.bestBid ?? initialBook.bestBid);
+      const book    = await orderbookCache.getBothPrices(tokenId);
+      const bestBid = book.bestBid ?? initialBook.bestBid;
+      const bestAsk = book.bestAsk ?? initialBook.bestAsk;
 
+      // Maker pricing: join the queue without crossing the spread.
       const limitPrice = side === 'BUY'
-        ? Math.max(0.01, refPrice - slack)
-        : Math.min(0.99, refPrice + slack);
+        ? Math.max(0.01, bestBid)   // Join the bid side (maker)
+        : Math.min(0.99, bestAsk);  // Join the ask side (maker)
 
       const remainingUsdc = targetUsdc - totalCost;
       const shares        = remainingUsdc / limitPrice;
       if (shares < 0.1) break;
 
-      console.log(`[GTTExecutor] Attempt ${attempts}: ${side} ~${shares.toFixed(2)} shares @ $${limitPrice.toFixed(4)} (slack ${(slack * 100).toFixed(1)}¢, fee ${feeRateBps}bps)`);
+      const expiration = Math.floor(Date.now() / 1000) + config.gttExpirySeconds;
+
+      console.log(`[GTTExecutor] Attempt ${attempts}: GTD ${side} ~${shares.toFixed(2)} shares @ $${limitPrice.toFixed(4)} (expiry ${config.gttExpirySeconds}s, fee ${feeRateBps}bps)`);
 
       try {
-        let order;
-        if (side === 'BUY') {
-          // createMarketBuyOrder — proven working with FAK on Polymarket CLOB v3.
-          // amount = USDC to spend, price = worst acceptable fill price (slippage guard).
-          order = await this.clobClient.createMarketBuyOrder({
-            tokenID:    tokenId,
-            amount:     Math.max(remainingUsdc, 1),  // min $1 Polymarket requirement
-            price:      limitPrice,
-            feeRateBps: feeRateBps,
-            nonce:      0,
-          });
-        } else {
-          order = await this.clobClient.createOrder({
-            tokenID:    tokenId,
-            price:      limitPrice,
-            size:       shares,
-            side:       Side.SELL,
-            feeRateBps: feeRateBps,
-            nonce:      0,
-          });
-        }
+        const order = await this.clobClient.createOrder({
+          tokenID:    tokenId,
+          price:      limitPrice,
+          size:       shares,
+          side:       side === 'BUY' ? Side.BUY : Side.SELL,
+          feeRateBps: feeRateBps,
+          nonce:      0,
+          expiration,
+        });
 
-        // FOK = Fill or Kill: fills immediately at best price, cancels if not fillable.
-        // Equivalent to FAK for our use case (small orders in liquid markets).
-        // Note: older clob-client versions don't have OrderType.FAK, use FOK.
-        const postResp = await this.clobClient.postOrder(order, OrderType.FOK);
+        // GTD = Good Till Date: order rests on the book as a maker until filled
+        // or the expiration timestamp is reached.
+        // postOnly: true rejects the order rather than taking if the price crosses.
+        const postResp = await this.clobClient.postOrder(order, OrderType.GTD, true);
         const orderId: string = (postResp as any).orderID ?? (postResp as any).id ?? '';
 
         if (!orderId) {
@@ -255,8 +250,8 @@ export class GTTExecutor {
           continue;
         }
 
-        // FAK fills or cancels within ~1-2s — poll with short timeout
-        const fillResult = await this.waitForFAKFill(orderId);
+        // Poll until filled or the GTD expiry window elapses
+        const fillResult = await this.waitForGTDFill(orderId);
 
         if (fillResult.filled > 0) {
           totalFilled += fillResult.filled;
@@ -264,7 +259,7 @@ export class GTTExecutor {
           console.log(`[GTTExecutor] Attempt ${attempts} filled: ${fillResult.filled.toFixed(2)} @ $${fillResult.price.toFixed(4)}`);
           if (totalCost >= targetUsdc * 0.9) break;
         } else {
-          console.log(`[GTTExecutor] Attempt ${attempts}: FAK unfilled (market too far from limit)`);
+          console.log(`[GTTExecutor] Attempt ${attempts}: GTD expired unfilled — will retry with fresh price`);
         }
 
       } catch (err: any) {
@@ -276,7 +271,7 @@ export class GTTExecutor {
         if (feeMatch) {
           const correctFee = parseInt(feeMatch[1]);
           if (correctFee !== feeRateBps) {
-            console.log(`[GTTExecutor] Fee correction: ${feeRateBps} → ${correctFee} bps — retrying same slack`);
+            console.log(`[GTTExecutor] Fee correction: ${feeRateBps} → ${correctFee} bps — retrying`);
             feeRateBps = correctFee;
             i--;
             attempts--;
@@ -293,10 +288,10 @@ export class GTTExecutor {
     return { filledSize: totalFilled, avgPrice, attempts };
   }
 
-  /** FAK orders fill or cancel within ~1-2s — poll with 200ms interval, 3s max */
-  private async waitForFAKFill(orderId: string): Promise<{ filled: number; price: number }> {
-    const deadline       = Date.now() + 3000;
-    const pollIntervalMs = 200;
+  /** GTD orders rest on the book — poll until filled/expired, timeout = expiry + 2s buffer */
+  private async waitForGTDFill(orderId: string): Promise<{ filled: number; price: number }> {
+    const deadline       = Date.now() + (config.gttExpirySeconds + 2) * 1000;
+    const pollIntervalMs = 500;
 
     while (Date.now() < deadline) {
       await this.sleep(pollIntervalMs);
