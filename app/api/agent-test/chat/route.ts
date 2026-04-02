@@ -11,7 +11,11 @@ import { buildStateInjection, updateState } from '@/lib/agent-test/state';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-// Startup check — logs which keys are loaded so misconfiguration is obvious
+// Show exactly which API-related keys Next.js can see
+const visibleApiKeys = Object.keys(process.env).filter(
+  (k) => k.includes('API') || k.includes('KEY') || k.includes('SECRET')
+);
+console.log('[agent-test] visible API-related env keys:', visibleApiKeys.sort().join(', '));
 console.log('[agent-test] env check:', {
   ANTHROPIC: !!process.env.ANTHROPIC_API_KEY,
   GPT: !!(process.env.GPT_API_KEY || process.env.OPENAI_API_KEY),
