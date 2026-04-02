@@ -69,6 +69,11 @@ export const config = {
 
   // ── Execution reporting interval ──────────────────────────────────────────
   reportIntervalMs: parseInt(process.env.REPORT_INTERVAL_MS || '600000'),  // 10m
+
+  // ── Stale activity filter ──────────────────────────────────────────────────
+  // Activities older than this are silently skipped (prevent backlog replay).
+  // 5 minutes covers typical poll gaps; increase if needed for slow markets.
+  maxLagMs: parseInt(process.env.MAX_LAG_MS || '300000'),  // 5m default
 };
 
 // Validate required environment variables

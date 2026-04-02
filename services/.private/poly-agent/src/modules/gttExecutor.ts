@@ -194,6 +194,11 @@ export class GTTExecutor {
     let totalCost   = 0;
     let attempts    = 0;
 
+    // feeRateBps starts from config but gets corrected on first fee-error response.
+    // Polymarket markets have either 0 or 1000 bps maker fee — not all markets match
+    // the config default, so we auto-correct on the first attempt.
+    let feeRateBps = config.feeRateBps;
+
     for (let i = 0; i < maxAttempts; i++) {
       attempts++;
       const slack = slackSchedule[i];
@@ -211,17 +216,19 @@ export class GTTExecutor {
       const shares        = remainingUsdc / limitPrice;
       if (shares < 0.1) break;
 
-      console.log(`[GTTExecutor] Attempt ${attempts}: ${side} ~${shares.toFixed(2)} shares @ $${limitPrice.toFixed(4)} (slack ${(slack * 100).toFixed(1)}¢)`);
+      console.log(`[GTTExecutor] Attempt ${attempts}: ${side} ~${shares.toFixed(2)} shares @ $${limitPrice.toFixed(4)} (slack ${(slack * 100).toFixed(1)}¢, fee ${feeRateBps}bps)`);
 
       try {
-        const expiration = Math.floor(Date.now() / 1000) + config.gttExpirySeconds;
+        // Polymarket requires expiration >= now + 60s (security threshold).
+        // We add 60s buffer on top of the configured GTT window.
+        const expiration = Math.floor(Date.now() / 1000) + 60 + config.gttExpirySeconds;
 
         const order = await this.clobClient.createOrder({
           tokenID:    tokenId,
           price:      limitPrice,
           size:       shares,
           side:       side === 'BUY' ? Side.BUY : Side.SELL,
-          feeRateBps: config.feeRateBps,
+          feeRateBps: feeRateBps,
           nonce:      0,
           expiration,
         });
@@ -248,6 +255,19 @@ export class GTTExecutor {
         }
 
       } catch (err: any) {
+        // Auto-correct fee rate: Polymarket returns the correct fee in the error message.
+        // e.g. "invalid fee rate (1000), current market's maker fee: 0"
+        const feeMatch = err.message?.match(/current market's maker fee:\s*(\d+)/i);
+        if (feeMatch) {
+          const correctFee = parseInt(feeMatch[1]);
+          if (correctFee !== feeRateBps) {
+            console.log(`[GTTExecutor] Fee correction: ${feeRateBps} → ${correctFee} bps — retrying same slack`);
+            feeRateBps = correctFee;
+            i--;  // retry this slack level with the corrected fee
+            attempts--;
+            continue;
+          }
+        }
         console.error(`[GTTExecutor] Order error attempt ${attempts}: ${err.message}`);
       }
 

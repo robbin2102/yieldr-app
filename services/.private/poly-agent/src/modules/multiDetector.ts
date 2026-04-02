@@ -159,6 +159,15 @@ export class MultiDetector {
       const traderTs = act.timestamp * 1000;
       const discoveryLatencyMs = now - traderTs;
 
+      // Skip stale activities — backlog replay guard.
+      // If the activity is older than maxLagMs it was missed during downtime;
+      // executing it now would be trading on stale signal.
+      if (discoveryLatencyMs > config.maxLagMs) {
+        const lagSec = (discoveryLatencyMs / 1000).toFixed(0);
+        console.log(`[${ts}]     ⏩ STALE ${act.transactionHash.slice(0, 12)}... lag ${lagSec}s > ${config.maxLagMs / 1000}s limit — skipped`);
+        continue;
+      }
+
       // Skip non-TRADE activities — log them for visibility
       if (act.type !== 'TRADE' || !act.side) {
         await this.logNonTrade(trader, act, traderTs, discoveryLatencyMs);
