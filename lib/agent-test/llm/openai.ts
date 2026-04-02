@@ -2,8 +2,6 @@ import OpenAI from 'openai';
 import { SYSTEM_PROMPT } from '../prompt';
 import { LLMMessage, StreamCallbacks } from './claude';
 
-const openaiClient = new OpenAI({ apiKey: process.env.GPT_API_KEY });
-
 export const OPENAI_MODEL = 'gpt-4.5-mini';
 
 export async function streamOpenAI(
@@ -14,6 +12,9 @@ export async function streamOpenAI(
   let fullContent = '';
   let promptTokens = 0;
   let completionTokens = 0;
+
+  // Instantiate at call time so env vars are guaranteed to be loaded
+  const openaiClient = new OpenAI({ apiKey: process.env.GPT_API_KEY });
 
   try {
     const stream = await openaiClient.chat.completions.create({

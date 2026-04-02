@@ -1,8 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { SYSTEM_PROMPT } from '../prompt';
 
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-
 export const CLAUDE_MODEL = 'claude-sonnet-4-6';
 
 export interface LLMMessage {
@@ -22,6 +20,9 @@ export async function streamClaude(
 ): Promise<void> {
   const start = Date.now();
   let fullContent = '';
+
+  // Instantiate at call time so env vars are guaranteed to be loaded
+  const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
   try {
     const stream = anthropic.messages.stream({

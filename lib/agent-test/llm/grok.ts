@@ -2,11 +2,6 @@ import OpenAI from 'openai';
 import { SYSTEM_PROMPT } from '../prompt';
 import { LLMMessage, StreamCallbacks } from './claude';
 
-const grokClient = new OpenAI({
-  apiKey: process.env.XAI_API_KEY,
-  baseURL: 'https://api.x.ai/v1',
-});
-
 export const GROK_MODEL = 'grok-4-1-fast-reasoning';
 
 export async function streamGrok(
@@ -17,6 +12,12 @@ export async function streamGrok(
   let fullContent = '';
   let promptTokens = 0;
   let completionTokens = 0;
+
+  // Instantiate at call time so env vars are guaranteed to be loaded
+  const grokClient = new OpenAI({
+    apiKey: process.env.XAI_API_KEY,
+    baseURL: 'https://api.x.ai/v1',
+  });
 
   try {
     const stream = await grokClient.chat.completions.create({
