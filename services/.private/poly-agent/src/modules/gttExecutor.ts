@@ -9,11 +9,14 @@ import { positionFetcher } from './positionFetcher';
 import { DetectedTradeEvent } from './multiDetector';
 
 /**
- * GTTExecutor — places GTT limit orders for copy trades.
+ * GTTExecutor — places FAK limit orders for copy trades.
+ *
+ * Uses FAK (Fill-And-Kill) like the working v2 bot — GTD orders
+ * cause "invalid signature" errors on Polymarket's CLOB.
  *
  * Order strategy:
- *   BUY  → GTT limit at (best_ask - slack)  — buy slightly below ask
- *   SELL → GTT limit at (best_bid + slack)  — sell slightly above bid
+ *   BUY  → FAK via createMarketBuyOrder at (best_ask - slack)
+ *   SELL → FAK via createOrder at (best_bid + slack)
  *
  * Retry with tightening slack:
  *   Attempt 1: 1.5¢  (best price — passive)
@@ -26,7 +29,7 @@ import { DetectedTradeEvent } from './multiDetector';
  *   NO_ORDERBOOK     — can't fetch orderbook
  *   SELL_NO_POSITION — we don't hold the position
  *   DUPLICATE        — txHash already processed
- *   ORDER_FAILED     — GTT failed after all retries
+ *   ORDER_FAILED     — FAK failed after all retries
  *   NON_TRADE        — REDEEM/MERGE/SPLIT activity
  */
 export class GTTExecutor {
@@ -163,20 +166,21 @@ export class GTTExecutor {
 
     } else {
       tradeDoc.status     = 'FAILED';
-      tradeDoc.failReason = `GTT unfilled after ${result.attempts} attempts`;
+      tradeDoc.failReason = `FAK unfilled after ${result.attempts} attempts`;
       tradeDoc.attempts   = result.attempts;
       await tradeDoc.save();
 
       await TraderLoader.recordSkip(freshTrader.wallet, 'ORDER_FAILED');
 
       const tsX = new Date().toISOString().slice(11, 19);
-      console.log(`[${tsX}]     ❌ FAILED [${tradeDoc._id}]  GTT unfilled after ${result.attempts} attempts`);
+      console.log(`[${tsX}]     ❌ FAILED [${tradeDoc._id}]  FAK unfilled after ${result.attempts} attempts`);
       eventBus.emit('trade:failed', { txHash, traderLabel: traderConfig.label });
     }
   }
 
   /**
-   * GTT limit order with progressive slack tightening.
+   * FAK limit order with progressive slack tightening.
+   * Matches the working v2 bot pattern exactly (createMarketBuyOrder + FAK).
    *   attempt 1 → 1.5¢  (best price — passive)
    *   attempt 2 → 1.0¢
    *   attempt 3 → 0.5¢  (near-guaranteed fill)
@@ -194,9 +198,7 @@ export class GTTExecutor {
     let totalCost   = 0;
     let attempts    = 0;
 
-    // feeRateBps starts from config but gets corrected on first fee-error response.
-    // Polymarket markets have either 0 or 1000 bps maker fee — not all markets match
-    // the config default, so we auto-correct on the first attempt.
+    // feeRateBps: starts at 0 (most markets), auto-corrected on fee error.
     let feeRateBps = config.feeRateBps;
 
     for (let i = 0; i < maxAttempts; i++) {
@@ -219,22 +221,31 @@ export class GTTExecutor {
       console.log(`[GTTExecutor] Attempt ${attempts}: ${side} ~${shares.toFixed(2)} shares @ $${limitPrice.toFixed(4)} (slack ${(slack * 100).toFixed(1)}¢, fee ${feeRateBps}bps)`);
 
       try {
-        // Polymarket requires expiration >= now + 60s (security threshold).
-        // We add 60s buffer on top of the configured GTT window.
-        const expiration = Math.floor(Date.now() / 1000) + 60 + config.gttExpirySeconds;
+        let order;
+        if (side === 'BUY') {
+          // createMarketBuyOrder — proven working with FAK on Polymarket CLOB v3.
+          // amount = USDC to spend, price = worst acceptable fill price (slippage guard).
+          order = await this.clobClient.createMarketBuyOrder({
+            tokenID:    tokenId,
+            amount:     Math.max(remainingUsdc, 1),  // min $1 Polymarket requirement
+            price:      limitPrice,
+            feeRateBps: feeRateBps,
+            nonce:      0,
+          });
+        } else {
+          order = await this.clobClient.createOrder({
+            tokenID:    tokenId,
+            price:      limitPrice,
+            size:       shares,
+            side:       Side.SELL,
+            feeRateBps: feeRateBps,
+            nonce:      0,
+          });
+        }
 
-        const order = await this.clobClient.createOrder({
-          tokenID:    tokenId,
-          price:      limitPrice,
-          size:       shares,
-          side:       side === 'BUY' ? Side.BUY : Side.SELL,
-          feeRateBps: feeRateBps,
-          nonce:      0,
-          expiration,
-        });
-
-        // GTD = Good Till Date — clob-client v3 name for time-limited orders
-        const postResp = await this.clobClient.postOrder(order, OrderType.GTD);
+        // FAK = Fill-And-Kill: fills immediately at best price, cancels unfilled.
+        // Proven working in v2 bot with same wallet/credentials.
+        const postResp = await this.clobClient.postOrder(order, OrderType.FAK);
         const orderId: string = (postResp as any).orderID ?? (postResp as any).id ?? '';
 
         if (!orderId) {
@@ -243,7 +254,8 @@ export class GTTExecutor {
           continue;
         }
 
-        const fillResult = await this.waitForGTTFill(orderId, config.gttExpirySeconds * 1000 + 1000);
+        // FAK fills or cancels within ~1-2s — poll with short timeout
+        const fillResult = await this.waitForFAKFill(orderId);
 
         if (fillResult.filled > 0) {
           totalFilled += fillResult.filled;
@@ -251,14 +263,12 @@ export class GTTExecutor {
           console.log(`[GTTExecutor] Attempt ${attempts} filled: ${fillResult.filled.toFixed(2)} @ $${fillResult.price.toFixed(4)}`);
           if (totalCost >= targetUsdc * 0.9) break;
         } else {
-          console.log(`[GTTExecutor] Attempt ${attempts}: GTT expired unfilled`);
+          console.log(`[GTTExecutor] Attempt ${attempts}: FAK unfilled (market too far from limit)`);
         }
 
       } catch (err: any) {
-        // Auto-correct fee rate: Polymarket returns the correct fee in the error.
-        // The CLOB client may surface it in err.message, err.data?.error, or
-        // err.response?.data?.error depending on how it wraps HTTP errors.
-        // e.g. "invalid fee rate (1000), current market's maker fee: 0"
+        // Auto-correct fee rate from error message.
+        // e.g. "invalid fee rate (0), current market's maker fee: 1000"
         const errText = err.message ?? '';
         const errData = err.data?.error ?? err.response?.data?.error ?? '';
         const feeMatch = (errText + ' ' + errData).match(/current market's maker fee:\s*(\d+)/i);
@@ -267,7 +277,7 @@ export class GTTExecutor {
           if (correctFee !== feeRateBps) {
             console.log(`[GTTExecutor] Fee correction: ${feeRateBps} → ${correctFee} bps — retrying same slack`);
             feeRateBps = correctFee;
-            i--;  // retry this slack level with the corrected fee
+            i--;
             attempts--;
             continue;
           }
@@ -282,12 +292,10 @@ export class GTTExecutor {
     return { filledSize: totalFilled, avgPrice, attempts };
   }
 
-  private async waitForGTTFill(
-    orderId: string,
-    timeoutMs: number
-  ): Promise<{ filled: number; price: number }> {
-    const deadline      = Date.now() + timeoutMs;
-    const pollIntervalMs = 1000;
+  /** FAK orders fill or cancel within ~1-2s — poll with 200ms interval, 3s max */
+  private async waitForFAKFill(orderId: string): Promise<{ filled: number; price: number }> {
+    const deadline       = Date.now() + 3000;
+    const pollIntervalMs = 200;
 
     while (Date.now() < deadline) {
       await this.sleep(pollIntervalMs);
