@@ -58,9 +58,9 @@ export const config = {
   maxOrderRetries:   parseInt(process.env.MAX_ORDER_RETRIES   || '3'),
   orderRetryDelayMs: parseInt(process.env.ORDER_RETRY_DELAY_MS || '500'),
   gttExpirySeconds:  parseInt(process.env.GTT_EXPIRY_SECONDS  || '8'),
-  // Polymarket maker fee in basis points. All markets currently require 1000 (10%).
-  // Override via FEE_RATE_BPS if a market charges differently.
-  feeRateBps:        parseInt(process.env.FEE_RATE_BPS || '1000'),
+  // Polymarket maker fee in basis points. Most markets are 0; auto-corrected on error.
+  // Override via FEE_RATE_BPS if needed.
+  feeRateBps:        parseInt(process.env.FEE_RATE_BPS || '0'),
 
   // ── Global safety cap per single copy order ────────────────────────────────
   // Per-trader maxBetUsdc in DB overrides this for bet sizing.
