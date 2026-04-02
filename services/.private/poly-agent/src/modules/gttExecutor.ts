@@ -202,8 +202,9 @@ export class GTTExecutor {
     let totalCost   = 0;
     let attempts    = 0;
 
-    // feeRateBps: maker fee. Auto-corrected from API error if wrong.
-    let feeRateBps = config.feeRateBps;
+    // feeRateBps: maker fee is always 0 on Polymarket for GTD orders.
+    // config.feeRateBps (default 1000) is the taker fee — wrong for makers.
+    let feeRateBps = 0;
 
     for (let i = 0; i < maxAttempts; i++) {
       attempts++;
