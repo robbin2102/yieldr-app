@@ -255,9 +255,13 @@ export class GTTExecutor {
         }
 
       } catch (err: any) {
-        // Auto-correct fee rate: Polymarket returns the correct fee in the error message.
+        // Auto-correct fee rate: Polymarket returns the correct fee in the error.
+        // The CLOB client may surface it in err.message, err.data?.error, or
+        // err.response?.data?.error depending on how it wraps HTTP errors.
         // e.g. "invalid fee rate (1000), current market's maker fee: 0"
-        const feeMatch = err.message?.match(/current market's maker fee:\s*(\d+)/i);
+        const errText = err.message ?? '';
+        const errData = err.data?.error ?? err.response?.data?.error ?? '';
+        const feeMatch = (errText + ' ' + errData).match(/current market's maker fee:\s*(\d+)/i);
         if (feeMatch) {
           const correctFee = parseInt(feeMatch[1]);
           if (correctFee !== feeRateBps) {
