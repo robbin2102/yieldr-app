@@ -249,7 +249,7 @@ export class GTTExecutor {
         }
 
         // Poll until filled or the GTD expiry window elapses
-        const fillResult = await this.waitForGTDFill(orderId);
+        const fillResult = await this.waitForGTDFill(orderId, tokenId, Date.now());
 
         if (fillResult.filled > 0) {
           totalFilled += fillResult.filled;
@@ -286,10 +286,21 @@ export class GTTExecutor {
     return { filledSize: totalFilled, avgPrice, attempts };
   }
 
-  /** GTD orders rest on the book — poll until filled/expired, timeout = expiry + 2s buffer */
-  private async waitForGTDFill(orderId: string): Promise<{ filled: number; price: number }> {
-    const deadline       = Date.now() + (60 + config.gttExpirySeconds + 2) * 1000; // matches expiration: 60s threshold + desired expiry + 2s buffer
+  /**
+   * GTD orders rest on the book — poll until filled/expired, timeout = expiry + 2s buffer.
+   *
+   * NOTE: Polymarket's GET /data/order/{id} returns 404 once an order is no longer active
+   * (filled, cancelled, or expired). 404 is NOT a transient error — it means the order
+   * is done. We break immediately on 404 and check recent trades to detect fills.
+   */
+  private async waitForGTDFill(
+    orderId: string,
+    tokenId: string,
+    postedAt: number
+  ): Promise<{ filled: number; price: number }> {
+    const deadline       = Date.now() + (60 + config.gttExpirySeconds + 2) * 1000;
     const pollIntervalMs = 500;
+    let orderGone = false;
 
     while (Date.now() < deadline) {
       await this.sleep(pollIntervalMs);
@@ -300,13 +311,77 @@ export class GTTExecutor {
         const avgPrice   = parseFloat(order?.price ?? '0');
 
         if (status === 'MATCHED'   && sizeFilled > 0) return { filled: sizeFilled, price: avgPrice };
-        if (status === 'CANCELLED' || status === 'EXPIRED') return { filled: sizeFilled, price: avgPrice };
+        if (status === 'CANCELLED' || status === 'EXPIRED') {
+          console.log(`[GTTExecutor] Order ${orderId.slice(0, 10)}... status=${status} sizeFilled=${sizeFilled}`);
+          return { filled: sizeFilled, price: avgPrice };
+        }
       } catch (err: any) {
+        const is404 = err?.status === 404 || err?.response?.status === 404 ||
+          String(err?.message ?? '').includes('404') || String(err?.message ?? '').includes('Not Found');
+
+        if (is404) {
+          // 404 = order no longer active (filled, cancelled, or expired by matching engine)
+          // Do NOT keep polling — check trades instead
+          console.log(`[GTTExecutor] Order ${orderId.slice(0, 10)}... returned 404 — order is no longer active, checking trades`);
+          orderGone = true;
+          break;
+        }
+
         console.warn(`[GTTExecutor] Poll error for ${orderId.slice(0, 8)}...: ${err.message}`);
       }
     }
 
+    if (orderGone) {
+      return await this.checkFillFromTrades(tokenId, postedAt);
+    }
+
     return { filled: 0, price: 0 };
+  }
+
+  /**
+   * After a GTD order disappears (404 from getOrder), check recent trades
+   * to determine if it actually filled. Looks for maker trades on the given
+   * tokenId placed after postedAt.
+   */
+  private async checkFillFromTrades(
+    tokenId: string,
+    postedAt: number
+  ): Promise<{ filled: number; price: number }> {
+    try {
+      console.log(`[GTTExecutor] Checking trades for tokenId=${tokenId.slice(0, 12)}... since ${new Date(postedAt).toISOString()}`);
+
+      const trades = await (this.clobClient as any).getTrades({
+        maker_address: config.botWalletAddress,
+        asset_id: tokenId,
+      }) as any[];
+
+      if (!Array.isArray(trades) || trades.length === 0) {
+        console.log(`[GTTExecutor] No trades found for tokenId=${tokenId.slice(0, 12)}...`);
+        return { filled: 0, price: 0 };
+      }
+
+      // Keep only trades that happened at or after order post time (with 5s buffer)
+      const cutoff = Math.floor((postedAt - 5000) / 1000);
+      const recent = trades.filter((t: any) => {
+        const ts = parseFloat(t.timestamp ?? t.created_at ?? '0');
+        return ts >= cutoff;
+      });
+
+      if (recent.length === 0) {
+        console.log(`[GTTExecutor] No recent trades found after ${new Date(postedAt).toISOString()}`);
+        return { filled: 0, price: 0 };
+      }
+
+      const totalFilled = recent.reduce((sum: number, t: any) => sum + parseFloat(t.size ?? t.size_matched ?? '0'), 0);
+      const avgPrice    = recent.reduce((sum: number, t: any) => sum + parseFloat(t.price ?? '0'), 0) / recent.length;
+
+      console.log(`[GTTExecutor] Found ${recent.length} trade(s) via /data/trades: totalFilled=${totalFilled.toFixed(4)} avgPrice=${avgPrice.toFixed(4)}`);
+      return { filled: totalFilled, price: avgPrice };
+
+    } catch (err: any) {
+      console.warn(`[GTTExecutor] getTrades fallback failed: ${err.message}`);
+      return { filled: 0, price: 0 };
+    }
   }
 
   private async skip(tradeDoc: any, reason: string, detail: string | undefined, wallet: string): Promise<void> {
