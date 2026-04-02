@@ -222,7 +222,7 @@ export class GTTExecutor {
       const shares        = remainingUsdc / limitPrice;
       if (shares < 0.1) break;
 
-      const expiration = Math.floor(Date.now() / 1000) + config.gttExpirySeconds;
+      const expiration = Math.floor(Date.now() / 1000) + 60 + config.gttExpirySeconds; // API requires now + 1min security threshold + desired expiry
 
       console.log(`[GTTExecutor] Attempt ${attempts}: GTD ${side} ~${shares.toFixed(2)} shares @ $${limitPrice.toFixed(4)} (expiry ${config.gttExpirySeconds}s, fee ${feeRateBps}bps)`);
 
@@ -288,7 +288,7 @@ export class GTTExecutor {
 
   /** GTD orders rest on the book — poll until filled/expired, timeout = expiry + 2s buffer */
   private async waitForGTDFill(orderId: string): Promise<{ filled: number; price: number }> {
-    const deadline       = Date.now() + (config.gttExpirySeconds + 2) * 1000;
+    const deadline       = Date.now() + (60 + config.gttExpirySeconds + 2) * 1000; // matches expiration: 60s threshold + desired expiry + 2s buffer
     const pollIntervalMs = 500;
 
     while (Date.now() < deadline) {
