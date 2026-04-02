@@ -18,8 +18,6 @@ import { DetectedTradeEvent } from './multiDetector';
  *   BUY  → GTD via createOrder at best_bid  (join the bid queue)
  *   SELL → GTD via createOrder at best_ask  (join the ask queue)
  *
- * postOnly: true guarantees the order is rejected rather than taking
- * if the market moves and our price would cross by the time it lands.
  *
  * Retry: if a GTD expires unfilled, retry up to maxOrderRetries times
  * with a fresh orderbook price each attempt.
@@ -240,8 +238,7 @@ export class GTTExecutor {
 
         // GTD = Good Till Date: order rests on the book as a maker until filled
         // or the expiration timestamp is reached.
-        // postOnly: true rejects the order rather than taking if the price crosses.
-        const postResp = await this.clobClient.postOrder(order, OrderType.GTD, true);
+        const postResp = await this.clobClient.postOrder(order, OrderType.GTD);
         const orderId: string = (postResp as any).orderID ?? (postResp as any).id ?? '';
 
         if (!orderId) {

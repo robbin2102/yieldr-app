@@ -23,7 +23,7 @@ import { DetectedTrade } from '../types';
  * 7. Emit 'trade:submitted' for Confirmer to track fills
  *
  * Order Execution:
- * - Uses GTD (Good Till Date) with postOnly=true — always maker, never taker
+ * - Uses GTD (Good Till Date) — always maker, never taker
  * - BUY at best_bid, SELL at best_ask (join the queue, don't cross the spread)
  * - Retries up to MAX_ORDER_RETRIES times with ORDER_RETRY_DELAY_MS between
  * - Tracks avg fill price across all attempts
@@ -247,7 +247,7 @@ export class Executor {
    * Execute GTD maker order with retry for 100% fills.
    *
    * Maker pricing: BUY at best_bid, SELL at best_ask — never cross the spread.
-   * postOnly: true guarantees rejection over taking if the price crosses on arrival.
+   * Maker pricing keeps us on the passive side of every fill.
    */
   private async executeWithRetry(
     side: 'BUY' | 'SELL',
@@ -296,8 +296,8 @@ export class Executor {
           expiration,
         });
 
-        // Submit as GTD with postOnly=true — rests on book as maker, never takes
-        const response = await this.clobClient.postOrder(order, OrderType.GTD, true);
+        // Submit as GTD — rests on book as maker until filled or expiration
+        const response = await this.clobClient.postOrder(order, OrderType.GTD);
 
         if (response && response.orderID) {
           lastOrderId = response.orderID;

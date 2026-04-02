@@ -129,7 +129,7 @@ export class InitialCopier {
    * Execute GTD maker order with retry for 100% fills.
    *
    * Maker pricing: BUY at best_bid, SELL at best_ask — never cross the spread.
-   * postOnly: true guarantees rejection over taking if the price crosses on arrival.
+   * Maker pricing keeps us on the passive side of every fill.
    */
   private async executeWithRetry(
     side: 'BUY' | 'SELL',
@@ -176,8 +176,8 @@ export class InitialCopier {
           expiration,
         });
 
-        // Submit as GTD with postOnly=true — rests on book as maker, never takes
-        const response = await this.clobClient.postOrder(order, OrderType.GTD, true);
+        // Submit as GTD — rests on book as maker until filled or expiration
+        const response = await this.clobClient.postOrder(order, OrderType.GTD);
 
         if (response && response.orderID) {
           // Wait for fill status (up to GTD expiry)
