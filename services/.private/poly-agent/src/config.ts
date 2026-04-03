@@ -68,7 +68,7 @@ export const config = {
   maxPositionUsdc: parseFloat(process.env.MAX_POSITION_USDC || '25'),
 
   // ── Execution reporting interval ──────────────────────────────────────────
-  reportIntervalMs: parseInt(process.env.REPORT_INTERVAL_MS || '600000'),  // 10m
+  reportIntervalMs: parseInt(process.env.REPORT_INTERVAL_MS || '3600000'),  // 1h
 
   // ── Stale activity filter ──────────────────────────────────────────────────
   // Activities older than this are silently skipped (prevent backlog replay).

@@ -288,23 +288,13 @@ export class GTTExecutor {
       const respError = String((postResp as any)?.error ?? (postResp as any)?.errorMsg ?? '');
       const feeMatchResp = respError.match(/current market's (?:taker|maker) fee:\s*(\d+)/i);
       if (feeMatchResp) {
-        feeRateBps = parseInt(feeMatchResp[1]);
-        this.feeRateCache.set(tokenId, feeRateBps);
+        const corrected = parseInt(feeMatchResp[1]);
+        this.feeRateCache.set(tokenId, corrected);
         saveFeeCache(this.feeRateCache);
-        console.log(`[GTTExecutor] Fee correction (response): ${config.feeRateBps} → ${feeRateBps} bps (cached for ${tokenId.slice(0, 10)}...)`);
-        const correctedOrder = await this.clobClient.createOrder({
-          tokenID: tokenId, price: limitPrice, size: shares,
-          side: side === 'BUY' ? Side.BUY : Side.SELL,
-          feeRateBps, nonce: 0, expiration,
-        });
-        const correctedResp = await this.clobClient.postOrder(correctedOrder, OrderType.GTD);
-        const correctedId: string = (correctedResp as any).orderID ?? (correctedResp as any).id ?? '';
-        if (correctedId) {
-          console.log(`[GTTExecutor] Order placed (fee-corrected): ${correctedId.slice(0, 12)}...`);
-          eventBus.emit('trade:submitted', { ...ctx, orderId: correctedId, limitPrice, submittedAt: Date.now() });
-        } else {
-          await this.markFailed(ctx.tradeDocId, ctx.traderWallet, attempt, `Fee-corrected order returned no orderId`);
-        }
+        console.log(`[GTTExecutor] Fee correction (response): ${feeRateBps} → ${corrected} bps — retrying with fresh signature`);
+        // Re-run placeOrder from scratch with the corrected fee now in cache.
+        // Inline re-sign of the same order causes "invalid signature" — fresh call avoids it.
+        await this.placeOrder(ctx, book);
         return;
       }
 
@@ -332,33 +322,12 @@ export class GTTExecutor {
       const errText = (err.message ?? '') + ' ' + (err.data?.error ?? err.response?.data?.error ?? '');
       const feeMatch = errText.match(/current market's (?:taker|maker) fee:\s*(\d+)/i);
       if (feeMatch) {
-        feeRateBps = parseInt(feeMatch[1]);
-        this.feeRateCache.set(tokenId, feeRateBps);
+        const corrected = parseInt(feeMatch[1]);
+        this.feeRateCache.set(tokenId, corrected);
         saveFeeCache(this.feeRateCache);
-        console.log(`[GTTExecutor] Fee correction (catch): ${config.feeRateBps} → ${feeRateBps} bps (cached for ${tokenId.slice(0, 10)}...)`);
-        // Rebuild and retry with corrected fee (same attempt number)
-        try {
-          const correctedOrder = await this.clobClient.createOrder({
-            tokenID:    tokenId,
-            price:      limitPrice,
-            size:       shares,
-            side:       side === 'BUY' ? Side.BUY : Side.SELL,
-            feeRateBps: feeRateBps,
-            nonce:      0,
-            expiration,
-          });
-          const postResp = await this.clobClient.postOrder(correctedOrder, OrderType.GTD);
-          const orderId: string = (postResp as any).orderID ?? (postResp as any).id ?? '';
-
-          if (orderId) {
-            console.log(`[GTTExecutor] Order placed (fee-corrected): ${orderId.slice(0, 12)}...`);
-            const pending: PendingOrder = { ...ctx, orderId, limitPrice, submittedAt: Date.now() };
-            eventBus.emit('trade:submitted', pending);
-            return;
-          }
-        } catch (retryErr: any) {
-          console.error(`[GTTExecutor] Fee-corrected retry failed: ${retryErr.message}`);
-        }
+        console.log(`[GTTExecutor] Fee correction (catch): ${feeRateBps} → ${corrected} bps — retrying with fresh signature`);
+        await this.placeOrder(ctx, book);
+        return;
       }
 
       console.error(`[GTTExecutor] Order placement error attempt ${attempt}: ${err.message}`);
