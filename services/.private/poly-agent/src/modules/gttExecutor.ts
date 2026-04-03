@@ -100,7 +100,7 @@ export class GTTExecutor {
     // ── 4. SELL guard: verify we hold this position ───────────────────────────
     if (side === 'SELL') {
       const ourShares  = await positionFetcher.getOurShares(tokenId);
-      const needShares = sizing.betUsdc / safeBook.bestBid;
+      const needShares = sizing.betUsdc / safeBook.bestAsk;
       if (ourShares < needShares * 0.5) {
         await this.skip(
           tradeDoc, 'SELL_NO_POSITION',
@@ -310,7 +310,7 @@ export class GTTExecutor {
         const sizeFilled = parseFloat(order?.size_matched ?? order?.sizeFilled ?? '0');
         const avgPrice   = parseFloat(order?.price ?? '0');
 
-        if (status === 'MATCHED'   && sizeFilled > 0) return { filled: sizeFilled, price: avgPrice };
+        if ((status === 'MATCHED' || status === 'FILLED') && sizeFilled > 0) return { filled: sizeFilled, price: avgPrice };
         if (status === 'CANCELLED' || status === 'EXPIRED') {
           console.log(`[GTTExecutor] Order ${orderId.slice(0, 10)}... status=${status} sizeFilled=${sizeFilled}`);
           return { filled: sizeFilled, price: avgPrice };
