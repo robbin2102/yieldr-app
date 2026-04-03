@@ -45,8 +45,8 @@ async function fetchFeeRateFromAPI(tokenId: string, clobApiBase: string): Promis
     const res = await fetch(url);
     if (!res.ok) return null;
     const data = await res.json() as any;
-    // API returns { maker_fee_rate: "0", taker_fee_rate: "0" } or { fee_rate_bps: 0 }
-    const bps = data.fee_rate_bps ?? data.maker_fee_rate ?? data.makerFeeRate;
+    // API returns { base_fee: 0 } (confirmed). Also handle legacy shapes.
+    const bps = data.base_fee ?? data.fee_rate_bps ?? data.maker_fee_rate ?? data.makerFeeRate;
     if (bps === undefined || bps === null) return null;
     return parseInt(String(bps), 10);
   } catch {
