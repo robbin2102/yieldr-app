@@ -179,9 +179,11 @@ export class GTTExecutor {
     // Progressive aggression: each retry moves price closer to mid by PRICE_AGGRESSION_PER_ATTEMPT.
     // Attempt 1 = 0 increment (passive), attempt 2 = +0.5¢, attempt 3 = +1.0¢, etc.
     const aggression = (attempt - 1) * PRICE_AGGRESSION_PER_ATTEMPT;
-    const limitPrice = side === 'BUY'
-      ? Math.min(parseFloat((book.bestBid + aggression).toFixed(4)), parseFloat((book.bestAsk - 0.01).toFixed(4)))
-      : Math.max(parseFloat((book.bestAsk - aggression).toFixed(4)), parseFloat((book.bestBid + 0.01).toFixed(4)));
+    const rawPrice = side === 'BUY'
+      ? Math.min(book.bestBid + aggression, book.bestAsk - 0.001)  // stay below ask
+      : Math.max(book.bestAsk - aggression, book.bestBid + 0.001); // stay above bid
+    // Polymarket prices must be strictly between 0 and 1
+    const limitPrice = parseFloat(Math.min(0.999, Math.max(0.001, rawPrice)).toFixed(4));
 
     const remainingUsdc = targetUsdc - filledCost;
     const shares        = remainingUsdc / limitPrice;
