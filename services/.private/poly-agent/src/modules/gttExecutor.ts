@@ -40,8 +40,18 @@ import { PendingOrder } from '../types';
  *   ORDER_FAILED     — GTD unfilled after all retries
  *   NON_TRADE        — REDEEM/MERGE/SPLIT activity
  */
+// Price aggression increment per retry attempt (in cents).
+// Attempt 1: passive (best_bid / best_ask)
+// Attempt 2: +0.5¢ toward mid
+// Attempt 3: +1.0¢ toward mid
+// Never crosses the spread — stays below ask (BUY) / above bid (SELL).
+const PRICE_AGGRESSION_PER_ATTEMPT = 0.005;
+
 export class GTTExecutor {
   private clobClient: ClobClient;
+  // Per-token fee rate cache — populated on first fee error, reused thereafter.
+  // Eliminates fee correction round-trips for every subsequent order on same market.
+  private feeRateCache: Map<string, number> = new Map();
 
   constructor(clobClient: ClobClient) {
     this.clobClient = clobClient;
@@ -166,9 +176,12 @@ export class GTTExecutor {
   ): Promise<void> {
     const { side, tokenId, targetUsdc, filledCost, attempt } = ctx;
 
+    // Progressive aggression: each retry moves price closer to mid by PRICE_AGGRESSION_PER_ATTEMPT.
+    // Attempt 1 = 0 increment (passive), attempt 2 = +0.5¢, attempt 3 = +1.0¢, etc.
+    const aggression = (attempt - 1) * PRICE_AGGRESSION_PER_ATTEMPT;
     const limitPrice = side === 'BUY'
-      ? Math.max(0.01, book.bestBid)
-      : Math.min(0.99, book.bestAsk);
+      ? Math.min(parseFloat((book.bestBid + aggression).toFixed(4)), parseFloat((book.bestAsk - 0.01).toFixed(4)))
+      : Math.max(parseFloat((book.bestAsk - aggression).toFixed(4)), parseFloat((book.bestBid + 0.01).toFixed(4)));
 
     const remainingUsdc = targetUsdc - filledCost;
     const shares        = remainingUsdc / limitPrice;
@@ -179,12 +192,12 @@ export class GTTExecutor {
     }
 
     const expiration = Math.floor(Date.now() / 1000) + 60 + config.gttExpirySeconds;
+    const aggrLabel  = aggression > 0 ? ` +${(aggression * 100).toFixed(1)}¢ aggression` : '';
+    console.log(`[GTTExecutor] Attempt ${attempt}: GTD ${side} ~${shares.toFixed(2)} shares @ $${limitPrice.toFixed(4)}${aggrLabel} (expiry ${config.gttExpirySeconds}s)`);
 
-    console.log(`[GTTExecutor] Attempt ${attempt}: GTD ${side} ~${shares.toFixed(2)} shares @ $${limitPrice.toFixed(4)} (expiry ${config.gttExpirySeconds}s)`);
-
-    // Default to config.feeRateBps (1000 for most markets).
-    // Auto-corrects if the market fee differs — see catch block below.
-    let feeRateBps = config.feeRateBps;
+    // Use cached fee rate if known for this token, else fall back to config default.
+    // Cache is populated on first fee correction — no round-trip error on repeat orders.
+    let feeRateBps = this.feeRateCache.get(tokenId) ?? config.feeRateBps;
 
     try {
       const order = await this.clobClient.createOrder({
@@ -204,7 +217,8 @@ export class GTTExecutor {
       const feeMatchResp = respError.match(/current market's (?:taker|maker) fee:\s*(\d+)/i);
       if (feeMatchResp) {
         feeRateBps = parseInt(feeMatchResp[1]);
-        console.log(`[GTTExecutor] Fee correction (response): retrying at ${feeRateBps} bps`);
+        this.feeRateCache.set(tokenId, feeRateBps);  // cache so next order uses correct rate immediately
+        console.log(`[GTTExecutor] Fee correction (response): ${config.feeRateBps} → ${feeRateBps} bps (cached for ${tokenId.slice(0, 10)}...)`);
         const correctedOrder = await this.clobClient.createOrder({
           tokenID: tokenId, price: limitPrice, size: shares,
           side: side === 'BUY' ? Side.BUY : Side.SELL,
@@ -246,7 +260,8 @@ export class GTTExecutor {
       const feeMatch = errText.match(/current market's (?:taker|maker) fee:\s*(\d+)/i);
       if (feeMatch) {
         feeRateBps = parseInt(feeMatch[1]);
-        console.log(`[GTTExecutor] Fee correction on attempt ${attempt}: retrying at ${feeRateBps} bps`);
+        this.feeRateCache.set(tokenId, feeRateBps);  // cache so next order uses correct rate immediately
+        console.log(`[GTTExecutor] Fee correction (catch): ${config.feeRateBps} → ${feeRateBps} bps (cached for ${tokenId.slice(0, 10)}...)`);
         // Rebuild and retry with corrected fee (same attempt number)
         try {
           const correctedOrder = await this.clobClient.createOrder({
