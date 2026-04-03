@@ -182,7 +182,9 @@ export class GTTExecutor {
 
     console.log(`[GTTExecutor] Attempt ${attempt}: GTD ${side} ~${shares.toFixed(2)} shares @ $${limitPrice.toFixed(4)} (expiry ${config.gttExpirySeconds}s)`);
 
-    let feeRateBps = 0;
+    // Default to config.feeRateBps (1000 for most markets).
+    // Auto-corrects if the market fee differs — see catch block below.
+    let feeRateBps = config.feeRateBps;
 
     try {
       const order = await this.clobClient.createOrder({
@@ -196,6 +198,29 @@ export class GTTExecutor {
       });
 
       const postResp = await this.clobClient.postOrder(order, OrderType.GTD);
+
+      // clob-client sometimes returns an error object instead of throwing (400 responses)
+      const respError = String((postResp as any)?.error ?? (postResp as any)?.errorMsg ?? '');
+      const feeMatchResp = respError.match(/current market's (?:taker|maker) fee:\s*(\d+)/i);
+      if (feeMatchResp) {
+        feeRateBps = parseInt(feeMatchResp[1]);
+        console.log(`[GTTExecutor] Fee correction (response): retrying at ${feeRateBps} bps`);
+        const correctedOrder = await this.clobClient.createOrder({
+          tokenID: tokenId, price: limitPrice, size: shares,
+          side: side === 'BUY' ? Side.BUY : Side.SELL,
+          feeRateBps, nonce: 0, expiration,
+        });
+        const correctedResp = await this.clobClient.postOrder(correctedOrder, OrderType.GTD);
+        const correctedId: string = (correctedResp as any).orderID ?? (correctedResp as any).id ?? '';
+        if (correctedId) {
+          console.log(`[GTTExecutor] Order placed (fee-corrected): ${correctedId.slice(0, 12)}...`);
+          eventBus.emit('trade:submitted', { ...ctx, orderId: correctedId, limitPrice, submittedAt: Date.now() });
+        } else {
+          await this.markFailed(ctx.tradeDocId, ctx.traderWallet, attempt, `Fee-corrected order returned no orderId`);
+        }
+        return;
+      }
+
       const orderId: string = (postResp as any).orderID ?? (postResp as any).id ?? '';
 
       if (!orderId) {
