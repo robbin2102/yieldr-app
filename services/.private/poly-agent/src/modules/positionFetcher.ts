@@ -17,7 +17,9 @@ export class PositionFetcher {
       if (!res.ok) return 0;
       const raw = await res.json() as any;
       const items: any[] = Array.isArray(raw) ? raw : (raw.data ?? []);
-      const pos = items.find((p: any) => p.asset === tokenId || p.tokenId === tokenId);
+      const pos = items.find((p: any) =>
+        p.asset === tokenId || p.tokenId === tokenId || p.assetId === tokenId
+      );
       return pos ? parseFloat(pos.size ?? '0') : 0;
     } catch {
       return 0;

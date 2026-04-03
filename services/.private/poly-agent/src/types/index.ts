@@ -31,10 +31,12 @@ export interface PendingOrder {
   tradeDocId:   string;   // MongoDB _id of the CopyTrade document
   traderWallet: string;   // Source trader wallet (for TraderLoader.recordFill)
 
-  side:        'BUY' | 'SELL';
-  tokenId:     string;
-  targetUsdc:  number;    // Total USDC we're trying to fill
-  limitPrice:  number;    // Price we posted at
+  side:         'BUY' | 'SELL';
+  tokenId:      string;
+  conditionId:  string;
+  targetUsdc:   number;         // Total USDC we're trying to fill (BUY)
+  targetShares?: number;        // Target shares to sell (SELL proportional exit)
+  limitPrice:   number;         // Price we posted at
   submittedAt: number;    // Date.now() when order was posted
 
   attempt:     number;    // 1-based attempt number (for retry cap check)

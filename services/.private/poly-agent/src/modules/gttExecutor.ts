@@ -149,27 +149,7 @@ export class GTTExecutor {
     const freshTrader = await TraderLoader.get(traderConfig.wallet);
     if (!freshTrader) return;
 
-    let sizing = calcCopyBet(traderBetUsdc, freshTrader);
-
-    // For SELL orders: bypass BELOW_AVG filter — if we hold the position we must be
-    // able to exit even if the trader's individual sell is below their avg bet size.
-    // The SELL guard (step 4) will handle the case where we don't hold shares.
-    // ALLOCATION_FULL still blocks SELLs (intentional — no free capital).
-    if (sizing.skip && sizing.skipReason === 'BELOW_AVG' && side === 'SELL') {
-      sizing = { betUsdc: freshTrader.baseBetUsdc, skip: false };
-    }
-
-    if (sizing.skip) {
-      await this.skip(tradeDoc, sizing.skipReason!, sizing.skipDetail, freshTrader.wallet);
-      if (sizing.skipReason !== 'BELOW_AVG') {
-        await TraderLoader.recordAboveAvg(freshTrader.wallet);
-      }
-      return;
-    }
-
-    await TraderLoader.recordAboveAvg(freshTrader.wallet);
-
-    // ── 3. Orderbook ─────────────────────────────────────────────────────────
+    // ── 2. Orderbook (needed for both BUY and SELL sizing) ───────────────────
     const book = await orderbookCache.getBothPrices(tokenId);
     if (!book.bestAsk || !book.bestBid) {
       await this.skip(tradeDoc, 'NO_ORDERBOOK', 'orderbook fetch failed or empty', freshTrader.wallet);
@@ -177,31 +157,79 @@ export class GTTExecutor {
     }
     const safeBook = book as { bestAsk: number; bestBid: number };
 
-    // ── 4. SELL guard: verify we hold this position ───────────────────────────
-    if (side === 'SELL') {
-      const ourShares  = await positionFetcher.getOurShares(tokenId);
-      const needShares = sizing.betUsdc / safeBook.bestAsk;
-      if (ourShares < needShares * 0.5) {
-        await this.skip(
-          tradeDoc, 'SELL_NO_POSITION',
-          `have ${ourShares.toFixed(2)} shares, need ~${needShares.toFixed(2)}`,
-          freshTrader.wallet
-        );
+    // ── 3. BUY: conviction-proportional sizing via avgBet filter ─────────────
+    let targetUsdc  = 0;
+    let targetShares: number | undefined;
+
+    if (side === 'BUY') {
+      const sizing = calcCopyBet(traderBetUsdc, freshTrader);
+      if (sizing.skip) {
+        await this.skip(tradeDoc, sizing.skipReason!, sizing.skipDetail, freshTrader.wallet);
+        if (sizing.skipReason !== 'BELOW_AVG') await TraderLoader.recordAboveAvg(freshTrader.wallet);
         return;
       }
+      await TraderLoader.recordAboveAvg(freshTrader.wallet);
+      targetUsdc = sizing.betUsdc;
+
+    // ── 4. SELL: proportional exit — (traderSellSize / traderTotalBought) × ourShares ──
+    } else {
+      // 4a. Check allocation not exhausted
+      if (freshTrader.allocationUsdc - freshTrader.spentUsdc <= 0) {
+        await this.skip(tradeDoc, 'ALLOCATION_FULL',
+          `allocation exhausted ($${freshTrader.spentUsdc} / $${freshTrader.allocationUsdc})`,
+          freshTrader.wallet);
+        return;
+      }
+
+      // 4b. Verify we hold this position (live API check)
+      const ourCurrentShares = await positionFetcher.getOurShares(tokenId);
+      if (ourCurrentShares < 0.01) {
+        await this.skip(tradeDoc, 'SELL_NO_POSITION',
+          `have ${ourCurrentShares.toFixed(4)} shares`,
+          freshTrader.wallet);
+        return;
+      }
+
+      // 4c. Trader's total bought shares for this token (primary) or condition (fallback)
+      const traderTotalBoughtShares = await this.getTraderTotalBoughtShares(
+        traderConfig.wallet, tokenId, conditionId
+      );
+
+      // 4d. Proportional exit: sell the same fraction of our position as the trader
+      let exitShares: number;
+      if (traderTotalBoughtShares > 0) {
+        const exitFraction = Math.min(traderSize / traderTotalBoughtShares, 1.0);
+        exitShares = exitFraction * ourCurrentShares;
+        console.log(`[GTTExecutor] SELL: trader selling ${(exitFraction * 100).toFixed(1)}% of position → exit ${exitShares.toFixed(4)} of our ${ourCurrentShares.toFixed(4)} shares`);
+      } else {
+        // No BUY history found — exit all shares as safe default
+        exitShares = ourCurrentShares;
+        console.log(`[GTTExecutor] SELL: no BUY history — exiting all ${ourCurrentShares.toFixed(4)} shares`);
+      }
+
+      exitShares = Math.min(exitShares, ourCurrentShares); // never oversell
+      if (exitShares < 0.1) {
+        await this.skip(tradeDoc, 'SELL_NO_POSITION',
+          `exit shares too small (${exitShares.toFixed(4)})`,
+          freshTrader.wallet);
+        return;
+      }
+
+      targetUsdc   = exitShares * safeBook.bestBid; // approximate USDC value for doc
+      targetShares = exitShares;
     }
 
     // ── 5. Update doc to EXECUTING ────────────────────────────────────────────
     const submittedAt         = Date.now();
     const submissionLatencyMs = submittedAt - detectedAt;
 
-    tradeDoc.copyBetUsdc         = sizing.betUsdc;
+    tradeDoc.copyBetUsdc         = targetUsdc;
     tradeDoc.submittedAt         = submittedAt;
     tradeDoc.submissionLatencyMs = submissionLatencyMs;
     tradeDoc.status              = 'EXECUTING';
     await tradeDoc.save();
 
-    eventBus.emit('trade:executing', { txHash, traderLabel: traderConfig.label, betUsdc: sizing.betUsdc });
+    eventBus.emit('trade:executing', { txHash, traderLabel: traderConfig.label, betUsdc: targetUsdc });
 
     // ── 6. Place GTD maker order (attempt 1) ──────────────────────────────────
     await this.placeOrder({
@@ -209,7 +237,9 @@ export class GTTExecutor {
       traderWallet: freshTrader.wallet,
       side,
       tokenId,
-      targetUsdc:  sizing.betUsdc,
+      conditionId,
+      targetUsdc,
+      targetShares,
       attempt:     1,
       traderPrice,
       traderTs,
@@ -217,6 +247,26 @@ export class GTTExecutor {
       filledSize:  0,
       filledCost:  0,
     }, safeBook);
+  }
+
+  /**
+   * Sums traderSize from all FILLED/EXECUTING BUY docs for a given trader+token.
+   * Falls back to conditionId match if no tokenId results (trader bought other outcome).
+   */
+  private async getTraderTotalBoughtShares(
+    sourceWallet: string, tokenId: string, conditionId: string
+  ): Promise<number> {
+    const match = async (filter: Record<string, any>) => {
+      const result = await CopyTrade.aggregate([
+        { $match: { sourceWallet, side: 'BUY', status: { $in: ['FILLED', 'EXECUTING'] }, ...filter } },
+        { $group: { _id: null, total: { $sum: '$traderSize' } } },
+      ]);
+      return result[0]?.total ?? 0;
+    };
+    const byToken     = await match({ tokenId });
+    if (byToken > 0) return byToken;
+    const byCondition = await match({ conditionId });
+    return byCondition;
   }
 
   /**
@@ -228,6 +278,7 @@ export class GTTExecutor {
     book: { bestBid: number; bestAsk: number }
   ): Promise<void> {
     const { side, tokenId, targetUsdc, filledCost, attempt } = ctx;
+    // targetShares is checked via ctx.targetShares in shares calculation below
 
     // Spread-proportional aggression: each retry covers more of the spread toward the opposite side.
     // Attempt 1: passive (bestBid / bestAsk), attempt 2: midpoint, attempt 3+: just inside opposite side.
@@ -240,8 +291,11 @@ export class GTTExecutor {
     // Polymarket prices must be strictly between 0 and 1
     const limitPrice = parseFloat(Math.min(0.999, Math.max(0.001, rawPrice)).toFixed(4));
 
-    const remainingUsdc = targetUsdc - filledCost;
-    const shares        = remainingUsdc / limitPrice;
+    // SELL proportional: use remaining shares directly (not USDC-derived).
+    // BUY: derive shares from remaining USDC at the limit price.
+    const shares = ctx.targetShares !== undefined
+      ? Math.max(0, ctx.targetShares - ctx.filledSize)
+      : Math.max(0, (targetUsdc - filledCost) / limitPrice);
 
     if (shares < 0.1) {
       console.log(`[GTTExecutor] Shares too small (${shares.toFixed(4)}) — marking filled`);
