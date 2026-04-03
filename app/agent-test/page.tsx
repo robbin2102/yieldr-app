@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
+import { AD_VARIANTS, AdVariant } from '@/lib/agent-test/ads';
 
 type ModelKey = 'claude' | 'openai' | 'grok';
 
@@ -121,6 +122,8 @@ export default function AgentTestPage() {
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [showSessionPicker, setShowSessionPicker] = useState(false);
   const [exchangeCount, setExchangeCount] = useState(0);
+  const [selectedAd, setSelectedAd] = useState<AdVariant>(AD_VARIANTS[0]);
+  const [openingFired, setOpeningFired] = useState(false);
 
   const [messages, setMessages] = useState<Record<ModelKey, Message[]>>({
     claude: [],
@@ -193,9 +196,100 @@ export default function AgentTestPage() {
     setTestLabel('');
     setStatus('active');
     setExchangeCount(0);
+    setOpeningFired(false);
     setMessages({ claude: [], openai: [], grok: [] });
     setStreaming({ claude: '', openai: '', grok: '' });
     inputRef.current?.focus();
+  };
+
+  // Fire the agent opening message (agent speaks first, no user bubble shown)
+  const handleFireOpening = async () => {
+    if (loading || openingFired) return;
+    setLoading(true);
+    setOpeningFired(true);
+    setStreaming({ claude: '', openai: '', grok: '' });
+
+    try {
+      const res = await fetch('/api/agent-test/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          session_id: sessionId,
+          message: '',
+          test_label: testLabel || selectedAd.id,
+          is_opening: true,
+          ad_variant_id: selectedAd.id,
+        }),
+      });
+
+      if (!res.ok || !res.body) throw new Error('Request failed');
+      await consumeStream(res.body);
+    } catch (err) {
+      console.error('Opening error:', err);
+      setOpeningFired(false);
+    } finally {
+      setLoading(false);
+      inputRef.current?.focus();
+    }
+  };
+
+  // Shared stream reader used by both handleFireOpening and handleSend
+  const consumeStream = async (body: ReadableStream<Uint8Array>) => {
+    const reader = body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    const liveStreams: Record<ModelKey, string> = { claude: '', openai: '', grok: '' };
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        try {
+          const event = JSON.parse(line.slice(6));
+
+          if (event.type === 'session' && !sessionId) {
+            setSessionId(event.session_id);
+          }
+
+          if (event.type === 'chunk' && event.model && event.chunk) {
+            const m = event.model as ModelKey;
+            liveStreams[m] += event.chunk;
+            setStreaming((prev) => ({ ...prev, [m]: liveStreams[m] }));
+          }
+
+          if (event.type === 'done' && event.model) {
+            const m = event.model as ModelKey;
+            setStreaming((prev) => ({ ...prev, [m]: '' }));
+            setMessages((prev) => ({
+              ...prev,
+              [m]: [
+                ...prev[m],
+                {
+                  role: 'agent',
+                  content: event.content,
+                  responseTimeMs: event.response_time_ms,
+                  inputTokens: event.input_tokens,
+                  outputTokens: event.output_tokens,
+                  model: event.model,
+                },
+              ],
+            }));
+          }
+
+          if (event.type === 'complete') {
+            setExchangeCount((c) => c + 1);
+          }
+        } catch {
+          // skip malformed SSE line
+        }
+      }
+    }
   };
 
   const handleSend = async () => {
@@ -206,7 +300,7 @@ export default function AgentTestPage() {
     setLoading(true);
     setStreaming({ claude: '', openai: '', grok: '' });
 
-    // Optimistically add user message to all columns
+    // Add user message to all columns
     setMessages((prev) => {
       const next = { ...prev };
       MODELS.forEach((m) => {
@@ -219,79 +313,11 @@ export default function AgentTestPage() {
       const res = await fetch('/api/agent-test/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          session_id: sessionId,
-          message: msg,
-          test_label: testLabel,
-        }),
+        body: JSON.stringify({ session_id: sessionId, message: msg, test_label: testLabel }),
       });
 
       if (!res.ok || !res.body) throw new Error('Request failed');
-
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-
-      const liveStreams: Record<ModelKey, string> = { claude: '', openai: '', grok: '' };
-      const doneResults: Partial<Record<ModelKey, { content: string; input_tokens: number; output_tokens: number; response_time_ms: number }>> = {};
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue;
-          try {
-            const event = JSON.parse(line.slice(6));
-
-            if (event.type === 'session' && !sessionId) {
-              setSessionId(event.session_id);
-            }
-
-            if (event.type === 'chunk' && event.model && event.chunk) {
-              const m = event.model as ModelKey;
-              liveStreams[m] += event.chunk;
-              setStreaming((prev) => ({ ...prev, [m]: liveStreams[m] }));
-            }
-
-            if (event.type === 'done' && event.model) {
-              const m = event.model as ModelKey;
-              doneResults[m] = {
-                content: event.content,
-                input_tokens: event.input_tokens,
-                output_tokens: event.output_tokens,
-                response_time_ms: event.response_time_ms,
-              };
-              // Move from streaming to finalized message
-              setStreaming((prev) => ({ ...prev, [m]: '' }));
-              setMessages((prev) => ({
-                ...prev,
-                [m]: [
-                  ...prev[m],
-                  {
-                    role: 'agent',
-                    content: event.content,
-                    responseTimeMs: event.response_time_ms,
-                    inputTokens: event.input_tokens,
-                    outputTokens: event.output_tokens,
-                    model: event.model,
-                  },
-                ],
-              }));
-            }
-
-            if (event.type === 'complete') {
-              setExchangeCount((c) => c + 1);
-            }
-          } catch {
-            // malformed SSE line — skip
-          }
-        }
-      }
+      await consumeStream(res.body);
     } catch (err) {
       console.error('Chat error:', err);
     } finally {
@@ -407,6 +433,40 @@ export default function AgentTestPage() {
           History →
         </Link>
       </header>
+
+      {/* Ad variant bar */}
+      <div className="border-b border-white/5 px-4 py-2 flex items-center gap-3 bg-[#0f0f12] flex-shrink-0">
+        <span className="text-[10px] text-white/30 uppercase tracking-widest whitespace-nowrap">Ad variant</span>
+        <div className="flex gap-1.5 flex-wrap">
+          {AD_VARIANTS.map((v) => (
+            <button
+              key={v.id}
+              onClick={() => { setSelectedAd(v); setOpeningFired(false); }}
+              className={`text-[10px] px-2.5 py-1 rounded border transition-colors ${
+                selectedAd.id === v.id
+                  ? 'border-[#7F77DD] bg-[#7F77DD]/15 text-[#a09be8]'
+                  : 'border-white/10 text-white/40 hover:text-white/60'
+              }`}
+            >
+              {v.name}
+            </button>
+          ))}
+        </div>
+        <div className="flex-1 text-[10px] text-white/25 italic truncate hidden md:block">
+          "{selectedAd.copy}"
+        </div>
+        <button
+          onClick={handleFireOpening}
+          disabled={loading || openingFired}
+          className={`text-[10px] px-3 py-1.5 rounded border font-medium transition-colors whitespace-nowrap ${
+            openingFired
+              ? 'border-white/10 text-white/20 cursor-not-allowed'
+              : 'border-[#7F77DD]/50 text-[#a09be8] hover:bg-[#7F77DD]/10'
+          }`}
+        >
+          {openingFired ? '✓ Agent opened' : '▶ Fire opening message'}
+        </button>
+      </div>
 
       {/* 3 columns */}
       <div className="flex gap-2 flex-1 p-3 overflow-hidden min-h-0">

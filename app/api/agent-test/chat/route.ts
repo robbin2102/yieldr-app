@@ -5,8 +5,9 @@ import { getChatSessionModel } from '@/lib/agent-test/models/ChatSession';
 import { streamClaude, LLMMessage } from '@/lib/agent-test/llm/claude';
 import { streamOpenAI } from '@/lib/agent-test/llm/openai';
 import { streamGrok } from '@/lib/agent-test/llm/grok';
-import { summarizeExchanges } from '@/lib/agent-test/llm/summarize';
 import { buildStateInjection, updateState } from '@/lib/agent-test/state';
+import { summarizeExchanges } from '@/lib/agent-test/llm/summarize';
+import { getAdVariant } from '@/lib/agent-test/ads';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -24,9 +25,16 @@ console.log('[agent-test] env check:', {
 });
 
 export async function POST(req: NextRequest) {
-  const { session_id, message, test_label } = await req.json();
+  const { session_id, message, test_label, is_opening, ad_variant_id } = await req.json();
 
-  if (!message?.trim()) {
+  // For opening trigger, message comes from the ad variant config
+  let resolvedMessage = message;
+  if (is_opening && ad_variant_id) {
+    const variant = getAdVariant(ad_variant_id);
+    if (variant) resolvedMessage = variant.openingPrompt;
+  }
+
+  if (!resolvedMessage?.trim()) {
     return new Response(JSON.stringify({ error: 'Message required' }), { status: 400 });
   }
 
@@ -97,13 +105,15 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  messages.push({ role: 'user', content: `${stateInjection}\n${message}` });
+  messages.push({ role: 'user', content: `${stateInjection}\n${resolvedMessage}` });
 
   const encoder = new TextEncoder();
   const exchangeNumber = exchanges.length + 1;
   const currentSessionId = session.session_id;
   const currentState = session.state;
   const currentSummaryHistory = [...session.summary_history];
+  // is_opening: agent fires first — store the opening prompt but UI won't render it as user bubble
+  const isOpening = !!is_opening;
 
   type LLMResult = {
     content: string;
@@ -121,7 +131,7 @@ export async function POST(req: NextRequest) {
         controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
       }
 
-      send({ type: 'session', session_id: currentSessionId });
+      send({ type: 'session', session_id: currentSessionId, is_opening: isOpening });
 
       await Promise.all([
         streamClaude(messages, {
@@ -154,7 +164,7 @@ export async function POST(req: NextRequest) {
       try {
         const bestResponse =
           results.claude?.content || results.openai?.content || results.grok?.content || '';
-        const stateUpdate = updateState(currentState, message, bestResponse);
+        const stateUpdate = updateState(currentState, resolvedMessage, bestResponse);
 
         const dbConn = await connectAgentDB();
         const CS = getChatSessionModel(dbConn);
@@ -166,7 +176,8 @@ export async function POST(req: NextRequest) {
               exchanges: {
                 exchange_number: exchangeNumber,
                 timestamp: new Date(),
-                user_message: message,
+                // Store the opening prompt but flag it so UI can hide it
+                user_message: is_opening ? `[OPENING:${ad_variant_id}] ${resolvedMessage}` : resolvedMessage,
                 responses: {
                   claude: results.claude,
                   openai: results.openai,
