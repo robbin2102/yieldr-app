@@ -1,4 +1,6 @@
 import { ClobClient, Side, OrderType } from '@polymarket/clob-client';
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
+import { resolve } from 'path';
 import { config } from '../config';
 import { eventBus } from '../state/eventBus';
 import { orderbookCache } from '../state/orderbookCache';
@@ -8,6 +10,29 @@ import { calcCopyBet } from './betSizer';
 import { positionFetcher } from './positionFetcher';
 import { DetectedTradeEvent } from './multiDetector';
 import { PendingOrder } from '../types';
+
+// Persist fee rate cache to disk so corrections survive process restarts.
+const FEE_CACHE_PATH = resolve(__dirname, '../../data/fee-rate-cache.json');
+
+function loadFeeCache(): Map<string, number> {
+  try {
+    if (existsSync(FEE_CACHE_PATH)) {
+      const raw = readFileSync(FEE_CACHE_PATH, 'utf8');
+      return new Map(Object.entries(JSON.parse(raw)));
+    }
+  } catch { /* corrupt file — start fresh */ }
+  return new Map();
+}
+
+function saveFeeCache(cache: Map<string, number>): void {
+  try {
+    const dir = resolve(FEE_CACHE_PATH, '..');
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    writeFileSync(FEE_CACHE_PATH, JSON.stringify(Object.fromEntries(cache)));
+  } catch (e: any) {
+    console.warn('[GTTExecutor] Could not persist fee cache:', e.message);
+  }
+}
 
 /**
  * GTTExecutor — places GTD (Good Till Date) maker limit orders for copy trades.
@@ -27,9 +52,10 @@ import { PendingOrder } from '../types';
  *   Confirmer receives order CANCELLATION event → emits 'order:expired'
  *   GTTExecutor.handleOrderExpired() places a fresh order (up to maxOrderRetries)
  *
- * Maker pricing (never cross the spread):
- *   BUY  → post at best_bid  (join the bid queue)
- *   SELL → post at best_ask  (join the ask queue)
+ * Maker pricing — spread-proportional aggression:
+ *   Attempt 1: passive  — BUY @ bestBid,          SELL @ bestAsk
+ *   Attempt 2: midpoint — BUY @ bestBid + 50% spread, SELL @ bestAsk - 50% spread
+ *   Attempt 3+: cross   — BUY @ bestAsk - 0.001,  SELL @ bestBid + 0.001  (near-certain fill)
  *
  * Skip reasons:
  *   BELOW_AVG        — trader bet < avgBet
@@ -40,18 +66,17 @@ import { PendingOrder } from '../types';
  *   ORDER_FAILED     — GTD unfilled after all retries
  *   NON_TRADE        — REDEEM/MERGE/SPLIT activity
  */
-// Price aggression increment per retry attempt (in cents).
-// Attempt 1: passive (best_bid / best_ask)
-// Attempt 2: +0.5¢ toward mid
-// Attempt 3: +1.0¢ toward mid
-// Never crosses the spread — stays below ask (BUY) / above bid (SELL).
-const PRICE_AGGRESSION_PER_ATTEMPT = 0.005;
+// Spread fraction applied per attempt (0 = passive, 1.0 = cross the spread).
+// Attempt 1: 0% → passive (best_bid / best_ask)
+// Attempt 2: 50% → midpoint
+// Attempt 3+: 100% → just inside the opposite side (near-certain fill)
+const AGGRESSION_FRACTIONS = [0, 0.5, 1.0];
 
 export class GTTExecutor {
   private clobClient: ClobClient;
-  // Per-token fee rate cache — populated on first fee error, reused thereafter.
+  // Per-token fee rate cache — persisted to disk so corrections survive restarts.
   // Eliminates fee correction round-trips for every subsequent order on same market.
-  private feeRateCache: Map<string, number> = new Map();
+  private feeRateCache: Map<string, number> = loadFeeCache();
 
   constructor(clobClient: ClobClient) {
     this.clobClient = clobClient;
@@ -176,12 +201,14 @@ export class GTTExecutor {
   ): Promise<void> {
     const { side, tokenId, targetUsdc, filledCost, attempt } = ctx;
 
-    // Progressive aggression: each retry moves price closer to mid by PRICE_AGGRESSION_PER_ATTEMPT.
-    // Attempt 1 = 0 increment (passive), attempt 2 = +0.5¢, attempt 3 = +1.0¢, etc.
-    const aggression = (attempt - 1) * PRICE_AGGRESSION_PER_ATTEMPT;
+    // Spread-proportional aggression: each retry covers more of the spread toward the opposite side.
+    // Attempt 1: passive (bestBid / bestAsk), attempt 2: midpoint, attempt 3+: just inside opposite side.
+    const spread = book.bestAsk - book.bestBid;
+    const fraction = AGGRESSION_FRACTIONS[attempt - 1] ?? 1.0;
+    const aggrStep = spread * fraction;
     const rawPrice = side === 'BUY'
-      ? Math.min(book.bestBid + aggression, book.bestAsk - 0.001)  // stay below ask
-      : Math.max(book.bestAsk - aggression, book.bestBid + 0.001); // stay above bid
+      ? Math.min(book.bestBid + aggrStep, book.bestAsk - 0.001)  // stay below ask
+      : Math.max(book.bestAsk - aggrStep, book.bestBid + 0.001); // stay above bid
     // Polymarket prices must be strictly between 0 and 1
     const limitPrice = parseFloat(Math.min(0.999, Math.max(0.001, rawPrice)).toFixed(4));
 
@@ -194,7 +221,7 @@ export class GTTExecutor {
     }
 
     const expiration = Math.floor(Date.now() / 1000) + 60 + config.gttExpirySeconds;
-    const aggrLabel  = aggression > 0 ? ` +${(aggression * 100).toFixed(1)}¢ aggression` : '';
+    const aggrLabel  = fraction > 0 ? ` +${(fraction * 100).toFixed(0)}% spread (${(aggrStep * 100).toFixed(1)}¢)` : '';
     console.log(`[GTTExecutor] Attempt ${attempt}: GTD ${side} ~${shares.toFixed(2)} shares @ $${limitPrice.toFixed(4)}${aggrLabel} (expiry ${config.gttExpirySeconds}s)`);
 
     // Use cached fee rate if known for this token, else fall back to config default.
@@ -219,7 +246,8 @@ export class GTTExecutor {
       const feeMatchResp = respError.match(/current market's (?:taker|maker) fee:\s*(\d+)/i);
       if (feeMatchResp) {
         feeRateBps = parseInt(feeMatchResp[1]);
-        this.feeRateCache.set(tokenId, feeRateBps);  // cache so next order uses correct rate immediately
+        this.feeRateCache.set(tokenId, feeRateBps);
+        saveFeeCache(this.feeRateCache);
         console.log(`[GTTExecutor] Fee correction (response): ${config.feeRateBps} → ${feeRateBps} bps (cached for ${tokenId.slice(0, 10)}...)`);
         const correctedOrder = await this.clobClient.createOrder({
           tokenID: tokenId, price: limitPrice, size: shares,
@@ -262,7 +290,8 @@ export class GTTExecutor {
       const feeMatch = errText.match(/current market's (?:taker|maker) fee:\s*(\d+)/i);
       if (feeMatch) {
         feeRateBps = parseInt(feeMatch[1]);
-        this.feeRateCache.set(tokenId, feeRateBps);  // cache so next order uses correct rate immediately
+        this.feeRateCache.set(tokenId, feeRateBps);
+        saveFeeCache(this.feeRateCache);
         console.log(`[GTTExecutor] Fee correction (catch): ${config.feeRateBps} → ${feeRateBps} bps (cached for ${tokenId.slice(0, 10)}...)`);
         // Rebuild and retry with corrected fee (same attempt number)
         try {
