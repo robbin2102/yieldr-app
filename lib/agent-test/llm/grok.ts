@@ -26,7 +26,7 @@ export async function streamGrok(
   try {
     const stream = await grokClient.chat.completions.create({
       model: GROK_MODEL,
-      max_tokens: 500,
+      max_tokens: 250,
       stream: true,
       stream_options: { include_usage: true },
       messages: [

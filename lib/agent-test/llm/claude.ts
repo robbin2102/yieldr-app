@@ -27,7 +27,7 @@ export async function streamClaude(
   try {
     const stream = anthropic.messages.stream({
       model: CLAUDE_MODEL,
-      max_tokens: 500,
+      max_tokens: 250,
       system: SYSTEM_PROMPT,
       messages,
     });

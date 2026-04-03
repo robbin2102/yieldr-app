@@ -24,7 +24,7 @@ export async function streamOpenAI(
   try {
     const stream = await openaiClient.chat.completions.create({
       model: OPENAI_MODEL,
-      max_tokens: 500,
+      max_tokens: 250,
       stream: true,
       stream_options: { include_usage: true },
       messages: [
