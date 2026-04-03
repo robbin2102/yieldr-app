@@ -149,7 +149,15 @@ export class GTTExecutor {
     const freshTrader = await TraderLoader.get(traderConfig.wallet);
     if (!freshTrader) return;
 
-    const sizing = calcCopyBet(traderBetUsdc, freshTrader);
+    let sizing = calcCopyBet(traderBetUsdc, freshTrader);
+
+    // For SELL orders: bypass BELOW_AVG filter — if we hold the position we must be
+    // able to exit even if the trader's individual sell is below their avg bet size.
+    // The SELL guard (step 4) will handle the case where we don't hold shares.
+    // ALLOCATION_FULL still blocks SELLs (intentional — no free capital).
+    if (sizing.skip && sizing.skipReason === 'BELOW_AVG' && side === 'SELL') {
+      sizing = { betUsdc: freshTrader.baseBetUsdc, skip: false };
+    }
 
     if (sizing.skip) {
       await this.skip(tradeDoc, sizing.skipReason!, sizing.skipDetail, freshTrader.wallet);
