@@ -2,7 +2,7 @@ import OpenAI from 'openai';
 import { SYSTEM_PROMPT } from '../prompt';
 import { LLMMessage, StreamCallbacks } from './claude';
 
-export const OPENAI_MODEL = 'gpt-4.5-mini';
+export const OPENAI_MODEL = 'gpt-4.1-mini';
 
 export async function streamOpenAI(
   messages: LLMMessage[],
