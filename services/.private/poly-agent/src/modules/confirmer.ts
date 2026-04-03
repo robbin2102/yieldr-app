@@ -154,8 +154,11 @@ export class Confirmer {
     const fillLatencyMs  = filledAt - pending.submittedAt;
     const totalLatencyMs = filledAt - pending.traderTs;
 
-    // Determine if fully filled (>= 90% of target)
-    const fullyFilled = filledUsdc >= pending.targetUsdc * 0.9;
+    // Determine if fully filled (>= 90% of target).
+    // SELL orders use targetShares (shares-based); BUY orders use targetUsdc.
+    const fullyFilled = pending.targetShares !== undefined
+      ? pending.filledSize >= pending.targetShares * 0.9
+      : filledUsdc >= pending.targetUsdc * 0.9;
     const status      = fullyFilled ? 'FILLED' : 'PARTIAL';
 
     const ts = new Date().toISOString().slice(11, 19);
@@ -179,8 +182,12 @@ export class Confirmer {
       attempts:     pending.attempt,
     });
 
-    // Record fill in trader counters + spentUsdc
-    await TraderLoader.recordFill(pending.traderWallet, filledUsdc);
+    // BUY fills consume allocation; SELL fills recycle proceeds back into the pool.
+    if (pending.side === 'BUY') {
+      await TraderLoader.recordFill(pending.traderWallet, filledUsdc);
+    } else {
+      await TraderLoader.recordSellFill(pending.traderWallet, filledUsdc);
+    }
 
     eventBus.emit('trade:filled', {
       tradeDocId:   pending.tradeDocId,
@@ -235,7 +242,11 @@ export class Confirmer {
         attempts:     pending.attempt,
       });
 
-      await TraderLoader.recordFill(pending.traderWallet, filledUsdc);
+      if (pending.side === 'BUY') {
+        await TraderLoader.recordFill(pending.traderWallet, filledUsdc);
+      } else {
+        await TraderLoader.recordSellFill(pending.traderWallet, filledUsdc);
+      }
       // Don't retry — we got a partial fill, not a full miss
       return;
     }

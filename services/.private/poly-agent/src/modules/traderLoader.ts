@@ -90,6 +90,18 @@ export class TraderLoader {
   }
 
   /**
+   * Record a SELL fill: recycle the proceeds back into available allocation.
+   * Uses aggregation pipeline update to floor spentUsdc at 0.
+   */
+  static async recordSellFill(wallet: string, filledUsdc: number): Promise<void> {
+    await CopyTrader.updateOne(
+      { wallet: wallet.toLowerCase() },
+      [{ $set: { spentUsdc: { $max: [0, { $subtract: ['$spentUsdc', filledUsdc] }] } } }]
+    );
+    console.log(`[TraderLoader] Recycled $${filledUsdc.toFixed(2)} back into allocation for ${wallet.slice(0, 10)}...`);
+  }
+
+  /**
    * Check if a trader still has allocation remaining (real-time DB check).
    * Used for a final guard before order submission to handle concurrent fills.
    */
