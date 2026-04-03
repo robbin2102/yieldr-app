@@ -373,7 +373,8 @@ export class GTTExecutor {
       }
 
       const totalFilled = recent.reduce((sum: number, t: any) => sum + parseFloat(t.size ?? t.size_matched ?? '0'), 0);
-      const avgPrice    = recent.reduce((sum: number, t: any) => sum + parseFloat(t.price ?? '0'), 0) / recent.length;
+      const totalCost   = recent.reduce((sum: number, t: any) => sum + parseFloat(t.size ?? t.size_matched ?? '0') * parseFloat(t.price ?? '0'), 0);
+      const avgPrice    = totalFilled > 0 ? totalCost / totalFilled : 0;
 
       console.log(`[GTTExecutor] Found ${recent.length} trade(s) via /data/trades: totalFilled=${totalFilled.toFixed(4)} avgPrice=${avgPrice.toFixed(4)}`);
       return { filled: totalFilled, price: avgPrice };
