@@ -5,6 +5,7 @@ import { createClobClient } from './clob/client';
 import { ensureAllowances } from './clob/allowances';
 import { MultiDetector } from './modules/multiDetector';
 import { GTTExecutor } from './modules/gttExecutor';
+import { Confirmer } from './modules/confirmer';
 import { ExecutionTracker } from './modules/executionTracker';
 import { CopyTrader } from './db/models/CopyTrader';
 
@@ -57,16 +58,21 @@ async function main() {
   // ── 3. Token approvals (one-time on-chain setup) ──────────────────────────
   await ensureAllowances(config.botPrivateKey, config.polygonRpcUrl, config.chainId);
 
-  // ── 4. GTT Executor (listens for trade:detected events) ───────────────────
+  // ── 4. Confirmer (WebSocket User Channel — receives fill push events) ────────
+  console.log('[Main] Connecting Confirmer to WebSocket User Channel...');
+  const confirmer = new Confirmer();
+  await confirmer.connect();
+
+  // ── 5. GTT Executor (places orders, hands off to Confirmer for fills) ────────
   console.log('[Main] Starting GTT Executor...');
   new GTTExecutor(clobClient);
 
-  // ── 5. Multi-trader Detector ───────────────────────────────────────────────
+  // ── 6. Multi-trader Detector ───────────────────────────────────────────────
   console.log('[Main] Starting Multi-Trader Detector...');
   const detector = new MultiDetector();
   await detector.start();
 
-  // ── 6. Execution Tracker (prints reports on interval) ─────────────────────
+  // ── 7. Execution Tracker (prints reports on interval) ─────────────────────
   console.log('[Main] Starting Execution Tracker...');
   const tracker = new ExecutionTracker(config.reportIntervalMs);
   tracker.start();
@@ -81,6 +87,7 @@ async function main() {
     console.log(`\n[Main] ${signal} — shutting down...`);
     detector.stop();
     tracker.stop();
+    confirmer.disconnect();
 
     // Force exit after 5s if shutdown hangs (e.g. slow DB query on final report)
     const forceExit = setTimeout(() => {
