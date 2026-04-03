@@ -1,5 +1,6 @@
 import { config } from '../config';
 import { eventBus } from '../state/eventBus';
+import { waitForConnection } from '../db/connection';
 import { TraderLoader } from './traderLoader';
 import { ICopyTrader } from '../db/models/CopyTrader';
 import { CopyTrade } from '../db/models/CopyTrade';
@@ -118,6 +119,15 @@ export class MultiDetector {
   }
 
   private async pollTrader(wallet: string): Promise<void> {
+    // Wait for DB to be available before any Mongoose calls.
+    // On transient disconnect this pauses the poll cycle rather than throwing.
+    try {
+      await waitForConnection(30_000);
+    } catch {
+      console.warn(`[MultiDetector] DB not ready — skipping poll for ${wallet.slice(0, 10)}...`);
+      return;
+    }
+
     const trader = await TraderLoader.get(wallet);
     if (!trader) return;
 

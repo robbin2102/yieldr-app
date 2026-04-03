@@ -1,6 +1,6 @@
 import mongoose from 'mongoose';
 import { config } from './config';
-import { connectDB } from './db/connection';
+import { connectDB, waitForConnection } from './db/connection';
 import { createClobClient } from './clob/client';
 import { ensureAllowances } from './clob/allowances';
 import { MultiDetector } from './modules/multiDetector';
@@ -34,6 +34,9 @@ async function main() {
 
   // ── 1. MongoDB ─────────────────────────────────────────────────────────────
   await connectDB();
+
+  // Guard: don't query until Mongoose is fully ready (matters after retry)
+  await waitForConnection();
 
   const traders = await CopyTrader.find({ active: true }).lean();
   if (traders.length === 0) {
