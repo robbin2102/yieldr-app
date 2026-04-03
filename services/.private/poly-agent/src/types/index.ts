@@ -20,14 +20,33 @@ export interface DetectedTrade {
 }
 
 /**
- * Pending order being tracked by Confirmer
+ * Pending order tracked by Confirmer (v3 — GTD maker orders)
+ *
+ * Emitted by GTTExecutor as 'trade:submitted' after successful postOrder.
+ * Confirmer stores this and matches incoming WebSocket trade events against
+ * maker_order_id (GTD orders are always maker side).
  */
 export interface PendingOrder {
-  tradeId: string;          // MongoDB _id of PolyAgentTrade
-  orderId: string;          // CLOB order ID
-  expectedSize: number;     // Shares we expect to fill
-  expectedPrice: number;    // Price we submitted at
-  originalTrade: DetectedTrade;
+  orderId:      string;   // CLOB order ID returned by postOrder
+  tradeDocId:   string;   // MongoDB _id of the CopyTrade document
+  traderWallet: string;   // Source trader wallet (for TraderLoader.recordFill)
+
+  side:        'BUY' | 'SELL';
+  tokenId:     string;
+  targetUsdc:  number;    // Total USDC we're trying to fill
+  limitPrice:  number;    // Price we posted at
+  submittedAt: number;    // Date.now() when order was posted
+
+  attempt:     number;    // 1-based attempt number (for retry cap check)
+
+  // Original trade context (for priceDrift + latency calculations)
+  traderPrice: number;
+  traderTs:    number;    // Unix ms — trader's tx timestamp
+  detectedAt:  number;    // Unix ms — when detector saw it
+
+  // Accumulated across partial fills (updated in-place by Confirmer)
+  filledSize:  number;
+  filledCost:  number;
 }
 
 /**
@@ -67,20 +86,24 @@ export interface PositionResponse {
 }
 
 /**
- * WebSocket trade fill message
+ * WebSocket trade fill message from Polymarket User Channel.
+ *
+ * For GTD maker orders our order is on the maker side, so the relevant
+ * field is maker_order_id (not taker_order_id).
  */
 export interface TradeFillMessage {
-  event_type: 'trade';
-  id: string;
-  taker_order_id: string;
-  status: 'MATCHED' | 'MINED' | 'CONFIRMED' | 'RETRYING' | 'FAILED';
-  price: string;
-  size: string;
-  side: 'BUY' | 'SELL';
-  asset_id: string;
-  market: string;
-  outcome: string;
-  timestamp: string;
+  event_type:       'trade';
+  id:               string;
+  maker_order_id:   string;   // Our order ID when we are the maker (GTD)
+  taker_order_id:   string;   // Our order ID when we are the taker (FAK/FOK)
+  status:           'MATCHED' | 'MINED' | 'CONFIRMED' | 'RETRYING' | 'FAILED';
+  price:            string;
+  size:             string;
+  side:             'BUY' | 'SELL';
+  asset_id:         string;
+  market:           string;
+  outcome:          string;
+  timestamp:        string;
 }
 
 /**
@@ -88,7 +111,7 @@ export interface TradeFillMessage {
  */
 export interface OrderUpdateMessage {
   event_type: 'order';
-  id: string;
-  type: 'PLACEMENT' | 'UPDATE' | 'CANCELLATION';
-  status: 'LIVE' | 'MATCHED' | 'CANCELLED';
+  id:         string;
+  type:       'PLACEMENT' | 'UPDATE' | 'CANCELLATION';
+  status:     'LIVE' | 'MATCHED' | 'CANCELLED';
 }
