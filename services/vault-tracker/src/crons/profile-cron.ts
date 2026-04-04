@@ -14,6 +14,12 @@ import { CONFIG } from '../config';
 import { createLogger } from '../utils/logger';
 import { profileTrader } from '../profiler/profile-trader-v3';
 
+function startOfDay(d: Date): Date {
+  const t = new Date(d);
+  t.setUTCHours(0, 0, 0, 0);
+  return t;
+}
+
 const log = createLogger('ProfileCron');
 
 async function profileVaultWallet(wallet: string): Promise<void> {
@@ -63,6 +69,49 @@ async function profileVaultWallet(wallet: string): Promise<void> {
     { ...positions, wallet: wallet.toLowerCase() },
     { upsert: true }
   );
+
+  // ── Seed vault_daily_snapshots from v3's accurate daily PnL series ─────
+  // dailyPnLByFrame['30d'] is an array of daily realized PnL values (oldest→newest).
+  // We build a cumulative series and upsert one snapshot per day.
+  // This is the source of truth for the PnL chart — accurate because it uses
+  // Polymarket's own realizedPnl from closedPositions API (not activity reconstruction).
+  const { vaultDailySnapshots } = getCollections();
+  const positionsDoc = positions as Record<string, unknown>;
+  const dailyPnLSeries = (positionsDoc.dailyPnLByFrame as Record<string, number[]>)?.['30d'] ?? [];
+
+  if (dailyPnLSeries.length > 0) {
+    // Build cumulative from the END: today's cumulative = totalPnlAllTime - unrealized
+    // Each prior day = subtract that day's realized PnL going backwards
+    const totalRealized = (core.totalRealizedPnl as number) ?? 0;
+
+    // dailyPnLSeries is chronological (oldest first), sum = 30d realized
+    let runningCumulative = totalRealized;
+    // Work backwards: today is last element
+    const daySnapshots: { date: Date; dailyPnl: number; cumulative: number }[] = [];
+    for (let i = dailyPnLSeries.length - 1; i >= 0; i--) {
+      const dayPnl = dailyPnLSeries[i];
+      const dayDate = new Date();
+      dayDate.setUTCDate(dayDate.getUTCDate() - (dailyPnLSeries.length - 1 - i));
+      daySnapshots.unshift({ date: startOfDay(dayDate), dailyPnl: dayPnl, cumulative: runningCumulative });
+      runningCumulative -= dayPnl;
+    }
+
+    for (const snap of daySnapshots) {
+      const snapVaultSize = initialCapital + snap.cumulative;
+      await vaultDailySnapshots.updateOne(
+        { wallet: wallet.toLowerCase(), date: snap.date },
+        { $set: {
+          wallet:              wallet.toLowerCase(),
+          date:                snap.date,
+          cumulative_pnl_usdc: snap.cumulative,
+          daily_pnl_usdc:      snap.dailyPnl,
+          vault_size_usdc:     snapVaultSize,
+        }},
+        { upsert: true }
+      );
+    }
+    log.info(`${label}: seeded ${daySnapshots.length} daily snapshots from v3 dailyPnLSeries`);
+  }
 
   const elapsed = ((Date.now() - started) / 1000).toFixed(1);
   log.success(

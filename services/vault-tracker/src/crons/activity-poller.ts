@@ -216,50 +216,47 @@ async function pollWallet(vault: VaultDoc): Promise<void> {
   );
 
   // ── 5. Upsert today's daily snapshot ─────────────────────
+  // cumulative_pnl_usdc comes from v3 profiler's totalPnlAllTime (accurate).
+  // The activity poller only owns daily_pnl_usdc (intraday approximation from vault_trades).
+  // vault_size_usdc is owned by the profile cron — we never overwrite it here.
   const todayStart = startOfDay(new Date());
 
-  // Cumulative PnL = sum of all closed vault_trades pnl
-  const cumulativeCursor = await vaultTrades.aggregate([
-    { $match: { wallet, status: { $in: ['win', 'loss'] } } },
-    { $group: { _id: null, total: { $sum: '$pnl_usdc' } } },
-  ]).toArray();
-  const cumulativePnl = (cumulativeCursor[0]?.total as number) ?? 0;
+  // Re-read vault doc to get the latest totalPnlAllTime written by profile cron
+  const freshVault = await vaults.findOne({ wallet });
+  const cumulativePnl   = (freshVault?.totalPnlAllTime as number) ?? 0;
+  const initialCapital  = freshVault?.initial_capital_usdc ?? vault.initial_capital_usdc ?? 0;
+  const vaultSize       = initialCapital + cumulativePnl;
 
-  // Daily PnL = closed today
+  // Daily PnL approximation — sum of vault_trades closed today
   const dailyCursor = await vaultTrades.aggregate([
     { $match: { wallet, status: { $in: ['win', 'loss'] }, closed_at: { $gte: todayStart } } },
     { $group: { _id: null, total: { $sum: '$pnl_usdc' } } },
   ]).toArray();
   const dailyPnl = (dailyCursor[0]?.total as number) ?? 0;
 
-  const initialCapital = vault.initial_capital_usdc ?? 0;
-  const vaultSize      = initialCapital + cumulativePnl;
-
   await vaultDailySnapshots.updateOne(
     { wallet, date: todayStart },
     { $set: {
       wallet,
-      date:                 todayStart,
-      cumulative_pnl_usdc:  cumulativePnl,
-      daily_pnl_usdc:       dailyPnl,
-      vault_size_usdc:      vaultSize,
+      date:                todayStart,
+      cumulative_pnl_usdc: cumulativePnl,
+      daily_pnl_usdc:      dailyPnl,
+      vault_size_usdc:     vaultSize,
     }},
     { upsert: true }
   );
 
   // ── 6. Update vault state ──────────────────────────────────
+  // Only update last_polled_activity_ts — vault_size_usdc is owned by profile cron
   await vaults.updateOne(
     { wallet },
-    { $set: {
-      last_polled_activity_ts: maxTs,
-      vault_size_usdc:         vaultSize,
-    }}
+    { $set: { last_polled_activity_ts: maxTs } }
   );
 
   if (newTrades > 0 || closedTrades > 0) {
-    log.success(`${label}: +${newTrades} new trades, ${closedTrades} closed | cumPnL=$${cumulativePnl.toFixed(2)} | vaultSize=$${vaultSize.toFixed(2)}`);
+    log.success(`${label}: +${newTrades} new trades, ${closedTrades} closed | v3PnL=$${cumulativePnl.toFixed(0)} | vaultSize=$${vaultSize.toFixed(0)}`);
   } else {
-    log.info(`${label}: no new trades | ${topOpenPositions.length} open positions | snapshot updated`);
+    log.info(`${label}: no new trades | ${topOpenPositions.length} open positions | snapshot ok`);
   }
 }
 
