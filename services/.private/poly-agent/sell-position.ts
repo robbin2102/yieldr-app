@@ -35,14 +35,18 @@ const size = parseFloat(sizeArg!);
 if (isNaN(size) || size <= 0) { console.error('Invalid --size'); process.exit(1); }
 
 // ── Fetch best bid from CLOB orderbook ───────────────────────────────────────
-async function fetchBestBid(token: string): Promise<number> {
+async function fetchBestBid(token: string): Promise<{ bestBid: number; bestAsk: number }> {
   const url = `${config.clobApiBase}/book?token_id=${token}`;
   const res  = await fetch(url);
   if (!res.ok) throw new Error(`Orderbook fetch failed: ${res.status}`);
   const book: any = await res.json();
   const bids: { price: string }[] = book.bids ?? [];
+  const asks: { price: string }[] = book.asks ?? [];
   if (bids.length === 0) throw new Error('No bids in orderbook — market may be closed');
-  return parseFloat(bids[0].price);
+  // Sort descending to get best (highest) bid; ascending for best (lowest) ask
+  const bestBid = Math.max(...bids.map(b => parseFloat(b.price)));
+  const bestAsk = asks.length > 0 ? Math.min(...asks.map(a => parseFloat(a.price))) : bestBid + 0.01;
+  return { bestBid, bestAsk };
 }
 
 async function main() {
@@ -57,9 +61,9 @@ async function main() {
     console.log(`\nUsing manual price: $${price}`);
   } else {
     console.log('\nFetching live orderbook...');
-    const bestBid = await fetchBestBid(tokenId!);
+    const { bestBid, bestAsk } = await fetchBestBid(tokenId!);
     price = parseFloat(Math.min(0.999, bestBid + 0.005).toFixed(4));
-    console.log(`Best bid: $${bestBid}  →  Sell price: $${price} (bestBid + 0.5¢)`);
+    console.log(`Best bid: $${bestBid}  |  Best ask: $${bestAsk}  →  Sell price: $${price} (bestBid + 0.5¢)`);
   }
 
   console.log('\n══════════════════════════════════════════');
