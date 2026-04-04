@@ -177,7 +177,7 @@ async function main() {
     // Refresh orderbook on each retry for fresh price
     const freshBook = attempt === 1 ? book : await fetchBook();
     const price     = sellPrice(freshBook.bestBid, attempt);
-    const expiration = Math.floor(Date.now() / 1000) + GTD_SECONDS;
+    const expiration = Math.floor(Date.now() / 1000) + 60 + GTD_SECONDS;
 
     console.log(`\n── Attempt ${attempt}/${MAX_ATTEMPTS} ─────────────────────────────────────────`);
     console.log(`  Best bid: $${freshBook.bestBid}  |  Best ask: $${freshBook.bestAsk}`);
