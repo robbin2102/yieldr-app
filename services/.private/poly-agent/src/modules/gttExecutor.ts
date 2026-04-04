@@ -124,7 +124,6 @@ export class GTTExecutor {
             tokenId, conditionId, title, outcome, traderTs, detectedAt, discoveryLatencyMs } = event;
 
     const ts = new Date().toISOString().slice(11, 19);
-    console.log(`\n[${ts}] ━━━ ${traderConfig.label} ${side} $${traderBetUsdc.toFixed(0)} | "${title.slice(0, 40)}" | lag ${discoveryLatencyMs}ms`);
 
     // ── 1. Dedup via unique txHash ────────────────────────────────────────────
     let tradeDoc;
@@ -138,12 +137,8 @@ export class GTTExecutor {
         status: 'DETECTED',
         copyBetUsdc: 0,
       });
-      console.log(`[${ts}]     📋 doc: ${tradeDoc._id}  tx: ${txHash.slice(0, 12)}...`);
     } catch (err: any) {
-      if (err.code === 11000) {
-        console.log(`[${ts}]     ⏭  duplicate txHash — skipping`);
-        return;
-      }
+      if (err.code === 11000) return; // silent dedup — already processed
       throw err;
     }
 
@@ -153,17 +148,13 @@ export class GTTExecutor {
     const freshTrader = await TraderLoader.get(traderConfig.wallet);
     if (!freshTrader) return;
 
-    // ── 2. Orderbook (needed for both BUY and SELL sizing) ───────────────────
-    const book = await orderbookCache.getBothPrices(tokenId);
-    if (!book.bestAsk || !book.bestBid) {
-      await this.skip(tradeDoc, 'NO_ORDERBOOK', 'orderbook fetch failed or empty', freshTrader.wallet);
-      return;
-    }
-    const safeBook = book as { bestAsk: number; bestBid: number };
-
     // ── 3. BUY: conviction-proportional sizing via avgBet filter ─────────────
+    // Run calcCopyBet early — before fetching orderbook or printing header.
+    // BELOW_AVG trades (e.g. 31 × $1 from T1) are silently skipped with a
+    // compact one-liner so they don't flood the terminal.
     let targetUsdc  = 0;
     let targetShares: number | undefined;
+    let buyBetUsdc  = 0;
 
     if (side === 'BUY') {
       const sizing = calcCopyBet(traderBetUsdc, freshTrader);
@@ -173,7 +164,23 @@ export class GTTExecutor {
         return;
       }
       await TraderLoader.recordAboveAvg(freshTrader.wallet);
-      targetUsdc = sizing.betUsdc;
+      buyBetUsdc = sizing.betUsdc; // saved — used below after header
+    }
+
+    // Verbose header only for trades that pass the initial BUY filter (or are SELLs)
+    console.log(`\n[${ts}] ━━━ ${traderConfig.label} ${side} $${traderBetUsdc.toFixed(0)} | "${title.slice(0, 40)}" | lag ${discoveryLatencyMs}ms`);
+    console.log(`[${ts}]     📋 doc: ${tradeDoc._id}  tx: ${txHash.slice(0, 12)}...`);
+
+    // ── Orderbook (needed for both BUY and SELL sizing) ───────────────────────
+    const book = await orderbookCache.getBothPrices(tokenId);
+    if (!book.bestAsk || !book.bestBid) {
+      await this.skip(tradeDoc, 'NO_ORDERBOOK', 'orderbook fetch failed or empty', freshTrader.wallet);
+      return;
+    }
+    const safeBook = book as { bestAsk: number; bestBid: number };
+
+    if (side === 'BUY') {
+      targetUsdc = buyBetUsdc;
 
       // ── Per-position cap: max 20% of allocationUsdc on any single market ──
       // Race-condition fix: combine DB-persisted spend with in-memory reservations
@@ -510,8 +517,12 @@ export class GTTExecutor {
     tradeDoc.skipDetail = detail ?? '';
     await tradeDoc.save();
     await TraderLoader.recordSkip(wallet, reason);
-    const ts = new Date().toISOString().slice(11, 19);
-    console.log(`[${ts}]     ⏭  SKIP [${tradeDoc._id}]  reason=${reason}  ${detail ?? ''}`);
+    // Only log skips that reached the verbose header (i.e. non-BELOW_AVG skips).
+    // BELOW_AVG is silent — counted in cycle stats, visible in hourly report.
+    if (reason !== 'BELOW_AVG') {
+      const ts = new Date().toISOString().slice(11, 19);
+      console.log(`[${ts}]     ⏭  SKIP [${tradeDoc._id}]  reason=${reason}  ${detail ?? ''}`);
+    }
     eventBus.emit('trade:skipped', { skipReason: reason, skipDetail: detail, docId: tradeDoc._id });
   }
 
