@@ -173,15 +173,9 @@ export class GTTExecutor {
 
     // ── 4. SELL: proportional exit — (traderSellSize / traderTotalBought) × ourShares ──
     } else {
-      // 4a. Check allocation not exhausted
-      if (freshTrader.allocationUsdc - freshTrader.spentUsdc <= 0) {
-        await this.skip(tradeDoc, 'ALLOCATION_FULL',
-          `allocation exhausted ($${freshTrader.spentUsdc} / $${freshTrader.allocationUsdc})`,
-          freshTrader.wallet);
-        return;
-      }
+      // Note: ALLOCATION_FULL does NOT block SELLs — selling returns capital, not consumes it.
 
-      // 4b. Verify we hold this position (live API check)
+      // 4a. Verify we hold this position (live API check)
       const ourCurrentShares = await positionFetcher.getOurShares(tokenId);
       if (ourCurrentShares < 0.01) {
         await this.skip(tradeDoc, 'SELL_NO_POSITION',
