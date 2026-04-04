@@ -171,6 +171,21 @@ export class GTTExecutor {
       await TraderLoader.recordAboveAvg(freshTrader.wallet);
       targetUsdc = sizing.betUsdc;
 
+      // ── Per-position cap: max 20% of allocationUsdc on any single market ──
+      const maxPerPosition  = freshTrader.allocationUsdc * 0.20;
+      const positionSpent   = await this.getPositionSpent(freshTrader.wallet, tokenId, conditionId);
+      const positionAvail   = maxPerPosition - positionSpent;
+      if (positionAvail <= 0) {
+        await this.skip(tradeDoc, 'ALLOCATION_FULL',
+          `position cap reached ($${positionSpent.toFixed(2)} / $${maxPerPosition.toFixed(2)} max per position)`,
+          freshTrader.wallet);
+        return;
+      }
+      if (targetUsdc > positionAvail) {
+        console.log(`[GTTExecutor] BUY capped to $${positionAvail.toFixed(2)} (position limit $${maxPerPosition.toFixed(2)}, already spent $${positionSpent.toFixed(2)})`);
+        targetUsdc = positionAvail;
+      }
+
     // ── 4. SELL: proportional exit — (traderSellSize / traderTotalBought) × ourShares ──
     } else {
       // Note: ALLOCATION_FULL does NOT block SELLs — selling returns capital, not consumes it.
@@ -247,6 +262,38 @@ export class GTTExecutor {
    * Sums traderSize from all FILLED/EXECUTING BUY docs for a given trader+token.
    * Falls back to conditionId match if no tokenId results (trader bought other outcome).
    */
+  /**
+   * Returns our net USDC spent on a specific position (BUY fills minus SELL fills).
+   * Used to enforce the 20% per-position cap.
+   */
+  private async getPositionSpent(wallet: string, tokenId: string, conditionId: string): Promise<number> {
+    const filter = (side: 'BUY' | 'SELL', statuses: string[]) => ({
+      sourceWallet: wallet.toLowerCase(),
+      side,
+      status: { $in: statuses },
+      $or: [{ tokenId }, { conditionId }],
+    });
+
+    const [buys, sells] = await Promise.all([
+      CopyTrade.aggregate([
+        { $match: filter('BUY', ['FILLED', 'PARTIAL', 'EXECUTING']) },
+        { $group: { _id: null, total: {
+          // EXECUTING: committed but not yet filled — count copyBetUsdc
+          // FILLED/PARTIAL: count actual filledUsdc
+          $sum: { $cond: [{ $eq: ['$status', 'EXECUTING'] }, '$copyBetUsdc', '$filledUsdc'] }
+        } } },
+      ]),
+      CopyTrade.aggregate([
+        { $match: filter('SELL', ['FILLED', 'PARTIAL']) },
+        { $group: { _id: null, total: { $sum: '$filledUsdc' } } },
+      ]),
+    ]);
+
+    const buySpent      = buys[0]?.total  ?? 0;
+    const sellRecovered = sells[0]?.total ?? 0;
+    return Math.max(0, buySpent - sellRecovered);
+  }
+
   private async getTraderTotalBoughtShares(
     sourceWallet: string, tokenId: string, conditionId: string
   ): Promise<number> {

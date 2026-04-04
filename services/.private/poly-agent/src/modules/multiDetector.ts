@@ -64,7 +64,15 @@ export interface DetectedTradeEvent {
 export class MultiDetector {
   private activeWallets: Set<string> = new Set();
   private watchdogTimer: NodeJS.Timeout | null = null;
+  private statusTimer:   NodeJS.Timeout | null = null;
   private stopped = false;
+
+  // In-memory cycle counters — reset each hour
+  private cycleHour    = '';
+  private cycleStart   = Date.now();
+  private cycleTotal   = 0;       // total activities detected this hour
+  private cycleTrades  = 0;       // TRADE activities forwarded to executor
+  private cycleByLabel = new Map<string, number>(); // label → trade count
 
   async start(): Promise<void> {
     console.log('[MultiDetector] Starting...');
@@ -79,15 +87,40 @@ export class MultiDetector {
     // Watchdog: pick up newly activated traders without restart
     this.watchdogTimer = setInterval(() => this.watchdog(), 60_000);
     console.log('[MultiDetector] Watchdog started (60s interval for new traders)');
+
+    // Status line every 10 minutes — shows cycle activity count without flooding
+    this.statusTimer = setInterval(() => this.printCycleStatus(), 10 * 60_000);
   }
 
   stop(): void {
     this.stopped = true;
-    if (this.watchdogTimer) {
-      clearInterval(this.watchdogTimer);
-      this.watchdogTimer = null;
-    }
+    if (this.watchdogTimer) { clearInterval(this.watchdogTimer); this.watchdogTimer = null; }
+    if (this.statusTimer)   { clearInterval(this.statusTimer);   this.statusTimer   = null; }
     console.log('[MultiDetector] Stopped');
+  }
+
+  private printCycleStatus(): void {
+    const elapsedMin = Math.round((Date.now() - this.cycleStart) / 60_000);
+    const breakdown  = [...this.cycleByLabel.entries()]
+      .filter(([, n]) => n > 0)
+      .map(([l, n]) => `${l.split('-')[0]}:${n}`)
+      .join(' ');
+    const ts = new Date().toISOString().slice(11, 19);
+    console.log(`[${ts}] 📊 Cycle ${elapsedMin}m | activities:${this.cycleTotal} trades:${this.cycleTrades}${breakdown ? ` (${breakdown})` : ''}`);
+  }
+
+  /** Reset cycle counters on the hour boundary */
+  private checkHourReset(): void {
+    const hour = new Date().toISOString().slice(0, 13); // "2026-04-04T11"
+    if (hour !== this.cycleHour) {
+      this.cycleHour    = hour;
+      this.cycleStart   = Date.now();
+      this.cycleTotal   = 0;
+      this.cycleTrades  = 0;
+      this.cycleByLabel.clear();
+      const ts = new Date().toISOString().slice(11, 19);
+      console.log(`\n[${ts}] ⏰ Hour cycle reset — monitoring ${this.activeWallets.size} traders`);
+    }
   }
 
   private startPollingChain(trader: ICopyTrader): void {
@@ -151,12 +184,12 @@ export class MultiDetector {
     // Filter to only new activities (after lastSeenTs)
     const newActivities = activities.filter(a => a.timestamp > trader.lastSeenTs);
 
+    this.checkHourReset();
     const ts = new Date().toISOString().slice(11, 19);  // HH:MM:SS
-    if (newActivities.length === 0) {
-      console.log(`[${ts}] 👁  ${trader.label.padEnd(20)} — no new activity (lastSeen: ${new Date(trader.lastSeenTs * 1000).toISOString().slice(0, 16)})`);
-      return;
-    }
 
+    if (newActivities.length === 0) return; // silent — cycle counter shown every 10m
+
+    this.cycleTotal += newActivities.length;
     console.log(`[${ts}] 🔔 ${trader.label}: ${newActivities.length} new activit${newActivities.length === 1 ? 'y' : 'ies'} detected`);
 
     // Advance cursor to the most recent timestamp
@@ -183,6 +216,9 @@ export class MultiDetector {
         await this.logNonTrade(trader, act, traderTs, discoveryLatencyMs);
         continue;
       }
+
+      this.cycleTrades++;
+      this.cycleByLabel.set(trader.label, (this.cycleByLabel.get(trader.label) ?? 0) + 1);
 
       const event: DetectedTradeEvent = {
         traderConfig: trader,

@@ -65,7 +65,7 @@ export const config = {
   // ── Global safety cap per single copy order ────────────────────────────────
   // Per-trader maxBetUsdc in DB overrides this for bet sizing.
   // This is the hard ceiling regardless of any per-trader setting.
-  maxPositionUsdc: parseFloat(process.env.MAX_POSITION_USDC || '25'),
+  maxPositionUsdc: parseFloat(process.env.MAX_POSITION_USDC || '20'),
 
   // ── Execution reporting interval ──────────────────────────────────────────
   reportIntervalMs: parseInt(process.env.REPORT_INTERVAL_MS || '3600000'),  // 1h
