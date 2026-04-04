@@ -1,12 +1,4 @@
 import { ClobClient, Side, OrderType } from '@polymarket/clob-client';
-// Internal helpers from clob-client — used to sign NegRisk orders against the
-// NegRisk adapter contract (clob-client v3 always uses CTF Exchange, not NegRisk).
-import {
-  buildOrder as buildSignedOrder,
-  buildOrderCreationArgs,
-  ROUNDING_CONFIG,
-} from '@polymarket/clob-client/dist/order-builder/helpers';
-import { SignatureType } from '@polymarket/order-utils';
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
 import { resolve } from 'path';
 import { config } from '../config';
@@ -18,10 +10,6 @@ import { calcCopyBet } from './betSizer';
 import { positionFetcher } from './positionFetcher';
 import { DetectedTradeEvent } from './multiDetector';
 import { PendingOrder } from '../types';
-
-// NegRisk Adapter contract on Polygon — used instead of CTF Exchange for
-// binary (non-crypto) markets. Orders signed against wrong contract → "invalid signature".
-const NEG_RISK_ADAPTER = '0xd91E80cF2E7be2e162c6513ceD06f1dD0dA35296';
 
 // Persist fee rate cache to disk so corrections survive process restarts.
 const FEE_CACHE_PATH = resolve(__dirname, '../../data/fee-rate-cache.json');
@@ -43,39 +31,6 @@ function saveFeeCache(cache: Map<string, number>): void {
     writeFileSync(FEE_CACHE_PATH, JSON.stringify(Object.fromEntries(cache)));
   } catch (e: any) {
     console.warn('[GTTExecutor] Could not persist fee cache:', e.message);
-  }
-}
-
-/**
- * Fetch negRisk flag for a token from Gamma API.
- * NegRisk markets (aviation, politics, macro) must be signed against the NegRisk
- * Adapter contract, not the CTF Exchange. Returns false on failure (safe default).
- */
-async function fetchNegRiskFromAPI(tokenId: string, gammaApiBase: string): Promise<boolean> {
-  try {
-    const url = `${gammaApiBase}/markets?clob_token_ids=${tokenId}`;
-    const res = await fetch(url);
-    if (!res.ok) return false;
-    const data = await res.json() as any[];
-    if (!Array.isArray(data) || data.length === 0) return false;
-    return data[0]?.negRisk === true;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Fetch minimum tick size for a token from the CLOB API.
- * Used when signing NegRisk orders directly (bypassing clobClient.createOrder).
- */
-async function fetchTickSize(tokenId: string, clobApiBase: string): Promise<string> {
-  try {
-    const res = await fetch(`${clobApiBase}/tick-size?token_id=${tokenId}`);
-    if (!res.ok) return '0.01';
-    const data = await res.json() as any;
-    return data.minimum_tick_size ?? '0.01';
-  } catch {
-    return '0.01';
   }
 }
 
@@ -142,8 +97,6 @@ export class GTTExecutor {
   // Per-token fee rate cache — persisted to disk so corrections survive restarts.
   // Eliminates fee correction round-trips for every subsequent order on same market.
   private feeRateCache: Map<string, number> = loadFeeCache();
-  // NegRisk flag cache — true means sign against NegRisk adapter, not CTF Exchange.
-  private negRiskCache = new Map<string, boolean>();
   // In-memory reservation map for per-position cap race-condition fix.
   // Key: `wallet:conditionId` — Value: USDC reserved by in-flight BUYs not yet EXECUTING in DB.
   // Updated SYNCHRONOUSLY (no await) so concurrent handleTrade() calls see each other's reservations.
@@ -437,19 +390,12 @@ export class GTTExecutor {
       }
     }
 
-    // Resolve negRisk flag (cached after first fetch per token).
-    // NegRisk markets must be signed against the NegRisk adapter contract.
-    if (!this.negRiskCache.has(tokenId)) {
-      const gammaBase = 'https://gamma-api.polymarket.com';
-      const isNeg = await fetchNegRiskFromAPI(tokenId, gammaBase);
-      this.negRiskCache.set(tokenId, isNeg);
-      if (isNeg) console.log(`[GTTExecutor] NegRisk market detected — using NegRisk adapter (${tokenId.slice(0, 10)}...)`);
-    }
-    const isNegRisk = this.negRiskCache.get(tokenId) ?? false;
-
     try {
-      // NegRisk markets: sign directly against the NegRisk adapter contract.
-      // clob-client v3 always signs against CTF Exchange → "invalid signature" for negRisk.
+      // clob-client v5 handles negRisk detection and signing internally.
+      // getNegRisk() fetches once from CLOB API and caches per token.
+      const isNegRisk = await this.clobClient.getNegRisk(tokenId);
+      if (isNegRisk) console.log(`[GTTExecutor] NegRisk market — using NegRisk exchange (${tokenId.slice(0, 10)}...)`);
+
       const userOrder = {
         tokenID:    tokenId,
         price:      limitPrice,
@@ -460,20 +406,7 @@ export class GTTExecutor {
         expiration,
       };
 
-      let order;
-      if (isNegRisk) {
-        const tickSize = await fetchTickSize(tokenId, config.clobApiBase);
-        const roundCfg = (ROUNDING_CONFIG as any)[tickSize] ?? ROUNDING_CONFIG['0.01'];
-        const signer   = (this.clobClient as any).signer;
-        const chainId  = (this.clobClient as any).chainId;
-        const signerAddr = await signer.getAddress();
-        const orderData  = await buildOrderCreationArgs(
-          signerAddr, signerAddr, SignatureType.EOA, userOrder, roundCfg
-        );
-        order = await buildSignedOrder(signer, NEG_RISK_ADAPTER, chainId, orderData);
-      } else {
-        order = await this.clobClient.createOrder(userOrder);
-      }
+      const order = await this.clobClient.createOrder(userOrder, { negRisk: isNegRisk });
 
       const postResp = await this.clobClient.postOrder(order, OrderType.GTD);
 
