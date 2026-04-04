@@ -76,12 +76,13 @@ async function fetchActivity(wallet: string, sinceMs: number): Promise<any[]> {
 }
 
 // ── classify activity ─────────────────────────────────────────────────────────
+// API schema: type='TRADE'|'REDEEM'|'MERGE'|'SPLIT'|'REWARD'|'CONVERSION'
+//             side='BUY'|'SELL'  (only present when type==='TRADE')
 function isTrade(t: any): boolean {
-  const type = (t.type ?? t.side ?? '').toUpperCase();
-  return type === 'BUY' || type === 'SELL';
+  return (t.type ?? '').toUpperCase() === 'TRADE' && (t.side === 'BUY' || t.side === 'SELL');
 }
 function tradeSide(t: any): string {
-  return (t.type ?? t.side ?? '?').toUpperCase();
+  return (t.side ?? '?').toUpperCase();
 }
 function marketKey(t: any): string {
   return t.conditionId ?? t.market ?? t.slug ?? t.title ?? t.asset ?? '?';
