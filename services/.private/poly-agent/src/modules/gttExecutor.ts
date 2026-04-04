@@ -97,6 +97,10 @@ export class GTTExecutor {
   // Per-token fee rate cache — persisted to disk so corrections survive restarts.
   // Eliminates fee correction round-trips for every subsequent order on same market.
   private feeRateCache: Map<string, number> = loadFeeCache();
+  // In-memory reservation map for per-position cap race-condition fix.
+  // Key: `wallet:conditionId` — Value: USDC reserved by in-flight BUYs not yet EXECUTING in DB.
+  // Updated SYNCHRONOUSLY (no await) so concurrent handleTrade() calls see each other's reservations.
+  private positionReserved = new Map<string, number>();
 
   constructor(clobClient: ClobClient) {
     this.clobClient = clobClient;
@@ -172,19 +176,29 @@ export class GTTExecutor {
       targetUsdc = sizing.betUsdc;
 
       // ── Per-position cap: max 20% of allocationUsdc on any single market ──
+      // Race-condition fix: combine DB-persisted spend with in-memory reservations
+      // from concurrent handleTrade() calls that haven't saved EXECUTING yet.
+      // positionReserved.set() is SYNCHRONOUS — no await between check and set —
+      // so concurrent promises see each other's reservation without yielding.
+      const lockKey         = `${freshTrader.wallet}:${conditionId || tokenId}`;
+      const alreadyReserved = this.positionReserved.get(lockKey) ?? 0;
+      const dbSpent         = await this.getPositionSpent(freshTrader.wallet, tokenId, conditionId);
       const maxPerPosition  = freshTrader.allocationUsdc * 0.20;
-      const positionSpent   = await this.getPositionSpent(freshTrader.wallet, tokenId, conditionId);
-      const positionAvail   = maxPerPosition - positionSpent;
+      const totalCommitted  = dbSpent + alreadyReserved;
+      const positionAvail   = maxPerPosition - totalCommitted;
       if (positionAvail <= 0) {
         await this.skip(tradeDoc, 'ALLOCATION_FULL',
-          `position cap reached ($${positionSpent.toFixed(2)} / $${maxPerPosition.toFixed(2)} max per position)`,
+          `position cap reached ($${totalCommitted.toFixed(2)} / $${maxPerPosition.toFixed(2)} max per position)`,
           freshTrader.wallet);
         return;
       }
-      if (targetUsdc > positionAvail) {
-        console.log(`[GTTExecutor] BUY capped to $${positionAvail.toFixed(2)} (position limit $${maxPerPosition.toFixed(2)}, already spent $${positionSpent.toFixed(2)})`);
-        targetUsdc = positionAvail;
+      const betCapped = Math.min(targetUsdc, positionAvail);
+      if (betCapped < targetUsdc) {
+        console.log(`[GTTExecutor] BUY capped to $${betCapped.toFixed(2)} (db=$${dbSpent.toFixed(2)} + inflight=$${alreadyReserved.toFixed(2)} / max $${maxPerPosition.toFixed(2)})`);
       }
+      // SYNCHRONOUS — reserves before any await so concurrent calls see it immediately
+      this.positionReserved.set(lockKey, alreadyReserved + betCapped);
+      targetUsdc = betCapped;
 
     // ── 4. SELL: proportional exit — (traderSellSize / traderTotalBought) × ourShares ──
     } else {
@@ -237,6 +251,16 @@ export class GTTExecutor {
     tradeDoc.submissionLatencyMs = submissionLatencyMs;
     tradeDoc.status              = 'EXECUTING';
     await tradeDoc.save();
+
+    // DB now has EXECUTING doc — getPositionSpent() includes it in future queries.
+    // Release the in-memory reservation so we don't double-count.
+    if (side === 'BUY') {
+      const lockKey = `${freshTrader.wallet}:${conditionId || tokenId}`;
+      const prev = this.positionReserved.get(lockKey) ?? 0;
+      const updated = Math.max(0, prev - targetUsdc);
+      if (updated === 0) this.positionReserved.delete(lockKey);
+      else               this.positionReserved.set(lockKey, updated);
+    }
 
     eventBus.emit('trade:executing', { txHash, traderLabel: traderConfig.label, betUsdc: targetUsdc });
 

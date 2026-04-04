@@ -41,9 +41,11 @@ async function main() {
       totalCashPnl      += cashPnl;
 
       const pnlSign = cashPnl >= 0 ? '+' : '';
+      const tokenId = p.asset ?? p.tokenId ?? '—';
       console.log(
         `\n  [${i + 1}] ${p.title ?? p.outcome ?? 'Unknown market'}\n` +
         `      Outcome   : ${p.outcome ?? '—'}\n` +
+        `      TokenId   : ${tokenId}\n` +
         `      Shares    : ${size.toFixed(4)}\n` +
         `      Avg price : $${avgPrice.toFixed(4)}\n` +
         `      Cur price : $${curPrice.toFixed(4)}\n` +
