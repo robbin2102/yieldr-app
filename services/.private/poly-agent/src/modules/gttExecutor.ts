@@ -12,7 +12,9 @@ import { DetectedTradeEvent } from './multiDetector';
 import { PendingOrder } from '../types';
 
 // Persist fee rate cache to disk so corrections survive process restarts.
-const FEE_CACHE_PATH = resolve(__dirname, '../../data/fee-rate-cache.json');
+const FEE_CACHE_PATH     = resolve(__dirname, '../../data/fee-rate-cache.json');
+// Persist negRisk flag to disk — eliminates per-order API call and version dependency.
+const NEG_RISK_CACHE_PATH = resolve(__dirname, '../../data/neg-risk-cache.json');
 
 function loadFeeCache(): Map<string, number> {
   try {
@@ -31,6 +33,44 @@ function saveFeeCache(cache: Map<string, number>): void {
     writeFileSync(FEE_CACHE_PATH, JSON.stringify(Object.fromEntries(cache)));
   } catch (e: any) {
     console.warn('[GTTExecutor] Could not persist fee cache:', e.message);
+  }
+}
+
+function loadNegRiskCache(): Map<string, boolean> {
+  try {
+    if (existsSync(NEG_RISK_CACHE_PATH)) {
+      const raw = readFileSync(NEG_RISK_CACHE_PATH, 'utf8');
+      return new Map(Object.entries(JSON.parse(raw)) as [string, boolean][]);
+    }
+  } catch { /* corrupt file — start fresh */ }
+  return new Map();
+}
+
+function saveNegRiskCache(cache: Map<string, boolean>): void {
+  try {
+    const dir = resolve(NEG_RISK_CACHE_PATH, '..');
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    writeFileSync(NEG_RISK_CACHE_PATH, JSON.stringify(Object.fromEntries(cache)));
+  } catch (e: any) {
+    console.warn('[GTTExecutor] Could not persist negRisk cache:', e.message);
+  }
+}
+
+/**
+ * Fetch the negRisk flag for a market from the CLOB /markets endpoint.
+ * Returns null on failure (caller falls back to false = standard CTF exchange).
+ */
+async function fetchNegRiskFromMarketAPI(conditionId: string, clobApiBase: string): Promise<boolean | null> {
+  try {
+    const url = `${clobApiBase}/markets/${conditionId}`;
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const data = await res.json() as any;
+    const val = data.neg_risk;
+    if (typeof val !== 'boolean') return null;
+    return val;
+  } catch {
+    return null;
   }
 }
 
@@ -97,6 +137,10 @@ export class GTTExecutor {
   // Per-token fee rate cache — persisted to disk so corrections survive restarts.
   // Eliminates fee correction round-trips for every subsequent order on same market.
   private feeRateCache: Map<string, number> = loadFeeCache();
+  // Per-token negRisk flag cache — persisted to disk.
+  // Avoids calling clobClient.getNegRisk() (version-dependent) on every order.
+  // Populated on first encounter via GET /markets/<conditionId>; never changes for a market.
+  private negRiskCache: Map<string, boolean> = loadNegRiskCache();
   // In-memory reservation map for per-position cap race-condition fix.
   // Key: `wallet:conditionId` — Value: USDC reserved by in-flight BUYs not yet EXECUTING in DB.
   // Updated SYNCHRONOUSLY (no await) so concurrent handleTrade() calls see each other's reservations.
@@ -398,9 +442,9 @@ export class GTTExecutor {
     }
 
     try {
-      // clob-client v5 handles negRisk detection and signing internally.
-      // getNegRisk() fetches once from CLOB API and caches per token.
-      const isNegRisk = await this.clobClient.getNegRisk(tokenId);
+      // negRisk flag comes from our own disk-persisted cache (populated via GET /markets/<conditionId>).
+      // No dependency on clob-client version — works with v3, v5, or any future version.
+      const isNegRisk = await this.getNegRiskCached(tokenId, ctx.conditionId);
       if (isNegRisk) console.log(`[GTTExecutor] NegRisk market — using NegRisk exchange (${tokenId.slice(0, 10)}...)`);
 
       const userOrder = {
@@ -524,6 +568,27 @@ export class GTTExecutor {
       console.log(`[${ts}]     ⏭  SKIP [${tradeDoc._id}]  reason=${reason}  ${detail ?? ''}`);
     }
     eventBus.emit('trade:skipped', { skipReason: reason, skipDetail: detail, docId: tradeDoc._id });
+  }
+
+  /**
+   * Returns the negRisk flag for a token, using a disk-persisted cache.
+   * On cache miss, fetches from GET /markets/<conditionId> (lightweight metadata call).
+   * Eliminates the per-order clobClient.getNegRisk() call and its version dependency.
+   * negRisk never changes for a market, so cache entries are permanent.
+   */
+  private async getNegRiskCached(tokenId: string, conditionId: string): Promise<boolean> {
+    if (this.negRiskCache.has(tokenId)) {
+      return this.negRiskCache.get(tokenId)!;
+    }
+    const result = await fetchNegRiskFromMarketAPI(conditionId, config.clobApiBase);
+    if (result === null) {
+      console.warn(`[GTTExecutor] negRisk API unavailable for ${conditionId.slice(0, 12)}... — defaulting to false (CTF exchange)`);
+      return false;
+    }
+    this.negRiskCache.set(tokenId, result);
+    saveNegRiskCache(this.negRiskCache);
+    if (result) console.log(`[GTTExecutor] NegRisk market cached (${tokenId.slice(0, 10)}...)`);
+    return result;
   }
 
   private sleep(ms: number): Promise<void> {
