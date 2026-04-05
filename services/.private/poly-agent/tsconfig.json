@@ -21,6 +21,7 @@
     "src/modules/executor.ts",
     "src/modules/initialCopier.ts",
     "src/modules/metrics.ts",
-    "src/modules/reconciler.ts"
+    "src/modules/reconciler.ts",
+    "src/modules/executionTracker.ts"
   ]
 }
