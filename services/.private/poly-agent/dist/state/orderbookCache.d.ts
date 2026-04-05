@@ -39,6 +39,14 @@ declare class OrderbookCache {
      */
     fetchOrderbookSync(tokenId: string): Promise<boolean>;
     /**
+     * Get both best bid and best ask in a single call.
+     * Used by GTTExecutor to compute limit prices (ask - slack, bid + slack).
+     */
+    getBothPrices(tokenId: string): Promise<{
+        bestBid: number | null;
+        bestAsk: number | null;
+    }>;
+    /**
      * Check if we have fresh orderbook data for a token
      */
     hasOrderbook(tokenId: string): boolean;

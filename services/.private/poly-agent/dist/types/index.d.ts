@@ -18,14 +18,29 @@ export interface DetectedTrade {
     detectedAt: number;
 }
 /**
- * Pending order being tracked by Confirmer
+ * Pending order tracked by Confirmer (v3 — GTD maker orders)
+ *
+ * Emitted by GTTExecutor as 'trade:submitted' after successful postOrder.
+ * Confirmer stores this and matches incoming WebSocket trade events against
+ * maker_order_id (GTD orders are always maker side).
  */
 export interface PendingOrder {
-    tradeId: string;
     orderId: string;
-    expectedSize: number;
-    expectedPrice: number;
-    originalTrade: DetectedTrade;
+    tradeDocId: string;
+    traderWallet: string;
+    side: 'BUY' | 'SELL';
+    tokenId: string;
+    conditionId: string;
+    targetUsdc: number;
+    targetShares?: number;
+    limitPrice: number;
+    submittedAt: number;
+    attempt: number;
+    traderPrice: number;
+    traderTs: number;
+    detectedAt: number;
+    filledSize: number;
+    filledCost: number;
 }
 /**
  * Polymarket Activity API response
@@ -62,11 +77,15 @@ export interface PositionResponse {
     redeemable: boolean;
 }
 /**
- * WebSocket trade fill message
+ * WebSocket trade fill message from Polymarket User Channel.
+ *
+ * For GTD maker orders our order is on the maker side, so the relevant
+ * field is maker_order_id (not taker_order_id).
  */
 export interface TradeFillMessage {
     event_type: 'trade';
     id: string;
+    maker_order_id: string;
     taker_order_id: string;
     status: 'MATCHED' | 'MINED' | 'CONFIRMED' | 'RETRYING' | 'FAILED';
     price: string;

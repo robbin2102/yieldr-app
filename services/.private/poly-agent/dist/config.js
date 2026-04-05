@@ -34,57 +34,63 @@ else {
     throw new Error('No environment file found! Please create services/.private/poly-agent/.env.polyagent from .env.example');
 }
 exports.config = {
-    // Target trader wallet
-    targetWallet: process.env.TARGET_WALLET?.trim(),
-    // Bot wallet (our wallet)
+    // ── Bot identity (never move to DB) ────────────────────────────────────────
     botWalletAddress: process.env.BOT_WALLET_ADDRESS?.trim(),
     botPrivateKey: process.env.BOT_PRIVATE_KEY?.trim(),
-    // Polymarket API credentials
+    // ── Polymarket API credentials ─────────────────────────────────────────────
     apiKey: process.env.POLYMARKET_API_KEY?.trim(),
     apiSecret: process.env.POLYMARKET_API_SECRET?.trim(),
     passphrase: process.env.POLYMARKET_PASSPHRASE?.trim(),
-    // MongoDB connection
+    // ── Infrastructure ─────────────────────────────────────────────────────────
     mongoUri: process.env.MONGODB_URI,
-    // Agent parameters
-    copyRatio: parseFloat(process.env.COPY_RATIO || '0.01'),
-    maxPositionUsdc: parseFloat(process.env.MAX_POSITION_USDC || '2000'),
-    minTradeSize: parseFloat(process.env.MIN_TRADE_SIZE || '0'), // DEPRECATED: Not used anymore
-    // Polling intervals
-    detectorIntervalMs: parseInt(process.env.DETECTOR_INTERVAL_MS || '3000'),
-    reconcilerIntervalMs: parseInt(process.env.RECONCILER_INTERVAL_MS || '60000'),
-    // Polymarket endpoints
+    polygonRpcUrl: process.env.POLYGON_RPC_URL,
+    chainId: parseInt(process.env.CHAIN_ID || '137'),
+    // ── Polymarket endpoints (defaults work for mainnet) ───────────────────────
     dataApiBase: process.env.DATA_API_BASE || 'https://data-api.polymarket.com',
     clobApiBase: process.env.CLOB_API_BASE || 'https://clob.polymarket.com',
     wssMarket: process.env.WSS_MARKET || 'wss://ws-subscriptions-clob.polymarket.com/ws/market',
     wssUser: process.env.WSS_USER || 'wss://ws-subscriptions-clob.polymarket.com/ws/user',
-    chainId: parseInt(process.env.CHAIN_ID || '137'),
-    // Polygon RPC endpoint (for on-chain transactions like approvals)
-    polygonRpcUrl: process.env.POLYGON_RPC_URL,
+    // ── Detector ──────────────────────────────────────────────────────────────
+    // Default poll interval. Individual traders can override via detectorIntervalMs
+    // in their ahf-copyTraders document (e.g. 300 for BTC 5m markets).
+    detectorIntervalMs: parseInt(process.env.DETECTOR_INTERVAL_MS || '60000'), // 1m default
+    // ── GTT order execution ────────────────────────────────────────────────────
+    maxOrderRetries: parseInt(process.env.MAX_ORDER_RETRIES || '3'),
+    orderRetryDelayMs: parseInt(process.env.ORDER_RETRY_DELAY_MS || '500'),
+    gttExpirySeconds: parseInt(process.env.GTT_EXPIRY_SECONDS || '8'),
+    // Polymarket taker fee in basis points. Standard markets use 1000 (10bps).
+    // Override via FEE_RATE_BPS if needed.
+    feeRateBps: parseInt(process.env.FEE_RATE_BPS || '1000'),
+    // ── Global safety cap per single copy order ────────────────────────────────
+    // Per-trader maxBetUsdc in DB overrides this for bet sizing.
+    // This is the hard ceiling regardless of any per-trader setting.
+    maxPositionUsdc: parseFloat(process.env.MAX_POSITION_USDC || '20'),
+    // ── Execution reporting interval ──────────────────────────────────────────
+    reportIntervalMs: parseInt(process.env.REPORT_INTERVAL_MS || '3600000'), // 1h
+    // ── Stale activity filter ──────────────────────────────────────────────────
+    // Activities older than this are silently skipped (prevent backlog replay).
+    // 5 minutes covers typical poll gaps; increase if needed for slow markets.
+    maxLagMs: parseInt(process.env.MAX_LAG_MS || '300000'), // 5m default
 };
 // Validate required environment variables
 const required = [
-    'targetWallet',
     'botWalletAddress',
     'botPrivateKey',
     'apiKey',
     'apiSecret',
     'passphrase',
     'mongoUri',
-    'polygonRpcUrl'
+    'polygonRpcUrl',
 ];
 for (const key of required) {
     if (!exports.config[key]) {
         throw new Error(`Missing required config: ${key}. Please check your .env.polyagent file.`);
     }
 }
-// Validate wallet addresses format (basic check)
-if (exports.config.targetWallet && !exports.config.targetWallet.startsWith('0x')) {
-    throw new Error('TARGET_WALLET must be a valid Ethereum address starting with 0x');
-}
-if (exports.config.botWalletAddress && !exports.config.botWalletAddress.startsWith('0x')) {
+if (!exports.config.botWalletAddress.startsWith('0x')) {
     throw new Error('BOT_WALLET_ADDRESS must be a valid Ethereum address starting with 0x');
 }
-if (exports.config.botPrivateKey && !exports.config.botPrivateKey.startsWith('0x')) {
+if (!exports.config.botPrivateKey.startsWith('0x')) {
     throw new Error('BOT_PRIVATE_KEY must start with 0x');
 }
 //# sourceMappingURL=config.js.map

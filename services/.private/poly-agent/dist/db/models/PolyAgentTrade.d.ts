@@ -1,24 +1,24 @@
 import mongoose from 'mongoose';
 export declare const PolyAgentTrade: mongoose.Model<{
+    status: "DETECTED" | "SKIPPED" | "EXECUTING" | "FILLED" | "FAILED";
     originalTxHash: string;
-    status: "DETECTED" | "EXECUTING" | "FILLED" | "FAILED" | "SKIPPED";
     skipReason?: string | null | undefined;
-    failReason?: string | null | undefined;
     detectedAt?: NativeDate | null | undefined;
+    failReason?: string | null | undefined;
     executedAt?: NativeDate | null | undefined;
     confirmedAt?: NativeDate | null | undefined;
     latencyMs?: number | null | undefined;
     original?: {
-        walletAddress?: string | null | undefined;
+        conditionId?: string | null | undefined;
         tokenId?: string | null | undefined;
+        title?: string | null | undefined;
+        outcome?: string | null | undefined;
+        side?: "BUY" | "SELL" | null | undefined;
         size?: number | null | undefined;
+        walletAddress?: string | null | undefined;
         price?: number | null | undefined;
         usdcSize?: number | null | undefined;
         timestamp?: NativeDate | null | undefined;
-        title?: string | null | undefined;
-        outcome?: string | null | undefined;
-        conditionId?: string | null | undefined;
-        side?: "BUY" | "SELL" | null | undefined;
     } | null | undefined;
     copy?: {
         side?: "BUY" | "SELL" | null | undefined;
@@ -36,25 +36,25 @@ export declare const PolyAgentTrade: mongoose.Model<{
         slippageBps?: number | null | undefined;
     } | null | undefined;
 } & mongoose.DefaultTimestampProps, {}, {}, {}, mongoose.Document<unknown, {}, {
+    status: "DETECTED" | "SKIPPED" | "EXECUTING" | "FILLED" | "FAILED";
     originalTxHash: string;
-    status: "DETECTED" | "EXECUTING" | "FILLED" | "FAILED" | "SKIPPED";
     skipReason?: string | null | undefined;
-    failReason?: string | null | undefined;
     detectedAt?: NativeDate | null | undefined;
+    failReason?: string | null | undefined;
     executedAt?: NativeDate | null | undefined;
     confirmedAt?: NativeDate | null | undefined;
     latencyMs?: number | null | undefined;
     original?: {
-        walletAddress?: string | null | undefined;
+        conditionId?: string | null | undefined;
         tokenId?: string | null | undefined;
+        title?: string | null | undefined;
+        outcome?: string | null | undefined;
+        side?: "BUY" | "SELL" | null | undefined;
         size?: number | null | undefined;
+        walletAddress?: string | null | undefined;
         price?: number | null | undefined;
         usdcSize?: number | null | undefined;
         timestamp?: NativeDate | null | undefined;
-        title?: string | null | undefined;
-        outcome?: string | null | undefined;
-        conditionId?: string | null | undefined;
-        side?: "BUY" | "SELL" | null | undefined;
     } | null | undefined;
     copy?: {
         side?: "BUY" | "SELL" | null | undefined;
@@ -74,25 +74,25 @@ export declare const PolyAgentTrade: mongoose.Model<{
 } & mongoose.DefaultTimestampProps, {}, {
     timestamps: true;
 }> & {
+    status: "DETECTED" | "SKIPPED" | "EXECUTING" | "FILLED" | "FAILED";
     originalTxHash: string;
-    status: "DETECTED" | "EXECUTING" | "FILLED" | "FAILED" | "SKIPPED";
     skipReason?: string | null | undefined;
-    failReason?: string | null | undefined;
     detectedAt?: NativeDate | null | undefined;
+    failReason?: string | null | undefined;
     executedAt?: NativeDate | null | undefined;
     confirmedAt?: NativeDate | null | undefined;
     latencyMs?: number | null | undefined;
     original?: {
-        walletAddress?: string | null | undefined;
+        conditionId?: string | null | undefined;
         tokenId?: string | null | undefined;
+        title?: string | null | undefined;
+        outcome?: string | null | undefined;
+        side?: "BUY" | "SELL" | null | undefined;
         size?: number | null | undefined;
+        walletAddress?: string | null | undefined;
         price?: number | null | undefined;
         usdcSize?: number | null | undefined;
         timestamp?: NativeDate | null | undefined;
-        title?: string | null | undefined;
-        outcome?: string | null | undefined;
-        conditionId?: string | null | undefined;
-        side?: "BUY" | "SELL" | null | undefined;
     } | null | undefined;
     copy?: {
         side?: "BUY" | "SELL" | null | undefined;
@@ -116,25 +116,25 @@ export declare const PolyAgentTrade: mongoose.Model<{
 }, mongoose.Schema<any, mongoose.Model<any, any, any, any, any, any>, {}, {}, {}, {}, {
     timestamps: true;
 }, {
+    status: "DETECTED" | "SKIPPED" | "EXECUTING" | "FILLED" | "FAILED";
     originalTxHash: string;
-    status: "DETECTED" | "EXECUTING" | "FILLED" | "FAILED" | "SKIPPED";
     skipReason?: string | null | undefined;
-    failReason?: string | null | undefined;
     detectedAt?: NativeDate | null | undefined;
+    failReason?: string | null | undefined;
     executedAt?: NativeDate | null | undefined;
     confirmedAt?: NativeDate | null | undefined;
     latencyMs?: number | null | undefined;
     original?: {
-        walletAddress?: string | null | undefined;
+        conditionId?: string | null | undefined;
         tokenId?: string | null | undefined;
+        title?: string | null | undefined;
+        outcome?: string | null | undefined;
+        side?: "BUY" | "SELL" | null | undefined;
         size?: number | null | undefined;
+        walletAddress?: string | null | undefined;
         price?: number | null | undefined;
         usdcSize?: number | null | undefined;
         timestamp?: NativeDate | null | undefined;
-        title?: string | null | undefined;
-        outcome?: string | null | undefined;
-        conditionId?: string | null | undefined;
-        side?: "BUY" | "SELL" | null | undefined;
     } | null | undefined;
     copy?: {
         side?: "BUY" | "SELL" | null | undefined;
@@ -152,25 +152,25 @@ export declare const PolyAgentTrade: mongoose.Model<{
         slippageBps?: number | null | undefined;
     } | null | undefined;
 } & mongoose.DefaultTimestampProps, mongoose.Document<unknown, {}, mongoose.FlatRecord<{
+    status: "DETECTED" | "SKIPPED" | "EXECUTING" | "FILLED" | "FAILED";
     originalTxHash: string;
-    status: "DETECTED" | "EXECUTING" | "FILLED" | "FAILED" | "SKIPPED";
     skipReason?: string | null | undefined;
-    failReason?: string | null | undefined;
     detectedAt?: NativeDate | null | undefined;
+    failReason?: string | null | undefined;
     executedAt?: NativeDate | null | undefined;
     confirmedAt?: NativeDate | null | undefined;
     latencyMs?: number | null | undefined;
     original?: {
-        walletAddress?: string | null | undefined;
+        conditionId?: string | null | undefined;
         tokenId?: string | null | undefined;
+        title?: string | null | undefined;
+        outcome?: string | null | undefined;
+        side?: "BUY" | "SELL" | null | undefined;
         size?: number | null | undefined;
+        walletAddress?: string | null | undefined;
         price?: number | null | undefined;
         usdcSize?: number | null | undefined;
         timestamp?: NativeDate | null | undefined;
-        title?: string | null | undefined;
-        outcome?: string | null | undefined;
-        conditionId?: string | null | undefined;
-        side?: "BUY" | "SELL" | null | undefined;
     } | null | undefined;
     copy?: {
         side?: "BUY" | "SELL" | null | undefined;
@@ -190,25 +190,25 @@ export declare const PolyAgentTrade: mongoose.Model<{
 } & mongoose.DefaultTimestampProps>, {}, mongoose.ResolveSchemaOptions<{
     timestamps: true;
 }>> & mongoose.FlatRecord<{
+    status: "DETECTED" | "SKIPPED" | "EXECUTING" | "FILLED" | "FAILED";
     originalTxHash: string;
-    status: "DETECTED" | "EXECUTING" | "FILLED" | "FAILED" | "SKIPPED";
     skipReason?: string | null | undefined;
-    failReason?: string | null | undefined;
     detectedAt?: NativeDate | null | undefined;
+    failReason?: string | null | undefined;
     executedAt?: NativeDate | null | undefined;
     confirmedAt?: NativeDate | null | undefined;
     latencyMs?: number | null | undefined;
     original?: {
-        walletAddress?: string | null | undefined;
+        conditionId?: string | null | undefined;
         tokenId?: string | null | undefined;
+        title?: string | null | undefined;
+        outcome?: string | null | undefined;
+        side?: "BUY" | "SELL" | null | undefined;
         size?: number | null | undefined;
+        walletAddress?: string | null | undefined;
         price?: number | null | undefined;
         usdcSize?: number | null | undefined;
         timestamp?: NativeDate | null | undefined;
-        title?: string | null | undefined;
-        outcome?: string | null | undefined;
-        conditionId?: string | null | undefined;
-        side?: "BUY" | "SELL" | null | undefined;
     } | null | undefined;
     copy?: {
         side?: "BUY" | "SELL" | null | undefined;

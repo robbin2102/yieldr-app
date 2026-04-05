@@ -105,6 +105,26 @@ class OrderbookCache {
         }
     }
     /**
+     * Get both best bid and best ask in a single call.
+     * Used by GTTExecutor to compute limit prices (ask - slack, bid + slack).
+     */
+    async getBothPrices(tokenId) {
+        const book = this.books.get(tokenId);
+        const now = Date.now();
+        if (!book || (now - book.lastUpdate) >= this.TTL_MS) {
+            const ok = await this.fetchOrderbookSync(tokenId);
+            if (!ok)
+                return { bestBid: null, bestAsk: null };
+        }
+        const fresh = this.books.get(tokenId);
+        if (!fresh)
+            return { bestBid: null, bestAsk: null };
+        return {
+            bestBid: fresh.bids.length > 0 ? fresh.bids[0].price : null,
+            bestAsk: fresh.asks.length > 0 ? fresh.asks[0].price : null,
+        };
+    }
+    /**
      * Check if we have fresh orderbook data for a token
      */
     hasOrderbook(tokenId) {
