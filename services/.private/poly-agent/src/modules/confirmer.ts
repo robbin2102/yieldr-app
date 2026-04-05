@@ -121,9 +121,15 @@ export class Confirmer {
       const { CopyTrade } = await import('../db/models/CopyTrade');
       const stale = await CopyTrade.find({ status: 'EXECUTING', submittedAt: { $lt: cutoff } });
       if (stale.length === 0) return;
+
+      // Skip docs already tracked in-memory — they're mid-flight, not actually stuck
+      const activeDocIds = new Set([...this.pendingOrders.values()].map(p => p.tradeDocId));
+      const reallyStale = stale.filter(doc => !activeDocIds.has(doc._id.toString()));
+      if (reallyStale.length === 0) return;
+
       const ts = new Date().toISOString().slice(11, 19);
-      console.warn(`[${ts}] [Confirmer] ⚠️  ${stale.length} stuck EXECUTING doc(s) found — triggering retry`);
-      for (const doc of stale) {
+      console.warn(`[${ts}] [Confirmer] ⚠️  ${reallyStale.length} stuck EXECUTING doc(s) found — triggering retry`);
+      for (const doc of reallyStale) {
         // Build a minimal PendingOrder from the doc so GTTExecutor can retry
         const pending: PendingOrder = {
           tradeDocId:   doc._id.toString(),
@@ -170,10 +176,15 @@ export class Confirmer {
    * We keep the pending entry until the total filled cost covers 90%+ of target.
    */
   private async handleTradeFill(msg: any): Promise<void> {
-    // Match on maker_order_id first (GTD maker), fallback to taker_order_id
-    const matchId = this.pendingOrders.has(msg.maker_order_id)
-      ? msg.maker_order_id
-      : msg.taker_order_id;
+    // Polymarket trade event format:
+    //   maker_orders: [{ order_id, maker_address, matched_amount, fee_rate_bps }]  ← array, not a scalar
+    //   taker_order_id: string
+    const makerOrderId: string = (msg.maker_orders as any[])?.[0]?.order_id ?? '';
+    const takerOrderId: string = msg.taker_order_id ?? '';
+
+    const matchId = this.pendingOrders.has(makerOrderId)
+      ? makerOrderId
+      : (this.pendingOrders.has(takerOrderId) ? takerOrderId : '');
 
     const pending = this.pendingOrders.get(matchId);
     if (!pending) {
@@ -181,7 +192,7 @@ export class Confirmer {
       if (this.pendingOrders.size > 0) {
         const knownIds = [...this.pendingOrders.keys()].map(k => k.slice(0, 12)).join(', ');
         const ts = new Date().toISOString().slice(11, 19);
-        console.warn(`[${ts}] [Confirmer] ⚠️  Fill event — unmatched order maker=${(msg.maker_order_id ?? '').slice(0, 12)} taker=${(msg.taker_order_id ?? '').slice(0, 12)} | tracking: [${knownIds}]`);
+        console.warn(`[${ts}] [Confirmer] ⚠️  Fill event — unmatched order maker=${makerOrderId.slice(0, 12)} taker=${takerOrderId.slice(0, 12)} | tracking: [${knownIds}]`);
       }
       return;  // Not our order
     }
