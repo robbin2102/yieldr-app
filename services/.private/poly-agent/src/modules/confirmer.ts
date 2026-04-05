@@ -133,7 +133,15 @@ export class Confirmer {
       : msg.taker_order_id;
 
     const pending = this.pendingOrders.get(matchId);
-    if (!pending) return;  // Not our order
+    if (!pending) {
+      // Log unmatched fills so we can diagnose orderId format mismatches
+      if (this.pendingOrders.size > 0) {
+        const knownIds = [...this.pendingOrders.keys()].map(k => k.slice(0, 12)).join(', ');
+        const ts = new Date().toISOString().slice(11, 19);
+        console.warn(`[${ts}] [Confirmer] ⚠️  Fill event — unmatched order maker=${(msg.maker_order_id ?? '').slice(0, 12)} taker=${(msg.taker_order_id ?? '').slice(0, 12)} | tracking: [${knownIds}]`);
+      }
+      return;  // Not our order
+    }
 
     const fillSize  = parseFloat(msg.size  ?? '0');
     const fillPrice = parseFloat(msg.price ?? '0');
