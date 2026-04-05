@@ -46,11 +46,13 @@ export class TraderLoader {
    * Increment skip counters. Called after every skipped trade.
    */
   static async recordSkip(wallet: string, reason: string): Promise<void> {
+    // Note: tradesDetected is incremented by recordDetected() before bet sizing.
+    // recordSkip() must NOT increment it again — that caused every skipped trade
+    // to count as 2 detections, inflating the det: stat in hourly reports.
     await CopyTrader.updateOne(
       { wallet: wallet.toLowerCase() },
       {
         $inc: {
-          tradesDetected: 1,
           tradesSkipped: 1,
           [`skipReasonCounts.${reason}`]: 1,
         },

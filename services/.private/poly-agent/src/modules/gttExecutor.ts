@@ -217,11 +217,21 @@ export class GTTExecutor {
 
     // ── Orderbook (needed for both BUY and SELL sizing) ───────────────────────
     const book = await orderbookCache.getBothPrices(tokenId);
-    if (!book.bestAsk || !book.bestBid) {
+    if (!book.bestBid) {
       await this.skip(tradeDoc, 'NO_ORDERBOOK', 'orderbook fetch failed or empty', freshTrader.wallet);
       return;
     }
-    const safeBook = book as { bestAsk: number; bestBid: number };
+    if (side === 'BUY' && !book.bestAsk) {
+      // BUY needs an ask to derive share count and price — can't proceed without one
+      await this.skip(tradeDoc, 'NO_ORDERBOOK', 'no ask side — cannot price BUY order', freshTrader.wallet);
+      return;
+    }
+    // For SELL with no ask (resolved/illiquid market where everyone is selling),
+    // synthesize bestAsk = bestBid + 0.01 so spread math works and order can proceed.
+    const safeBook = {
+      bestBid: book.bestBid,
+      bestAsk: book.bestAsk ?? (book.bestBid + 0.01),
+    };
 
     if (side === 'BUY') {
       targetUsdc = buyBetUsdc;
@@ -289,7 +299,7 @@ export class GTTExecutor {
         return;
       }
 
-      targetUsdc   = exitShares * safeBook.bestBid; // approximate USDC value for doc
+      targetUsdc   = exitShares * safeBook.bestAsk; // use ask (our posting price) for doc accuracy
       targetShares = exitShares;
     }
 
@@ -301,21 +311,34 @@ export class GTTExecutor {
     tradeDoc.submittedAt         = submittedAt;
     tradeDoc.submissionLatencyMs = submissionLatencyMs;
     tradeDoc.status              = 'EXECUTING';
-    await tradeDoc.save();
 
-    // DB now has EXECUTING doc — getPositionSpent() includes it in future queries.
-    // Release the in-memory reservation so we don't double-count.
-    if (side === 'BUY') {
-      const lockKey = `${freshTrader.wallet}:${conditionId || tokenId}`;
-      const prev = this.positionReserved.get(lockKey) ?? 0;
-      const updated = Math.max(0, prev - targetUsdc);
-      if (updated === 0) this.positionReserved.delete(lockKey);
-      else               this.positionReserved.set(lockKey, updated);
+    // Wrap save in try/finally so the BUY reservation is ALWAYS released,
+    // even if the DB write fails. Without this, a DB error between reservation
+    // and release would permanently block future BUYs on that position until restart.
+    try {
+      await tradeDoc.save();
+    } finally {
+      if (side === 'BUY') {
+        const lockKey = `${freshTrader.wallet}:${conditionId || tokenId}`;
+        const prev = this.positionReserved.get(lockKey) ?? 0;
+        const updated = Math.max(0, prev - targetUsdc);
+        if (updated === 0) this.positionReserved.delete(lockKey);
+        else               this.positionReserved.set(lockKey, updated);
+      }
     }
 
     eventBus.emit('trade:executing', { txHash, traderLabel: traderConfig.label, betUsdc: targetUsdc });
 
-    // ── 6. Place GTD maker order (attempt 1) ──────────────────────────────────
+    // ── 6. Final real-time allocation guard ──────────────────────────────────
+    // calcCopyBet used a snapshot from the start of handleTrade. A concurrent fill
+    // between then and now could have consumed the allocation. Re-check DB before
+    // committing to an order.
+    if (side === 'BUY' && !(await TraderLoader.hasAllocation(freshTrader.wallet, targetUsdc))) {
+      await this.skip(tradeDoc, 'ALLOCATION_FULL', 'allocation consumed by concurrent fill', freshTrader.wallet);
+      return;
+    }
+
+    // ── 7. Place GTD maker order (attempt 1) ──────────────────────────────────
     await this.placeOrder({
       tradeDocId:   tradeDoc._id.toString(),
       traderWallet: freshTrader.wallet,
@@ -391,7 +414,8 @@ export class GTTExecutor {
    */
   private async placeOrder(
     ctx: Omit<PendingOrder, 'orderId' | 'limitPrice' | 'submittedAt'>,
-    book: { bestBid: number; bestAsk: number }
+    book: { bestBid: number; bestAsk: number },
+    feeRetried = false   // guard against infinite recursion on fee correction
   ): Promise<void> {
     const { side, tokenId, targetUsdc, filledCost, attempt } = ctx;
     // targetShares is checked via ctx.targetShares in shares calculation below
@@ -468,10 +492,13 @@ export class GTTExecutor {
         const corrected = parseInt(feeMatchResp[1]);
         this.feeRateCache.set(tokenId, corrected);
         saveFeeCache(this.feeRateCache);
-        console.log(`[GTTExecutor] Fee correction (response): ${feeRateBps} → ${corrected} bps — retrying with fresh signature`);
-        // Re-run placeOrder from scratch with the corrected fee now in cache.
-        // Inline re-sign of the same order causes "invalid signature" — fresh call avoids it.
-        await this.placeOrder(ctx, book);
+        if (feeRetried) {
+          console.error(`[GTTExecutor] Fee correction loop detected (response) — giving up`);
+          await this.markFailed(ctx.tradeDocId, ctx.traderWallet, ctx.attempt, 'Fee correction loop');
+          return;
+        }
+        console.log(`[GTTExecutor] Fee correction (response): ${feeRateBps} → ${corrected} bps — retrying`);
+        await this.placeOrder(ctx, book, true);
         return;
       }
 
@@ -502,8 +529,13 @@ export class GTTExecutor {
         const corrected = parseInt(feeMatch[1]);
         this.feeRateCache.set(tokenId, corrected);
         saveFeeCache(this.feeRateCache);
-        console.log(`[GTTExecutor] Fee correction (catch): ${feeRateBps} → ${corrected} bps — retrying with fresh signature`);
-        await this.placeOrder(ctx, book);
+        if (feeRetried) {
+          console.error(`[GTTExecutor] Fee correction loop detected (catch) — giving up`);
+          await this.markFailed(ctx.tradeDocId, ctx.traderWallet, ctx.attempt, 'Fee correction loop');
+          return;
+        }
+        console.log(`[GTTExecutor] Fee correction (catch): ${feeRateBps} → ${corrected} bps — retrying`);
+        await this.placeOrder(ctx, book, true);
         return;
       }
 

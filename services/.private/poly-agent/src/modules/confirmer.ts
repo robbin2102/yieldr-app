@@ -277,9 +277,54 @@ export class Confirmer {
     console.log('[Confirmer] Reconnecting in 5s...');
     setTimeout(() => {
       this.reconnecting = false;
-      this.connect().catch(err =>
-        console.error('[Confirmer] Reconnect failed:', err.message)
-      );
+      this.connect()
+        .then(() => this.reviewStaleOrders())
+        .catch(err => console.error('[Confirmer] Reconnect failed:', err.message));
     }, 5_000);
+  }
+
+  /**
+   * Called after reconnect to handle orders whose fill events may have been
+   * missed during the disconnect window.
+   *
+   * Any pending order older than gttExpirySeconds + 30s has definitely expired
+   * on Polymarket's side. Emit 'order:expired' so GTTExecutor retries it.
+   * This prevents orders getting stuck in EXECUTING forever after a WS gap.
+   */
+  private reviewStaleOrders(): void {
+    const staleThresholdMs = (config.gttExpirySeconds + 30) * 1000;
+    const now = Date.now();
+    let staleCount = 0;
+
+    for (const [orderId, pending] of this.pendingOrders) {
+      if (now - pending.submittedAt > staleThresholdMs) {
+        console.warn(`[Confirmer] Stale order after reconnect: ${orderId.slice(0, 12)}... (doc ${pending.tradeDocId}) — re-queuing as expired`);
+        this.pendingOrders.delete(orderId);
+        eventBus.emit('order:expired', pending);
+        staleCount++;
+      }
+    }
+
+    if (staleCount > 0) {
+      console.log(`[Confirmer] Reviewed ${staleCount} stale order(s) after reconnect`);
+    }
+  }
+
+  /**
+   * On bot startup, scan MongoDB for EXECUTING docs left over from a previous
+   * run. These will never receive a fill event (WebSocket session is new).
+   * Mark them FAILED so they don't silently block allocation.
+   */
+  static async clearStaleExecutingDocs(): Promise<void> {
+    const { CopyTrade } = await import('../db/models/CopyTrade');
+    const staleMs = 5 * 60 * 1000; // anything EXECUTING for > 5min is from a prior run
+    const cutoff  = Date.now() - staleMs;
+    const result  = await CopyTrade.updateMany(
+      { status: 'EXECUTING', submittedAt: { $lt: cutoff } },
+      { $set: { status: 'FAILED', failReason: 'Bot restarted while order was in-flight' } }
+    );
+    if (result.modifiedCount > 0) {
+      console.warn(`[Confirmer] Cleared ${result.modifiedCount} stale EXECUTING doc(s) from previous run`);
+    }
   }
 }

@@ -62,6 +62,10 @@ async function main() {
   await ensureAllowances(config.botPrivateKey, config.polygonRpcUrl, config.chainId);
 
   // ── 4. Confirmer (WebSocket User Channel — receives fill push events) ────────
+  // Clear any EXECUTING docs left over from a previous run — they'll never
+  // receive fill events on this new WS session and would block allocation.
+  await Confirmer.clearStaleExecutingDocs();
+
   console.log('[Main] Connecting Confirmer to WebSocket User Channel...');
   const confirmer = new Confirmer();
   await confirmer.connect();
