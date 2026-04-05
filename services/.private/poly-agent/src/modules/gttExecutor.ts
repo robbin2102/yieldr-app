@@ -528,6 +528,9 @@ export class GTTExecutor {
 
       console.log(`[GTTExecutor] Order placed: ${orderId.slice(0, 12)}... — handing off to Confirmer`);
 
+      // Persist orderId to DB so stale EXECUTING docs can be diagnosed after restart
+      await CopyTrade.findByIdAndUpdate(ctx.tradeDocId, { orderId });
+
       // Hand off to Confirmer — it will receive the fill via WebSocket User Channel
       const pending: PendingOrder = {
         ...ctx,

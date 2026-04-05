@@ -69,6 +69,7 @@ async function main() {
   console.log('[Main] Connecting Confirmer to WebSocket User Channel...');
   const confirmer = new Confirmer();
   await confirmer.connect();
+  confirmer.startStuckOrderScan(); // catch fills missed by WebSocket mid-session
 
   // ── 5. GTT Executor (places orders, hands off to Confirmer for fills) ────────
   console.log('[Main] Starting GTT Executor...');

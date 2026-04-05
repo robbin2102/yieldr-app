@@ -44,6 +44,7 @@ export interface ICopyTrade extends Document {
   detectedAt:          number;
   discoveryLatencyMs:  number;
 
+  orderId?:             string;   // Polymarket order ID — persisted so stale docs can be diagnosed
   submittedAt?:         number;
   submissionLatencyMs?: number;
 
@@ -86,6 +87,7 @@ const copyTradeSchema = new mongoose.Schema<ICopyTrade>({
   detectedAt:         { type: Number, required: true },
   discoveryLatencyMs: { type: Number, required: true },
 
+  orderId:             { type: String },
   submittedAt:         { type: Number },
   submissionLatencyMs: { type: Number },
 
