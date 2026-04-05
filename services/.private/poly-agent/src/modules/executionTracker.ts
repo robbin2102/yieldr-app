@@ -90,7 +90,7 @@ export async function printExecutionReport(walletFilter?: string, windowHours = 
   const div = '─'.repeat(60);
 
   if (walletFilter) {
-    await tracker.printTraderReport(walletFilter.toLowerCase(), since, div);
+    await tracker.printTraderReport(walletFilter.toLowerCase(), since);
   } else {
     await tracker.printAllReports(windowHours);
   }
