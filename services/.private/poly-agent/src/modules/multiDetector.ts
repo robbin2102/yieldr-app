@@ -155,10 +155,16 @@ export class MultiDetector {
 
   private startPollingChain(trader: ICopyTrader): void {
     if (this.activeWallets.has(trader.wallet)) return; // already running
+
+    // Stagger evenly: each new trader starts 8s after the previous one.
+    // With 7 traders × 8s = 56s spread across a 60s cycle — no burst at the API.
+    // activeWallets.size is read BEFORE add() so it serves as a 0-based slot index.
+    const slotIndex = this.activeWallets.size;
     this.activeWallets.add(trader.wallet);
 
     const interval = trader.detectorIntervalMs ?? config.detectorIntervalMs;
-    console.log(`[MultiDetector] Polling ${trader.label} (${trader.wallet.slice(0, 10)}...) every ${interval / 1000}s`);
+    const staggerMs = slotIndex * 8_000;
+    console.log(`[MultiDetector] Polling ${trader.label} (${trader.wallet.slice(0, 10)}...) every ${interval / 1000}s (starts in ${staggerMs / 1000}s)`);
 
     const tick = async () => {
       if (this.stopped) return;
@@ -176,9 +182,7 @@ export class MultiDetector {
       setTimeout(tick, nextInterval);
     };
 
-    // Stagger start by random 0-2s to avoid thundering herd on startup
-    const stagger = Math.floor(Math.random() * 2000);
-    setTimeout(tick, stagger);
+    setTimeout(tick, staggerMs);
   }
 
   private async pollTrader(wallet: string): Promise<void> {
