@@ -116,7 +116,11 @@ async function main() {
   const negRiskAdap = new ethers.Contract(CONTRACTS.NEG_RISK_ADAPTER, NEG_RISK_ABI,   wallet);
 
   const PARENT_COLLECTION_ID = ethers.constants.HashZero;  // 0x000...0 for root positions
-  const gasBump = { gasLimit: 300_000 };
+  const gasBump = {
+    gasLimit: 300_000,
+    maxPriorityFeePerGas: ethers.utils.parseUnits('30', 'gwei'),  // Polygon min is 25 Gwei
+    maxFeePerGas:         ethers.utils.parseUnits('100', 'gwei'), // cap — only pays what's needed
+  };
 
   // ── 5. Redeem each position ───────────────────────────────────────────────
   console.log('\nExecuting redemptions...\n');
