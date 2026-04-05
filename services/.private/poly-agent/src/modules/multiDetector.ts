@@ -196,6 +196,9 @@ export class MultiDetector {
 
     await TraderLoader.updateLastPolled(wallet);
 
+    const pollTs = new Date().toISOString().slice(11, 19);
+    console.log(`[${pollTs}] 👁  ${trader.label}: polling... (lastSeen: ${new Date(trader.lastSeenTs).toISOString().slice(11, 19)})`);
+
     let activities: ActivityResponse[] = [];
     try {
       const url = `${config.dataApiBase}/activity?user=${wallet}&limit=50&offset=0&sortBy=TIMESTAMP&sortDirection=DESC`;
@@ -220,7 +223,9 @@ export class MultiDetector {
     this.checkHourReset();
     const ts = new Date().toISOString().slice(11, 19);  // HH:MM:SS
 
-    if (newActivities.length === 0) return; // silent — cycle counter shown every 10m
+    console.log(`[${ts}] 👁  ${trader.label}: ✓ ${activities.length} activities fetched, ${newActivities.length} new`);
+
+    if (newActivities.length === 0) return;
 
     this.cycleTotal += newActivities.length;
     console.log(`[${ts}] 🔔 ${trader.label}: ${newActivities.length} new activit${newActivities.length === 1 ? 'y' : 'ies'} detected`);
