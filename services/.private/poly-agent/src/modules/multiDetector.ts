@@ -74,6 +74,36 @@ export class MultiDetector {
   private cycleTrades  = 0;       // TRADE activities forwarded to executor
   private cycleByLabel = new Map<string, number>(); // label → trade count
 
+  /**
+   * Fetch with timeout + one retry on 408/5xx.
+   * 408 = server-side request timeout (Polymarket API under load).
+   * Returns the Response on success, throws on unrecoverable failure.
+   */
+  private async fetchActivity(url: string, label: string): Promise<Response> {
+    const attempt = async (): Promise<Response> => {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 8_000);
+      try {
+        const res = await fetch(url, { signal: controller.signal });
+        return res;
+      } finally {
+        clearTimeout(timer);
+      }
+    };
+
+    let res = await attempt();
+
+    // Retry once on 408 or server errors (5xx) after a short delay
+    if (res.status === 408 || res.status >= 500) {
+      const ts = new Date().toISOString().slice(11, 19);
+      console.warn(`[${ts}] [MultiDetector] ${label}: API ${res.status} — retrying in 3s`);
+      await new Promise(r => setTimeout(r, 3_000));
+      res = await attempt();
+    }
+
+    return res;
+  }
+
   async start(): Promise<void> {
     console.log('[MultiDetector] Starting...');
 
@@ -169,15 +199,18 @@ export class MultiDetector {
     let activities: ActivityResponse[] = [];
     try {
       const url = `${config.dataApiBase}/activity?user=${wallet}&limit=50&offset=0&sortBy=TIMESTAMP&sortDirection=DESC`;
-      const res = await fetch(url);
+      const res = await this.fetchActivity(url, trader.label);
       if (!res.ok) {
-        console.warn(`[MultiDetector] ${trader.label}: API ${res.status}`);
+        const ts = new Date().toISOString().slice(11, 19);
+        console.warn(`[${ts}] [MultiDetector] ${trader.label}: API ${res.status} — skipping poll`);
         return;
       }
       const data = await res.json() as any;
       activities = (Array.isArray(data) ? data : data.data ?? []) as ActivityResponse[];
     } catch (err: any) {
-      console.warn(`[MultiDetector] ${trader.label}: fetch error — ${err.message}`);
+      const ts = new Date().toISOString().slice(11, 19);
+      const reason = (err as any)?.name === 'AbortError' ? 'request timed out (8s)' : err.message;
+      console.warn(`[${ts}] [MultiDetector] ${trader.label}: fetch error — ${reason}`);
       return;
     }
 
