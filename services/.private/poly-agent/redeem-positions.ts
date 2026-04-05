@@ -100,7 +100,7 @@ async function main() {
     return;
   }
 
-  console.log(`Found ${redeemable.length} redeemable position(s):\n`);
+  console.log(`Found ${redeemable.length} redeemable position(s) with value > $0:\n`);
   redeemable.forEach((p: any) => {
     const size  = parseFloat(p.size ?? '0');
     const value = parseFloat(p.currentValue ?? String(size * parseFloat(p.curPrice ?? '0')));
@@ -122,14 +122,17 @@ async function main() {
   const negRiskAdap = new ethers.Contract(CONTRACTS.NEG_RISK_ADAPTER, NEG_RISK_ABI,   wallet);
 
   const PARENT_COLLECTION_ID = ethers.constants.HashZero;  // 0x000...0 for root positions
-  // Fetch live gas prices and add 30% headroom so TX confirms promptly
+
+  // Fetch live gas prices; enforce Polygon minimums (RPC estimates are often too low)
+  const FLOOR_PRIORITY = ethers.utils.parseUnits('30', 'gwei');   // Polygon hard min = 25 Gwei
+  const FLOOR_MAX      = ethers.utils.parseUnits('300', 'gwei');  // comfortable ceiling
   const feeData = await provider.getFeeData();
-  const basePriorityFee = feeData.maxPriorityFeePerGas ?? ethers.utils.parseUnits('30', 'gwei');
-  const baseMaxFee      = feeData.maxFeePerGas         ?? ethers.utils.parseUnits('300', 'gwei');
+  const estimatedPriority = feeData.maxPriorityFeePerGas ?? ethers.constants.Zero;
+  const estimatedMax      = feeData.maxFeePerGas         ?? ethers.constants.Zero;
   const gasBump = {
     gasLimit:             300_000,
-    maxPriorityFeePerGas: basePriorityFee.mul(130).div(100),  // +30% over live estimate
-    maxFeePerGas:         baseMaxFee.mul(130).div(100),        // +30% ceiling
+    maxPriorityFeePerGas: estimatedPriority.gt(FLOOR_PRIORITY) ? estimatedPriority : FLOOR_PRIORITY,
+    maxFeePerGas:         estimatedMax.gt(FLOOR_MAX)           ? estimatedMax       : FLOOR_MAX,
   };
   console.log(`  Gas: priority=${ethers.utils.formatUnits(gasBump.maxPriorityFeePerGas, 'gwei')} Gwei  max=${ethers.utils.formatUnits(gasBump.maxFeePerGas, 'gwei')} Gwei`);
 
