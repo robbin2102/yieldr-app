@@ -76,29 +76,49 @@ export class MultiDetector {
 
   /**
    * Fetch with timeout + one retry on 408/5xx.
-   * 408 = server-side request timeout (Polymarket API under load).
-   * Returns the Response on success, throws on unrecoverable failure.
+   * Logs full response body + key headers on any non-ok status for diagnosis.
    */
   private async fetchActivity(url: string, label: string): Promise<Response> {
     const attempt = async (): Promise<Response> => {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 8_000);
       try {
-        const res = await fetch(url, { signal: controller.signal });
+        const res = await fetch(url, {
+          signal: controller.signal,
+          headers: { 'User-Agent': 'poly-agent/3 (+https://polymarket.com)' },
+        });
         return res;
       } finally {
         clearTimeout(timer);
       }
     };
 
+    const diagnose = async (res: Response, attemptNum: number): Promise<void> => {
+      const ts = new Date().toISOString().slice(11, 19);
+      let body = '';
+      try { body = (await res.clone().text()).slice(0, 300); } catch {}
+      const cfRay   = res.headers.get('cf-ray') ?? '—';
+      const rateRem = res.headers.get('x-ratelimit-remaining') ?? '—';
+      const retryAft = res.headers.get('retry-after') ?? '—';
+      console.warn(
+        `[${ts}] [MultiDetector] ${label}: HTTP ${res.status} (attempt ${attemptNum})\n` +
+        `  URL:           ${url.replace(/(user=0x[a-f0-9]{8})[a-f0-9]+/, '$1...')}\n` +
+        `  CF-Ray:        ${cfRay}\n` +
+        `  RateLimit-Rem: ${rateRem}  Retry-After: ${retryAft}\n` +
+        `  Body:          ${body || '(empty)'}`
+      );
+    };
+
     let res = await attempt();
 
-    // Retry once on 408 or server errors (5xx) after a short delay
-    if (res.status === 408 || res.status >= 500) {
-      const ts = new Date().toISOString().slice(11, 19);
-      console.warn(`[${ts}] [MultiDetector] ${label}: API ${res.status} — retrying in 3s`);
-      await new Promise(r => setTimeout(r, 3_000));
-      res = await attempt();
+    if (!res.ok) {
+      await diagnose(res, 1);
+      if (res.status === 408 || res.status >= 500) {
+        console.warn(`[MultiDetector] ${label}: retrying in 3s...`);
+        await new Promise(r => setTimeout(r, 3_000));
+        res = await attempt();
+        if (!res.ok) await diagnose(res, 2);
+      }
     }
 
     return res;
@@ -203,6 +223,9 @@ export class MultiDetector {
 
     await TraderLoader.updateLastPolled(wallet);
 
+    const pollTs = new Date().toISOString().slice(11, 19);
+    console.log(`[${pollTs}] 👁  ${trader.label}: polling...`);
+
     let activities: ActivityResponse[] = [];
     try {
       const url = `${config.dataApiBase}/activity?user=${wallet}&limit=50&offset=0&sortBy=TIMESTAMP&sortDirection=DESC`;
@@ -227,7 +250,9 @@ export class MultiDetector {
     this.checkHourReset();
     const ts = new Date().toISOString().slice(11, 19);
 
-    if (newActivities.length === 0) return; // silent — cycle summary shown every 10m
+    console.log(`[${ts}] 👁  ${trader.label}: ✓ ${activities.length} fetched, ${newActivities.length} new`);
+
+    if (newActivities.length === 0) return;
 
     this.cycleTotal += newActivities.length;
     console.log(`[${ts}] 🔔 ${trader.label}: ${newActivities.length} new activit${newActivities.length === 1 ? 'y' : 'ies'} detected`);
