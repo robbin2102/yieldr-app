@@ -509,13 +509,18 @@ export class GTTExecutor {
         const rawResp = JSON.stringify(postResp).slice(0, 300);
         console.warn(`[GTTExecutor] No orderId on attempt ${attempt} — raw response: ${rawResp}`);
 
-        // If order size is below Polymarket minimum, retrying at higher price = fewer shares = worse.
-        // Skip immediately with a clear reason instead of wasting retries.
+        // If order size is below Polymarket minimum on a passive limit, keep retrying —
+        // aggressive crossing orders (attempt 3 at 100% spread) bypass the passive minimum.
+        // Only skip gracefully if ALL attempts exhausted with this error.
         const errMsg = String((postResp as any)?.error ?? '');
-        if (/lower than the minimum/i.test(errMsg)) {
+        const isSizeTooSmall = /lower than the minimum/i.test(errMsg);
+        if (isSizeTooSmall && attempt >= config.maxOrderRetries) {
           await this.skip(ctx.tradeDocId, ctx.traderWallet, 'ALLOCATION_FULL',
-            `Order size below Polymarket minimum (capped bet too small for this market price)`);
+            `Order size below Polymarket minimum after ${attempt} attempt(s) — capped bet too small`);
           return;
+        }
+        if (isSizeTooSmall) {
+          console.log(`[GTTExecutor] Size below passive minimum — retrying with more aggression`);
         }
 
         // Retry up to maxOrderRetries before giving up
