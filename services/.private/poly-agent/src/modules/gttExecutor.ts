@@ -571,23 +571,27 @@ export class GTTExecutor {
   }
 
   /**
-   * Returns the negRisk flag for a token, using a disk-persisted cache.
-   * On cache miss, fetches from GET /markets/<conditionId> (lightweight metadata call).
-   * Eliminates the per-order clobClient.getNegRisk() call and its version dependency.
-   * negRisk never changes for a market, so cache entries are permanent.
+   * Returns the negRisk flag for a market, using a disk-persisted cache keyed by conditionId.
+   * Keyed by conditionId (not tokenId) so all outcome tokens of the same market share one entry —
+   * a 3-outcome negRisk market fetches metadata once, not 3 times.
+   *
+   * On cache miss: fetches GET /markets/<conditionId> and persists to disk.
+   * On API failure for an unknown market: throws so the order is skipped with a visible error.
+   * Defaulting to false would sign against the wrong exchange for negRisk markets — a reverted
+   * on-chain tx with no obvious log trail. A skipped order is always preferable.
    */
   private async getNegRiskCached(tokenId: string, conditionId: string): Promise<boolean> {
-    if (this.negRiskCache.has(tokenId)) {
-      return this.negRiskCache.get(tokenId)!;
+    if (this.negRiskCache.has(conditionId)) {
+      return this.negRiskCache.get(conditionId)!;
     }
     const result = await fetchNegRiskFromMarketAPI(conditionId, config.clobApiBase);
     if (result === null) {
-      console.warn(`[GTTExecutor] negRisk API unavailable for ${conditionId.slice(0, 12)}... — defaulting to false (CTF exchange)`);
-      return false;
+      // Don't default to false — signing against the wrong exchange silently fails on-chain.
+      throw new Error(`negRisk lookup failed for conditionId ${conditionId.slice(0, 12)}... — order skipped to avoid wrong-exchange signature`);
     }
-    this.negRiskCache.set(tokenId, result);
+    this.negRiskCache.set(conditionId, result);
     saveNegRiskCache(this.negRiskCache);
-    if (result) console.log(`[GTTExecutor] NegRisk market cached (${tokenId.slice(0, 10)}...)`);
+    if (result) console.log(`[GTTExecutor] NegRisk market cached: conditionId ${conditionId.slice(0, 12)}... (tokenId ${tokenId.slice(0, 10)}...)`);
     return result;
   }
 
