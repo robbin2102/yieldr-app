@@ -578,8 +578,9 @@ export class GTTExecutor {
 
     // Fresh orderbook price for retry
     const book = await orderbookCache.getBothPrices(pending.tokenId);
-    if (!book.bestBid || !book.bestAsk) {
-      console.error(`[GTTExecutor] No orderbook for retry — marking FAILED`);
+    const needsAsk = pending.side === 'BUY';
+    if (!book.bestBid || (needsAsk && !book.bestAsk)) {
+      console.error(`[GTTExecutor] No orderbook for retry (bid=${book.bestBid} ask=${book.bestAsk}) — marking FAILED`);
       await this.markFailed(pending.tradeDocId, pending.traderWallet, pending.attempt, 'No orderbook on retry');
       return;
     }

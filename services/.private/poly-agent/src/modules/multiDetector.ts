@@ -262,21 +262,23 @@ export class MultiDetector {
       const traderTs = act.timestamp * 1000;
       const discoveryLatencyMs = now - traderTs;
 
+      const shortTitle = (act.title ?? act.conditionId?.slice(0, 30) ?? act.asset?.slice(0, 12) ?? '?').slice(0, 45);
+      const lagSec     = (discoveryLatencyMs / 1000).toFixed(0);
+
       // Skip stale activities — backlog replay guard.
-      // If the activity is older than maxLagMs it was missed during downtime;
-      // executing it now would be trading on stale signal.
       if (discoveryLatencyMs > config.maxLagMs) {
-        const lagSec = (discoveryLatencyMs / 1000).toFixed(0);
-        console.log(`[${ts}]     ⏩ STALE ${act.transactionHash.slice(0, 12)}... lag ${lagSec}s > ${config.maxLagMs / 1000}s limit — skipped`);
+        console.log(`[${ts}]     ⏩ STALE  [${act.side ?? act.type}] "${shortTitle}" — lag ${lagSec}s > ${config.maxLagMs / 1000}s limit`);
         continue;
       }
 
-      // Skip non-TRADE activities — log them for visibility
+      // Skip non-TRADE activities — log inline and record to DB
       if (act.type !== 'TRADE' || !act.side) {
+        console.log(`[${ts}]     ↷ NON_TRADE [${act.type}] "${shortTitle}" — skipped`);
         await this.logNonTrade(trader, act, traderTs, discoveryLatencyMs);
         continue;
       }
 
+      console.log(`[${ts}]     → [${act.side}] $${act.usdcSize.toFixed(2)} "${shortTitle}" lag ${lagSec}s — queuing`);
       this.cycleTrades++;
       this.cycleByLabel.set(trader.label, (this.cycleByLabel.get(trader.label) ?? 0) + 1);
 
