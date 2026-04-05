@@ -86,8 +86,14 @@ async function main() {
   console.log(`  Total PnL     : ${totalSign}$${totalPnl.toFixed(2)}`);
   console.log('══════════════════════════════════════════════════════════\n');
 
-  // ── 3. Filter redeemable positions ────────────────────────────────────────
-  const redeemable = all.filter((p: any) => p.redeemable === true || parseFloat(p.curPrice ?? '0') >= 0.99);
+  // ── 3. Filter redeemable positions (skip $0 value — nothing to collect) ──
+  const redeemable = all.filter((p: any) => {
+    const isResolved = p.redeemable === true || parseFloat(p.curPrice ?? '0') >= 0.99;
+    if (!isResolved) return false;
+    const size  = parseFloat(p.size ?? '0');
+    const value = parseFloat(p.currentValue ?? String(size * parseFloat(p.curPrice ?? '0')));
+    return value > 0.005;  // skip dust / losing positions
+  });
 
   if (redeemable.length === 0) {
     console.log('No redeemable positions found. Nothing to do.\n');
