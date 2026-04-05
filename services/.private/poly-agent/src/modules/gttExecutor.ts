@@ -203,7 +203,7 @@ export class GTTExecutor {
     if (side === 'BUY') {
       const sizing = calcCopyBet(traderBetUsdc, freshTrader);
       if (sizing.skip) {
-        await this.skip(tradeDoc, sizing.skipReason!, sizing.skipDetail, freshTrader.wallet);
+        await this.skip(tradeDoc, sizing.skipReason!, sizing.skipDetail, freshTrader.wallet, freshTrader.avgBet);
         if (sizing.skipReason !== 'BELOW_AVG') await TraderLoader.recordAboveAvg(freshTrader.wallet);
         return;
       }
@@ -243,22 +243,37 @@ export class GTTExecutor {
       // so concurrent promises see each other's reservation without yielding.
       const lockKey         = `${freshTrader.wallet}:${conditionId || tokenId}`;
       const alreadyReserved = this.positionReserved.get(lockKey) ?? 0;
-      const dbSpent         = await this.getPositionSpent(freshTrader.wallet, tokenId, conditionId);
-      const maxPerPosition  = freshTrader.allocationUsdc * 0.20;
-      const totalCommitted  = dbSpent + alreadyReserved;
-      const positionAvail   = maxPerPosition - totalCommitted;
+
+      // Pre-reserve the FULL buyBetUsdc BEFORE any await.
+      // This is the race-condition fix: all concurrent handleTrade() calls read
+      // the reservation synchronously, so each sees the previous one's claim.
+      // Without this, 4 simultaneous trades all read 0 and all pass the cap check.
+      this.positionReserved.set(lockKey, alreadyReserved + buyBetUsdc);
+
+      const dbSpent        = await this.getPositionSpent(freshTrader.wallet, tokenId, conditionId);
+      const maxPerPosition = freshTrader.allocationUsdc * 0.20;
+      // Use alreadyReserved (what was there BEFORE us) — that's the committed amount
+      const positionAvail  = maxPerPosition - dbSpent - alreadyReserved;
+
       if (positionAvail <= 0) {
+        // Release our pre-reservation since we're skipping
+        const cur = this.positionReserved.get(lockKey) ?? 0;
+        const upd = Math.max(0, cur - buyBetUsdc);
+        if (upd === 0) this.positionReserved.delete(lockKey);
+        else           this.positionReserved.set(lockKey, upd);
         await this.skip(tradeDoc, 'ALLOCATION_FULL',
-          `position cap reached ($${totalCommitted.toFixed(2)} / $${maxPerPosition.toFixed(2)} max per position)`,
-          freshTrader.wallet);
+          `position cap reached ($${(dbSpent + alreadyReserved).toFixed(2)} / $${maxPerPosition.toFixed(2)} max per position)`,
+          freshTrader.wallet, freshTrader.avgBet);
         return;
       }
-      const betCapped = Math.min(targetUsdc, positionAvail);
-      if (betCapped < targetUsdc) {
+
+      const betCapped = Math.min(buyBetUsdc, positionAvail);
+      if (betCapped < buyBetUsdc) {
+        // Trim reservation down to what we'll actually use
+        const cur = this.positionReserved.get(lockKey) ?? 0;
+        this.positionReserved.set(lockKey, Math.max(0, cur - (buyBetUsdc - betCapped)));
         console.log(`[GTTExecutor] BUY capped to $${betCapped.toFixed(2)} (db=$${dbSpent.toFixed(2)} + inflight=$${alreadyReserved.toFixed(2)} / max $${maxPerPosition.toFixed(2)})`);
       }
-      // SYNCHRONOUS — reserves before any await so concurrent calls see it immediately
-      this.positionReserved.set(lockKey, alreadyReserved + betCapped);
       targetUsdc = betCapped;
 
     // ── 4. SELL: proportional exit — (traderSellSize / traderTotalBought) × ourShares ──
@@ -621,18 +636,17 @@ export class GTTExecutor {
     eventBus.emit('trade:failed', { tradeDocId, reason });
   }
 
-  private async skip(tradeDoc: any, reason: string, detail: string | undefined, wallet: string): Promise<void> {
+  private async skip(tradeDoc: any, reason: string, detail: string | undefined, wallet: string, avgBet?: number): Promise<void> {
     tradeDoc.status     = 'SKIPPED';
     tradeDoc.skipReason = reason;
     tradeDoc.skipDetail = detail ?? '';
     await tradeDoc.save();
     await TraderLoader.recordSkip(wallet, reason);
-    // Only log skips that reached the verbose header (i.e. non-BELOW_AVG skips).
-    // BELOW_AVG is silent — counted in cycle stats, visible in hourly report.
-    if (reason !== 'BELOW_AVG') {
-      const ts = new Date().toISOString().slice(11, 19);
-      console.log(`[${ts}]     ⏭  SKIP [${tradeDoc._id}]  reason=${reason}  ${detail ?? ''}`);
-    }
+    const ts         = new Date().toISOString().slice(11, 19);
+    const shortTitle = (tradeDoc.title ?? '').slice(0, 45);
+    const betStr     = `$${(tradeDoc.traderBetUsdc ?? 0).toFixed(2)}`;
+    const avgStr     = avgBet !== undefined ? `  avgBet $${avgBet}` : '';
+    console.log(`[${ts}]     ⏭  SKIP  ${tradeDoc.traderLabel} ${tradeDoc.side} ${betStr} "${shortTitle}"  ${reason}${avgStr}`);
     eventBus.emit('trade:skipped', { skipReason: reason, skipDetail: detail, docId: tradeDoc._id });
   }
 
