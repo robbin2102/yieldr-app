@@ -505,8 +505,24 @@ export class GTTExecutor {
       const orderId: string = (postResp as any).orderID ?? (postResp as any).id ?? '';
 
       if (!orderId) {
-        console.warn(`[GTTExecutor] No orderId returned on attempt ${attempt} — order not placed`);
-        await this.markFailed(ctx.tradeDocId, ctx.traderWallet, attempt, 'No orderId returned from postOrder');
+        // Log the full response so we can diagnose what Polymarket returned
+        const rawResp = JSON.stringify(postResp).slice(0, 300);
+        console.warn(`[GTTExecutor] No orderId on attempt ${attempt} — raw response: ${rawResp}`);
+
+        // Retry up to maxOrderRetries before giving up
+        if (attempt < config.maxOrderRetries) {
+          const nextAttempt = attempt + 1;
+          console.log(`[GTTExecutor] Retrying (attempt ${nextAttempt}/${config.maxOrderRetries}) after no-orderId response`);
+          await this.sleep(config.orderRetryDelayMs);
+          const freshBook = await orderbookCache.getBothPrices(ctx.tokenId);
+          if (freshBook.bestBid && (ctx.side === 'SELL' || freshBook.bestAsk)) {
+            await this.placeOrder({ ...ctx, attempt: nextAttempt }, freshBook as { bestBid: number; bestAsk: number });
+          } else {
+            await this.markFailed(ctx.tradeDocId, ctx.traderWallet, attempt, 'No orderId + no orderbook on retry');
+          }
+        } else {
+          await this.markFailed(ctx.tradeDocId, ctx.traderWallet, attempt, `No orderId after ${attempt} attempts`);
+        }
         return;
       }
 
