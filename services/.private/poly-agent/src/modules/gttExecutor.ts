@@ -509,6 +509,15 @@ export class GTTExecutor {
         const rawResp = JSON.stringify(postResp).slice(0, 300);
         console.warn(`[GTTExecutor] No orderId on attempt ${attempt} — raw response: ${rawResp}`);
 
+        // If order size is below Polymarket minimum, retrying at higher price = fewer shares = worse.
+        // Skip immediately with a clear reason instead of wasting retries.
+        const errMsg = String((postResp as any)?.error ?? '');
+        if (/lower than the minimum/i.test(errMsg)) {
+          await this.skip(ctx.tradeDocId, ctx.traderWallet, 'ALLOCATION_FULL',
+            `Order size below Polymarket minimum (capped bet too small for this market price)`);
+          return;
+        }
+
         // Retry up to maxOrderRetries before giving up
         if (attempt < config.maxOrderRetries) {
           const nextAttempt = attempt + 1;
