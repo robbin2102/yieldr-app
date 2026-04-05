@@ -155,19 +155,14 @@ export class MultiDetector {
 
   private startPollingChain(trader: ICopyTrader): void {
     if (this.activeWallets.has(trader.wallet)) return; // already running
-
-    // Stagger evenly: each new trader starts 8s after the previous one.
-    // With 7 traders × 8s = 56s spread across a 60s cycle — no burst at the API.
-    // activeWallets.size is read BEFORE add() so it serves as a 0-based slot index.
-    const slotIndex = this.activeWallets.size;
     this.activeWallets.add(trader.wallet);
 
     const interval = trader.detectorIntervalMs ?? config.detectorIntervalMs;
-    const staggerMs = slotIndex * 8_000;
-    console.log(`[MultiDetector] Polling ${trader.label} (${trader.wallet.slice(0, 10)}...) every ${interval / 1000}s (starts in ${staggerMs / 1000}s)`);
+    console.log(`[MultiDetector] Polling ${trader.label} (${trader.wallet.slice(0, 10)}...) every ${interval / 1000}s`);
 
     const tick = async () => {
       if (this.stopped) return;
+      const tickStart = Date.now();
       await this.pollTrader(trader.wallet);
 
       // Re-read config each cycle — picks up detectorIntervalMs changes
@@ -178,11 +173,19 @@ export class MultiDetector {
         return;
       }
 
+      // Subtract elapsed time so each trader holds a steady cadence regardless
+      // of API response time. Without this, slow polls accumulate into the next
+      // timer and traders gradually drift out of their intended interval.
       const nextInterval = fresh.detectorIntervalMs ?? config.detectorIntervalMs;
-      setTimeout(tick, nextInterval);
+      const elapsed = Date.now() - tickStart;
+      const nextDelay = Math.max(0, nextInterval - elapsed);
+      setTimeout(tick, nextDelay);
     };
 
-    setTimeout(tick, staggerMs);
+    // Small random stagger (0–1s) to avoid all traders firing at identical ms on startup.
+    // Rate limits are not a concern (Data API: 1,000 req/10s; we do ~7 req/min).
+    const stagger = Math.floor(Math.random() * 1000);
+    setTimeout(tick, stagger);
   }
 
   private async pollTrader(wallet: string): Promise<void> {
@@ -199,9 +202,6 @@ export class MultiDetector {
     if (!trader) return;
 
     await TraderLoader.updateLastPolled(wallet);
-
-    const pollTs = new Date().toISOString().slice(11, 19);
-    console.log(`[${pollTs}] 👁  ${trader.label}: polling... (lastSeen: ${new Date(trader.lastSeenTs).toISOString().slice(11, 19)})`);
 
     let activities: ActivityResponse[] = [];
     try {
@@ -225,11 +225,9 @@ export class MultiDetector {
     const newActivities = activities.filter(a => a.timestamp > trader.lastSeenTs);
 
     this.checkHourReset();
-    const ts = new Date().toISOString().slice(11, 19);  // HH:MM:SS
+    const ts = new Date().toISOString().slice(11, 19);
 
-    console.log(`[${ts}] 👁  ${trader.label}: ✓ ${activities.length} activities fetched, ${newActivities.length} new`);
-
-    if (newActivities.length === 0) return;
+    if (newActivities.length === 0) return; // silent — cycle summary shown every 10m
 
     this.cycleTotal += newActivities.length;
     console.log(`[${ts}] 🔔 ${trader.label}: ${newActivities.length} new activit${newActivities.length === 1 ? 'y' : 'ies'} detected`);
