@@ -122,11 +122,16 @@ async function main() {
   const negRiskAdap = new ethers.Contract(CONTRACTS.NEG_RISK_ADAPTER, NEG_RISK_ABI,   wallet);
 
   const PARENT_COLLECTION_ID = ethers.constants.HashZero;  // 0x000...0 for root positions
+  // Fetch live gas prices and add 30% headroom so TX confirms promptly
+  const feeData = await provider.getFeeData();
+  const basePriorityFee = feeData.maxPriorityFeePerGas ?? ethers.utils.parseUnits('30', 'gwei');
+  const baseMaxFee      = feeData.maxFeePerGas         ?? ethers.utils.parseUnits('300', 'gwei');
   const gasBump = {
-    gasLimit: 300_000,
-    maxPriorityFeePerGas: ethers.utils.parseUnits('30', 'gwei'),  // Polygon min is 25 Gwei
-    maxFeePerGas:         ethers.utils.parseUnits('100', 'gwei'), // cap — only pays what's needed
+    gasLimit:             300_000,
+    maxPriorityFeePerGas: basePriorityFee.mul(130).div(100),  // +30% over live estimate
+    maxFeePerGas:         baseMaxFee.mul(130).div(100),        // +30% ceiling
   };
+  console.log(`  Gas: priority=${ethers.utils.formatUnits(gasBump.maxPriorityFeePerGas, 'gwei')} Gwei  max=${ethers.utils.formatUnits(gasBump.maxFeePerGas, 'gwei')} Gwei`);
 
   // ── 5. Redeem each position ───────────────────────────────────────────────
   console.log('\nExecuting redemptions...\n');
