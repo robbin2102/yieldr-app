@@ -265,7 +265,63 @@ export async function ensureAllowances(
     }
 
     // ═══════════════════════════════════════════════════════════════
-    // 4. Check and Set CTF Approval for NEG_RISK Exchange
+    // 4. Check and Set USDC Allowance for NEG_RISK_ADAPTER
+    //    The adapter contract (0xd91E...) pulls USDC directly when
+    //    routing negRisk BUY orders — needs its own approval.
+    // ═══════════════════════════════════════════════════════════════
+
+    const negRiskAdapterAllowanceData = allowanceSelector +
+      walletAddress.slice(2).padStart(64, '0') +
+      POLYGON_CONTRACTS.NEG_RISK_ADAPTER.slice(2).padStart(64, '0');
+
+    const negRiskAdapterUsdcHex = await rawRpcCall(rpcUrl, 'eth_call', [
+      { to: POLYGON_CONTRACTS.USDC, data: negRiskAdapterAllowanceData },
+      'latest'
+    ]);
+
+    const negRiskAdapterUsdcAllowance = BigInt(negRiskAdapterUsdcHex);
+    console.log(`[Allowances] Current NEG_RISK_ADAPTER USDC allowance: ${Number(negRiskAdapterUsdcAllowance) / 1e6} USDC`);
+
+    if (negRiskAdapterUsdcAllowance < ONE_MILLION_USDC) {
+      console.log('[Allowances] ⚙️  Setting unlimited NEG_RISK_ADAPTER USDC approval...');
+      console.log(`[Allowances] Approving ${POLYGON_CONTRACTS.NEG_RISK_ADAPTER} to spend USDC`);
+
+      const provider = new ethers.providers.JsonRpcProvider(rpcUrl);
+      const wallet = new ethers.Wallet(privateKey, provider);
+
+      const usdcInterface = new ethers.utils.Interface([
+        'function approve(address spender, uint256 amount) returns (bool)'
+      ]);
+
+      const feeData = await provider.getFeeData();
+      const priorityFee = ethers.utils.parseUnits('35', 'gwei');
+      const maxFeePerGas = feeData.maxFeePerGas || ethers.utils.parseUnits('200', 'gwei');
+
+      const tx = await wallet.sendTransaction({
+        to: POLYGON_CONTRACTS.USDC,
+        data: usdcInterface.encodeFunctionData('approve', [
+          POLYGON_CONTRACTS.NEG_RISK_ADAPTER,
+          ethers.constants.MaxUint256
+        ]),
+        maxPriorityFeePerGas: priorityFee,
+        maxFeePerGas: maxFeePerGas.add(priorityFee),
+      });
+
+      console.log(`[Allowances] Transaction sent: ${tx.hash}`);
+      const receipt = await Promise.race([
+        tx.wait(),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('Transaction confirmation timeout after 2 minutes')), 120000)
+        ),
+      ]) as any;
+
+      console.log(`[Allowances] ✅ NEG_RISK_ADAPTER USDC approval confirmed (block ${receipt.blockNumber})`);
+    } else {
+      console.log('[Allowances] ✅ NEG_RISK_ADAPTER USDC allowance already set');
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // 5. Check and Set CTF Approval for NEG_RISK Exchange
     // ═══════════════════════════════════════════════════════════════
 
     const negRiskIsApprovedData = isApprovedSelector +
@@ -396,11 +452,25 @@ export async function checkAllowances(
 
   const negRiskCtfApproved = BigInt(negRiskCtfApprovedHex) !== BigInt(0);
 
+  // Check NEG_RISK_ADAPTER allowance
+  const negRiskAdapterAllowanceData = allowanceSelector +
+    walletAddress.slice(2).padStart(64, '0') +
+    POLYGON_CONTRACTS.NEG_RISK_ADAPTER.slice(2).padStart(64, '0');
+
+  const negRiskAdapterUsdcHex = await rawRpcCall(rpcUrl, 'eth_call', [
+    { to: POLYGON_CONTRACTS.USDC, data: negRiskAdapterAllowanceData },
+    'latest'
+  ]);
+
+  const negRiskAdapterUsdcAllowance = BigInt(negRiskAdapterUsdcHex);
+
   console.log(`  CTF_EXCHANGE:`);
   console.log(`    USDC: ${Number(usdcAllowance) / 1e6} USDC`);
   console.log(`    CTF:  ${ctfApproved ? 'Approved ✅' : 'Not approved ❌'}`);
   console.log(`  NEG_RISK_CTF_EXCHANGE:`);
   console.log(`    USDC: ${Number(negRiskUsdcAllowance) / 1e6} USDC`);
   console.log(`    CTF:  ${negRiskCtfApproved ? 'Approved ✅' : 'Not approved ❌'}`);
+  console.log(`  NEG_RISK_ADAPTER:`);
+  console.log(`    USDC: ${Number(negRiskAdapterUsdcAllowance) / 1e6} USDC`);
   console.log('');
 }
