@@ -119,3 +119,11 @@ main().catch(err => {
   console.error('\n[Main] Fatal error:', err);
   process.exit(1);
 });
+
+// Catch unhandled promise rejections (e.g. DB query during network blip in a setInterval).
+// Without this, Node.js 15+ crashes the process on any unhandled rejection.
+// Logging the error here keeps the bot alive — Mongoose will reconnect automatically.
+process.on('unhandledRejection', (reason: any) => {
+  const msg = reason?.message ?? String(reason);
+  console.error(`[Main] ⚠️  Unhandled rejection (bot continues): ${msg}`);
+});
