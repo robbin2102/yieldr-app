@@ -67,11 +67,12 @@ export class MultiDetector {
   private statusTimer:   NodeJS.Timeout | null = null;
   private stopped = false;
 
-  // In-memory cycle counters — reset each hour
+  // In-memory cycle counters — reset every 10m print window
   private cycleHour    = '';
   private cycleStart   = Date.now();
-  private cycleTotal   = 0;       // total activities detected this hour
+  private cycleTotal   = 0;       // non-stale activities detected this window
   private cycleTrades  = 0;       // TRADE activities forwarded to executor
+  private cycleStale   = 0;       // stale activities skipped (backlog/startup)
   private cycleByLabel = new Map<string, number>(); // label → trade count
 
   /**
@@ -150,13 +151,18 @@ export class MultiDetector {
   }
 
   private printCycleStatus(): void {
-    const elapsedMin = Math.round((Date.now() - this.cycleStart) / 60_000);
-    const breakdown  = [...this.cycleByLabel.entries()]
+    const breakdown = [...this.cycleByLabel.entries()]
       .filter(([, n]) => n > 0)
       .map(([l, n]) => `${l.split('-')[0]}:${n}`)
       .join(' ');
     const ts = new Date().toISOString().slice(11, 19);
-    console.log(`[${ts}] 📊 Cycle ${elapsedMin}m | activities:${this.cycleTotal} trades:${this.cycleTrades}${breakdown ? ` (${breakdown})` : ''}`);
+    const staleNote = this.cycleStale > 0 ? ` stale:${this.cycleStale}` : '';
+    console.log(`[${ts}] 📊 Last 10m | activities:${this.cycleTotal} trades:${this.cycleTrades}${staleNote}${breakdown ? ` (${breakdown})` : ''}`);
+    // Reset counters after each print so each window shows its own numbers
+    this.cycleTotal  = 0;
+    this.cycleTrades = 0;
+    this.cycleStale  = 0;
+    this.cycleByLabel.clear();
   }
 
   /** Reset cycle counters on the hour boundary */
@@ -244,19 +250,27 @@ export class MultiDetector {
     // Filter to only new activities (after lastSeenTs)
     const newActivities = activities.filter(a => a.timestamp > trader.lastSeenTs);
 
-    this.checkHourReset();
     const ts = new Date().toISOString().slice(11, 19);
 
     if (newActivities.length === 0) return; // silent — cycle summary shown every 10m
 
-    this.cycleTotal += newActivities.length;
-    console.log(`[${ts}] 🔔 ${trader.label}: ${newActivities.length} new activit${newActivities.length === 1 ? 'y' : 'ies'} detected`);
-
-    // Advance cursor to the most recent timestamp
+    // Advance cursor to the most recent timestamp before processing
     const maxTs = Math.max(...newActivities.map(a => a.timestamp));
     await TraderLoader.updateLastSeen(wallet, maxTs);
 
     const now = Date.now();
+
+    // Count stale separately so the 10m summary shows real signal vs startup backlog
+    const staleCount = newActivities.filter(a => (now - a.timestamp * 1000) > config.maxLagMs).length;
+    const freshCount = newActivities.length - staleCount;
+    this.cycleStale += staleCount;
+    this.cycleTotal += freshCount;
+
+    if (freshCount > 0) {
+      console.log(`[${ts}] 🔔 ${trader.label}: ${freshCount} new activit${freshCount === 1 ? 'y' : 'ies'} detected${staleCount > 0 ? ` (${staleCount} stale skipped)` : ''}`);
+    } else if (staleCount > 0) {
+      console.log(`[${ts}] 🔔 ${trader.label}: ${staleCount} stale activit${staleCount === 1 ? 'y' : 'ies'} skipped (startup backlog)`);
+    }
 
     for (const act of newActivities) {
       const traderTs = act.timestamp * 1000;
@@ -267,8 +281,7 @@ export class MultiDetector {
 
       // Skip stale activities — backlog replay guard.
       if (discoveryLatencyMs > config.maxLagMs) {
-        console.log(`[${ts}]     ⏩ STALE  [${act.side ?? act.type}] "${shortTitle}" — lag ${lagSec}s > ${config.maxLagMs / 1000}s limit`);
-        continue;
+        continue; // already counted in cycleStale above, no need to log individually
       }
 
       // Skip non-TRADE activities — log inline and record to DB
