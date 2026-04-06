@@ -86,8 +86,8 @@ async function main() {
   tracker.start();
 
   console.log('\n✅ Poly-Agent v3 running.');
-  console.log('   Per-poll heartbeat:  every 60s per trader (👁 = quiet, 🔔 = activity)');
-  console.log('   Trade detected:      ━━━ immediate log with doc ID');
+  console.log('   Per-poll heartbeat:  every 60s per trader (silent if no activity)');
+  console.log('   Trade detected:      T6 BUY $4148 "title" lag 20s | ×1.3 avg $3200 → copy $7');
   console.log('   Execution summary:   printed every 10m\n');
 
   // ── Graceful shutdown ──────────────────────────────────────────────────────
