@@ -116,40 +116,45 @@ export class Confirmer {
     const scanIntervalMs = 60_000; // scan every 60s
     this.stuckScanInterval = setInterval(async () => {
       if (this.stopped) return;
-      const staleMs  = (config.gttExpirySeconds + 60) * 1000;
-      const cutoff   = Date.now() - staleMs;
-      const { CopyTrade } = await import('../db/models/CopyTrade');
-      const stale = await CopyTrade.find({ status: 'EXECUTING', submittedAt: { $lt: cutoff } });
-      if (stale.length === 0) return;
+      try {
+        const staleMs  = (config.gttExpirySeconds + 60) * 1000;
+        const cutoff   = Date.now() - staleMs;
+        const { CopyTrade } = await import('../db/models/CopyTrade');
+        const stale = await CopyTrade.find({ status: 'EXECUTING', submittedAt: { $lt: cutoff } });
+        if (stale.length === 0) return;
 
-      // Skip docs already tracked in-memory — they're mid-flight, not actually stuck
-      const activeDocIds = new Set([...this.pendingOrders.values()].map(p => p.tradeDocId));
-      const reallyStale = stale.filter(doc => !activeDocIds.has(doc._id.toString()));
-      if (reallyStale.length === 0) return;
+        // Skip docs already tracked in-memory — they're mid-flight, not actually stuck
+        const activeDocIds = new Set([...this.pendingOrders.values()].map(p => p.tradeDocId));
+        const reallyStale = stale.filter(doc => !activeDocIds.has(doc._id.toString()));
+        if (reallyStale.length === 0) return;
 
-      const ts = new Date().toISOString().slice(11, 19);
-      console.warn(`[${ts}] [Confirmer] ⚠️  ${reallyStale.length} stuck EXECUTING doc(s) found — triggering retry`);
-      for (const doc of reallyStale) {
-        // Build a minimal PendingOrder from the doc so GTTExecutor can retry
-        const pending: PendingOrder = {
-          tradeDocId:   doc._id.toString(),
-          traderWallet: doc.sourceWallet,
-          side:         doc.side as 'BUY' | 'SELL',
-          tokenId:      doc.tokenId,
-          conditionId:  doc.conditionId,
-          targetUsdc:   doc.copyBetUsdc,
-          targetShares: doc.side === 'SELL' ? (doc as any).targetShares : undefined,
-          filledSize:   0,
-          filledCost:   0,
-          attempt:      (doc.attempts ?? 1),
-          traderPrice:  doc.traderPrice,
-          traderTs:     doc.traderTs,
-          detectedAt:   doc.detectedAt,
-          orderId:      (doc as any).orderId ?? '',
-          limitPrice:   0,
-          submittedAt:  doc.submittedAt ?? Date.now(),
-        };
-        eventBus.emit('order:expired', pending);
+        const ts = new Date().toISOString().slice(11, 19);
+        console.warn(`[${ts}] [Confirmer] ⚠️  ${reallyStale.length} stuck EXECUTING doc(s) found — triggering retry`);
+        for (const doc of reallyStale) {
+          // Build a minimal PendingOrder from the doc so GTTExecutor can retry
+          const pending: PendingOrder = {
+            tradeDocId:   doc._id.toString(),
+            traderWallet: doc.sourceWallet,
+            side:         doc.side as 'BUY' | 'SELL',
+            tokenId:      doc.tokenId,
+            conditionId:  doc.conditionId,
+            targetUsdc:   doc.copyBetUsdc,
+            targetShares: doc.side === 'SELL' ? (doc as any).targetShares : undefined,
+            filledSize:   0,
+            filledCost:   0,
+            attempt:      (doc.attempts ?? 1),
+            traderPrice:  doc.traderPrice,
+            traderTs:     doc.traderTs,
+            detectedAt:   doc.detectedAt,
+            orderId:      (doc as any).orderId ?? '',
+            limitPrice:   0,
+            submittedAt:  doc.submittedAt ?? Date.now(),
+          };
+          eventBus.emit('order:expired', pending);
+        }
+      } catch (err: any) {
+        // DB unavailable (e.g. network blip) — skip this scan cycle, Mongoose will reconnect
+        console.warn(`[Confirmer] Stuck scan skipped — DB error: ${err.message?.slice(0, 80)}`);
       }
     }, scanIntervalMs);
   }
