@@ -291,7 +291,7 @@ export class MultiDetector {
         continue;
       }
 
-      console.log(`[${ts}]     → [${act.side}] $${act.usdcSize.toFixed(2)} "${shortTitle}" lag ${lagSec}s — queuing`);
+      // GTTExecutor prints the full header with avg-bet context — no duplicate line here
       this.cycleTrades++;
       this.cycleByLabel.set(trader.label, (this.cycleByLabel.get(trader.label) ?? 0) + 1);
 

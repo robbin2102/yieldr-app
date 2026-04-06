@@ -208,12 +208,15 @@ export class GTTExecutor {
         return;
       }
       await TraderLoader.recordAboveAvg(freshTrader.wallet);
-      buyBetUsdc = sizing.betUsdc; // saved — used below after header
-    }
+      buyBetUsdc = sizing.betUsdc;
 
-    // Verbose header only for trades that pass the initial BUY filter (or are SELLs)
-    console.log(`\n[${ts}] ━━━ ${traderConfig.label} ${side} $${traderBetUsdc.toFixed(0)} | "${title.slice(0, 40)}" | lag ${discoveryLatencyMs}ms`);
-    console.log(`[${ts}]     📋 doc: ${tradeDoc._id}  tx: ${txHash.slice(0, 12)}...`);
+      const ratio    = (traderBetUsdc / freshTrader.avgBet).toFixed(1);
+      const lagSec   = (discoveryLatencyMs / 1000).toFixed(0);
+      console.log(`\n[${ts}] ${traderConfig.label} BUY $${traderBetUsdc.toFixed(0)} "${title.slice(0, 42)}" lag ${lagSec}s | ×${ratio} avg $${freshTrader.avgBet} → copy $${buyBetUsdc.toFixed(2)}`);
+    } else {
+      const lagSec = (discoveryLatencyMs / 1000).toFixed(0);
+      console.log(`\n[${ts}] ${traderConfig.label} SELL $${traderBetUsdc.toFixed(0)} "${title.slice(0, 42)}" lag ${lagSec}s`);
+    }
 
     // ── Orderbook (needed for both BUY and SELL sizing) ───────────────────────
     const book = await orderbookCache.getBothPrices(tokenId);
@@ -272,7 +275,7 @@ export class GTTExecutor {
         // Trim reservation down to what we'll actually use
         const cur = this.positionReserved.get(lockKey) ?? 0;
         this.positionReserved.set(lockKey, Math.max(0, cur - (buyBetUsdc - betCapped)));
-        console.log(`[GTTExecutor] BUY capped to $${betCapped.toFixed(2)} (db=$${dbSpent.toFixed(2)} + inflight=$${alreadyReserved.toFixed(2)} / max $${maxPerPosition.toFixed(2)})`);
+        // cap applied silently — header already shows final copy amount
       }
       targetUsdc = betCapped;
 
@@ -458,8 +461,9 @@ export class GTTExecutor {
     }
 
     const expiration = Math.floor(Date.now() / 1000) + 60 + config.gttExpirySeconds;
-    const aggrLabel  = fraction > 0 ? ` +${(fraction * 100).toFixed(0)}% spread (${(aggrStep * 100).toFixed(1)}¢)` : '';
-    console.log(`[GTTExecutor] Attempt ${attempt}: GTD ${side} ~${shares.toFixed(2)} shares @ $${limitPrice.toFixed(4)}${aggrLabel} (expiry ${config.gttExpirySeconds}s)`);
+    const aggrLabel  = fraction === 0 ? 'passive' : fraction === 1.0 ? 'cross' : 'midpoint';
+    const ts2 = new Date().toISOString().slice(11, 19);
+    console.log(`[${ts2}]     #${attempt} ${side} ${shares.toFixed(2)}sh @ $${limitPrice.toFixed(4)} (${aggrLabel} bid $${book.bestBid.toFixed(4)} ask $${book.bestAsk.toFixed(4)})`);
 
     // Resolve fee rate: cached → API fetch → config default.
     // Fetching from API on first encounter eliminates the error-then-correct round trip
@@ -473,7 +477,7 @@ export class GTTExecutor {
         feeRateBps = apiFee;
         this.feeRateCache.set(tokenId, feeRateBps);
         saveFeeCache(this.feeRateCache);
-        console.log(`[GTTExecutor] Fee rate fetched from API: ${feeRateBps} bps (${tokenId.slice(0, 10)}...)`);
+        // fee rate cached silently
       } else {
         feeRateBps = config.feeRateBps;
         console.warn(`[GTTExecutor] Fee rate API unavailable — using config default ${feeRateBps} bps`);
@@ -484,7 +488,7 @@ export class GTTExecutor {
       // negRisk flag comes from our own disk-persisted cache (populated via GET /markets/<conditionId>).
       // No dependency on clob-client version — works with v3, v5, or any future version.
       const isNegRisk = await this.getNegRiskCached(tokenId, ctx.conditionId);
-      if (isNegRisk) console.log(`[GTTExecutor] NegRisk market — using NegRisk exchange (${tokenId.slice(0, 10)}...)`);
+      // isNegRisk routes to correct exchange silently
 
       const userOrder = {
         tokenID:    tokenId,
@@ -555,7 +559,8 @@ export class GTTExecutor {
         return;
       }
 
-      console.log(`[GTTExecutor] Order placed: ${orderId.slice(0, 12)}... — handing off to Confirmer`);
+      const ts3 = new Date().toISOString().slice(11, 19);
+      console.log(`[${ts3}]     → order ${orderId.slice(0, 12)}...`);
 
       // Persist orderId + current attempt so stuck scan uses the correct attempt number
       await CopyTrade.findByIdAndUpdate(ctx.tradeDocId, { orderId, attempts: attempt });
@@ -618,7 +623,7 @@ export class GTTExecutor {
     }
 
     const ts = new Date().toISOString().slice(11, 19);
-    console.log(`[${ts}] 🔁 Retrying order for doc ${pending.tradeDocId} (attempt ${nextAttempt}/${config.maxOrderRetries})`);
+    // retry log handled by placeOrder attempt line
 
     await this.placeOrder(
       { ...pending, attempt: nextAttempt },

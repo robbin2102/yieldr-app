@@ -79,7 +79,7 @@ class OrderbookCache {
   async fetchOrderbookSync(tokenId: string): Promise<boolean> {
     try {
       const fetchStart = Date.now();
-      console.log(`[OrderbookCache] 🔄 Fetching orderbook for ${tokenId.slice(0, 16)}...`);
+      // silent fetch — bid/ask shown inline in placeOrder attempt log
 
       const url = `${config.clobApiBase}/book?token_id=${tokenId}`;
       const response = await fetch(url);
@@ -107,7 +107,7 @@ class OrderbookCache {
       const bestBid = book.bids.length > 0 ? book.bids[0].price : 'N/A';
       const bestAsk = book.asks.length > 0 ? book.asks[0].price : 'N/A';
 
-      console.log(`[OrderbookCache] ✅ Fetched in ${fetchLatency}ms (bid: ${bestBid}, ask: ${bestAsk})`);
+      // silent — caller logs bid/ask inline
 
       return true;
     } catch (error: any) {

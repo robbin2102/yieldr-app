@@ -93,8 +93,7 @@ export class Confirmer {
 
       // Track pending orders emitted by GTTExecutor
       eventBus.on('trade:submitted', (pending: PendingOrder) => {
-        this.pendingOrders.set(pending.orderId, pending);
-        console.log(`[Confirmer] Tracking order ${pending.orderId.slice(0, 12)}... (attempt ${pending.attempt}, doc ${pending.tradeDocId})`);
+        this.pendingOrders.set(pending.orderId, pending); // tracking silently — order logged above
       });
     });
   }
@@ -229,12 +228,9 @@ export class Confirmer {
     const status      = fullyFilled ? 'FILLED' : 'PARTIAL';
 
     const ts = new Date().toISOString().slice(11, 19);
-    console.log(
-      `[${ts}] [Confirmer] ✅ ${status} via WebSocket | doc=${pending.tradeDocId}\n` +
-      `          ${pending.filledSize.toFixed(2)} shares @ $${avgFillPrice.toFixed(4)}` +
-      ` | drift ${priceDrift >= 0 ? '+' : ''}${priceDrift.toFixed(2)}%` +
-      ` | latency ${totalLatencyMs}ms | attempt ${pending.attempt}`
-    );
+    const driftStr = `${priceDrift >= 0 ? '+' : ''}${priceDrift.toFixed(2)}%`;
+    const latSec   = (totalLatencyMs / 1000).toFixed(0);
+    console.log(`[${ts}] ✅ ${status}  ${pending.filledSize.toFixed(2)}sh @ $${avgFillPrice.toFixed(4)} | drift ${driftStr} | ${latSec}s | attempt ${pending.attempt}`);
 
     // Update CopyTrade document
     await CopyTrade.findByIdAndUpdate(pending.tradeDocId, {
@@ -319,7 +315,7 @@ export class Confirmer {
     }
 
     // Expired with zero fill — trigger retry in GTTExecutor
-    console.log(`[${ts}] [Confirmer] ⏱  Order expired unfilled (attempt ${pending.attempt}) — requesting retry`);
+    console.log(`[${ts}]     ⏱  expired attempt ${pending.attempt} — retrying`);
     eventBus.emit('order:expired', pending);
   }
 
