@@ -181,9 +181,23 @@ export class Confirmer {
     }, config.groupScanIntervalMs);
   }
 
-  private async scanGroupedTrades(): Promise<void> {
-    const windowMs = config.groupScanWindowMs;
+  /**
+   * Run a one-time scan on startup with a wider lookback window (3h) to catch
+   * accumulated BELOW_AVG trades from before the bot was last running.
+   * The regular 30m rolling scanner won't reach these.
+   */
+  async runStartupScan(): Promise<void> {
+    const startupWindowMs = 3 * 60 * 60 * 1000; // 3h
+    try {
+      await this.scanGroupedTrades(startupWindowMs);
+    } catch (err: any) {
+      console.warn(`[GroupScanner] Startup scan error: ${err.message?.slice(0, 80)}`);
+    }
+  }
+
+  private async scanGroupedTrades(windowMs = config.groupScanWindowMs): Promise<void> {
     const since    = Date.now() - windowMs;
+    const windowLabel = `${Math.round(windowMs / 60000)}m`;
 
     // Group BELOW_AVG skips by (sourceWallet, tokenId) within the rolling window.
     // Only picks up docs still labelled BELOW_AVG — GROUPED_BELOW_AVG are excluded.
@@ -211,6 +225,8 @@ export class Confirmer {
       },
     ]);
 
+    let qualified = 0;
+
     for (const group of groups) {
       const { sourceWallet, tokenId } = group._id;
       const { totalUsdc, totalShares, firstSeen, conditionId, title, outcome, traderLabel, docIds } = group;
@@ -221,6 +237,8 @@ export class Confirmer {
 
       // Trigger threshold: grouped total must reach avgBet (same filter as real-time path)
       if (totalUsdc < trader.avgBet) continue;
+
+      qualified++;
 
       // VWAP — reference price for the drift check inside placeOrder()
       const vwap = totalUsdc / totalShares;
@@ -255,6 +273,9 @@ export class Confirmer {
         discoveryLatencyMs: Date.now() - firstSeen,
       } as DetectedTradeEvent);
     }
+
+    const ts = new Date().toISOString().slice(11, 19);
+    console.log(`[${ts}] [GroupScanner] Scanned ${groups.length} group(s), ${qualified} qualified (window: last ${windowLabel})`);
   }
 
   private sendAuth(): void {
