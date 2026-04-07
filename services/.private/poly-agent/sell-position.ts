@@ -1,24 +1,22 @@
 /**
- * sell-position.ts — place a GTD SELL order and confirm fill via WebSocket.
+ * sell-position.ts — manual SELL or BUY limit order with GTD fill tracking.
  *
  * Usage:
- *   npx tsx sell-position.ts --token <tokenId> --size <shares> [--price <0.xxx>]
+ *   SELL (GTT passive → midpoint → cross, mirrors bot executor):
+ *     npx tsx sell-position.ts --token <tokenId> --size <shares>
  *
- * Flow:
- *   1. Fetch fee rate from CLOB API (no error-retry round trip)
- *   2. Fetch live orderbook
- *   3. Connect to Polymarket WebSocket User Channel
- *   4. Place GTD SELL order
- *   5. Wait for fill event (trade) or expiry event (order CANCELLATION)
- *   6. If expired: retry with increasing aggression (up to 3 attempts)
+ *   BUY limit (at a specified price, retries if expired):
+ *     npx tsx sell-position.ts --buy --token <tokenId> --size <shares> --price <0.xxx>
  *
- * Pricing strategy per attempt:
- *   Attempt 1: bestBid        — crosses the spread, near-instant taker fill
- *   Attempt 2: bestBid - 1¢   — more aggressive
- *   Attempt 3: bestBid - 2¢   — very aggressive, near-certain fill
+ * SELL aggression per attempt (same as bot GTTExecutor):
+ *   Attempt 1: bestAsk              — passive maker, waits for buyer
+ *   Attempt 2: midpoint             — (bestBid + bestAsk) / 2
+ *   Attempt 3: bestBid + $0.001     — just above bid, near-certain fill
  *
- * Example:
- *   npx tsx sell-position.ts --token 163266... --size 67.52
+ * BUY:
+ *   Places GTD order at --price. Retries up to 3 attempts at same price
+ *   (price refreshed each attempt so midpoint/bid/ask stay current).
+ *   Omit --price to default to bestAsk (immediate taker fill).
  */
 
 import WebSocket from 'ws';
@@ -27,27 +25,41 @@ import { createClobClient } from './src/clob/client';
 import { config } from './src/config';
 
 const MAX_ATTEMPTS = 3;
-const GTD_SECONDS  = 30;   // expiry window per attempt
+const GTD_SECONDS  = 30;
 
 // ── CLI args ──────────────────────────────────────────────────────────────────
 function arg(name: string): string | undefined {
   const idx = process.argv.indexOf(`--${name}`);
   return idx !== -1 ? process.argv[idx + 1] : undefined;
 }
+function flag(name: string): boolean {
+  return process.argv.includes(`--${name}`);
+}
 
-const tokenId  = arg('token');
-const sizeArg  = arg('size');
+const isBuy   = flag('buy');
+const tokenId = arg('token');
+const sizeArg = arg('size');
 const priceArg = arg('price');
 
 if (!tokenId || !sizeArg) {
-  console.error('Usage: npx tsx sell-position.ts --token <tokenId> --size <shares> [--price <0.xxx>]');
+  console.error('Usage:');
+  console.error('  SELL: npx tsx sell-position.ts --token <tokenId> --size <shares>');
+  console.error('  BUY:  npx tsx sell-position.ts --buy --token <tokenId> --size <shares> --price <0.xxx>');
+  process.exit(1);
+}
+if (isBuy && !priceArg) {
+  console.error('BUY mode requires --price <0.xxx>');
   process.exit(1);
 }
 
-const totalSize = parseFloat(sizeArg!);
+const totalSize  = parseFloat(sizeArg!);
+const fixedPrice = priceArg ? parseFloat(priceArg) : undefined;
 if (isNaN(totalSize) || totalSize <= 0) { console.error('Invalid --size'); process.exit(1); }
+if (fixedPrice !== undefined && (isNaN(fixedPrice) || fixedPrice <= 0 || fixedPrice >= 1)) {
+  console.error('--price must be between 0 and 1 exclusive'); process.exit(1);
+}
 
-// ── Fetch fee rate upfront — no error-retry round trip ────────────────────────
+// ── Fetch fee rate ────────────────────────────────────────────────────────────
 async function fetchFeeRate(token: string): Promise<number> {
   try {
     const res  = await fetch(`${config.clobApiBase}/fee-rate?token_id=${token}`);
@@ -78,22 +90,29 @@ async function fetchBook(): Promise<{ bestBid: number; bestAsk: number }> {
   return { bestBid, bestAsk };
 }
 
-// ── Sell price per attempt — increasing aggression ────────────────────────────
-// Attempt 1: sell @ bestBid       → crosses the spread, taker fill
-// Attempt 2: sell @ bestBid - 1¢  → more aggressive
-// Attempt 3: sell @ bestBid - 2¢  → very aggressive
-function sellPrice(bestBid: number, attempt: number): number {
-  if (priceArg) return parseFloat(priceArg);
-  const offsets = [0, 0.01, 0.02];
-  const offset  = offsets[attempt - 1] ?? 0.02;
-  return parseFloat(Math.max(0.001, bestBid - offset).toFixed(4));
+// ── SELL price per attempt (mirrors bot GTTExecutor SELL aggression) ──────────
+// Attempt 1: passive — post at bestAsk, wait for buyer to come to us
+// Attempt 2: midpoint — split the spread
+// Attempt 3: cross   — bestBid + $0.001, near-certain immediate fill
+function sellPrice(bestBid: number, bestAsk: number, attempt: number): number {
+  if (fixedPrice !== undefined) return fixedPrice;
+  const spread = bestAsk - bestBid;
+  const fractions = [0, 0.5, 1.0];
+  const fraction  = fractions[attempt - 1] ?? 1.0;
+  const raw = Math.max(bestAsk - spread * fraction, bestBid + 0.001);
+  return parseFloat(Math.min(0.999, Math.max(0.001, raw)).toFixed(4));
 }
 
-// ── WebSocket User Channel — listen for fill or expiry of a specific order ────
-function waitForFillOrExpiry(orderId: string): Promise<'filled' | 'expired'> {
+// ── BUY price (fixed --price, refreshed book each retry) ─────────────────────
+function buyPrice(bestBid: number, bestAsk: number): number {
+  if (fixedPrice !== undefined) return fixedPrice;
+  return parseFloat(Math.min(0.999, bestAsk).toFixed(4)); // default: bestAsk (immediate fill)
+}
+
+// ── WebSocket: wait for fill or expiry of a specific order ───────────────────
+function waitForFillOrExpiry(orderId: string, targetSize: number): Promise<{ result: 'filled' | 'expired'; filledSize: number }> {
   return new Promise((resolve) => {
     const ws = new WebSocket(config.wssUser);
-
     let filledSize = 0;
     let resolved   = false;
 
@@ -101,127 +120,124 @@ function waitForFillOrExpiry(orderId: string): Promise<'filled' | 'expired'> {
       if (resolved) return;
       resolved = true;
       ws.close();
-      resolve(result);
+      resolve({ result, filledSize });
     };
 
     ws.on('open', () => {
       ws.send(JSON.stringify({
-        type:    'user',
-        markets: [],
-        auth: {
-          apiKey:     config.apiKey,
-          secret:     config.apiSecret,
-          passphrase: config.passphrase,
-        },
+        type: 'user', markets: [],
+        auth: { apiKey: config.apiKey, secret: config.apiSecret, passphrase: config.passphrase },
       }));
     });
 
     ws.on('message', (raw) => {
       const text = raw.toString();
       if (text === 'PONG') return;
-
       let msg: any;
       try { msg = JSON.parse(text); } catch { return; }
 
       if (msg.event_type === 'trade') {
-        // Maker fill: our orderId appears as maker_order_id
-        // Taker fill: our orderId appears as taker_order_id
-        if (msg.maker_order_id === orderId || msg.taker_order_id === orderId) {
+        const makerOrderId: string = (msg.maker_orders as any[])?.[0]?.order_id ?? '';
+        const takerOrderId: string = msg.taker_order_id ?? '';
+        if (makerOrderId === orderId || takerOrderId === orderId) {
           const fill = parseFloat(msg.size ?? '0');
           filledSize += fill;
-          console.log(`  📥 Fill event: +${fill.toFixed(4)} shares @ $${parseFloat(msg.price ?? '0').toFixed(4)} (total filled: ${filledSize.toFixed(4)})`);
-          if (filledSize >= totalSize * 0.9) {
-            done('filled');
-          }
+          console.log(`  📥 Fill: +${fill.toFixed(4)} sh @ $${parseFloat(msg.price ?? '0').toFixed(4)}  (total: ${filledSize.toFixed(4)}/${targetSize.toFixed(4)})`);
+          if (filledSize >= targetSize * 0.9) done('filled');
         }
-      } else if (msg.event_type === 'order' && msg.type === 'CANCELLATION') {
-        if (msg.id === orderId) {
-          if (filledSize > 0) {
-            console.log(`  ⚠️  Partially filled (${filledSize.toFixed(4)} / ${totalSize} shares) then expired`);
-            done('filled'); // partial is acceptable — don't retry
-          } else {
-            done('expired');
-          }
+      } else if (msg.event_type === 'order' && msg.type === 'CANCELLATION' && msg.id === orderId) {
+        if (filledSize > 0) {
+          console.log(`  ⚠️  Partial fill ${filledSize.toFixed(4)} sh then expired`);
+          done('filled');
+        } else {
+          done('expired');
         }
       }
     });
 
-    ws.on('error', (err) => {
-      console.warn(`  WS error: ${err.message}`);
-      done('expired'); // treat as expired, will retry
-    });
-
-    ws.on('close', () => {
-      if (!resolved) done('expired');
-    });
-
-    // Safety timeout slightly longer than GTD window
-    setTimeout(() => {
-      if (!resolved) {
-        console.warn(`  WS timeout after ${GTD_SECONDS + 15}s`);
-        done('expired');
-      }
-    }, (GTD_SECONDS + 15) * 1000);
+    ws.on('error', (err) => { console.warn(`  WS error: ${err.message}`); done('expired'); });
+    ws.on('close', () => { if (!resolved) done('expired'); });
+    setTimeout(() => { if (!resolved) { console.warn(`  WS timeout`); done('expired'); } }, (GTD_SECONDS + 15) * 1000);
   });
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
 async function main() {
-  console.log('\nFetching orderbook and fee rate...');
+  const side      = isBuy ? 'BUY' : 'SELL';
+  const sideLabel = isBuy ? Side.BUY : Side.SELL;
+
+  console.log(`\nFetching orderbook and fee rate...`);
   const [book, feeRateBps] = await Promise.all([fetchBook(), fetchFeeRate(tokenId!)]);
+  console.log(`Orderbook: bid $${book.bestBid}  ask $${book.bestAsk}  spread ${((book.bestAsk - book.bestBid) * 100).toFixed(1)}%`);
   const { client } = await createClobClient();
 
   let remainingSize = totalSize;
+  let totalFilledSize = 0;
+  let totalFilledCost = 0;
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-    // Refresh orderbook on each retry for fresh price
-    const freshBook = attempt === 1 ? book : await fetchBook();
-    const price     = sellPrice(freshBook.bestBid, attempt);
+    const freshBook  = attempt === 1 ? book : await fetchBook();
+    const price      = isBuy
+      ? buyPrice(freshBook.bestBid, freshBook.bestAsk)
+      : sellPrice(freshBook.bestBid, freshBook.bestAsk, attempt);
     const expiration = Math.floor(Date.now() / 1000) + 60 + GTD_SECONDS;
 
-    console.log(`\n── Attempt ${attempt}/${MAX_ATTEMPTS} ─────────────────────────────────────────`);
-    console.log(`  Best bid: $${freshBook.bestBid}  |  Best ask: $${freshBook.bestAsk}`);
-    console.log(`  Sell price: $${price}  |  Size: ${remainingSize.toFixed(4)} shares  |  ~$${(remainingSize * price).toFixed(2)} USDC`);
+    const aggrLabel  = isBuy
+      ? (fixedPrice ? 'limit' : 'taker')
+      : (['passive', 'midpoint', 'cross'][attempt - 1] ?? 'cross');
+
+    console.log(`\n── Attempt ${attempt}/${MAX_ATTEMPTS}  [${aggrLabel}] ──────────────────────────────────`);
+    console.log(`  Bid $${freshBook.bestBid.toFixed(4)}  Ask $${freshBook.bestAsk.toFixed(4)}`);
+    console.log(`  ${side} ${remainingSize.toFixed(4)} sh @ $${price}  ≈ $${(remainingSize * price).toFixed(2)} USDC`);
 
     const order = await client.createOrder({
-      tokenID:    tokenId!,
-      price,
-      size:       remainingSize,
-      side:       Side.SELL,
-      feeRateBps,
-      nonce:      0,
-      expiration,
+      tokenID: tokenId!, price, size: remainingSize,
+      side: sideLabel, feeRateBps, nonce: 0, expiration,
     });
 
     const resp: any = await client.postOrder(order, OrderType.GTD);
     const orderId = resp?.orderID ?? resp?.id ?? '';
 
     if (!orderId) {
-      console.error('  ❌ Order rejected:', JSON.stringify(resp));
+      const errMsg = String(resp?.error ?? resp?.errorMsg ?? JSON.stringify(resp)).slice(0, 200);
+      console.error(`  ❌ Order rejected: ${errMsg}`);
       process.exit(1);
     }
 
-    console.log(`  ✅ Order placed: ${orderId}`);
-    console.log(`  Waiting for fill (${GTD_SECONDS}s window)...`);
+    console.log(`  → order ${orderId.slice(0, 14)}...`);
+    console.log(`  Waiting for fill (${GTD_SECONDS}s)...`);
 
-    const result = await waitForFillOrExpiry(orderId);
+    const { result, filledSize } = await waitForFillOrExpiry(orderId, remainingSize);
+
+    if (filledSize > 0) {
+      totalFilledSize += filledSize;
+      totalFilledCost += filledSize * price;
+      remainingSize    = Math.max(0, remainingSize - filledSize);
+    }
 
     if (result === 'filled') {
-      console.log(`\n✅ SELL COMPLETE — ${remainingSize.toFixed(4)} shares sold @ ~$${price}`);
-      console.log(`   Estimated proceeds: ~$${(remainingSize * price).toFixed(2)} USDC`);
-      console.log(`   Check at: https://polymarket.com/portfolio\n`);
+      const avgPrice = totalFilledCost / totalFilledSize;
+      console.log(`\n✅ ${side} COMPLETE`);
+      console.log(`   Filled: ${totalFilledSize.toFixed(4)} sh  avg $${avgPrice.toFixed(4)}  ≈ $${totalFilledCost.toFixed(2)} USDC`);
+      console.log(`   Check: https://polymarket.com/portfolio\n`);
       process.exit(0);
     }
 
-    console.log(`  ⏱  Order expired unfilled`);
+    console.log(`  ⏱  Expired unfilled`);
     if (attempt < MAX_ATTEMPTS) {
-      console.log(`  Retrying with more aggressive price...`);
+      const nextLabel = isBuy ? 'same price' : ['midpoint', 'cross'][attempt - 1] ?? 'cross';
+      console.log(`  Retrying (${nextLabel})...`);
     }
   }
 
-  console.error(`\n❌ Could not fill after ${MAX_ATTEMPTS} attempts. Market may be illiquid.`);
-  console.error(`   Try a lower price manually: npx tsx sell-position.ts --token ${tokenId} --size ${remainingSize} --price <lower>\n`);
-  process.exit(1);
+  const summary = totalFilledSize > 0
+    ? `Partially filled ${totalFilledSize.toFixed(4)}/${totalSize} sh @ avg $${(totalFilledCost / totalFilledSize).toFixed(4)}`
+    : `No fill after ${MAX_ATTEMPTS} attempts`;
+  console.error(`\n❌ ${summary}. Market may be illiquid or price too far from market.`);
+  if (!isBuy && !fixedPrice) {
+    console.error(`   Try: npx tsx sell-position.ts --token ${tokenId} --size ${remainingSize.toFixed(4)} --price ${(book.bestBid - 0.01).toFixed(4)}\n`);
+  }
+  process.exit(totalFilledSize > 0 ? 0 : 1);
 }
 
 main().catch(err => {
