@@ -71,11 +71,13 @@ async function main() {
   await confirmer.connect();
   confirmer.startStuckOrderScan();       // catch fills missed by WebSocket mid-session
   confirmer.startGroupedTradeScanner();  // aggregate BELOW_AVG sub-orders into conviction trades (30m rolling)
-  await confirmer.runStartupScan();      // one-time 3h backfill for pre-restart accumulations
 
   // ── 5. GTT Executor (places orders, hands off to Confirmer for fills) ────────
   console.log('[Main] Starting GTT Executor...');
   new GTTExecutor(clobClient);
+
+  // Startup backfill AFTER GTTExecutor is registered — it listens for trade:detected
+  await confirmer.runStartupScan();      // one-time 3h backfill for pre-restart accumulations
 
   // ── 6. Multi-trader Detector ───────────────────────────────────────────────
   console.log('[Main] Starting Multi-Trader Detector...');
