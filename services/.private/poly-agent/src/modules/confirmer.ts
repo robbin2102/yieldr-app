@@ -4,6 +4,7 @@ import { eventBus } from '../state/eventBus';
 import { CopyTrade } from '../db/models/CopyTrade';
 import { TraderLoader } from './traderLoader';
 import { PendingOrder } from '../types';
+import { DetectedTradeEvent } from './multiDetector';
 
 /**
  * Confirmer — tracks GTD maker order fills via Polymarket WebSocket User Channel.
@@ -37,6 +38,7 @@ export class Confirmer {
   private reconnecting = false;
   private heartbeatInterval: NodeJS.Timeout | null = null;
   private stuckScanInterval: NodeJS.Timeout | null = null;
+  private groupedScanInterval: NodeJS.Timeout | null = null;
   private stopped = false;
 
   async connect(): Promise<void> {
@@ -101,7 +103,8 @@ export class Confirmer {
   disconnect(): void {
     this.stopped = true;
     this.stopHeartbeat();
-    if (this.stuckScanInterval) { clearInterval(this.stuckScanInterval); this.stuckScanInterval = null; }
+    if (this.stuckScanInterval)   { clearInterval(this.stuckScanInterval);   this.stuckScanInterval   = null; }
+    if (this.groupedScanInterval) { clearInterval(this.groupedScanInterval); this.groupedScanInterval = null; }
     this.ws?.close();
     this.ws = null;
   }
@@ -156,6 +159,102 @@ export class Confirmer {
         console.warn(`[Confirmer] Stuck scan skipped — DB error: ${err.message?.slice(0, 80)}`);
       }
     }, scanIntervalMs);
+  }
+
+  /**
+   * Periodically aggregate BELOW_AVG skipped trades on the same market.
+   * When grouped total >= trader.avgBet, fires one conviction copy trade
+   * using the same conviction multiplier as the real-time path.
+   *
+   * Runs every groupScanIntervalMs (10m), looks back groupScanWindowMs (30m).
+   * Sub-orders that form a group are relabelled GROUPED_BELOW_AVG so they
+   * are not counted again in future scans.
+   */
+  startGroupedTradeScanner(): void {
+    this.groupedScanInterval = setInterval(async () => {
+      if (this.stopped) return;
+      try {
+        await this.scanGroupedTrades();
+      } catch (err: any) {
+        console.warn(`[GroupScanner] Scan error: ${err.message?.slice(0, 80)}`);
+      }
+    }, config.groupScanIntervalMs);
+  }
+
+  private async scanGroupedTrades(): Promise<void> {
+    const windowMs = config.groupScanWindowMs;
+    const since    = Date.now() - windowMs;
+
+    // Group BELOW_AVG skips by (sourceWallet, tokenId) within the rolling window.
+    // Only picks up docs still labelled BELOW_AVG — GROUPED_BELOW_AVG are excluded.
+    const groups = await CopyTrade.aggregate([
+      {
+        $match: {
+          skipReason: 'BELOW_AVG',
+          status:     'SKIPPED',
+          side:       'BUY',
+          detectedAt: { $gte: since },
+        },
+      },
+      {
+        $group: {
+          _id:         { sourceWallet: '$sourceWallet', tokenId: '$tokenId' },
+          totalUsdc:   { $sum: '$traderBetUsdc' },
+          totalShares: { $sum: '$traderSize' },
+          firstSeen:   { $min: '$detectedAt' },
+          conditionId: { $first: '$conditionId' },
+          title:       { $first: '$title' },
+          outcome:     { $first: '$outcome' },
+          traderLabel: { $first: '$traderLabel' },
+          docIds:      { $push: '$_id' },
+        },
+      },
+    ]);
+
+    for (const group of groups) {
+      const { sourceWallet, tokenId } = group._id;
+      const { totalUsdc, totalShares, firstSeen, conditionId, title, outcome, traderLabel, docIds } = group;
+
+      // Load fresh trader state
+      const trader = await TraderLoader.get(sourceWallet);
+      if (!trader || !trader.active) continue;
+
+      // Trigger threshold: grouped total must reach avgBet (same filter as real-time path)
+      if (totalUsdc < trader.avgBet) continue;
+
+      // VWAP — reference price for the drift check inside placeOrder()
+      const vwap = totalUsdc / totalShares;
+
+      // Relabel constituent docs BEFORE emitting so the next scan skips them.
+      // updateMany is atomic per-doc — if this fails the scan retries next cycle cleanly.
+      await CopyTrade.updateMany(
+        { _id: { $in: docIds } },
+        { $set: { skipReason: 'GROUPED_BELOW_AVG' } }
+      );
+
+      const ts = new Date().toISOString().slice(11, 19);
+      console.log(`[${ts}] 🔄 GROUPED  ${traderLabel}  ${docIds.length} sub-orders → $${totalUsdc.toFixed(0)} USDC @ VWAP $${vwap.toFixed(4)} — firing copy`);
+
+      // Synthetic txHash: deterministic per group so duplicate-key dedup in
+      // handleTrade() silently no-ops if this fires twice (e.g. scanner overlap).
+      const syntheticTxHash = `grouped_${sourceWallet.slice(2, 10)}_${tokenId.slice(0, 12)}_${firstSeen}`;
+
+      eventBus.emit('trade:detected', {
+        traderConfig:       trader,
+        txHash:             syntheticTxHash,
+        side:               'BUY' as const,
+        traderBetUsdc:      totalUsdc,
+        traderPrice:        vwap,
+        traderSize:         totalShares,
+        tokenId,
+        conditionId,
+        title,
+        outcome,
+        traderTs:           firstSeen,
+        detectedAt:         Date.now(),
+        discoveryLatencyMs: Date.now() - firstSeen,
+      } as DetectedTradeEvent);
+    }
   }
 
   private sendAuth(): void {

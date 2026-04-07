@@ -79,6 +79,12 @@ export const config = {
   // Orders are skipped (not retried) when these limits are exceeded.
   maxSpreadPct: parseFloat(process.env.MAX_SPREAD_PCT || '0.10'),  // 10% max bid-ask spread
   maxDriftPct:  parseFloat(process.env.MAX_DRIFT_PCT  || '0.02'),  // 2% max price drift vs trader
+
+  // ── Grouped BELOW_AVG scanner ─────────────────────────────────────────────
+  // Aggregates skipped sub-orders on the same market within a rolling window.
+  // When grouped total >= trader.avgBet, fires one conviction copy trade.
+  groupScanIntervalMs: parseInt(process.env.GROUP_SCAN_INTERVAL_MS || '600000'),  // 10m (matches report cycle)
+  groupScanWindowMs:   parseInt(process.env.GROUP_SCAN_WINDOW_MS   || '1800000'), // 30m rolling lookback
 };
 
 // Validate required environment variables

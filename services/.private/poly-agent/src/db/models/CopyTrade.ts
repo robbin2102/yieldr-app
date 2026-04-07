@@ -10,8 +10,9 @@ import mongoose, { Document } from 'mongoose';
  * DUPLICATE        — txHash already processed
  * ORDER_FAILED     — GTT failed after all retries
  * NON_TRADE        — activity type was REDEEM/MERGE/SPLIT
- * WIDE_SPREAD      — bid-ask spread > maxSpreadPct (illiquid market)
- * PRICEDRIFT_FAILED — limit price drifted > maxDriftPct from trader's price
+ * WIDE_SPREAD        — bid-ask spread > maxSpreadPct (illiquid market)
+ * PRICEDRIFT_FAILED  — limit price drifted > maxDriftPct from trader's price
+ * GROUPED_BELOW_AVG  — sub-order absorbed into a grouped conviction trade
  */
 export type SkipReason =
   | 'BELOW_AVG'
@@ -22,7 +23,8 @@ export type SkipReason =
   | 'ORDER_FAILED'
   | 'NON_TRADE'
   | 'WIDE_SPREAD'
-  | 'PRICEDRIFT_FAILED';
+  | 'PRICEDRIFT_FAILED'
+  | 'GROUPED_BELOW_AVG';
 
 export type TradeStatus = 'DETECTED' | 'SKIPPED' | 'EXECUTING' | 'FILLED' | 'PARTIAL' | 'FAILED';
 
