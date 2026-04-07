@@ -74,6 +74,11 @@ export const config = {
   // Activities older than this are silently skipped (prevent backlog replay).
   // 5 minutes covers typical poll gaps; increase if needed for slow markets.
   maxLagMs: parseInt(process.env.MAX_LAG_MS || '300000'),  // 5m default
+
+  // ── Market quality filters ─────────────────────────────────────────────────
+  // Orders are skipped (not retried) when these limits are exceeded.
+  maxSpreadPct: parseFloat(process.env.MAX_SPREAD_PCT || '0.10'),  // 10% max bid-ask spread
+  maxDriftPct:  parseFloat(process.env.MAX_DRIFT_PCT  || '0.02'),  // 2% max price drift vs trader
 };
 
 // Validate required environment variables

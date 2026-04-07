@@ -236,6 +236,15 @@ export class GTTExecutor {
       bestAsk: book.bestAsk ?? (book.bestBid + 0.01),
     };
 
+    // ── Spread check: skip wide/illiquid markets before placing any order ─────
+    const spreadPct = (safeBook.bestAsk - safeBook.bestBid) / safeBook.bestBid;
+    if (spreadPct > config.maxSpreadPct) {
+      const ts2 = new Date().toISOString().slice(11, 19);
+      console.log(`[${ts2}]     ⏭  WIDE_SPREAD  ${(spreadPct * 100).toFixed(1)}% > ${(config.maxSpreadPct * 100).toFixed(0)}%  bid $${safeBook.bestBid.toFixed(4)} ask $${safeBook.bestAsk.toFixed(4)}`);
+      await this.skip(tradeDoc, 'WIDE_SPREAD', `spread ${(spreadPct * 100).toFixed(1)}% > ${(config.maxSpreadPct * 100).toFixed(0)}% limit`, freshTrader.wallet);
+      return;
+    }
+
     if (side === 'BUY') {
       targetUsdc = buyBetUsdc;
 
@@ -449,6 +458,21 @@ export class GTTExecutor {
     // Polymarket prices must be strictly between 0 and 1
     const limitPrice = parseFloat(Math.min(0.999, Math.max(0.001, rawPrice)).toFixed(4));
 
+    // ── Price drift check: abort if our limit price has drifted too far ───────
+    // BUY: we're paying more than the trader did → unfavourable drift upward.
+    // SELL: we're selling below what the trader sold for → unfavourable drift downward.
+    if (ctx.traderPrice > 0) {
+      const drift = side === 'BUY'
+        ? (limitPrice - ctx.traderPrice) / ctx.traderPrice
+        : (ctx.traderPrice - limitPrice) / ctx.traderPrice;
+      if (drift > config.maxDriftPct) {
+        const ts2 = new Date().toISOString().slice(11, 19);
+        console.log(`[${ts2}]     ⏭  PRICEDRIFT  limit $${limitPrice.toFixed(4)} vs trader $${ctx.traderPrice.toFixed(4)}  drift ${(drift * 100).toFixed(1)}% > ${(config.maxDriftPct * 100).toFixed(0)}%`);
+        await this.markPriceDrift(ctx.tradeDocId, ctx.traderWallet, attempt, `drift ${(drift * 100).toFixed(1)}% > ${(config.maxDriftPct * 100).toFixed(0)}% limit`);
+        return;
+      }
+    }
+
     // SELL proportional: use remaining shares directly (not USDC-derived).
     // BUY: derive shares from remaining USDC at the limit price.
     const shares = ctx.targetShares !== undefined
@@ -629,6 +653,17 @@ export class GTTExecutor {
       { ...pending, attempt: nextAttempt },
       book as { bestBid: number; bestAsk: number }
     );
+  }
+
+  private async markPriceDrift(tradeDocId: string, traderWallet: string, attempts: number, detail: string): Promise<void> {
+    await CopyTrade.findByIdAndUpdate(tradeDocId, {
+      status:     'SKIPPED',
+      skipReason: 'PRICEDRIFT_FAILED',
+      skipDetail: detail,
+      attempts,
+    });
+    await TraderLoader.recordSkip(traderWallet, 'PRICEDRIFT_FAILED');
+    eventBus.emit('trade:skipped', { skipReason: 'PRICEDRIFT_FAILED', skipDetail: detail, docId: tradeDocId });
   }
 
   private async markFailed(tradeDocId: string, traderWallet: string, attempts: number, reason: string): Promise<void> {
