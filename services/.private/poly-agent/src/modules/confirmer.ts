@@ -204,7 +204,11 @@ export class Confirmer {
     const groups = await CopyTrade.aggregate([
       {
         $match: {
-          skipReason: 'BELOW_AVG',
+          // Include GROUPED_BELOW_AVG so orphaned groups (relabelled but event
+          // lost due to race condition on previous run) are re-processed.
+          // syntheticTxHash dedup in handleTrade() prevents double-firing for
+          // groups that already have a copy trade doc.
+          skipReason: { $in: ['BELOW_AVG', 'GROUPED_BELOW_AVG'] },
           status:     'SKIPPED',
           side:       'BUY',
           detectedAt: { $gte: since },
