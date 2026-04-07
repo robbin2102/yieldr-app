@@ -32,21 +32,23 @@ export function calcCopyBet(
   const { avgBet, baseBetUsdc, maxBetUsdc, allocationUsdc, spentUsdc } = trader;
   const available = allocationUsdc - spentUsdc;
 
-  // 1. Allocation exhausted
-  if (available <= 0) {
-    return {
-      betUsdc: 0, skip: true,
-      skipReason: 'ALLOCATION_FULL',
-      skipDetail: `allocation exhausted ($${spentUsdc.toFixed(2)} / $${allocationUsdc})`,
-    };
-  }
-
-  // 2. Below avg — probe/noise bet, skip
+  // 1. Below avg — probe/noise bet, skip regardless of allocation state.
+  // Checked first so tiny trades are classified correctly even when allocation
+  // is also exhausted (analytics and grouped scanner rely on this distinction).
   if (traderBetUsdc < avgBet) {
     return {
       betUsdc: 0, skip: true,
       skipReason: 'BELOW_AVG',
       skipDetail: `$${traderBetUsdc.toFixed(0)} < avg $${avgBet.toFixed(0)}`,
+    };
+  }
+
+  // 2. Allocation exhausted — conviction trade but no room left
+  if (available <= 0) {
+    return {
+      betUsdc: 0, skip: true,
+      skipReason: 'ALLOCATION_FULL',
+      skipDetail: `allocation exhausted ($${spentUsdc.toFixed(2)} / $${allocationUsdc})`,
     };
   }
 
