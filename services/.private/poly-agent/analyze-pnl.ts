@@ -271,7 +271,7 @@ async function main() {
         groupedSubUsdc,
         groupedFiredDocs:  groupFiredDocs.length,
         groupedFilledDocs: groupFilledDocs.length,
-        groupedFiredReasons,
+        groupedFiredReasons: groupFiredReasons,
         sellNoPosCount:    sellNoPosDoc.length,
         sellNoPosUsdc,
         sellNoPosAvgPrice,
