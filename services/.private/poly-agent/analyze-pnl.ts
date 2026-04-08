@@ -11,10 +11,11 @@
  *   traderOpenVal  = Σ(netShares × curPrice) per market
  *   traderTotal    = traderRealized + traderOpenVal
  *
- * Bot PnL — same cashflow from FILLED docs:
- *   botRealized = − Σ(filledUsdc, FILLED BUY) + Σ(filledUsdc, FILLED SELL)
- *   botOpenVal  = Σ(netBotShares × curPrice) per market
- *   botTotal    = botRealized + botOpenVal
+ * Bot PnL — same cashflow from FILLED docs + data API redemptions:
+ *   botRealized  = − Σ(filledUsdc, FILLED BUY) + Σ(filledUsdc, FILLED SELL)
+ *   botRedeemed  = Σ(usdcSize, REDEEM events for bot wallet from data API)
+ *   botOpenVal   = Σ(netBotShares × curPrice) — EXCLUDING already-redeemed tokens
+ *   botTotal     = botRealized + botOpenVal + botRedeemed
  *
  * Current prices fetched from Polymarket CLOB midpoint (for open positions only).
  *
@@ -64,6 +65,44 @@ async function batchPrices(ids: string[]) {
   }
 }
 
+// ── fetch all bot REDEEM events from Polymarket data API ─────────────────────
+// Returns Map<assetKey → totalUsdcRedeemed>.
+// assetKey is typically the outcome tokenId (returned in `asset` field by
+// the data API). Falls back to `conditionId` if `asset` is absent.
+async function fetchBotRedemptions(): Promise<Map<string, number>> {
+  const byAsset = new Map<string, number>();
+  let offset = 0;
+  const limit = 500;
+  process.stdout.write('Fetching bot redemption history from data API... ');
+  try {
+    while (true) {
+      const url =
+        `${config.dataApiBase}/activity?user=${config.botWalletAddress}` +
+        `&limit=${limit}&offset=${offset}&sortBy=TIMESTAMP&sortDirection=DESC`;
+      const res = await fetch(url);
+      if (!res.ok) { process.stdout.write(`HTTP ${res.status} `); break; }
+      const raw: any = await res.json();
+      const items: any[] = Array.isArray(raw) ? raw : (raw.data ?? []);
+      if (items.length === 0) break;
+
+      for (const item of items) {
+        if ((item.type ?? '').toUpperCase() !== 'REDEEM') continue;
+        const key  = item.asset ?? item.tokenId ?? item.conditionId ?? '';
+        const usdc = parseFloat(item.usdcSize ?? item.size ?? '0');
+        if (key && usdc > 0) byAsset.set(key, (byAsset.get(key) ?? 0) + usdc);
+      }
+
+      if (items.length < limit) break;
+      offset += limit;
+    }
+  } catch (e: any) {
+    process.stdout.write(`WARN(${e.message}) `);
+  }
+  const total = [...byAsset.values()].reduce((s, v) => s + v, 0);
+  console.log(`done — ${byAsset.size} redeemed positions, $${total.toFixed(2)} USDC total.`);
+  return byAsset;
+}
+
 // ── derive shares when traderSize is missing ──────────────────────────────────
 function shares(t: any): number {
   if ((t.traderSize ?? 0) > 0) return t.traderSize;
@@ -77,8 +116,8 @@ interface Stats {
   // Trader cashflow (from MongoDB detected docs)
   tBought: number; tSold: number; tRedeemed: number; tOpenVal: number;
   tRealized: number; tTotal: number;
-  // Bot cashflow (from MongoDB FILLED docs)
-  bBought: number; bSold: number; bOpenVal: number;
+  // Bot cashflow (from MongoDB FILLED docs + data API redeems)
+  bBought: number; bSold: number; bRedeemed: number; bOpenVal: number;
   bRealized: number; bTotal: number;
   // Activity counts
   detected: number; filled: number; skips: Record<string, number>;
@@ -132,7 +171,11 @@ async function main() {
   const uniqueIds = [...new Set(allDocs.map((t: any) => t.tokenId).filter(Boolean))];
   process.stdout.write(`Fetching prices for ${uniqueIds.length} markets... `);
   await batchPrices(uniqueIds);
-  console.log('done.\n');
+  console.log('done.');
+
+  // Fetch bot redemptions from data API (all time, for all traders)
+  const botRedemptionMap = await fetchBotRedemptions();
+  console.log();
 
   // ── compute per-trader stats ──────────────────────────────────────────────
   const allStats: Stats[] = [];
@@ -164,11 +207,20 @@ async function main() {
     const tRealized = -tBought + tSold + tRedeemed;
     const tTotal    = tRealized + tOpenVal;
 
-    // ── Bot cashflow (FILLED docs only) ───────────────────────────────────────
+    // ── Bot cashflow (FILLED docs + data API redemptions) ────────────────────
     const bBuyFills  = docs.filter((t: any) => t.side === 'BUY'  && t.status === 'FILLED');
     const bSellFills = docs.filter((t: any) => t.side === 'SELL' && t.status === 'FILLED');
     const bBought    = bBuyFills .reduce((s: number, t: any) => s + (t.filledUsdc ?? 0), 0);
     const bSold      = bSellFills.reduce((s: number, t: any) => s + (t.filledUsdc ?? 0), 0);
+
+    // Trader tokenIds the bot actually filled on — used to attribute redemptions
+    const bTraderTokenIds = new Set(bBuyFills.map((t: any) => t.tokenId).filter(Boolean));
+
+    // Bot redeemed: sum USDC from data API REDEEM events for this trader's tokens
+    let bRedeemed = 0;
+    for (const tid of bTraderTokenIds) {
+      bRedeemed += botRedemptionMap.get(tid) ?? 0;
+    }
 
     const bNetByMkt  = new Map<string, number>();
     for (const t of bBuyFills)  bNetByMkt.set(t.tokenId ?? '', (bNetByMkt.get(t.tokenId ?? '') ?? 0) + (t.filledSize ?? 0));
@@ -176,11 +228,13 @@ async function main() {
     let bOpenVal = 0;
     for (const [id, sh] of bNetByMkt) {
       if (sh <= 0) continue;
+      // Skip tokens already redeemed — their value is captured in bRedeemed
+      if (botRedemptionMap.has(id)) continue;
       const cur = priceCache.get(id) ?? 0;
       if (cur > 0.01) bOpenVal += sh * cur;
     }
     const bRealized = -bBought + bSold;
-    const bTotal    = bRealized + bOpenVal;
+    const bTotal    = bRealized + bOpenVal + bRedeemed;
 
     // ── Skip counts (excluding NON_TRADE from detect count) ───────────────────
     const skips: Record<string, number> = {};
@@ -208,7 +262,7 @@ async function main() {
       avgBet: tr.avgBet, baseBet: tr.baseBetUsdc, maxBet: tr.maxBetUsdc,
       alloc: tr.allocationUsdc, spent: tr.spentUsdc,
       tBought, tSold, tRedeemed, tOpenVal, tRealized, tTotal,
-      bBought, bSold, bOpenVal, bRealized, bTotal,
+      bBought, bSold, bRedeemed, bOpenVal, bRealized, bTotal,
       detected, filled, skips, missedPnl,
       action: '', reason: '',
     };
@@ -228,12 +282,12 @@ async function main() {
     rpad('T.Bought', 10) + rpad('T.Sold', 9) + rpad('T.Redeem', 10) +
     rpad('T.OpenVal', 10) + rpad('T.Realized', 12) + rpad('T.Total', 10) +
     rpad('Det/Fill', 9) +
-    rpad('B.Cost', 9) + rpad('B.PnL', 9) +
+    rpad('B.Cost', 9) + rpad('B.Redeem', 10) + rpad('B.PnL', 9) +
     rpad('Missed', 9) + '  Action'
   );
   console.log('  ' + '─'.repeat(W - 2));
 
-  let gTB=0, gTS=0, gTR=0, gTO=0, gTRlz=0, gTT=0, gBC=0, gBP=0, gM=0;
+  let gTB=0, gTS=0, gTR=0, gTO=0, gTRlz=0, gTT=0, gBC=0, gBRd=0, gBP=0, gM=0;
   for (const s of allStats) {
     console.log(
       '  ' + pad(s.label, 22) +
@@ -241,11 +295,13 @@ async function main() {
       rpad('$'+s.tRedeemed.toFixed(0), 10) + rpad('$'+s.tOpenVal.toFixed(0),  10) +
       rpad($(s.tRealized), 12) + rpad($(s.tTotal), 10) +
       rpad(`${s.filled}/${s.detected}`, 9) +
-      rpad('$'+s.bBought.toFixed(0), 9) + rpad($(s.bTotal), 9) +
+      rpad('$'+s.bBought.toFixed(0), 9) +
+      rpad(s.bRedeemed > 0 ? '$'+s.bRedeemed.toFixed(0) : '—', 10) +
+      rpad($(s.bTotal), 9) +
       rpad($(s.missedPnl), 9) + '  ' + s.action
     );
     gTB+=s.tBought; gTS+=s.tSold; gTR+=s.tRedeemed; gTO+=s.tOpenVal;
-    gTRlz+=s.tRealized; gTT+=s.tTotal; gBC+=s.bBought; gBP+=s.bTotal; gM+=s.missedPnl;
+    gTRlz+=s.tRealized; gTT+=s.tTotal; gBC+=s.bBought; gBRd+=s.bRedeemed; gBP+=s.bTotal; gM+=s.missedPnl;
   }
   console.log('  ' + '─'.repeat(W - 2));
   console.log(
@@ -254,7 +310,9 @@ async function main() {
     rpad('$'+gTR.toFixed(0), 10) + rpad('$'+gTO.toFixed(0), 10) +
     rpad($(gTRlz), 12) + rpad($(gTT), 10) +
     '         ' +
-    rpad('$'+gBC.toFixed(0), 9) + rpad($(gBP), 9) + rpad($(gM), 9)
+    rpad('$'+gBC.toFixed(0), 9) +
+    rpad(gBRd > 0 ? '$'+gBRd.toFixed(0) : '—', 10) +
+    rpad($(gBP), 9) + rpad($(gM), 9)
   );
 
   // ══ 2. RECOMMENDATIONS ════════════════════════════════════════════════════
@@ -307,7 +365,11 @@ async function main() {
       const bVwap      = bBuyFills.length > 0
         ? bBuyUsdc / bBuyFills.reduce((a: number, t: any) => a + (t.filledSize ?? 0), 0)
         : 0;
-      const bPnl       = -bBuyUsdc + bSellUsdc + (bNetSh > 0 && cur > 0.01 ? bNetSh * cur : 0);
+      // For bPnl: exclude open value for tokens already redeemed (cash in bRedeemed)
+      const bAlreadyRedeemed = botRedemptionMap.has(tokenId);
+      const bMktRedeemed = botRedemptionMap.get(tokenId) ?? 0;
+      const bPnl = -bBuyUsdc + bSellUsdc + bMktRedeemed +
+        (!bAlreadyRedeemed && bNetSh > 0 && cur > 0.01 ? bNetSh * cur : 0);
 
       const MISSED = new Set(['ALLOCATION_FULL', 'PRICEDRIFT_FAILED', 'WIDE_SPREAD']);
       let mktMissed = 0;
@@ -375,6 +437,8 @@ async function main() {
   console.log('  · T.OpenVal: net detected shares × current mid-price (includes resolved positions).');
   console.log('  · Missed$: est. PnL on above-avgBet trades blocked by ALLOC_FULL/PRICEDRIFT/WIDE_SPREAD.');
   console.log('  · NON_TRADE (redeems/merges) counted as positive cashflow where traderBetUsdc > 0.');
+  console.log('  · B.Redeem: USDC bot received from resolved YES positions, fetched from Polymarket data API.');
+  console.log('    Redeemed tokens are excluded from B.OpenVal to prevent double-counting.');
   console.log('═'.repeat(W) + '\n');
 
   await mongoose.disconnect();
