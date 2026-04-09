@@ -9,7 +9,12 @@
  * - GET endpoints: charges per request
  */
 
-import { TwitterApi, TweetV2, UserV2 } from 'twitter-api-v2';
+import { TwitterApi, UserV2 } from 'twitter-api-v2';
+
+interface TweetResult {
+  id: string;
+  text: string;
+}
 import { CONFIG } from '../config';
 
 let client: TwitterApi | null = null;
@@ -68,7 +73,7 @@ export function getAuthenticatedUserId(): string | null {
 /**
  * Post a tweet
  */
-export async function postTweet(content: string): Promise<TweetV2> {
+export async function postTweet(content: string): Promise<TweetResult> {
   const xClient = getXClient();
   const result = await xClient.v2.tweet(content);
   console.log(`[X] Posted tweet: ${result.data.id}`);
@@ -78,7 +83,7 @@ export async function postTweet(content: string): Promise<TweetV2> {
 /**
  * Reply to a tweet
  */
-export async function replyToTweet(content: string, replyToId: string): Promise<TweetV2> {
+export async function replyToTweet(content: string, replyToId: string): Promise<TweetResult> {
   const xClient = getXClient();
   const result = await xClient.v2.reply(content, replyToId);
   console.log(`[X] Replied to ${replyToId}: ${result.data.id}`);
@@ -88,7 +93,7 @@ export async function replyToTweet(content: string, replyToId: string): Promise<
 /**
  * Quote tweet
  */
-export async function quoteTweet(content: string, quotedTweetId: string): Promise<TweetV2> {
+export async function quoteTweet(content: string, quotedTweetId: string): Promise<TweetResult> {
   const xClient = getXClient();
   const result = await xClient.v2.tweet(content, {
     quote_tweet_id: quotedTweetId,

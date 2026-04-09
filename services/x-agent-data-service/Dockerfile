@@ -6,14 +6,14 @@ WORKDIR /app
 # Copy package files
 COPY package*.json ./
 
-# Install dependencies
+# Install all dependencies (tsx needed at runtime for pipeline scripts)
 RUN npm install
 
 # Copy source
 COPY tsconfig.json ./
 COPY src ./src
 
-# Build TypeScript
+# Build TypeScript (compiles src/ only, scripts/ are run via tsx)
 RUN npm run build
 
 # Production stage
@@ -21,12 +21,15 @@ FROM node:20-alpine
 
 WORKDIR /app
 
-# Copy package files and install production deps only
+# Copy package files and install all deps (tsx needed at runtime)
 COPY package*.json ./
-RUN npm install --omit=dev
+RUN npm install --production=false
 
-# Copy built files
+# Copy built service files
 COPY --from=builder /app/dist ./dist
+
+# Copy pipeline scripts (ESM, run via tsx at runtime)
+COPY scripts ./scripts
 
 # Expose HTTP port for health checks
 EXPOSE 3000

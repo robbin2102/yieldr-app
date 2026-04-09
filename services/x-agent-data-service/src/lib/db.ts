@@ -29,24 +29,18 @@ export async function connectDB(): Promise<Db> {
 
 async function ensureIndexes(database: Db): Promise<void> {
   try {
-    // x-agent-tradeActivities indexes
-    const activities = database.collection(COLLECTIONS.TRADE_ACTIVITIES);
-    await activities.createIndex(
-      { wallet: 1, transactionHash: 1 },
-      { unique: true }
-    );
-    await activities.createIndex({ wallet: 1, timestamp: -1 });
-    await activities.createIndex({ timestamp: -1 });
-
-    // x-agent-highConvictionTrades indexes
+    // x-agent-highConvictionTrades indexes (materialized view)
     const hcTrades = database.collection(COLLECTIONS.HIGH_CONVICTION_TRADES);
-    await hcTrades.createIndex(
-      { transactionHash: 1 },
-      { unique: true }
-    );
+    await hcTrades.createIndex({ transactionHash: 1 }, { unique: true });
     await hcTrades.createIndex({ detectedAt: -1 });
     await hcTrades.createIndex({ sizeMultiplier: -1 });
     await hcTrades.createIndex({ usdcValue: -1 });
+    await hcTrades.createIndex({ postedToX: 1 });
+
+    // polymarket-openPositions indexes (materialized view)
+    const openPos = database.collection(COLLECTIONS.OPEN_POSITIONS);
+    await openPos.createIndex({ wallet: 1, title: 1, outcome: 1 });
+    await openPos.createIndex({ title: 'text' });
 
     console.log('[DB] Indexes verified');
   } catch (error: any) {
@@ -74,28 +68,23 @@ export async function closeDB(): Promise<void> {
  * Collection names used by this service
  */
 export const COLLECTIONS = {
-  // Source collections (read-only, populated by other services/scripts)
-  EDGE_RANKED_TRADERS: 'ahf-edgeRankedTraders',
+  // Pipeline output collections (written by scripts)
+  LEADERBOARD_SNAPSHOTS: 'polymarket-leaderboardSnapshots',
+  CONSISTENT_TRADERS: 'polymarket-consistentTraders',
   TRADER_PROFILES: 'polymarket-traderProfiles',
-  TRACKED_TRADERS: 'polymarket-trackedTraders',
+  TRADER_POSITIONS: 'polymarket-traderPositions',
+  EDGE_RANKED_TRADERS: 'ahf-edgeRankedTraders',
 
   // Markets (written by market indexer)
   POLY_MARKETS: 'polyMarkets',
-  POLY_MARKET_HOLDERS: 'polyMarketHolders',
 
-  // Positions (shared with polymarket-indexer)
-  OPEN_POSITIONS: 'polymarket-openPositions',
-  CLOSED_POSITIONS: 'polymarket-closedPositions',
-  TRADES: 'polymarket-trades',
-
-  // New collections created by this service
-  TRADE_ACTIVITIES: 'x-agent-tradeActivities',
+  // Materialized views (written by materialize.ts after pipeline)
   HIGH_CONVICTION_TRADES: 'x-agent-highConvictionTrades',
+  OPEN_POSITIONS: 'polymarket-openPositions',
 
-  // Vault collections (read-only)
+  // Vault collections (read-only, populated by vault logging service)
   VAULTS: 'vaults',
   VAULT_SNAPSHOTS: 'vault_daily_snapshots',
   VAULT_TRADES: 'vault_trades',
   VAULT_POSITIONS: 'vault_openPositions',
-  VAULT_DEPOSITS: 'vault_deposits',
 } as const;

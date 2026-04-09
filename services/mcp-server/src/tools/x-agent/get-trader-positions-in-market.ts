@@ -1,6 +1,9 @@
 /**
  * get_trader_positions_in_market Tool
- * Find which top edge-ranked traders hold positions in a specific market
+ *
+ * Find which top edge-ranked traders hold positions in a specific market.
+ * Reads from polymarket-openPositions (materialized from v3 profiler)
+ * and enriches with edge data from ahf-edgeRankedTraders.
  */
 
 import { z } from 'zod';
@@ -36,8 +39,6 @@ export async function executeGetTraderPositionsInMarket(input: GetTraderPosition
   }
 
   // If edge traders only, get their wallets first
-  let edgeWallets: Set<string> | null = null;
-
   if (input.edgeTradersOnly) {
     const edgeCol = db.collection('ahf-edgeRankedTraders');
     const edgeTraders = await edgeCol
@@ -45,10 +46,10 @@ export async function executeGetTraderPositionsInMarket(input: GetTraderPosition
       .project({ wallet: 1 })
       .toArray();
 
-    edgeWallets = new Set(edgeTraders.map(t => t.wallet?.toLowerCase()));
+    const edgeWallets = edgeTraders.map(t => t.wallet?.toLowerCase()).filter(Boolean);
 
-    if (edgeWallets.size > 0) {
-      filter.wallet = { $in: Array.from(edgeWallets) };
+    if (edgeWallets.length > 0) {
+      filter.wallet = { $in: edgeWallets };
     }
   }
 
@@ -58,22 +59,22 @@ export async function executeGetTraderPositionsInMarket(input: GetTraderPosition
     .limit(input.limit || 20)
     .toArray();
 
-  // Enrich with trader profile data
+  // Enrich with edge-ranked trader data (v3 field names)
   const wallets = [...new Set(positions.map(p => p.wallet))];
   const edgeCol = db.collection('ahf-edgeRankedTraders');
-  const profiles = await edgeCol
+  const edgeData = await edgeCol
     .find({ wallet: { $in: wallets } })
-    .project({ wallet: 1, label: 1, winRate: 1, profitFactor: 1, netPnl: 1, specialty: 1 })
+    .project({ wallet: 1, display_name: 1, win_rate: 1, pf: 1, pnl_30d: 1, specialty: 1, confidence: 1, edge: 1, overall_rank: 1 })
     .toArray();
 
-  const profileMap = new Map(profiles.map(p => [p.wallet, p]));
+  const edgeMap = new Map(edgeData.map(p => [p.wallet, p]));
 
   return {
     positions: positions.map(p => {
-      const profile = profileMap.get(p.wallet);
+      const edge = edgeMap.get(p.wallet);
       return {
         wallet: p.wallet,
-        traderLabel: profile?.label,
+        traderLabel: edge?.display_name || `Trader-${(p.wallet || '').slice(0, 6)}`,
         market: p.title,
         conditionId: p.conditionId,
         outcome: p.outcome,
@@ -83,11 +84,14 @@ export async function executeGetTraderPositionsInMarket(input: GetTraderPosition
         currentValue: p.currentValue,
         cashPnl: p.cashPnl,
         percentPnl: p.percentPnl,
-        traderEdge: profile ? {
-          winRate: profile.winRate,
-          profitFactor: profile.profitFactor,
-          netPnl: profile.netPnl,
-          specialty: profile.specialty,
+        traderEdge: edge ? {
+          rank: edge.overall_rank,
+          winRate: edge.win_rate,
+          profitFactor: edge.pf,
+          pnl30d: edge.pnl_30d,
+          specialty: edge.specialty,
+          confidence: edge.confidence,
+          edgeMagnitude: edge.edge,
         } : undefined,
       };
     }),
@@ -99,7 +103,7 @@ export async function executeGetTraderPositionsInMarket(input: GetTraderPosition
 
 export const getTraderPositionsInMarketTool = {
   name: 'get_trader_positions_in_market',
-  description: 'Find which top edge-ranked traders hold positions in a specific Polymarket market. Search by conditionId, market slug, or keyword. Returns trader positions enriched with their edge metrics.',
+  description: 'Find which top edge-ranked traders hold positions in a specific Polymarket market. Search by conditionId, market slug, or keyword. Returns trader positions enriched with their statistical edge metrics.',
   inputSchema: getTraderPositionsInMarketSchema,
   execute: executeGetTraderPositionsInMarket,
 };
