@@ -40,6 +40,7 @@ export class Confirmer {
   private stuckScanInterval: NodeJS.Timeout | null = null;
   private groupedScanInterval: NodeJS.Timeout | null = null;
   private stopped = false;
+  private tradeSubmittedListenerRegistered = false;
 
   async connect(): Promise<void> {
     return new Promise((resolve, reject) => {
@@ -93,10 +94,15 @@ export class Confirmer {
         console.error('[Confirmer] WebSocket error:', err.message);
       });
 
-      // Track pending orders emitted by GTTExecutor
-      eventBus.on('trade:submitted', (pending: PendingOrder) => {
-        this.pendingOrders.set(pending.orderId, pending); // tracking silently — order logged above
-      });
+      // Track pending orders emitted by GTTExecutor.
+      // Guard: only register once — connect() is called on every reconnect
+      // and adding the listener repeatedly causes MaxListenersExceededWarning.
+      if (!this.tradeSubmittedListenerRegistered) {
+        this.tradeSubmittedListenerRegistered = true;
+        eventBus.on('trade:submitted', (pending: PendingOrder) => {
+          this.pendingOrders.set(pending.orderId, pending); // tracking silently — order logged above
+        });
+      }
     });
   }
 
