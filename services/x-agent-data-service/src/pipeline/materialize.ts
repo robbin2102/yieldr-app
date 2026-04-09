@@ -1,17 +1,18 @@
 /**
  * Materialization Step
  *
- * After the pipeline runs, extract data from the v3 profiler's output
- * collections into tool-accessible collections:
+ * After the pipeline runs:
  *
- * 1. polymarket-traderPositions.recentHighConvictionTrades
- *    → x-agent-highConvictionTrades (max 10 per trader, sorted by recency + value)
+ * 1. Clean stale v3 profiles from edge consideration
+ *    (only profiles from the current cycle are materialized)
  *
- * 2. polymarket-traderPositions.topOpenPositions
- *    → polymarket-openPositions (max 10 per trader, sorted by currentValue)
+ * 2. Extract high conviction trades from polymarket-traderPositions
+ *    → x-agent-highConvictionTrades (max 10 per trader)
  *
- * This keeps the MCP tools and x-content-agent working with their
- * expected collection schemas while the pipeline scripts run as-is.
+ * 3. Extract open positions from polymarket-traderPositions
+ *    → polymarket-openPositions (max 10 per trader)
+ *
+ * 4. Log funnel summary (leaderboard → consistent → profiled → edge-ranked)
  */
 
 import { getDB, COLLECTIONS } from '../lib/db';
@@ -22,21 +23,38 @@ const log = createLogger('Materialize');
 const MAX_HC_PER_TRADER = 10;
 const MAX_POSITIONS_PER_TRADER = 10;
 
+// Only materialize data from profiles updated within the last 48h
+// This prevents stale v3 profiles (from old runs) from polluting tool data
+const FRESHNESS_HOURS = 48;
+
 /**
- * Extract high conviction trades from polymarket-traderPositions
+ * Get the freshness cutoff date
+ */
+function getFreshnessCutoff(): Date {
+  return new Date(Date.now() - FRESHNESS_HOURS * 60 * 60 * 1000);
+}
+
+/**
+ * Extract high conviction trades from FRESH polymarket-traderPositions
  * into x-agent-highConvictionTrades
  */
 async function materializeHighConvictionTrades(): Promise<number> {
   const db = await getDB();
+  const cutoff = getFreshnessCutoff();
 
   const traderPositions = db.collection(COLLECTIONS.TRADER_POSITIONS);
   const hcCollection = db.collection(COLLECTIONS.HIGH_CONVICTION_TRADES);
 
-  // Get all trader positions docs that have high conviction trades
+  // Only process recently profiled traders
   const docs = await traderPositions
-    .find({ 'recentHighConvictionTrades.0': { $exists: true } })
+    .find({
+      'recentHighConvictionTrades.0': { $exists: true },
+      profiledAt: { $gte: cutoff },
+    })
     .project({ wallet: 1, recentHighConvictionTrades: 1 })
     .toArray();
+
+  log.info(`Found ${docs.length} fresh traders with high conviction trades`);
 
   let upserted = 0;
 
@@ -49,7 +67,7 @@ async function materializeHighConvictionTrades(): Promise<number> {
       .sort((a: any, b: any) => (b.usdcSize || 0) - (a.usdcSize || 0))
       .slice(0, MAX_HC_PER_TRADER);
 
-    // Look up trader edge info from ahf-edgeRankedTraders
+    // Look up trader edge info
     const edgeTrader = await db.collection(COLLECTIONS.EDGE_RANKED_TRADERS)
       .findOne({ wallet }, { projection: { win_rate: 1, pf: 1, specialty: 1, display_name: 1 } });
 
@@ -99,20 +117,26 @@ async function materializeHighConvictionTrades(): Promise<number> {
 }
 
 /**
- * Extract open positions from polymarket-traderPositions
+ * Extract open positions from FRESH polymarket-traderPositions
  * into polymarket-openPositions
  */
 async function materializeOpenPositions(): Promise<number> {
   const db = await getDB();
+  const cutoff = getFreshnessCutoff();
 
   const traderPositions = db.collection(COLLECTIONS.TRADER_POSITIONS);
   const positionsCollection = db.collection(COLLECTIONS.OPEN_POSITIONS);
 
-  // Get all trader positions docs that have open positions
+  // Only process recently profiled traders
   const docs = await traderPositions
-    .find({ 'topOpenPositions.0': { $exists: true } })
+    .find({
+      'topOpenPositions.0': { $exists: true },
+      profiledAt: { $gte: cutoff },
+    })
     .project({ wallet: 1, topOpenPositions: 1 })
     .toArray();
+
+  log.info(`Found ${docs.length} fresh traders with open positions`);
 
   let upserted = 0;
 
@@ -160,6 +184,129 @@ async function materializeOpenPositions(): Promise<number> {
 }
 
 /**
+ * Log the full funnel summary: leaderboard → consistent → profiled → edge-ranked
+ * Broken down by category
+ */
+async function logFunnelSummary(): Promise<void> {
+  const db = await getDB();
+  const cutoff = getFreshnessCutoff();
+
+  // Step 1: Leaderboard snapshots — unique wallets by category
+  const leaderboardCol = db.collection(COLLECTIONS.LEADERBOARD_SNAPSHOTS);
+  const leaderboardByCategory = await leaderboardCol.aggregate([
+    { $group: { _id: '$category', wallets: { $addToSet: '$wallet' } } },
+    { $project: { category: '$_id', count: { $size: '$wallets' }, _id: 0 } },
+    { $sort: { count: -1 } },
+  ]).toArray();
+  const totalLeaderboard = await leaderboardCol.aggregate([
+    { $group: { _id: '$wallet' } },
+    { $count: 'total' },
+  ]).toArray();
+
+  // Step 2: Consistent traders — by consistent_categories
+  const consistentCol = db.collection(COLLECTIONS.CONSISTENT_TRADERS);
+  const totalConsistent = await consistentCol.countDocuments();
+  const shouldProfile = await consistentCol.countDocuments({ should_profile: true });
+  const consistentByCategory = await consistentCol.aggregate([
+    { $unwind: '$consistent_categories' },
+    { $group: { _id: '$consistent_categories', count: { $sum: 1 } } },
+    { $project: { category: '$_id', count: 1, _id: 0 } },
+    { $sort: { count: -1 } },
+  ]).toArray();
+
+  // Step 3: Profiled traders (fresh v3 only)
+  const profilesCol = db.collection(COLLECTIONS.TRADER_PROFILES);
+  const totalProfiledFresh = await profilesCol.countDocuments({
+    tradingConsistency: { $exists: true },
+    profiledAt: { $gte: cutoff },
+  });
+  const totalProfiledAll = await profilesCol.countDocuments({
+    tradingConsistency: { $exists: true },
+  });
+  const profiledBySpecialty = await profilesCol.aggregate([
+    { $match: { tradingConsistency: { $exists: true }, profiledAt: { $gte: cutoff } } },
+    { $group: { _id: '$specialty', count: { $sum: 1 } } },
+    { $project: { specialty: '$_id', count: 1, _id: 0 } },
+    { $sort: { count: -1 } },
+  ]).toArray();
+
+  // Step 4: Edge-ranked traders
+  const edgeCol = db.collection(COLLECTIONS.EDGE_RANKED_TRADERS);
+  const totalEdge = await edgeCol.countDocuments();
+  const edgeBySpecialty = await edgeCol.aggregate([
+    { $group: { _id: '$specialty', count: { $sum: 1 } } },
+    { $project: { specialty: '$_id', count: 1, _id: 0 } },
+    { $sort: { count: -1 } },
+  ]).toArray();
+  const edgeByConfidence = await edgeCol.aggregate([
+    { $group: { _id: '$confidence', count: { $sum: 1 } } },
+    { $project: { confidence: '$_id', count: 1, _id: 0 } },
+    { $sort: { count: -1 } },
+  ]).toArray();
+
+  // Materialized views
+  const hcCount = await db.collection(COLLECTIONS.HIGH_CONVICTION_TRADES).countDocuments();
+  const posCount = await db.collection(COLLECTIONS.OPEN_POSITIONS).countDocuments();
+
+  // Print funnel
+  console.log('');
+  console.log('================================================================');
+  console.log('           PIPELINE FUNNEL SUMMARY                              ');
+  console.log('================================================================');
+  console.log('');
+
+  // Leaderboard
+  const lbTotal = totalLeaderboard[0]?.total || 0;
+  console.log(`  1. LEADERBOARD SNAPSHOTS: ${lbTotal} unique wallets`);
+  for (const c of leaderboardByCategory) {
+    console.log(`     ${(c.category || 'UNKNOWN').padEnd(15)} ${c.count} wallets`);
+  }
+
+  // Consistent
+  console.log('');
+  console.log(`  2. CONSISTENT TRADERS: ${totalConsistent} total (${shouldProfile} should_profile=true)`);
+  for (const c of consistentByCategory) {
+    console.log(`     ${(c.category || 'UNKNOWN').padEnd(15)} ${c.count}`);
+  }
+
+  // Profiled
+  console.log('');
+  console.log(`  3. PROFILED v3: ${totalProfiledFresh} fresh (last ${FRESHNESS_HOURS}h) / ${totalProfiledAll} total v3`);
+  for (const c of profiledBySpecialty) {
+    console.log(`     ${(c.specialty || 'Other').padEnd(15)} ${c.count}`);
+  }
+
+  // Edge-ranked
+  console.log('');
+  console.log(`  4. EDGE-RANKED: ${totalEdge} traders`);
+  console.log('     By specialty:');
+  for (const c of edgeBySpecialty) {
+    console.log(`       ${(c.specialty || 'Other').padEnd(15)} ${c.count}`);
+  }
+  console.log('     By confidence:');
+  for (const c of edgeByConfidence) {
+    console.log(`       ${(c.confidence || 'unknown').padEnd(15)} ${c.count}`);
+  }
+
+  // Materialized
+  console.log('');
+  console.log(`  5. MATERIALIZED VIEWS:`);
+  console.log(`     High conviction trades:  ${hcCount}`);
+  console.log(`     Open positions:          ${posCount}`);
+
+  // Funnel conversion
+  console.log('');
+  console.log('  FUNNEL:');
+  console.log(`     Leaderboard → Consistent:  ${lbTotal} → ${totalConsistent} (${lbTotal > 0 ? ((totalConsistent / lbTotal) * 100).toFixed(1) : 0}%)`);
+  console.log(`     Consistent → Profiled v3:  ${shouldProfile} → ${totalProfiledFresh} (${shouldProfile > 0 ? ((totalProfiledFresh / shouldProfile) * 100).toFixed(1) : 0}%)`);
+  console.log(`     Profiled v3 → Edge-ranked: ${totalProfiledFresh} → ${totalEdge} (${totalProfiledFresh > 0 ? ((totalEdge / totalProfiledFresh) * 100).toFixed(1) : 0}%)`);
+
+  console.log('');
+  console.log('================================================================');
+  console.log('');
+}
+
+/**
  * Run all materialization steps
  */
 export async function runMaterialization(): Promise<void> {
@@ -169,6 +316,8 @@ export async function runMaterialization(): Promise<void> {
 
     const posCount = await materializeOpenPositions();
     log.success(`Open positions: ${posCount} positions materialized`);
+
+    await logFunnelSummary();
 
   } catch (error: any) {
     log.error(`Materialization failed: ${error.message}`);
