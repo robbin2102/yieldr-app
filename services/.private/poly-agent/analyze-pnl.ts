@@ -65,11 +65,18 @@ async function batchPrices(ids: string[]) {
   }
 }
 
+// BTC short-duration markets predate copy-trade bot — exclude from portfolio totals.
+// These are naturally excluded from bot cashflow PnL (no CopyTrade docs for them),
+// but they'd inflate the portfolio total shown in NOTES if not filtered here.
+const BTC_SHORT_MKT = /btc.*(5m|5min|15m|15min|up.?down)/i;
+
 // ── fetch bot portfolio positions (data API) — more accurate than CLOB for ────
 // resolved markets. Returns Map<tokenId, {curPrice, size}>.
 // Overrides priceCache entries where portfolio shows a higher-confidence price.
+// Excludes BTC 5m/15m short-duration markets (pre-copy-trade positions).
 async function fetchBotPortfolioPrices(): Promise<Map<string, { curPrice: number; size: number }>> {
   const m = new Map<string, { curPrice: number; size: number }>();
+  let btcExcluded = 0;
   try {
     const url = `${config.dataApiBase}/positions?user=${config.botWalletAddress}&sizeThreshold=0.01&limit=500`;
     const res = await fetch(url);
@@ -77,8 +84,10 @@ async function fetchBotPortfolioPrices(): Promise<Map<string, { curPrice: number
     const raw: any = await res.json();
     const items: any[] = Array.isArray(raw) ? raw : (raw.data ?? []);
     for (const p of items) {
-      const tid = p.asset ?? p.tokenId ?? '';
+      const tid   = p.asset ?? p.tokenId ?? '';
+      const title = (p.title ?? p.outcome ?? '').toString();
       if (!tid) continue;
+      if (BTC_SHORT_MKT.test(title)) { btcExcluded++; continue; }
       const cur  = parseFloat(p.curPrice ?? p.currentPrice ?? '0');
       const size = parseFloat(p.size ?? '0');
       m.set(tid, { curPrice: cur, size });
@@ -88,6 +97,7 @@ async function fetchBotPortfolioPrices(): Promise<Map<string, { curPrice: number
   } catch (e: any) {
     process.stdout.write(`WARN(${(e as any).message}) `);
   }
+  if (btcExcluded > 0) process.stdout.write(`(${btcExcluded} BTC short-mkt excluded) `);
   return m;
 }
 
