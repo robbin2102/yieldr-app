@@ -47,7 +47,7 @@ const rpad = (s: any, n: number) => String(s).slice(0, n).padStart(n);
 const $    = (n: number) => !isFinite(n) || n === 0 ? '—' : (n >= 0 ? '+$' : '-$') + Math.abs(n).toFixed(2);
 const p3   = (n: number) => n > 0 ? n.toFixed(3) : '—';
 
-// ── price cache (CLOB midpoint) ───────────────────────────────────────────────
+// ── price cache (CLOB midpoint, overridden by portfolio prices where available) ─
 const priceCache = new Map<string, number>();
 async function fetchMidprice(id: string): Promise<number> {
   if (!id || priceCache.has(id)) return priceCache.get(id) ?? 0;
@@ -63,6 +63,32 @@ async function batchPrices(ids: string[]) {
     await Promise.all(ids.slice(i, i+10).map(fetchMidprice));
     if (i + 10 < ids.length) await new Promise(r => setTimeout(r, 150));
   }
+}
+
+// ── fetch bot portfolio positions (data API) — more accurate than CLOB for ────
+// resolved markets. Returns Map<tokenId, {curPrice, size}>.
+// Overrides priceCache entries where portfolio shows a higher-confidence price.
+async function fetchBotPortfolioPrices(): Promise<Map<string, { curPrice: number; size: number }>> {
+  const m = new Map<string, { curPrice: number; size: number }>();
+  try {
+    const url = `${config.dataApiBase}/positions?user=${config.botWalletAddress}&sizeThreshold=0.01&limit=500`;
+    const res = await fetch(url);
+    if (!res.ok) { process.stdout.write(`HTTP ${res.status} `); return m; }
+    const raw: any = await res.json();
+    const items: any[] = Array.isArray(raw) ? raw : (raw.data ?? []);
+    for (const p of items) {
+      const tid = p.asset ?? p.tokenId ?? '';
+      if (!tid) continue;
+      const cur  = parseFloat(p.curPrice ?? p.currentPrice ?? '0');
+      const size = parseFloat(p.size ?? '0');
+      m.set(tid, { curPrice: cur, size });
+      // Seed priceCache — portfolio price is authoritative (handles resolved markets)
+      if (cur > 0) priceCache.set(tid, cur);
+    }
+  } catch (e: any) {
+    process.stdout.write(`WARN(${(e as any).message}) `);
+  }
+  return m;
 }
 
 // ── fetch all bot REDEEM events from Polymarket data API ─────────────────────
@@ -172,6 +198,11 @@ async function main() {
   process.stdout.write(`Fetching prices for ${uniqueIds.length} markets... `);
   await batchPrices(uniqueIds);
   console.log('done.');
+
+  // Fetch bot portfolio positions — overrides CLOB price for resolved markets
+  process.stdout.write('Fetching bot portfolio positions... ');
+  const botPortfolio = await fetchBotPortfolioPrices();
+  console.log(`done — ${botPortfolio.size} open positions, $${[...botPortfolio.values()].reduce((s,p) => s + p.curPrice * p.size, 0).toFixed(2)} total value.`);
 
   // Fetch bot redemptions from data API (all time, for all traders)
   const botRedemptionMap = await fetchBotRedemptions();
@@ -439,6 +470,9 @@ async function main() {
   console.log('  · NON_TRADE (redeems/merges) counted as positive cashflow where traderBetUsdc > 0.');
   console.log('  · B.Redeem: USDC bot received from resolved YES positions, fetched from Polymarket data API.');
   console.log('    Redeemed tokens are excluded from B.OpenVal to prevent double-counting.');
+  console.log('  · Bot portfolio prices fetched from data API /positions — overrides CLOB for resolved markets');
+  console.log(`    (e.g. resolved YES positions show $1.00 even when CLOB orderbook is gone).`);
+  console.log(`  · Portfolio total value: $${[...botPortfolio.values()].reduce((s,p) => s + p.curPrice * p.size, 0).toFixed(2)} across ${botPortfolio.size} open positions.`);
   console.log('═'.repeat(W) + '\n');
 
   await mongoose.disconnect();
