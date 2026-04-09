@@ -39,10 +39,15 @@ export const CONFIG = {
     FALLBACK_SIZE_MULTIPLIER: 10,          // 10x for broader detection
   },
 
-  // Profiler settings
+  // Profiler settings (evolved v2)
   PROFILER: {
-    ACTIVITY_DAYS: 90,                     // Look back 90 days for profiling
+    ACTIVITY_DAYS: 30,                     // 30 days for profiling (v2 standard)
     CONVICTION_MULTIPLIER: 10,             // 10x avg trade = high conviction
+    CLOSED_POSITIONS_LIMIT: 1000,          // Fetch last 1000 for accurate win rate
+    MIN_TRADING_DAYS_FOR_DRAWDOWN: 3,      // Min trading days per timeframe for drawdown
+    MIN_TRADING_DAYS_FOR_MAX_DD: 5,        // Min trading days for 30d max drawdown
+    INSIDER_ACCOUNT_AGE_THRESHOLD: 30,     // Days — younger = suspicious
+    INSIDER_DORMANCY_THRESHOLD: 30,        // Days inactive before current window
   },
 
   // API pagination limits
