@@ -115,7 +115,7 @@ async function fetchFeeRateFromAPI(tokenId: string, clobApiBase: string): Promis
  * Maker pricing — spread-proportional aggression:
  *   Attempt 1: passive  — BUY @ bestBid,          SELL @ bestAsk
  *   Attempt 2: midpoint — BUY @ bestBid + 50% spread, SELL @ bestAsk - 50% spread
- *   Attempt 3+: cross   — BUY @ bestAsk - 0.001,  SELL @ bestBid + 0.001  (near-certain fill)
+ *   Attempt 3+: cross   — BUY @ bestAsk (take),   SELL @ bestBid (take)  — immediate fill
  *
  * Skip reasons:
  *   BELOW_AVG        — trader bet < avgBet
@@ -448,13 +448,22 @@ export class GTTExecutor {
     // targetShares is checked via ctx.targetShares in shares calculation below
 
     // Spread-proportional aggression: each retry covers more of the spread toward the opposite side.
-    // Attempt 1: passive (bestBid / bestAsk), attempt 2: midpoint, attempt 3+: just inside opposite side.
+    // Attempt 1: passive  — BUY @ bestBid,              SELL @ bestAsk
+    // Attempt 2: midpoint — BUY @ bestBid + 50% spread, SELL @ bestAsk - 50% spread
+    // Attempt 3+: cross   — BUY @ bestAsk (take liquidity), SELL @ bestBid (take liquidity)
+    //   Placing AT the opposite side crosses the spread and fills as a taker immediately.
+    //   The old cap (bestAsk - 0.001) kept the order below the ask, causing all 3 GTD
+    //   orders to expire unfilled in illiquid near-resolved markets.
     const spread = book.bestAsk - book.bestBid;
     const fraction = AGGRESSION_FRACTIONS[attempt - 1] ?? 1.0;
     const aggrStep = spread * fraction;
     const rawPrice = side === 'BUY'
-      ? Math.min(book.bestBid + aggrStep, book.bestAsk - 0.001)  // stay below ask
-      : Math.max(book.bestAsk - aggrStep, book.bestBid + 0.001); // stay above bid
+      ? (fraction >= 1.0
+          ? book.bestAsk                                              // cross: take standing ask liquidity
+          : Math.min(book.bestBid + aggrStep, book.bestAsk - 0.001)) // passive/midpoint: stay below ask
+      : (fraction >= 1.0
+          ? book.bestBid                                              // cross: take standing bid liquidity
+          : Math.max(book.bestAsk - aggrStep, book.bestBid + 0.001)); // passive/midpoint: stay above bid
     // Polymarket prices must be strictly between 0 and 1
     const limitPrice = parseFloat(Math.min(0.999, Math.max(0.001, rawPrice)).toFixed(4));
 
