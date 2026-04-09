@@ -269,7 +269,12 @@ export class MultiDetector {
     if (freshCount > 0) {
       console.log(`[${ts}] 🔔 ${trader.label}: ${freshCount} new activit${freshCount === 1 ? 'y' : 'ies'} detected${staleCount > 0 ? ` (${staleCount} stale skipped)` : ''}`);
     } else if (staleCount > 0) {
-      console.log(`[${ts}] 🔔 ${trader.label}: ${staleCount} stale activit${staleCount === 1 ? 'y' : 'ies'} skipped (startup backlog)`);
+      // All activities were stale — cursor was advanced but nothing executed.
+      // If this happens during normal operation (not startup), it means API indexing
+      // lag exceeded maxLagMs. Increase MAX_LAG_MS env var if this recurs.
+      const oldestMs = Math.min(...newActivities.map(a => now - a.timestamp * 1000));
+      const oldestMin = (oldestMs / 60000).toFixed(1);
+      console.warn(`[${ts}] ⚠️  ${trader.label}: ${staleCount} activit${staleCount === 1 ? 'y' : 'ies'} fully stale (oldest ${oldestMin}m ago) — cursor advanced, none executed`);
     }
 
     for (const act of newActivities) {

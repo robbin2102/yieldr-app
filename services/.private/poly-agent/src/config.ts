@@ -72,8 +72,11 @@ export const config = {
 
   // ── Stale activity filter ──────────────────────────────────────────────────
   // Activities older than this are silently skipped (prevent backlog replay).
-  // 5 minutes covers typical poll gaps; increase if needed for slow markets.
-  maxLagMs: parseInt(process.env.MAX_LAG_MS || '300000'),  // 5m default
+  // 30 minutes covers API indexing lag (Polymarket can index activities 5-15 min
+  // after they occur, especially after network disruptions). The lastSeenTs cursor
+  // already prevents re-executing activities from previous bot sessions — this
+  // filter only guards against very old startup backlog.
+  maxLagMs: parseInt(process.env.MAX_LAG_MS || '1800000'),  // 30m default (was 5m)
 
   // ── Market quality filters ─────────────────────────────────────────────────
   // Orders are skipped (not retried) when these limits are exceeded.
