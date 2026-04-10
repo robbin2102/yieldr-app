@@ -192,10 +192,32 @@ export class MultiDetector {
     const tick = async () => {
       if (this.stopped) return;
       const tickStart = Date.now();
-      await this.pollTrader(trader.wallet);
+
+      // Wrap pollTrader so a transient DB/network error never permanently kills the chain.
+      // Without this try/catch, any uncaught throw propagates to an unhandledRejection,
+      // the process survives (caught in index.ts), but setTimeout(tick) is never reached
+      // and the polling chain dies silently forever.
+      try {
+        await this.pollTrader(trader.wallet);
+      } catch (err: any) {
+        const ts = new Date().toISOString().slice(11, 19);
+        console.error(`[${ts}] [MultiDetector] ${trader.label}: poll error (chain continues) — ${err.message}`);
+      }
+
+      if (this.stopped) return;
 
       // Re-read config each cycle — picks up detectorIntervalMs changes
-      const fresh = await TraderLoader.get(trader.wallet);
+      let fresh: ICopyTrader | null = null;
+      try {
+        fresh = await TraderLoader.get(trader.wallet);
+      } catch (err: any) {
+        // DB error reading trader config — retry next cycle using last known interval
+        const ts = new Date().toISOString().slice(11, 19);
+        console.warn(`[${ts}] [MultiDetector] ${trader.label}: DB error reading config (will retry in ${interval}ms) — ${err.message}`);
+        setTimeout(tick, interval);
+        return;
+      }
+
       if (!fresh || !fresh.active) {
         this.activeWallets.delete(trader.wallet);
         console.log(`[MultiDetector] Stopped polling ${trader.wallet.slice(0, 10)}... (inactive)`);
@@ -227,10 +249,18 @@ export class MultiDetector {
       return;
     }
 
-    const trader = await TraderLoader.get(wallet);
+    let trader: ICopyTrader | null;
+    try {
+      trader = await TraderLoader.get(wallet);
+    } catch (err: any) {
+      console.warn(`[MultiDetector] DB error loading trader ${wallet.slice(0, 10)}... — ${err.message}`);
+      return;
+    }
     if (!trader) return;
 
-    await TraderLoader.updateLastPolled(wallet);
+    try {
+      await TraderLoader.updateLastPolled(wallet);
+    } catch { /* non-critical — continue poll */ }
 
     let activities: ActivityResponse[] = [];
     try {
@@ -270,7 +300,12 @@ export class MultiDetector {
 
     // Advance cursor to the most recent timestamp before processing
     const maxTs = Math.max(...newActivities.map(a => a.timestamp));
-    await TraderLoader.updateLastSeen(wallet, maxTs);
+    try {
+      await TraderLoader.updateLastSeen(wallet, maxTs);
+    } catch (err: any) {
+      console.warn(`[MultiDetector] DB error advancing cursor for ${wallet.slice(0, 10)}... — ${err.message}`);
+      // Continue processing activities — cursor will be retried on next poll
+    }
 
     const now = Date.now();
 
