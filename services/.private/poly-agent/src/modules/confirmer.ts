@@ -119,6 +119,14 @@ export class Confirmer {
    * Periodically scan for EXECUTING docs that have been stuck longer than
    * gttExpirySeconds + 60s. Emits 'order:expired' so GTTExecutor retries them.
    * Catches fills missed by WebSocket during running sessions (not just restarts).
+   *
+   * Two-phase approach:
+   *   Phase 1 — sweep in-memory pendingOrders for stale entries whose WebSocket
+   *              CANCELLATION event was never received. Without this, a missed
+   *              CANCELLATION keeps the entry in pendingOrders forever, and the
+   *              DB scan (phase 2) silently skips it as "mid-flight".
+   *   Phase 2 — scan MongoDB for stale EXECUTING docs not tracked in memory
+   *              (e.g. stuck docs from prior scan cycles or edge cases).
    */
   startStuckOrderScan(): void {
     const scanIntervalMs = 60_000; // scan every 60s
@@ -127,12 +135,41 @@ export class Confirmer {
       try {
         const staleMs  = (config.gttExpirySeconds + 60) * 1000;
         const cutoff   = Date.now() - staleMs;
+        const now      = Date.now();
+
+        // ── Phase 1: Evict stale in-memory pendingOrders (missed CANCELLATION) ──
+        // Any entry older than gttExpiry+60s definitely expired on Polymarket's side.
+        const evictedDocIds = new Set<string>();
+        for (const [orderId, pending] of this.pendingOrders) {
+          if (now - pending.submittedAt <= staleMs) continue;
+
+          evictedDocIds.add(pending.tradeDocId);
+          this.pendingOrders.delete(orderId);
+          const ts = new Date().toISOString().slice(11, 19);
+
+          if (pending.filledSize < 0.01) {
+            // No fill received at all — missed both fill AND cancellation events.
+            // Re-queue as expired so GTTExecutor can retry with a fresh price.
+            console.warn(`[${ts}] [Confirmer] ⚠️  Pending order ${orderId.slice(0, 12)}... stale (missed CANCELLATION, 0 fill) — re-queuing as expired`);
+            eventBus.emit('order:expired', pending);
+          } else {
+            // Partial fill events came through (DB already shows PARTIAL); just evict
+            // the stale in-memory entry — no retry needed.
+            console.warn(`[${ts}] [Confirmer] ⚠️  Pending order ${orderId.slice(0, 12)}... stale partial fill (${pending.filledSize.toFixed(2)}sh) — evicting from memory`);
+          }
+        }
+
+        // ── Phase 2: Scan MongoDB for stuck EXECUTING docs ──────────────────────
         const { CopyTrade } = await import('../db/models/CopyTrade');
         const stale = await CopyTrade.find({ status: 'EXECUTING', submittedAt: { $lt: cutoff } });
         if (stale.length === 0) return;
 
-        // Skip docs already tracked in-memory — they're mid-flight, not actually stuck
-        const activeDocIds = new Set([...this.pendingOrders.values()].map(p => p.tradeDocId));
+        // Skip docs still tracked in-memory (mid-flight) and docs just evicted above
+        // (order:expired already emitted — don't double-fire).
+        const activeDocIds = new Set([
+          ...[...this.pendingOrders.values()].map(p => p.tradeDocId),
+          ...evictedDocIds,
+        ]);
         const reallyStale = stale.filter(doc => !activeDocIds.has(doc._id.toString()));
         if (reallyStale.length === 0) return;
 
