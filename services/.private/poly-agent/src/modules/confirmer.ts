@@ -32,9 +32,15 @@ import { DetectedTradeEvent } from './multiDetector';
  *   Auto-reconnects on disconnect with 5s delay.
  *   No REST polling fallback — REST polling was the source of the 404 problem.
  */
+// Key: `${orderId}:${size}:${price}` — Value: timestamp of first receipt.
+// Polymarket re-delivers the same trade event within seconds (confirmed duplicate pattern).
+// We drop any identical fill (same orderId + size + price) within 10s of the first receipt.
+type FillKey = string;
+
 export class Confirmer {
   private ws: WebSocket | null = null;
   private pendingOrders: Map<string, PendingOrder> = new Map();  // orderId → PendingOrder
+  private recentFills: Map<FillKey, number> = new Map();          // dedup: key → first-seen ts
   private reconnecting = false;
   private heartbeatInterval: NodeJS.Timeout | null = null;
   private stuckScanInterval: NodeJS.Timeout | null = null;
@@ -372,6 +378,26 @@ export class Confirmer {
     const fillPrice = parseFloat(msg.price ?? '0');
 
     if (fillSize <= 0) return;
+
+    // ── Dedup: Polymarket re-delivers the same fill event within seconds ───────
+    // Drop any fill with the same orderId + size + price seen within 10s.
+    const fillKey: FillKey = `${matchId}:${fillSize.toFixed(6)}:${fillPrice.toFixed(6)}`;
+    const fillDedupWindowMs = 10_000;
+    const now = Date.now();
+    const lastSeenTs = this.recentFills.get(fillKey);
+    if (lastSeenTs !== undefined && now - lastSeenTs < fillDedupWindowMs) {
+      const ts = new Date().toISOString().slice(11, 19);
+      console.warn(`[${ts}] [Confirmer] ⚠️  Duplicate fill event dropped: ${matchId.slice(0, 12)}... ${fillSize.toFixed(4)}sh @ $${fillPrice.toFixed(4)} (${((now - lastSeenTs) / 1000).toFixed(1)}s ago)`);
+      return;
+    }
+    this.recentFills.set(fillKey, now);
+    // Prune old entries every 50 fills to prevent unbounded growth
+    if (this.recentFills.size > 50) {
+      const cutoff = now - fillDedupWindowMs;
+      for (const [key, ts] of this.recentFills) {
+        if (ts < cutoff) this.recentFills.delete(key);
+      }
+    }
 
     // Accumulate partial fills
     pending.filledSize += fillSize;

@@ -80,8 +80,13 @@ export const config = {
 
   // ── Market quality filters ─────────────────────────────────────────────────
   // Orders are skipped (not retried) when these limits are exceeded.
-  maxSpreadPct: parseFloat(process.env.MAX_SPREAD_PCT || '0.10'),  // 10% max bid-ask spread
-  maxDriftPct:  parseFloat(process.env.MAX_DRIFT_PCT  || '0.02'),  // 2% max price drift vs trader
+  maxSpreadPct:     parseFloat(process.env.MAX_SPREAD_PCT      || '0.10'),  // 10% max bid-ask spread
+  maxDriftPct:      parseFloat(process.env.MAX_DRIFT_PCT       || '0.02'),  // 2% max BUY price drift vs trader
+  // SELL drift uses a wider tolerance: the trader's own large sell moves the market
+  // down, and latency means our exit price legitimately diverges more than 2%.
+  // 10% default allows exiting even after a significant market move without blocking
+  // profitable partial exits (e.g. 30¢ → 27¢ = 10% drift but still worth selling).
+  maxSellDriftPct:  parseFloat(process.env.MAX_SELL_DRIFT_PCT  || '0.10'),  // 10% max SELL drift
 
   // ── Grouped BELOW_AVG scanner ─────────────────────────────────────────────
   // Aggregates skipped sub-orders on the same market within a rolling window.

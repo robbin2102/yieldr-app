@@ -509,10 +509,11 @@ export class GTTExecutor {
       const drift = side === 'BUY'
         ? (limitPrice - ctx.traderPrice) / ctx.traderPrice
         : (ctx.traderPrice - limitPrice) / ctx.traderPrice;
-      if (drift > config.maxDriftPct) {
+      const driftLimit = side === 'SELL' ? config.maxSellDriftPct : config.maxDriftPct;
+      if (drift > driftLimit) {
         const ts2 = new Date().toISOString().slice(11, 19);
-        console.log(`[${ts2}]     ⏭  PRICEDRIFT  limit $${limitPrice.toFixed(4)} vs trader $${ctx.traderPrice.toFixed(4)}  drift ${(drift * 100).toFixed(1)}% > ${(config.maxDriftPct * 100).toFixed(0)}%`);
-        await this.markPriceDrift(ctx.tradeDocId, ctx.traderWallet, attempt, `drift ${(drift * 100).toFixed(1)}% > ${(config.maxDriftPct * 100).toFixed(0)}% limit`);
+        console.log(`[${ts2}]     ⏭  PRICEDRIFT  limit $${limitPrice.toFixed(4)} vs trader $${ctx.traderPrice.toFixed(4)}  drift ${(drift * 100).toFixed(1)}% > ${(driftLimit * 100).toFixed(0)}%`);
+        await this.markPriceDrift(ctx.tradeDocId, ctx.traderWallet, attempt, `drift ${(drift * 100).toFixed(1)}% > ${(driftLimit * 100).toFixed(0)}% limit`);
         return;
       }
     }
