@@ -145,6 +145,12 @@ export class GTTExecutor {
   // Key: `wallet:conditionId` — Value: USDC reserved by in-flight BUYs not yet EXECUTING in DB.
   // Updated SYNCHRONOUSLY (no await) so concurrent handleTrade() calls see each other's reservations.
   private positionReserved = new Map<string, number>();
+  // Set of tokenIds currently being processed through the SELL path.
+  // Prevents two concurrent SELL handleTrade() calls from both reading the same
+  // getOurShares() snapshot and trying to double-sell the same shares.
+  // has() + add() is synchronous (no await between) so concurrent promises always
+  // see each other's claim before either reaches the first await.
+  private sellInProgress = new Set<string>();
 
   constructor(clobClient: ClobClient) {
     this.clobClient = clobClient;
@@ -292,9 +298,30 @@ export class GTTExecutor {
     } else {
       // Note: ALLOCATION_FULL does NOT block SELLs — selling returns capital, not consumes it.
 
+      // ── Concurrent-SELL guard ──────────────────────────────────────────────────
+      // Two SELL activities for the same tokenId can arrive in the same poll batch
+      // (e.g. a trader exits a market in two rapid transactions: 100% then 81.5%).
+      // Both handleTrade() calls run concurrently; without this guard, both read the
+      // same getOurShares() snapshot and both try to SELL the same shares. The result:
+      // whichever cross order fills first wins, the other fails with "not enough balance",
+      // and the larger/full-exit order ends up with ORDER_FAILED. The smaller order is
+      // NOT the one we want winning.
+      // has() + add() is synchronous with no await between → concurrent promises always
+      // see each other's claim before either hits the first await.
+      if (this.sellInProgress.has(tokenId)) {
+        const ts2 = new Date().toISOString().slice(11, 19);
+        console.log(`[${ts2}] [GTTExecutor] SELL ${tokenId.slice(0, 12)}... already in progress — skipping concurrent SELL`);
+        await this.skip(tradeDoc, 'SELL_NO_POSITION',
+          `concurrent SELL already in progress for this token`,
+          freshTrader.wallet);
+        return;
+      }
+      this.sellInProgress.add(tokenId);
+
       // 4a. Verify we hold this position (live API check)
       const ourCurrentShares = await positionFetcher.getOurShares(tokenId);
       if (ourCurrentShares < 0.01) {
+        this.sellInProgress.delete(tokenId);
         await this.skip(tradeDoc, 'SELL_NO_POSITION',
           `have ${ourCurrentShares.toFixed(4)} shares`,
           freshTrader.wallet);
@@ -320,6 +347,7 @@ export class GTTExecutor {
 
       exitShares = Math.min(exitShares, ourCurrentShares); // never oversell
       if (exitShares < 0.1) {
+        this.sellInProgress.delete(tokenId);
         await this.skip(tradeDoc, 'SELL_NO_POSITION',
           `exit shares too small (${exitShares.toFixed(4)})`,
           freshTrader.wallet);
@@ -328,6 +356,7 @@ export class GTTExecutor {
 
       targetUsdc   = exitShares * safeBook.bestAsk; // use ask (our posting price) for doc accuracy
       targetShares = exitShares;
+      // sellInProgress cleared after placeOrder completes (see finally below)
     }
 
     // ── 5. Update doc to EXECUTING ────────────────────────────────────────────
@@ -366,21 +395,27 @@ export class GTTExecutor {
     }
 
     // ── 7. Place GTD maker order (attempt 1) ──────────────────────────────────
-    await this.placeOrder({
-      tradeDocId:   tradeDoc._id.toString(),
-      traderWallet: freshTrader.wallet,
-      side,
-      tokenId,
-      conditionId,
-      targetUsdc,
-      targetShares,
-      attempt:     1,
-      traderPrice,
-      traderTs,
-      detectedAt,
-      filledSize:  0,
-      filledCost:  0,
-    }, safeBook);
+    // sellInProgress is cleared here — the exchange locks the balance once the order
+    // is submitted, protecting against concurrent orders after this point.
+    try {
+      await this.placeOrder({
+        tradeDocId:   tradeDoc._id.toString(),
+        traderWallet: freshTrader.wallet,
+        side,
+        tokenId,
+        conditionId,
+        targetUsdc,
+        targetShares,
+        attempt:     1,
+        traderPrice,
+        traderTs,
+        detectedAt,
+        filledSize:  0,
+        filledCost:  0,
+      }, safeBook);
+    } finally {
+      if (side === 'SELL') this.sellInProgress.delete(tokenId);
+    }
   }
 
   /**
