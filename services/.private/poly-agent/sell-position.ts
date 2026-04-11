@@ -93,13 +93,13 @@ async function fetchBook(): Promise<{ bestBid: number; bestAsk: number }> {
 // ── SELL price per attempt (mirrors bot GTTExecutor SELL aggression) ──────────
 // Attempt 1: passive — post at bestAsk, wait for buyer to come to us
 // Attempt 2: midpoint — split the spread
-// Attempt 3: cross   — bestBid + $0.001, near-certain immediate fill
+// Attempt 3: cross   — bestBid + $0.005, crosses spread for immediate fill
 function sellPrice(bestBid: number, bestAsk: number, attempt: number): number {
   if (fixedPrice !== undefined) return fixedPrice;
   const spread = bestAsk - bestBid;
   const fractions = [0, 0.5, 1.0];
   const fraction  = fractions[attempt - 1] ?? 1.0;
-  const raw = Math.max(bestAsk - spread * fraction, bestBid + 0.001);
+  const raw = Math.max(bestAsk - spread * fraction, bestBid + 0.005);
   return parseFloat(Math.min(0.999, Math.max(0.001, raw)).toFixed(4));
 }
 
