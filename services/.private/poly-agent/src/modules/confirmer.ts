@@ -412,11 +412,15 @@ export class Confirmer {
       attempts:     pending.attempt,
     });
 
-    // BUY fills consume allocation; SELL fills recycle proceeds back into the pool.
+    // Update allocation using the DELTA for this fill event only (not cumulative).
+    // Using pending.filledCost (cumulative) here caused double-counting on partial fills:
+    // each successive fill event would re-subtract the running total, not just the new increment.
+    // The CANCELLATION handler does NOT call recordFill/recordSellFill — deltas cover it fully.
+    const fillDeltaUsdc = fillSize * fillPrice;
     if (pending.side === 'BUY') {
-      await TraderLoader.recordFill(pending.traderWallet, filledUsdc);
+      await TraderLoader.recordFill(pending.traderWallet, fillDeltaUsdc);
     } else {
-      await TraderLoader.recordSellFill(pending.traderWallet, filledUsdc);
+      await TraderLoader.recordSellFill(pending.traderWallet, fillDeltaUsdc);
     }
 
     eventBus.emit('trade:filled', {
@@ -452,7 +456,10 @@ export class Confirmer {
     const ts = new Date().toISOString().slice(11, 19);
 
     if (pending.filledSize > 0) {
-      // Partially filled before expiry — record what we got
+      // Partially filled before expiry — record what we got.
+      // NOTE: allocation (recordFill / recordSellFill) was already updated
+      // incrementally by each fill event delta in handleTradeFill — do NOT
+      // call it again here or it double-counts the entire filled amount.
       const avgFillPrice  = pending.filledCost / pending.filledSize;
       const filledUsdc    = pending.filledCost;
       const totalLatencyMs = Date.now() - pending.traderTs;
@@ -460,7 +467,10 @@ export class Confirmer {
         ? ((avgFillPrice - pending.traderPrice) / pending.traderPrice) * 100
         : 0;
 
-      console.log(`[${ts}] [Confirmer] ⚠️  Order expired with partial fill: ${pending.filledSize.toFixed(2)} shares`);
+      const remainingShares = (pending.targetShares ?? 0) - pending.filledSize;
+
+      console.log(`[${ts}] [Confirmer] ⚠️  Order expired with partial fill: ${pending.filledSize.toFixed(2)} shares` +
+        (remainingShares >= 0.1 ? ` — ${remainingShares.toFixed(2)} remaining, retrying` : ''));
 
       await CopyTrade.findByIdAndUpdate(pending.tradeDocId, {
         status:       'PARTIAL',
@@ -472,12 +482,20 @@ export class Confirmer {
         attempts:     pending.attempt,
       });
 
-      if (pending.side === 'BUY') {
-        await TraderLoader.recordFill(pending.traderWallet, filledUsdc);
-      } else {
-        await TraderLoader.recordSellFill(pending.traderWallet, filledUsdc);
+      // For SELL orders with remaining shares: retry the unfilled remainder.
+      // Without this, a partial fill from a GTD expiry leaves a residual position forever.
+      // Reset filledSize/filledCost for the retry order (fresh tracking for the new leg).
+      if (pending.side === 'SELL' && remainingShares >= 0.1 && pending.attempt < config.maxOrderRetries) {
+        const retryPending: PendingOrder = {
+          ...pending,
+          filledSize:   0,
+          filledCost:   0,
+          targetShares: remainingShares,
+          attempt:      0,   // reset to 0 so handleOrderExpired starts at attempt 1 (passive)
+        };
+        eventBus.emit('order:expired', retryPending);
       }
-      // Don't retry — we got a partial fill, not a full miss
+      // BUYs: partial is acceptable — don't chase the remaining shares
       return;
     }
 
