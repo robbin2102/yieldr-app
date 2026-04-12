@@ -9,7 +9,10 @@ import { getDB } from '../../db/mongodb.js';
 const COLLECTION = 'polyMarkets';
 
 export const searchMarketsByKeywordSchema = z.object({
-  keywords: z.array(z.string()).describe('Array of keywords to search for in market questions/descriptions'),
+  keywords: z.preprocess(
+    (val) => typeof val === 'string' ? [val] : val,
+    z.array(z.string())
+  ).describe('Keywords to search for in market questions/descriptions (string or array of strings)'),
   activeOnly: z.boolean().optional().default(true).describe('Only return active (not closed) markets'),
   minVolume: z.number().optional().describe('Minimum volume filter in USD (e.g. 50000)'),
   category: z.string().optional().describe('Filter by category (e.g. Sports, Politics, Crypto)'),
