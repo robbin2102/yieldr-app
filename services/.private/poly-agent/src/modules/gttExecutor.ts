@@ -119,7 +119,8 @@ async function fetchFeeRateFromAPI(tokenId: string, clobApiBase: string): Promis
  *
  * Skip reasons:
  *   BELOW_AVG        — trader bet < avgBet
- *   ALLOCATION_FULL  — spentUsdc >= allocationUsdc
+ *   ALLOCATION_FULL   — spentUsdc >= allocationUsdc (overall budget gone)
+ *   POSITION_CAP_FULL — 20% per-position cap hit for this market
  *   NO_ORDERBOOK     — can't fetch orderbook
  *   SELL_NO_POSITION — we don't hold the position
  *   DUPLICATE        — txHash already processed
@@ -279,8 +280,8 @@ export class GTTExecutor {
         const upd = Math.max(0, cur - buyBetUsdc);
         if (upd === 0) this.positionReserved.delete(lockKey);
         else           this.positionReserved.set(lockKey, upd);
-        await this.skip(tradeDoc, 'ALLOCATION_FULL',
-          `position cap reached ($${(dbSpent + alreadyReserved).toFixed(2)} / $${maxPerPosition.toFixed(2)} max per position)`,
+        await this.skip(tradeDoc, 'POSITION_CAP_FULL',
+          `per-position cap reached ($${(dbSpent + alreadyReserved).toFixed(2)} / $${maxPerPosition.toFixed(2)} = 20% of $${freshTrader.allocationUsdc})`,
           freshTrader.wallet, freshTrader.avgBet);
         return;
       }
@@ -296,7 +297,7 @@ export class GTTExecutor {
 
     // ── 4. SELL: proportional exit — (traderSellSize / traderTotalBought) × ourShares ──
     } else {
-      // Note: ALLOCATION_FULL does NOT block SELLs — selling returns capital, not consumes it.
+      // Note: ALLOCATION_FULL and POSITION_CAP_FULL do NOT block SELLs — selling returns capital, not consumes it.
 
       // ── Concurrent-SELL guard ──────────────────────────────────────────────────
       // Two SELL activities for the same tokenId can arrive in the same poll batch

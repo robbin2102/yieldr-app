@@ -3,20 +3,22 @@ import mongoose, { Document } from 'mongoose';
 /**
  * Skip reason codes — every skip is logged for post-analysis.
  *
- * BELOW_AVG        — trader bet < avgBet (conviction filter)
- * ALLOCATION_FULL  — trader's allocationUsdc exhausted
- * NO_ORDERBOOK     — failed to fetch orderbook
- * SELL_NO_POSITION — copying SELL but we have no matching position
- * DUPLICATE        — txHash already processed
- * ORDER_FAILED     — GTT failed after all retries
- * NON_TRADE        — activity type was REDEEM/MERGE/SPLIT
- * WIDE_SPREAD        — bid-ask spread > maxSpreadPct (illiquid market)
- * PRICEDRIFT_FAILED  — limit price drifted > maxDriftPct from trader's price
- * GROUPED_BELOW_AVG  — sub-order absorbed into a grouped conviction trade
+ * BELOW_AVG         — trader bet < avgBet (conviction filter)
+ * ALLOCATION_FULL   — trader's overall allocationUsdc exhausted (spentUsdc ≥ allocationUsdc)
+ * POSITION_CAP_FULL — 20% per-position cap hit for this specific market
+ * NO_ORDERBOOK      — failed to fetch orderbook
+ * SELL_NO_POSITION  — copying SELL but we have no matching position
+ * DUPLICATE         — txHash already processed
+ * ORDER_FAILED      — GTT failed after all retries
+ * NON_TRADE         — activity type was REDEEM/MERGE/SPLIT
+ * WIDE_SPREAD       — bid-ask spread > maxSpreadPct (illiquid market)
+ * PRICEDRIFT_FAILED — limit price drifted > maxDriftPct from trader's price
+ * GROUPED_BELOW_AVG — sub-order absorbed into a grouped conviction trade
  */
 export type SkipReason =
   | 'BELOW_AVG'
   | 'ALLOCATION_FULL'
+  | 'POSITION_CAP_FULL'
   | 'NO_ORDERBOOK'
   | 'SELL_NO_POSITION'
   | 'DUPLICATE'
