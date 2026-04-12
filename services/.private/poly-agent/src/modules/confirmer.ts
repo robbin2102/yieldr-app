@@ -166,7 +166,6 @@ export class Confirmer {
         }
 
         // ── Phase 2: Scan MongoDB for stuck EXECUTING docs ──────────────────────
-        const { CopyTrade } = await import('../db/models/CopyTrade');
         const stale = await CopyTrade.find({ status: 'EXECUTING', submittedAt: { $lt: cutoff } });
         if (stale.length === 0) return;
 
