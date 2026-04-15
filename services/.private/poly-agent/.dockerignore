@@ -1,0 +1,7 @@
+node_modules
+dist
+.bulk-profile-ahf-progress.json
+env.polyagent
+.env
+.env.local
+*.log
