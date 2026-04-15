@@ -2,21 +2,25 @@ FROM node:20-slim
 
 WORKDIR /app
 
-# Install dependencies
+# ── 1. Install ALL deps (including devDeps for tsc) ──────────────
 COPY package.json package-lock.json* ./
-RUN npm ci --omit=dev && npm install tsx
+RUN npm ci
 
-# Copy compiled source (built via tsc before Docker build)
-COPY dist ./dist
+# ── 2. Copy source and compile ───────────────────────────────────
+COPY tsconfig.json ./
+COPY src ./src
+RUN npm run build
 
-# Copy scripts directory (ESM, run via tsx at runtime)
+# ── 3. Copy runtime assets ────────────────────────────────────────
+# scripts/ are ESM, spawned at runtime via `npx tsx` — not compiled
 COPY scripts ./scripts
 
-# Copy env template (actual secrets injected by Railway)
-# COPY env.polyagent .env
+# ── 4. Prune devDeps, keep tsx for runtime script spawning ────────
+RUN npm prune --omit=dev && npm install tsx
 
+# ── 5. Expose health port (Railway injects PORT automatically) ────
 EXPOSE 3001
 
-# Default: run the pipeline service
-# Override CMD in Railway to run the trading bot instead (node dist/index.js)
+# Default: pipeline service
+# To run the copy-trading bot instead: CMD ["node", "dist/index.js"]
 CMD ["node", "dist/pipeline-service.js"]
