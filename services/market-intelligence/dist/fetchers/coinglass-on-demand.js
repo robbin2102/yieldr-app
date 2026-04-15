@@ -9,6 +9,10 @@ const logger_1 = require("../utils/logger");
 const coinglass_1 = require("./coinglass");
 const MarketSnapshot_1 = __importDefault(require("../models/MarketSnapshot"));
 async function fetchOnDemand(symbol) {
+    if (!config_1.config.coinglass.enabled) {
+        logger_1.logger.info('OnDemand', 'CoinGlass disabled — on-demand fetch skipped');
+        return null;
+    }
     const upperSym = symbol.toUpperCase();
     const existing = await MarketSnapshot_1.default.findOne({ symbol: upperSym })
         .sort({ timestamp: -1 })

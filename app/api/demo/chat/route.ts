@@ -3,18 +3,94 @@ import Anthropic from '@anthropic-ai/sdk';
 import connectDB from '@/lib/mongoose';
 import mongoose from 'mongoose';
 import Agent from '@/models/Agent';
+import Position from '@/models/Position';
 import ChatSession from '@/models/ChatSession';
 import { trackUsage, TokenUsageData } from '@/lib/tokenTracking';
 import { fetchNews, formatArticlesForLLM } from '@/lib/rss';
+import {
+  classifyToolResult,
+  detectPostResponseHallucination,
+  EXECUTION_TOOLS,
+  type ClassifiedResult,
+} from '@/lib/toolResultInterpreter';
+// Note: validateBalanceForTrade removed — Bankr handles balance/allowance checks internally.
 
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY || '',
 });
 
+// Ensure service URLs always carry a protocol (handles Railway/Render URLs without https://)
+function normalizeUrl(url: string): string {
+  if (!url.startsWith('http://') && !url.startsWith('https://')) return `https://${url}`;
+  return url;
+}
+
 const HYPERLIQUID_API_URL = 'https://api.hyperliquid.xyz/info';
 const POLYMARKET_API_BASE = 'https://data-api.polymarket.com';
 const AVANTIS_API_URL = 'https://yieldr-app-production.up.railway.app/fetch-positions';
 const BASE_RPC_URL = process.env.QUICKNODE_BASE_RPC_URL || process.env.BASE_RPC_URL || 'https://mainnet.base.org';
+
+// ─── Bankr API (replaces CDP wallet + Railway Python execution layer) ─────────
+// MIGRATION NOTE (2026-03-16): All trade execution now routes through Bankr API.
+// The old CDP wallet address was 0xe7b76A90d2fA937a380176F360EcDB2F17087452.
+// The old Railway Python service handled ERC20 approval + on-chain tx signing.
+// Bankr handles all of this internally — no allowance checks, no gas management needed.
+// To REVERT: restore CDP/Railway handlers in executeTool() and re-add trade tools to EXECUTION_TOOLS.
+const BANKR_API_BASE = 'https://api.bankr.bot';
+const BANKR_WALLET_ADDRESS = '0xcdc44ffda057aca49bb9c8b7d54de212742729c7';
+const USDC_BASE_ADDRESS = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
+const BANKR_API_KEY = process.env.BANKR_API_KEY ?? '';
+
+/** Submit a natural-language prompt to Bankr and poll until complete (max 60 × 2 s = 2 min). */
+async function submitBankrPrompt(prompt: string, emitToStream?: (event: any) => void): Promise<{ success: boolean; response?: string; status: string }> {
+  if (!BANKR_API_KEY) throw new Error('Bankr authentication issue (BANKR_API_KEY is not configured)');
+  console.log(`[bankr] Using API key: ${BANKR_API_KEY.slice(0, 6)}...${BANKR_API_KEY.slice(-4)} (len=${BANKR_API_KEY.length})`);
+  const apiKey = BANKR_API_KEY;
+
+  emitToStream?.({ type: 'agent_activity', message: 'Submitting trade to execution engine...' });
+
+  const submitRes = await fetch(`${BANKR_API_BASE}/agent/prompt`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-API-Key': apiKey },
+    body: JSON.stringify({ prompt }),
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!submitRes.ok) {
+    const body = await submitRes.text().catch(() => '');
+    throw new Error(`Bankr prompt submit failed: HTTP ${submitRes.status}${body ? ` — ${body}` : ''}`);
+  }
+  const { jobId } = await submitRes.json();
+
+  // Activity messages shown to user during execution (no Bankr/wallet references)
+  const activitySteps = [
+    { at: 2, msg: 'Checking token allowances...' },
+    { at: 5, msg: 'Preparing on-chain transaction...' },
+    { at: 10, msg: 'Signing and broadcasting transaction...' },
+    { at: 18, msg: 'Waiting for block confirmation...' },
+    { at: 30, msg: 'Transaction pending — confirming on Base network...' },
+    { at: 45, msg: 'Still waiting for confirmation (this can take a moment)...' },
+  ];
+
+  // Poll
+  for (let i = 0; i < 60; i++) {
+    await new Promise(r => setTimeout(r, 2000));
+
+    // Emit activity step if it matches this iteration
+    const step = activitySteps.find(s => s.at === i);
+    if (step) emitToStream?.({ type: 'agent_activity', message: step.msg });
+
+    const pollRes = await fetch(`${BANKR_API_BASE}/agent/job/${jobId}`, {
+      headers: { 'X-API-Key': apiKey },
+      signal: AbortSignal.timeout(10_000),
+    });
+    const job = await pollRes.json();
+    if (job.status !== 'pending' && job.status !== 'processing') {
+      emitToStream?.({ type: 'agent_activity', message: job.status === 'completed' ? 'Transaction confirmed!' : 'Execution finished.' });
+      return { success: job.status === 'completed', response: job.response, status: job.status };
+    }
+  }
+  return { success: false, response: 'Trade execution timed out after 2 minutes.', status: 'timeout' };
+}
 
 // ─── Position Cache (30 second TTL) ──────────────────────────────────────────
 interface CachedPosition {
@@ -380,6 +456,158 @@ const toolDefinitions: Anthropic.Tool[] = [
   },
 ];
 
+// ─── Agent Trading Execution Tools ───────────────────────────────────────────
+toolDefinitions.push({
+  name: 'get_agent_wallet_balance',
+  description:
+    'Check the Bankr agent wallet ETH and USDC balance. Call this BEFORE executing any trade or generating deposit cards. ' +
+    'Bankr handles gas internally, but USDC is needed as trade collateral. ' +
+    'After checking: if USDC < required collateral call fund_agent. ' +
+    'Both cards can be emitted in the same response — call both tools without waiting for user approval.',
+  input_schema: {
+    type: 'object' as const,
+    properties: {},
+  },
+});
+
+toolDefinitions.push({
+  name: 'open_trade',
+  description:
+    'Execute a perpetual trade on Avantis (Base). ONLY call this after receiving a TRADE_APPROVED: message from the user — ' +
+    'calling without approval will be REJECTED. You must call propose_trade first to show an approval card. ' +
+    'Minimum position size: collateral × leverage >= $100 USDC. ' +
+    'Pair indices: 1=BTC/USD, 2=ETH/USD, 3=SOL/USD, 4=LINK/USD, 5=ARB/USD. ' +
+    'For MARKET orders open_price is not needed. For LIMIT orders open_price is required. ' +
+    'Returns a natural-language confirmation with entry price, leverage, TP/SL, and tx hash.',
+  input_schema: {
+    type: 'object' as const,
+    properties: {
+      pair:       { type: 'string',  description: 'Trading pair, e.g. "BTC/USD" or "ETH/USD"' },
+      pair_index: { type: 'number',  description: 'On-chain pair index: 1=BTC/USD, 2=ETH/USD, 3=SOL/USD' },
+      direction:  { type: 'string',  enum: ['LONG', 'SHORT'], description: 'Trade direction' },
+      collateral: { type: 'number',  description: 'Collateral in USDC (e.g. 10 for $10 USDC)' },
+      leverage:   { type: 'number',  description: 'Leverage multiplier (e.g. 10 for 10×). collateral × leverage must be ≥ $100' },
+      tp_pct:     { type: 'number',  description: 'Take-profit % above/below entry (e.g. 4 for 4%)' },
+      sl_pct:     { type: 'number',  description: 'Stop-loss % against entry (e.g. 2.5 for 2.5%)' },
+      order_type: { type: 'string',  enum: ['MARKET', 'LIMIT'], description: 'MARKET executes immediately; LIMIT queues at open_price. Default: MARKET' },
+      open_price: { type: 'number',  description: 'Fill price — required for LIMIT orders only' },
+    },
+    required: ['pair', 'pair_index', 'direction', 'collateral', 'leverage', 'tp_pct', 'sl_pct'],
+  },
+});
+
+toolDefinitions.push({
+  name: 'close_trade',
+  description:
+    'Close an open perpetual position on Avantis. ' +
+    'Call get_avantis_live_positions first to get pair_index and trade_index. ' +
+    'Returns tx_hash, exit_price, pnl.',
+  input_schema: {
+    type: 'object' as const,
+    properties: {
+      pair_index:          { type: 'number', description: 'On-chain pair index (e.g. 1 for BTC/USD)' },
+      trade_index:         { type: 'number', description: 'On-chain trade index (from get_avantis_live_positions)' },
+      collateral_to_close: { type: 'number', description: 'USDC collateral amount to close. Use the full open_collateral value to close the entire position.' },
+    },
+    required: ['pair_index', 'trade_index', 'collateral_to_close'],
+  },
+});
+
+toolDefinitions.push({
+  name: 'cancel_limit_order',
+  description:
+    'Cancel a pending limit order on Avantis. ' +
+    'Call get_avantis_live_positions first to get pair_index and trade_index from pending_orders. ' +
+    'Returns tx_hash on success.',
+  input_schema: {
+    type: 'object' as const,
+    properties: {
+      pair_index:  { type: 'number', description: 'On-chain pair index' },
+      trade_index: { type: 'number', description: 'On-chain trade/order index (from pending_orders in get_avantis_live_positions)' },
+    },
+    required: ['pair_index', 'trade_index'],
+  },
+});
+
+toolDefinitions.push({
+  name: 'withdraw_funds',
+  description:
+    'Withdraw ETH or USDC from the Bankr agent wallet to a destination address. ' +
+    'Bankr signs and sends autonomously — no user signature needed. ' +
+    'Call get_agent_wallet_balance first to confirm available balance. ' +
+    'Use when the user asks to withdraw, send back, or transfer funds out of the agent wallet. ' +
+    'Default to_address is the user\'s connected wallet unless they specify otherwise.',
+  input_schema: {
+    type: 'object' as const,
+    properties: {
+      amount:     { type: 'number', description: 'Amount to withdraw (e.g. 0.005 for 0.005 ETH or 10 for $10 USDC)' },
+      asset:      { type: 'string', enum: ['ETH', 'USDC'], description: 'Asset to withdraw: ETH (native gas token on Base) or USDC' },
+      to_address: { type: 'string', description: 'Destination wallet address. Use the user\'s connected wallet address unless they specify a different one.' },
+    },
+    required: ['amount', 'asset', 'to_address'],
+  },
+});
+
+toolDefinitions.push({
+  name: 'fund_agent',
+  description:
+    'Deposit USDC from the user\'s connected wallet into the Bankr agent wallet. ' +
+    'Call this when the agent wallet needs USDC for trading collateral. ' +
+    'Emits a deposit approval card — the user must click Approve and sign in their wallet. ' +
+    'Call get_agent_wallet_balance first to confirm how much USDC is needed.',
+  input_schema: {
+    type: 'object' as const,
+    properties: {
+      amount: { type: 'number', description: 'Amount of USDC to deposit (e.g. 10 for $10 USDC)' },
+    },
+    required: ['amount'],
+  },
+});
+
+toolDefinitions.push({
+  name: 'fund_agent_eth',
+  description:
+    'Deposit ETH from the user\'s connected wallet into the Bankr agent wallet. ' +
+    'Bankr manages gas internally, but a small ETH reserve is useful as a buffer. ' +
+    'Emits an ETH deposit approval card — the user must click Approve and sign in their wallet. ' +
+    'Default deposit: 0.001 ETH.',
+  input_schema: {
+    type: 'object' as const,
+    properties: {
+      amount_eth: { type: 'number', description: 'Amount of ETH to deposit (e.g. 0.001 for 0.001 ETH)' },
+    },
+    required: ['amount_eth'],
+  },
+});
+
+toolDefinitions.push({
+  name: 'propose_trade',
+  description:
+    'Propose a perpetual trade for user confirmation BEFORE executing. ' +
+    'ALWAYS call this INSTEAD OF open_trade when presenting a trade to the user. ' +
+    'Shows a trade confirmation card in the UI with entry/exit conditions and execution details. ' +
+    'After the user clicks Approve, THEN call open_trade with the SAME parameters. ' +
+    'Do NOT call open_trade without calling propose_trade first (except when re-executing after user approval).',
+  input_schema: {
+    type: 'object' as const,
+    properties: {
+      pair:             { type: 'string',  description: 'Trading pair, e.g. "BTC/USD" or "ETH/USD"' },
+      pair_index:       { type: 'number',  description: 'On-chain pair index: 1=BTC/USD, 2=ETH/USD, 3=SOL/USD' },
+      direction:        { type: 'string',  enum: ['LONG', 'SHORT'], description: 'Trade direction' },
+      collateral:       { type: 'number',  description: 'Collateral in USDC' },
+      leverage:         { type: 'number',  description: 'Leverage multiplier' },
+      tp_pct:           { type: 'number',  description: 'Take-profit percentage' },
+      sl_pct:           { type: 'number',  description: 'Stop-loss percentage' },
+      order_type:       { type: 'string',  enum: ['MARKET', 'LIMIT'], description: 'Order type. Default: MARKET' },
+      open_price:       { type: 'number',  description: 'Fill price for LIMIT orders only' },
+      rationale:        { type: 'string',  description: 'Brief reason for this trade shown on the confirmation card' },
+      entry_conditions: { type: 'array', items: { type: 'string' }, description: 'List of entry signal conditions (e.g. ["RSI < 35", "Stoch RSI < 25", "Price below EMA-21"])' },
+      exit_conditions:  { type: 'array', items: { type: 'string' }, description: 'List of exit/TP/SL conditions (e.g. ["TP: +3.5% → EMA-21 resistance", "SL: -2% → below swing low"])' },
+    },
+    required: ['pair', 'pair_index', 'direction', 'collateral', 'leverage', 'tp_pct', 'sl_pct'],
+  },
+});
+
 // ─── RSS News tool ───────────────────────────────────────────────────────────
 toolDefinitions.push({
   name: 'get_news_headlines',
@@ -473,6 +701,20 @@ function getToolStatusLabel(name: string, input: any): string {
         ? `Scanning ${src} news for "${input.topics}"...`
         : `Fetching latest ${src} headlines...`;
     }
+    case 'get_agent_wallet_balance':
+      return `Checking agent wallet balance...`;
+    case 'open_trade':
+      return `Executing ${input.direction || ''} ${input.pair || ''} ${input.order_type || 'MARKET'} order...`.trim();
+    case 'close_trade':
+      return `Closing ${input.pair_index ? (['', 'BTC', 'ETH', 'SOL', 'LINK', 'ARB'][input.pair_index] || '') + ' ' : ''}position...`.trim();
+    case 'cancel_limit_order':
+      return `Cancelling limit order (pair_index=${input.pair_index}, trade_index=${input.trade_index})...`;
+    case 'withdraw_funds':
+      return `Withdrawing ${input.amount} ${input.asset} from agent wallet...`;
+    case 'fund_agent':
+      return `Preparing $${input.amount} USDC deposit transaction...`;
+    case 'propose_trade':
+      return `Preparing ${input.direction || ''} ${input.pair || ''} trade proposal...`.trim();
     case 'web_search':
       return `Searching the web...`;
     default:
@@ -482,7 +724,7 @@ function getToolStatusLabel(name: string, input: any): string {
 
 // ─── Tool Execution ────────────────────────────────────────────────────────
 
-async function executeTool(name: string, input: any, wallet?: string): Promise<string> {
+async function executeTool(name: string, input: any, wallet?: string, agentCtxId?: string, agentCtxWallet?: string, emitToStream?: (event: any) => void, tradeApproved?: boolean): Promise<string> {
   console.log(`[chat] Executing tool: ${name}`, JSON.stringify(input).slice(0, 200));
   try {
     switch (name) {
@@ -723,6 +965,9 @@ async function executeTool(name: string, input: any, wallet?: string): Promise<s
       }
       case 'get_avantis_live_positions': {
         const { walletAddress, limit = 10 } = input;
+        // Use Railway fetch-positions API for ALL wallets (including Bankr agent wallet).
+        // Bankr prompt API is reserved ONLY for trade execution (open/close) to conserve
+        // the 100 msg/day free-tier limit. Position fetching uses QuickNode RPC via Python service.
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 30000);
         try {
@@ -1226,6 +1471,327 @@ async function executeTool(name: string, input: any, wallet?: string): Promise<s
         return JSON.stringify({ error: `Unknown action: ${action}` });
       }
 
+      // ── Agent Trading Execution Tools (Bankr API) ──────────────────────────
+      // MIGRATION NOTE (2026-03-16): These tools now route through Bankr API instead of
+      // the CDP wallet + Railway Python service. Bankr handles gas, allowances, and signing
+      // internally. The static Bankr wallet address is BANKR_WALLET_ADDRESS.
+      // REVERT POINT: restore CDP/Railway code from git history (commit 0a9f445 / 418a27e).
+      case 'get_agent_wallet_balance': {
+        // Use Bankr REST API to get balances for the Bankr agent wallet
+        if (!BANKR_API_KEY) throw new Error('Bankr API key not configured (set BANKR_API_KEY in .env.local)');
+        console.log(`[balance] Fetching Bankr wallet balances from ${BANKR_API_BASE}/agent/balances?chains=base`);
+        const res = await fetch(`${BANKR_API_BASE}/agent/balances?chains=base`, {
+          headers: { 'X-API-Key': BANKR_API_KEY },
+          signal: AbortSignal.timeout(15_000),
+        });
+        if (!res.ok) {
+          let detail = `HTTP ${res.status}`;
+          try { const e = await res.json(); detail = e.error || detail; } catch {}
+          throw new Error(`Bankr balance API failed: ${detail}`);
+        }
+        const data = await res.json();
+        const baseBalances = data.balances?.base;
+        const ethBalance = parseFloat(baseBalances?.nativeBalance || '0');
+        const usdcToken = (baseBalances?.tokenBalances || []).find(
+          (t: any) => t.address?.toLowerCase() === USDC_BASE_ADDRESS.toLowerCase()
+        );
+        const usdcBalance = parseFloat(usdcToken?.token?.balance || '0');
+        console.log(`[balance] Bankr wallet: ${ethBalance.toFixed(6)} ETH, ${usdcBalance.toFixed(2)} USDC`);
+        return JSON.stringify({
+          agent_wallet:           BANKR_WALLET_ADDRESS,
+          eth_balance:            ethBalance,
+          usdc_balance:           usdcBalance,
+          eth_sufficient_for_gas: true, // Bankr manages gas internally
+          status:   `✓ Bankr wallet: ${ethBalance.toFixed(6)} ETH, ${usdcBalance.toFixed(2)} USDC`,
+          usdc_note: usdcBalance === 0
+            ? `Agent wallet has no USDC. Fund it before placing trades.`
+            : `${usdcBalance.toFixed(2)} USDC available for trading.`,
+        });
+      }
+
+      case 'open_trade': {
+        // GUARD: Reject execution unless user explicitly approved via TRADE_APPROVED message
+        if (!tradeApproved) {
+          console.log(`[open_trade] BLOCKED — no TRADE_APPROVED in user message. Must call propose_trade first.`);
+          return JSON.stringify({
+            error: 'TRADE NOT APPROVED. You must call propose_trade first to show the user a confirmation card. Only call open_trade after the user clicks Approve (TRADE_APPROVED message).',
+            action_required: 'Call propose_trade with the trade parameters to show the approval card.',
+          });
+        }
+        // BANKR MIGRATION: Trade execution via Bankr natural-language prompt API.
+        // Bankr handles USDC approval, gas, and on-chain tx signing internally.
+        const { pair, pair_index, direction, collateral, leverage, tp_pct, sl_pct, order_type = 'MARKET', open_price } = input;
+        const action = direction === 'SHORT' ? 'short' : 'buy';
+        let prompt = `${action} $${collateral} of ${pair} with ${leverage}x leverage, ${sl_pct}% stop loss, and ${tp_pct}% take profit on avantis`;
+        if (order_type === 'LIMIT' && open_price != null) {
+          prompt += ` at limit price $${open_price}`;
+        }
+        console.log(`[open_trade] Bankr prompt: "${prompt}"`);
+        emitToStream?.({ type: 'agent_activity', message: `Executing ${direction || 'LONG'} ${pair || 'BTC/USD'} on Avantis...` });
+        const job = await submitBankrPrompt(prompt, emitToStream);
+        console.log(`[open_trade] Bankr job status=${job.status} response="${(job.response || '').slice(0, 200)}"`);
+
+        // Save position to MongoDB if trade succeeded (response contains tx hash)
+        const bankrResponse = job.response || '';
+        const txMatch = bankrResponse.match(/0x[a-fA-F0-9]{64}/);
+        // Try multiple price patterns from Bankr response
+        const pricePatterns = [
+          /entry[:\s]*\$?([\d,]+\.?\d*)/i,                    // "entry: $73,499"
+          /(?:price|at)[:\s]*\$?([\d,]+\.?\d*)/i,             // "price: $73,499" or "at $73,499"
+          /opened?\s+(?:at\s+)?\$?([\d,]+\.?\d*)/i,           // "opened at $73,499"
+          /\$?([\d,]+\.?\d{2,})\s*(?:per|\/)/i,               // "$73,499.73 per" or "/BTC"
+        ];
+        let entryPrice: number | undefined;
+        for (const pat of pricePatterns) {
+          const m = bankrResponse.match(pat);
+          if (m) {
+            const parsed = parseFloat(m[1].replace(/,/g, ''));
+            if (parsed > 0) { entryPrice = parsed; break; }
+          }
+        }
+        if (job.success && txMatch) {
+          try {
+            await connectDB();
+            await Position.create({
+              walletAddress: (wallet || '').toLowerCase(),
+              agentWallet: BANKR_WALLET_ADDRESS.toLowerCase(),
+              type: 'PERP',
+              platform: 'Avantis',
+              positionId: `bankr-${txMatch[0].slice(0, 16)}`,
+              status: 'active',
+              pair: pair?.replace('/USD', '') || 'BTC',
+              direction: direction || 'LONG',
+              leverage: leverage || 1,
+              positionSize: (collateral || 0) * (leverage || 1),
+              margin: collateral || 0,
+              entryPrice,
+              currentPrice: entryPrice, // Mark = Entry at open time
+              pnl: 0,
+              roi: 0,
+              txHash: txMatch[0],
+            });
+            console.log(`[open_trade] Position saved to MongoDB for wallet=${wallet}, pair=${pair}`);
+            // Emit position_opened event so frontend can start 30s polling
+            emitToStream?.({ type: 'position_opened', pair, direction, pair_index, agentWallet: BANKR_WALLET_ADDRESS });
+          } catch (saveErr: any) {
+            console.error(`[open_trade] Failed to save position: ${saveErr.message}`);
+          }
+        }
+
+        // Append monitoring reminder so agent creates a monitor for this trade
+        const monitorReminder = job.success && txMatch
+          ? '\n\n[SYSTEM: Trade opened successfully. You MUST now call manage_monitoring to create a monitoring task for this position. Use the strategy signals (RSI, funding rate, etc.) from the trade setup as monitor conditions. Set intervalSeconds to 300. Do NOT skip this step.]'
+          : '';
+        return (bankrResponse || JSON.stringify({ success: false, error: `Bankr trade failed (status: ${job.status})` })) + monitorReminder;
+      }
+
+      case 'close_trade': {
+        // BANKR MIGRATION: Close via Bankr natural-language prompt — no pair_index/trade_index needed.
+        const { pair_index } = input;
+        const pairMap: Record<number, string> = { 1: 'BTC', 2: 'ETH', 3: 'SOL', 4: 'LINK', 5: 'ARB' };
+        const pairName = pairMap[pair_index] || 'my';
+        const prompt = `close my ${pairName} position on Avantis`;
+        console.log(`[close_trade] Bankr prompt: "${prompt}"`);
+        emitToStream?.({ type: 'agent_activity', message: `Closing ${pairName} position on Avantis...` });
+        const job = await submitBankrPrompt(prompt, emitToStream);
+        console.log(`[close_trade] Bankr job status=${job.status} response="${(job.response || '').slice(0, 200)}"`);
+
+        // Mark position as closed in MongoDB + pause related monitors
+        const closeResponse = job.response || '';
+        const closeTxMatch = closeResponse.match(/0x[a-fA-F0-9]{64}/);
+        if (job.success && closeTxMatch) {
+          try {
+            await connectDB();
+            // Extract exit price from close response
+            const exitPricePatterns = [
+              /(?:exit|close[d]?|price)[:\s]*\$?([\d,]+\.?\d*)/i,
+              /at\s+\$?([\d,]+\.?\d{2,})/i,
+              /\$?([\d,]+\.?\d{2,})\s*(?:per|\/)/i,
+            ];
+            let exitPrice: number | undefined;
+            for (const pat of exitPricePatterns) {
+              const m = closeResponse.match(pat);
+              if (m) {
+                const parsed = parseFloat(m[1].replace(/,/g, ''));
+                if (parsed > 0) { exitPrice = parsed; break; }
+              }
+            }
+            await Position.updateMany(
+              {
+                agentWallet: BANKR_WALLET_ADDRESS.toLowerCase(),
+                platform: 'Avantis',
+                status: 'active',
+                ...(pairName !== 'my' ? { pair: pairName } : {}),
+              },
+              { $set: {
+                status: 'closed',
+                updatedAt: new Date(),
+                ...(exitPrice ? { currentPrice: exitPrice } : {}),
+              } }
+            );
+            console.log(`[close_trade] Position marked closed in MongoDB for pair=${pairName}`);
+
+            // Auto-pause any active monitoring tasks related to this pair
+            const db = mongoose.connection.db!;
+            const tasksCol = db.collection('monitoring_tasks');
+            const monitorFilter: any = {
+              userId: (wallet || '').toLowerCase(),
+              status: 'active',
+            };
+            // If we know the specific pair, only pause monitors for that pair
+            if (pairName !== 'my') {
+              monitorFilter.task = { $regex: new RegExp(pairName, 'i') };
+            }
+            const pauseResult = await tasksCol.updateMany(monitorFilter, {
+              $set: { status: 'paused', updatedAt: new Date() },
+            });
+            if (pauseResult.modifiedCount > 0) {
+              console.log(`[close_trade] Auto-paused ${pauseResult.modifiedCount} monitor(s) for pair=${pairName}`);
+              emitToStream?.({ type: 'agent_activity', message: `Paused ${pauseResult.modifiedCount} monitor${pauseResult.modifiedCount > 1 ? 's' : ''} — position closed.` });
+            }
+
+            emitToStream?.({ type: 'position_closed', pair: pairName, pair_index });
+          } catch (closeErr: any) {
+            console.error(`[close_trade] Failed to update position: ${closeErr.message}`);
+          }
+        }
+
+        return closeResponse || JSON.stringify({ success: false, error: `Bankr close failed (status: ${job.status})` });
+      }
+
+      case 'cancel_limit_order': {
+        // BANKR MIGRATION: Cancel via Bankr natural-language prompt.
+        const { pair_index } = input;
+        const pairMap: Record<number, string> = { 1: 'BTC', 2: 'ETH', 3: 'SOL', 4: 'LINK', 5: 'ARB' };
+        const pairName = pairMap[pair_index] || 'my';
+        const prompt = `cancel my ${pairName} limit order on Avantis`;
+        console.log(`[cancel_limit_order] Bankr prompt: "${prompt}"`);
+        emitToStream?.({ type: 'agent_activity', message: `Cancelling ${pairName} limit order...` });
+        const job = await submitBankrPrompt(prompt, emitToStream);
+        console.log(`[cancel_limit_order] Bankr job status=${job.status} response="${(job.response || '').slice(0, 200)}"`);
+        return job.response || JSON.stringify({ success: false, error: `Bankr cancel failed (status: ${job.status})` });
+      }
+
+      case 'withdraw_funds': {
+        // BANKR MIGRATION: Withdraw via Bankr /agent/submit REST endpoint (synchronous, returns tx hash).
+        // ETH: native transfer. USDC: ERC20 transfer(address,uint256) calldata.
+        if (!BANKR_API_KEY) throw new Error('Bankr API key not configured (set BANKR_API_KEY in .env.local)');
+        const { amount, asset, to_address } = input;
+        let transaction: Record<string, any>;
+
+        if (asset === 'ETH') {
+          const weiHex = `0x${BigInt(Math.round(amount * 1e18)).toString(16)}`;
+          transaction = { to: to_address, chainId: 8453, value: weiHex };
+        } else {
+          // USDC ERC20 transfer(address,uint256) — selector 0xa9059cbb
+          const usdcUnits = BigInt(Math.round(amount * 1e6));
+          const paddedAddr   = to_address.replace('0x', '').toLowerCase().padStart(64, '0');
+          const paddedAmount = usdcUnits.toString(16).padStart(64, '0');
+          transaction = {
+            to: USDC_BASE_ADDRESS,
+            chainId: 8453,
+            value: '0',
+            data: `0xa9059cbb${paddedAddr}${paddedAmount}`,
+          };
+        }
+
+        console.log(`[withdraw_funds] Bankr submit: ${amount} ${asset} → ${to_address}`);
+        const res = await fetch(`${BANKR_API_BASE}/agent/submit`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-API-Key': BANKR_API_KEY },
+          body: JSON.stringify({
+            transaction,
+            description: `Withdraw ${amount} ${asset} to ${to_address}`,
+            waitForConfirmation: true,
+          }),
+          signal: AbortSignal.timeout(60_000),
+        });
+        const data = await res.json();
+        if (!res.ok || !data.success) {
+          console.error(`[withdraw_funds] Bankr submit failed: ${JSON.stringify(data).slice(0, 300)}`);
+          return JSON.stringify({ success: false, error: data.error || `Withdraw failed: HTTP ${res.status}` });
+        }
+        console.log(`[withdraw_funds] Bankr submit SUCCESS: tx=${data.transactionHash}`);
+        return JSON.stringify({
+          success: true,
+          tx_hash: data.transactionHash,
+          status: data.status,
+          message: `Withdrew ${amount} ${asset} to ${to_address}. Transaction: ${data.transactionHash}`,
+        });
+      }
+
+      case 'fund_agent': {
+        // BANKR MIGRATION: Deposit targets the Bankr agent wallet directly.
+        // Constructs ERC20 transfer calldata inline — no external API call needed.
+        if (!agentCtxId) return JSON.stringify({ success: false, error: 'No agent ID in context.' });
+        const userWallet = wallet || '';
+        if (!userWallet) return JSON.stringify({ success: false, error: 'No user wallet in context.' });
+        const { amount } = input;
+        // USDC ERC20 transfer(address,uint256) calldata to Bankr wallet
+        const usdcUnits = BigInt(Math.round(amount * 1e6));
+        const paddedAddr   = BANKR_WALLET_ADDRESS.replace('0x', '').toLowerCase().padStart(64, '0');
+        const paddedAmount = usdcUnits.toString(16).padStart(64, '0');
+        emitToStream?.({
+          type: 'deposit_request',
+          amount,
+          agent_wallet: BANKR_WALLET_ADDRESS,
+          unsigned_tx: {
+            to: USDC_BASE_ADDRESS,
+            data: `0xa9059cbb${paddedAddr}${paddedAmount}`,
+            value: '0x0',
+            chainId: 8453,
+          },
+        });
+        return JSON.stringify({
+          success: true,
+          status: 'awaiting_user_approval',
+          message: `A deposit approval card for ${amount} USDC has been shown. The user must click Approve and sign in their wallet.`,
+          agent_wallet: BANKR_WALLET_ADDRESS,
+        });
+      }
+
+      case 'fund_agent_eth': {
+        // BANKR MIGRATION: ETH deposit targets the Bankr agent wallet.
+        const { amount_eth } = input;
+        const weiAmount = BigInt(Math.round(amount_eth * 1e18));
+        emitToStream?.({
+          type: 'deposit_eth_request',
+          amount_eth,
+          agent_wallet: BANKR_WALLET_ADDRESS,
+          unsigned_tx: {
+            to: BANKR_WALLET_ADDRESS,
+            data: '0x',
+            value: `0x${weiAmount.toString(16)}`,
+            chainId: 8453,
+          },
+        });
+        return JSON.stringify({
+          success: true,
+          status: 'awaiting_user_approval',
+          message: `An ETH gas deposit card for ${amount_eth} ETH has been shown. The user must click Approve and sign in their wallet to send ETH to the agent.`,
+          agent_wallet: BANKR_WALLET_ADDRESS,
+        });
+      }
+
+      case 'propose_trade': {
+        const { pair, pair_index, direction, collateral, leverage, tp_pct, sl_pct, order_type = 'MARKET', open_price, rationale, entry_conditions, exit_conditions } = input;
+        const position_size = collateral * leverage;
+        const tradeParams = { pair, pair_index, direction, collateral, leverage, tp_pct, sl_pct, order_type, ...(open_price != null ? { open_price } : {}) };
+        // Emit trade_approval event to frontend
+        emitToStream?.({
+          type: 'trade_approval',
+          params: tradeParams,
+          rationale: rationale || '',
+          position_size,
+          entry_conditions: entry_conditions || [],
+          exit_conditions: exit_conditions || [],
+        });
+        return JSON.stringify({
+          status: 'pending_approval',
+          message: `Trade proposal displayed to user: ${direction} ${pair} — ${collateral} USDC × ${leverage}x = $${position_size} position, TP: ${tp_pct}%, SL: ${sl_pct}%, order: ${order_type}. Waiting for user to click Approve or Cancel.`,
+        });
+      }
+
       default:
         return JSON.stringify({ error: `Unknown tool: ${name}` });
     }
@@ -1238,379 +1804,116 @@ async function executeTool(name: string, input: any, wallet?: string): Promise<s
 // ─── System Prompt ─────────────────────────────────────────────────────────
 
 // Static system prompt (cached) — agent instructions, rules — NO dynamic content
-const STATIC_SYSTEM_PROMPT = `You are an AI trading and investment agent on the Yieldr platform.
-
-You serve two roles:
-
-1. TRADING ADVISOR — Help active traders analyze positions, compare with top performers, understand market context, and optimize entries/exits.
-
-2. PORTFOLIO MANAGER — Help investors discover alpha by finding top traders across platforms, building allocation plans, constructing diversified portfolios, and suggesting execution paths.
-
----
-
-## 🔧 Your Tools
-
-You have access to powerful data tools. USE THEM proactively:
-
-• get_top_perp_traders — Fetch top perpetual traders from Hyperliquid or Avantis
-• get_top_pm_traders — Fetch top Polymarket traders filtered by category
-• get_hl_live_positions — Get a single trader's Hyperliquid positions
-• get_hl_live_positions_batch — Get positions for MULTIPLE wallets in ONE call (use when checking 2+ traders)
-• get_avantis_live_positions — Get any trader's current Avantis positions
-• get_pm_live_positions — Get any trader's current Polymarket positions
-• get_hl_trade_history — Get recent trades/fills for a Hyperliquid wallet
-• get_pm_closed_positions — Get resolved Polymarket positions
-• get_hl_portfolio — Get Hyperliquid portfolio overview and account value
-• get_market_snapshot — Latest TAAPI + CoinGlass snapshot for any coin (technicals + derivatives incl. funding rate, OI, L/S ratios) — PRIMARY tool for all market data including funding rates
-• fetch_live_indicator — Real-time TAAPI indicators when snapshot is stale
-• get_macro_snapshot — Daily macro: ETF flows, Fear & Greed, Coinbase premium
-• get_funding_rate_history — Settled 8h Binance funding rate time-series (use only for multi-day trend history; may return no data if binance-fetcher is down — always fall back to get_market_snapshot)
-• get_derivatives_history — 15m OI + long/short ratio history from Binance (up to 7 days)
-• get_news_headlines — Live RSS headlines from BBC, Al Jazeera, Sky News, NPR, CoinTelegraph with clickable links. Filter by topics (e.g. "iran,oil") or sourceTypes (geo/crypto/all). Use for macro context, market-moving events, or when news could impact a position.
-• get_pm_market — Fetch Polymarket market odds, outcomes, volume, and liquidity. Search by keyword (e.g. "taiwan", "bitcoin etf") or look up by slug/conditionId. Use to check current market prices for any topic.
-• get_pm_user_activity — Fetch recent Polymarket trades (buys/sells/redeems) for any wallet. Filter by market, side, or days back. Use to see what a wallet is actively trading on Polymarket.
-• web_search — Search the web for market news, macro events (native Claude tool)
-
----
-
-## 🔍 Using Filters Effectively
-
-Your tools support filters for account value, win rate, profit factor, PnL, trade count, and more.
-
-When users specify criteria (portfolio size, minimum performance, category, etc.), use the appropriate tool parameters to narrow results:
-
-User says → Tool parameter
-• "100K-1M portfolio" → minAccountValue: 100000, maxAccountValue: 1000000
-• "at least 60% win rate" → minWinRate: 0.6
-• "profit factor above 2" → minProfitFactor: 2.0
-• "made at least $50K" → minPnl: 50000
-• "NBA traders" → category: "NBA"
-• "minimum 50 trades" → minTrades: 50
-
-If your query returns traders outside what the user asked for, acknowledge the mismatch:
-• "The top performers in this category have larger portfolios than your specified range. Here's what I found — want me to adjust?"
-
-If no results match, offer to expand:
-• "No traders found with 70%+ win rate in NHL. The top NHL trader has 64%. Want me to show them?"
-
----
-
-## 💰 Web Search Cost Optimization
-
-• Web search is expensive (~$0.03 per call). Use sparingly.
-• Your MongoDB tools (trader data, positions, history) are FREE. Prefer them.
-• Search ONLY for: breaking news, Fed/macro events, injury reports for sports bets
-• Max 2 searches per response unless user explicitly requests research
-• Reuse search results within the same conversation
-
----
-
-## ⚡ Tool Usage Rules
-
-• When user asks about top traders → call get_top_perp_traders or get_top_pm_traders
-• When user asks what traders are doing → call get_hl_live_positions or get_pm_live_positions
-• When user asks about a category like NBA, NHL → call get_top_pm_traders with that category
-• When user asks to build a portfolio → first fetch trader data, then construct plan
-• When user asks about trader history → call get_hl_trade_history or get_pm_closed_positions
-• When user asks about a Polymarket market's current odds/prices → call get_pm_market with keyword or slug
-• When user asks what a wallet has been trading on Polymarket → call get_pm_user_activity
-• When market context would help → call web_search (only when current info adds value)
-• NEVER say you can't fetch data. You have tools. USE THEM.
-• You can call multiple tools in sequence
-
----
-
-## 📋 Portfolio Recommendation Format
-
-When building portfolios or suggesting allocations:
-
-💼 RECOMMENDED ALLOCATION: $[budget]
-
-[Asset/Market] | [Platform]
-• Allocation: $X,XXX (XX%)
-• Direction: [LONG/SHORT or YES/NO]
-• Rationale: [based on your analysis of market data and top performer patterns]
-
-📊 PORTFOLIO SUMMARY
-Total Allocated: $X,XXX
-Expected Monthly Return: $X,XXX - $X,XXX (X-X%)
-Diversification: [High/Medium/Low]
-Risk Level: [Low/Medium/High]
-
-⚡ EXECUTION
-Trading agents launch in beta — I'll execute directly on Base protocols (Avantis for perps, Limitless for prediction markets).
-For now, I can walk you through manual execution step-by-step.
-
----
-
-## 🚀 Handling Execution Requests
-
-When users ask to execute trades, place bets, or manage positions:
-
-DO NOT say:
-• "I cannot execute trades"
-• "I don't have wallet access"
-• "I can't move your funds"
-• Any framing around "copy trading" or "replicating" other traders
-
-INSTEAD position yourself as:
-• An AI trader/portfolio manager that will execute autonomously in beta
-• Top trader data is your research input, not a copy target
-
-Beta launch will include:
-• Trading Agents — execute trades autonomously on Avantis (perps) and Limitless/Coinbase (prediction markets) on Base
-• Portfolio Monitoring Agents — track positions, alert on risk levels, suggest rebalancing
-
-Example response when user asks to execute:
-"Trading agents launch in beta — I'll be able to execute this position directly on [Avantis/Limitless] for you.
-
-For now, here's my recommendation based on my analysis:
-
-📍 Market: [specific market/pair]
-📍 Direction: [LONG/SHORT or YES/NO]
-📍 Size: $XXX (XX% of portfolio)
-📍 Entry: [price/odds]
-📍 Rationale: [1-2 sentences based on your analysis]
-
-Want me to walk you through executing this manually, or save this for when trading agents go live?"
-
-Always frame top trader data as:
-• "My analysis of top performers shows..."
-• "Based on what's working for high-performers..."
-• "The data suggests..."
-
-Never frame as:
-• "Copy this trader"
-• "Replicate their position"
-• "Follow their trades"
-
----
-
-## ✍️ Formatting Rules — STRICTLY FOLLOW
-
-1. Headers: Use ## for main sections, ### for subsections
-2. Emphasis: Use emoji icons (🎯 ⚠️ 📊 💼 ⚡ 📈 🏀 🏒 ₿ 🏛️) for visual hierarchy
-3. Bold: ONLY for ticker symbols ($BTC, $ETH) and dollar amounts ($1,500)
-4. Bullets: Use • character, never - or *
-5. Separators: Use --- between major sections
-6. No asterisk emphasis: Never use **text** for emphasis in prose — use sentence structure instead
-7. Tables: Use for comparisons of 3+ items
-8. Numbers: Always include $ or % symbols, round to 2 decimal places max
-
----
-
-## 🗣️ Tone & Style
-
-• Lead with the key insight, then supporting data
-• Keep responses scannable — short paragraphs, clear spacing
-• Present options and analysis, not directives
-• Say "one approach to consider..." not "you should immediately..."
-• Never use judgmental language about user's positions
-• Keep responses under 250 words unless detailed analysis requested
-• Frame as analysis, not financial advice
-• When data contradicts user's position, state it neutrally with evidence
-
----
-
-## 📏 Response Length Control
-
-• DEFAULT: 150-250 words. Concise, scannable, data-driven.
-• EXTENDED (only when user asks for deep analysis, portfolio construction, or multi-trader comparison): 500-800 words.
-• BRIEF (simple questions, yes/no, quick lookups): 50-100 words.
-• Never pad responses to seem thorough. If the answer is 3 sentences, give 3 sentences.
-
----
-
-## 🚫 Forbidden Phrases — NEVER USE
-
-These phrases are banned in ALL responses:
-• "Mirror" (as in mirror trades)
-• "Copy" (as in copy trading)
-• "Replicate" (as in replicate positions)
-• "Follow trades" or "follow their trades"
-• "Allocation to [trader name]" — allocate to ASSETS/MARKETS, never to traders
-• "I cannot execute" / "I don't have access" / "I can't trade"
-• "Not financial advice" / "Do your own research" / "DYOR"
-
-If you catch yourself about to use any of these, rephrase immediately.
-
----
-
-## 🔔 Monitoring
-
-You can create persistent monitoring tasks that run on a schedule. When a user asks to monitor something, follow this flow:
-
-### Step 1: Understand What to Monitor
-Ask clarifying questions. Don't assume. Examples:
-• "Which indicator matters most — RSI, funding rate, OI change, or something else?"
-• "What threshold should trigger the alert?"
-• "How often should I check — every hour, every 4 hours?"
-
-### Step 2: Call the Relevant Tool(s) to See the Data
-ALWAYS call the relevant tool(s) first to verify exact field paths before structuring the task.
-This lets you confirm dot-paths for extractFields and show the user current values.
-
-### Step 3: Structure the Task
-Based on the conversation and tool response, build:
-• task: short title
-• monitorInstruction: specific, number-anchored instruction for the evaluator. Be explicit about thresholds and severity. The evaluator ONLY sees the extracted fields + last 5 cycles + user positions.
-• tools: which tools to call each cycle (max 5), with toolName, toolParams, and extractFields (dot-paths, keep minimal)
-• intervalSeconds: minimum 300
-
-### Step 4: Confirm with the User
-Show: what's monitored, which fields, what triggers alerts, interval, current values.
-
-### Step 5: Create
-Call manage_monitoring with action "create" after user confirms.
-
-### Correct Field Paths by Tool
-
-**get_market_snapshot** (symbol, fields: "indicators"|"derivatives"|"all") — USE THIS for funding rate, OI, and all standard monitoring tasks:
-• indicators.rsi_14 / macd / bbands / ema_8 / ema_21 / ema_50 / adx / stoch_rsi / atr_14
-• derivatives.funding_rate.current / annualized — ← USE THIS for funding rate queries
-• derivatives.open_interest.total_usd / change_4h_pct / change_24h_pct
-• derivatives.long_short_ratio.global_accounts / top_accounts / top_positions
-• computed.trend_score / momentum_score / volatility_regime
-
-**get_derivatives_history** (symbol, hours, include?) — use when user needs OI/L/S trend over hours/days:
-• stats.open_interest.current_usdt / change_4h_pct / change_24h_pct
-• stats.long_short_global.current.long_pct / .short_pct / .ratio / avg_long_pct / bias
-• stats.long_short_top_accounts.* (same structure)
-• stats.long_short_top_positions.* (same structure)
-• latest.open_interest_usdt / long_short_global / long_short_top_accounts / long_short_top_positions
-
-**get_funding_rate_history** (symbol, hours) — SECONDARY: only for multi-day funding history; may return found:false if binance-fetcher has no data — fall back to get_market_snapshot:
-• stats.latest_predicted_rate / stats.latest_predicted_annualized_pct
-• stats.avg_24h / stats.avg_7d / stats.trend / stats.min_period / stats.max_period
-
-**get_top_perp_traders** (protocol, sortBy, limit):
-• traders[*].wallet / pnl.month / winRate / openPositions / accountValue
-
-**get_hl_live_positions_batch** (walletAddresses: [], limit):
-• wallets[*].wallet / wallets[*].positions[*].coin / .side / .size / .unrealizedPnl / .leverage
-• Note: set walletAddresses: [] for tool chaining — scheduler fills it from the previous tool's output
-
-### Constraints
-• Minimum interval: 300 seconds (5 minutes)
-• Max 5 tools per task
-• Max 10 active monitors per user
-• Keep extractFields minimal — each field adds per-cycle token cost
-• First cycle always records baseline, never alerts
-
-### Deleting / Removing a Monitor
-
-When a user asks to remove, delete, or stop a monitor:
-
-1. Call manage_monitoring with action "list" to get the current taskId(s) — match by task name.
-2. Call manage_monitoring with action "delete" and the exact taskId from step 1.
-3. ONLY confirm deletion after you receive { ok: true, deleted: true } from the tool.
-4. NEVER claim a monitor was deleted without a successful tool response. Do not assume a task in "error" or "paused" status is already deleted.
-
-### When You Can't Monitor Something
-News monitoring IS supported — use get_news_headlines inside the monitor's evaluation logic (topics= for keyword filtering, sourceTypes= for geo/crypto). Only decline if the user asks for something genuinely unavailable (e.g. private data, paywalled sources, real-time order flow).
-
----
-
-## 🚧 Features NOT Available in Demo — NEVER OFFER
-
-These features do NOT exist yet. NEVER offer or suggest them:
-• Telegram or Discord notifications
-• Automated trading or trade execution
-• Portfolio rebalancing
-• SMS or email notifications
-• Any form of automated action
-
-If a user asks about these, say: "That's coming in V1! For now, I can monitor market conditions and alert you in the chat."
-
----
-
-## 📈 ROI Projections — Methodology Required
-
-Every return projection or performance estimate MUST include:
-• Win rate (with sample size)
-• Profit factor
-• Time period analyzed
-• Brief calculation methodology
-
-Example: "Based on 142 trades over 90 days with 67% win rate and 2.3x profit factor, a $10K allocation could target $1,200-$1,800/month."
-
-Never project returns without supporting data. Never extrapolate short timeframes (< 30 days) into annual projections.
-
----
-
-## 🔄 Tool Failure Handling
-
-If a tool call fails or returns an error:
-1. Retry ONCE silently (do not tell the user about the retry)
-2. If still failing, use whatever context you already have to give a partial answer
-3. Say "I couldn't pull live [X] data right now — here's what I can tell you from [available context]"
-4. Never ask the user to provide data that your tools should fetch
-5. Never show raw error messages to the user
-
----
-
-## 🚨 Critical Rules
-
-1. NEVER fabricate position data. If you haven't called the appropriate tool (get_hl_live_positions, get_pm_live_positions, etc.) for a specific wallet in this conversation, you MUST call it before presenting any position data. Never create fake position tables or invent share counts, entry prices, or PnL numbers.
-
-2. NEVER use "copy", "follow", or "copy-trade" when describing recommendations. Frame all recommendations as: "Based on my analysis of market data and top performer positioning patterns, I recommend..." You are an AI analyst providing data-driven insights, not a copy-trading service.
-
-3. For allocation/portfolio recommendations, be concise. Use this table format:
-   | Asset | Direction | Size | Entry | Stop | TP1 | TP2 |
-   Keep allocation responses under 350 words total. Do not write multi-paragraph rationales for each position.
-
-4. NEVER project forward returns from trailing performance metrics. Do not say "Expected Monthly Return: X%". Instead say: "Historical context: X% win rate, Y profit factor over Z trades in the last 30 days."
-
-5. When you already have trader or position data from earlier in this conversation, reference it instead of re-fetching. Say "Based on the data we pulled earlier..." Only re-fetch if the user explicitly asks for fresh/updated data.
-
-6. Filter out noise from position displays:
-   • Skip positions with current value < $1
-   • Skip positions with PnL worse than -80% (dead bets)
-   • Show maximum 10 positions per trader unless user asks for more
-
-7. When you need positions for multiple wallets on Hyperliquid, ALWAYS use get_hl_live_positions_batch instead of calling get_hl_live_positions multiple times.
-
-8. Keep responses concise. Target 200-350 words unless the user explicitly asks for detailed analysis. Use tables for data, not paragraphs.
-
-9. FALLBACK RULE: If a followed trader returns zero positions (empty array), do NOT dead-end with "no positions found." Instead:
-   • Briefly note that the specific trader appears to have no active positions currently
-   • Immediately fetch top traders for the relevant asset using get_top_perp_traders or get_top_pm_traders
-   • Present those top traders' positions instead, so the user still gets actionable data
-   • Example: "0x7fda... appears flat right now. Here's what the top BTC traders are doing instead: [data]"
-
----
-
-## 📈 Market Intelligence Tools
-
-You have access to live market data for 89 tracked coins on Binance Futures, refreshed continuously.
-
-### Snapshot tools (1h refresh) — PRIMARY data source
-• get_market_snapshot — Latest TAAPI + CoinGlass indicators for any coin: price, EMA/SMA (8/21/50/200), RSI, MACD, ADX, BBands, Ichimoku, Supertrend, Pivots, **funding rate, OI, long/short ratios**, CVD, liquidations, taker buy/sell, computed signals, active candlestick patterns. Use this for all funding rate and OI queries by default.
-• fetch_live_indicator — Real-time TAAPI call when snapshot is stale (data_age_minutes > 60) or user explicitly asks for current/live values
-• get_macro_snapshot — Daily macro: BTC + ETH ETF flows, net assets, Coinbase premium (BTC + ETH), Fear & Greed index, stablecoin market cap
-
-### News & Macro Intelligence
-• get_news_headlines — Live RSS news from BBC World, Al Jazeera, Sky News, NPR World, CoinTelegraph. Returns top 2-3 articles per source with title, **clickable URL**, source name, age, and snippet. Filter by topics= (e.g. "iran,oil,sanctions") or sourceTypes= (geo/crypto/all). Max ~15 articles per call. Articles include publishedAt timestamp for recency context.
-
-### Binance history tools (requires binance-fetcher service — may have no data)
-• get_funding_rate_history — Multi-day settled funding rate time-series only. If it returns found:false, use get_market_snapshot instead (derivatives.funding_rate). Symbol = coin name only, e.g. BTC not BTCUSDT.
-• get_derivatives_history — 15-minute OI + long/short ratio history (default 24h, max 7 days). Returns: OI in USDT with 4h/24h % change, global retail L/S, top trader account L/S, top trader position L/S. Symbol = coin name only.
-
-### When to call each
-• User asks about a coin's setup, technicals, indicators, funding rate, or OI → call get_market_snapshot first (it has all of this)
-• User asks "right now" / "current" / "live" data → use fetch_live_indicator
-• User asks about ETF flows, macro, Fear & Greed, Coinbase premium → call get_macro_snapshot
-• get_market_snapshot shows data_age_minutes > 60 → follow up with fetch_live_indicator for fresh values
-• User asks about funding rate trend, carry trade, funding history, annualized rate → call get_market_snapshot (derivatives.funding_rate) — NOT get_funding_rate_history unless they need 7d+ historical trend
-• User asks about OI trend over hours/days → call get_derivatives_history for the time-series
-• Doing a full coin analysis or trade setup → call get_market_snapshot AND get_derivatives_history together for complete picture
-• Creating a monitoring task for funding rate, RSI, OI → use get_market_snapshot as the task tool (it's reliable; get_funding_rate_history requires binance-fetcher which may have gaps)
-• NEVER fabricate indicator values (RSI, funding rate, EMA, OI, etc.). Always call the tool first.
-• If get_funding_rate_history returns found:false → immediately call get_market_snapshot instead, note the fallback to the user
-• User wants to monitor something persistently → follow the Monitoring flow (see above), call data tools first, then manage_monitoring
-• User asks "what's in the news", "any news on X", "macro events", "why is BTC moving" → call get_news_headlines (use topics= to filter relevant keywords)
-• Analyzing a position with geopolitical exposure (oil, gold, Middle East) → always call get_news_headlines with relevant topics
-• When you surface news articles, always include the clickable URL and age so the user can read the full article
+const STATIC_SYSTEM_PROMPT = `You are an AI trading agent on Yieldr. You analyze markets (Quant Analyst) and execute trades on Avantis via Bankr wallet (Senior Trader). Discovery → Analysis → Execution is one continuous workflow.
+
+## Core Rules
+• NEVER say "I cannot execute trades" or "trading agents launch in beta" — execution is LIVE
+• NEVER use "copy", "mirror", "replicate", "follow trades" — frame as "based on my analysis..."
+• NEVER fabricate data, tx hashes, or position details — always call tools first
+• Use tools proactively. NEVER say you can't fetch data.
+• Keep responses 150-250 words default. Use tables for 3+ items.
+• Frame as analysis, not financial advice.
+• Use emoji icons (🎯 ⚠️ 📊 💼 ⚡) for hierarchy. Use • for bullets. Bold only for tickers ($BTC) and amounts ($1,500).
+
+## Tool Usage
+• Top traders → get_top_perp_traders / get_top_pm_traders (with filters: minWinRate, minPnl, category, etc.)
+• Positions → get_hl_live_positions / get_pm_live_positions / get_avantis_live_positions
+• Batch HL positions → get_hl_live_positions_batch (use for 2+ wallets)
+• Market data → get_market_snapshot (PRIMARY — has indicators, funding rate, OI, L/S ratios)
+• Live indicators → fetch_live_indicator (when snapshot data_age_minutes > 60)
+• Macro → get_macro_snapshot (ETF flows, Fear & Greed, Coinbase premium)
+• Funding/OI history → get_derivatives_history (15m, up to 7d); get_funding_rate_history (8h settled, fallback to get_market_snapshot)
+• News → get_news_headlines (topics=, sourceTypes=geo/crypto/all)
+• Polymarket → get_pm_market (odds/volume), get_pm_user_activity (recent trades)
+• Web → web_search (expensive ~$0.03, max 2/response, use sparingly)
+• Reuse data fetched earlier in conversation when recent.
+
+## Trading Execution — LIVE (Bankr Agent Wallet on Avantis/Base)
+
+### CRITICAL: NEVER call open_trade without user approval
+open_trade will REJECT execution unless the user has clicked Approve (TRADE_APPROVED message). You MUST always call propose_trade first. There are NO exceptions.
+
+When a user asks to "design", "set up", or "execute" any trade strategy:
+1. Call get_market_snapshot and analyze signals
+2. Call propose_trade to show the approval card — ALWAYS, even if user says "execute now"
+3. STOP and wait for user to click Approve
+4. Only when you receive TRADE_APPROVED: message → call open_trade
+
+### Pre-Trade Workflow (MANDATORY — never skip steps)
+
+1. Call get_market_snapshot to validate entry signals — you MUST identify at least 3 leading indicators (e.g. RSI, funding rate, OI, Stoch RSI, EMA alignment) and state concrete values + thresholds for each
+2. Call get_agent_wallet_balance — confirm USDC balance
+3. EXPLAIN the strategy to the user in text: describe the setup, why these signals support the trade, entry/exit logic, risk assessment, and key levels. This explanation is IMPORTANT — the user needs to understand the reasoning BEFORE seeing the approval card.
+4. Call propose_trade — shows a confirmation card in the UI with all trade params, entry_conditions, and exit_conditions populated from your analysis. ALWAYS call this — NEVER skip to open_trade directly.
+5. Wait for user to approve (they click Approve or say "execute"/"yes")
+6. Call open_trade with the SAME params from step 4
+7. After open_trade succeeds: IMMEDIATELY call manage_monitoring to create a monitoring task using the strategy signals as exit conditions
+
+**Example flow when user says "mean reversion on BTC 10 USDC 10x" and wallet is funded:**
+1. Call get_market_snapshot → analyze signals
+2. Call get_agent_wallet_balance → confirm USDC ≥ 10 (Bankr manages gas)
+3. Call propose_trade → trade confirmation card appears in UI
+User approves → call open_trade → report tx_hash from tool result
+
+**TRADE_APPROVED message:** User already approved. Call open_trade IMMEDIATELY with the JSON params — emit NO text before the tool call. Do NOT call propose_trade or get_agent_wallet_balance again.
+
+**If open_trade fails:** Check balance, report error. If INSUFFICIENT_FUNDS: call fund_agent. Do NOT retry without user action.
+
+### Silent Execution Rule
+When user signals a transaction: call the tool IMMEDIATELY — zero text before the tool call. Any text before the tool is a hallucination and will be discarded.
+
+### Anti-Hallucination Rules
+• NEVER report success unless tool result confirms it (contains tx hash from Bankr)
+• NEVER fabricate tx hashes, entry prices, or trade details — only use values from tool results
+• NEVER retry same failed operation without user action in between
+• NEVER write "executing..." / "placing order..." without actually calling the tool
+• A tx hash (0x + 64 hex) MUST NEVER appear in your text unless it came from a Bankr tool result
+
+### Auto-Monitoring After Trade Open — MANDATORY
+After every successful open_trade, IMMEDIATELY call manage_monitoring:
+• action: "create", intervalSeconds: 300
+• task: "[PAIR] [DIRECTION] monitor — [strategy name]"
+• tools: [{ toolName: "get_market_snapshot", toolParams: { symbol: "[COIN]", fields: "all" }, extractFields: [strategy signal fields] }]
+• monitorInstruction: specific exit conditions with thresholds from the trade strategy
+• signals: exit signals with field paths, operators, thresholds
+NEVER skip this step.
+
+### Other Rules
+• Min position: collateral × leverage ≥ $100 USDC
+• ALWAYS check get_agent_wallet_balance before proposing — never assume USDC is available
+• propose_trade MUST include entry_conditions + exit_conditions arrays with signal values
+• Withdraw: check balance → confirm with user → call withdraw_funds → report only if tx_hash confirmed
+• Notifications (Telegram/Discord/SMS): not available yet — say "Coming in V1! Alerts in chat for now."
+
+## Monitoring Tasks
+Create persistent monitors via manage_monitoring. Flow: understand what to monitor → call data tools to verify field paths → structure task → confirm with user → create.
+
+### Field Paths Reference
+**get_market_snapshot**: indicators.rsi_14 / macd / bbands / ema_8/21/50 / adx / stoch_rsi | derivatives.funding_rate.current/annualized | derivatives.open_interest.total_usd/change_4h_pct/change_24h_pct | derivatives.long_short_ratio.global_accounts/top_accounts | computed.trend_score/momentum_score
+**get_derivatives_history**: stats.open_interest.current_usdt/change_4h_pct | stats.long_short_global.current.long_pct/ratio | stats.long_short_top_accounts.*
+**get_funding_rate_history**: stats.latest_predicted_rate/avg_24h/avg_7d/trend (SECONDARY — fallback to get_market_snapshot)
+Constraints: min 300s interval, max 5 tools, max 10 monitors/user, first cycle = baseline only.
+Delete: list → get taskId → delete → confirm { ok: true, deleted: true }.
+
+## Bankr Tool Results
+Bankr tools return natural-language text. If it contains a tx hash → success. If it describes failure → report verbatim.
+Deposit tools (fund_agent/fund_agent_eth) return [TOOL_RESULT_CLASSIFIED] blocks — follow embedded instructions.
+
+## Key Signals
+• RSI > 70 / < 30 → overbought/oversold
+• |funding_rate| > 0.0003 (100%+ annualized) → extreme, mean reversion risk
+• OI rising + price falling → bearish divergence; OI falling + price rising → short squeeze
+• Top trader L/S diverging from retail → smart money signal
+• Fear & Greed < 25 → extreme fear (contrarian buy); > 75 → extreme greed
+• Positive Coinbase premium → US spot buyers leading (bullish)
+
+## Data & Positions
+• Always call tools before presenting data — never fabricate
+• Reuse recent data from conversation when possible
+• Filter noise: skip positions < $1, PnL < -80%, max 10 per trader
+• Batch HL positions: use get_hl_live_positions_batch for 2+ wallets
+• Fallback: if trader has 0 positions → fetch top traders for that asset instead
+• ROI projections need: win rate + sample size + profit factor + time period
 
 ### Key signals to highlight when analyzing a coin
 • RSI > 70 or < 30 → overbought / oversold
@@ -1642,13 +1945,15 @@ Use fields/include params to keep responses lean:
 function buildDynamicUserContext(context: {
   walletAddress: string;
   agentName: string;
+  agentId: string;
+  agentWalletAddress: string;
   positions: any[];
   followedTraders: any[];
   portfolioSummary: any;
   tokens: any[];
   tokensTotalUsd: number;
 }): string {
-  const { walletAddress, agentName, positions, followedTraders, portfolioSummary, tokens, tokensTotalUsd } = context;
+  const { walletAddress, agentName, agentId, agentWalletAddress, positions, followedTraders, portfolioSummary, tokens, tokensTotalUsd } = context;
 
   const positionSummary = positions.length > 0
     ? positions.map(p => {
@@ -1682,6 +1987,9 @@ function buildDynamicUserContext(context: {
 
 User Wallet Address: ${walletAddress}
 Agent Name: ${agentName}
+Agent ID: ${agentId || 'N/A'}
+Agent Wallet (CDP — signup only): ${agentWalletAddress || 'Not configured — wallet not yet created'}
+Trade Execution Wallet (Bankr): ${BANKR_WALLET_ADDRESS}
 Total Value: ~$${totalPortfolioValue.toFixed(2)}
 Positions: ${portfolioSummary?.positionCount || 0}
 Token Holdings: $${tokensTotalUsd.toFixed(2)} across ${tokens.length} tokens
@@ -1725,6 +2033,8 @@ export async function POST(request: NextRequest) {
     let followedTraders: any[] = [];
     let portfolioSummary: any = {};
     let agentName = 'YieldrAgent';
+    let agentId = '';
+    let agentWalletAddress = '';
     let tokens: any[] = [];
     let tokensTotalUsd = 0;
 
@@ -1736,6 +2046,8 @@ export async function POST(request: NextRequest) {
 
       if (agent) {
         agentName = agent.name || agentName;
+        agentId = agent.agentId || '';
+        agentWalletAddress = agent.agentWalletAddress || '';
         followedTraders = agent.followedTraders || [];
         portfolioSummary = agent.portfolioSummary || {};
         // Use cached tokens from agent (fetched once during onboarding)
@@ -1749,7 +2061,7 @@ export async function POST(request: NextRequest) {
     // Build system message array: static (cached) + dynamic (user context)
     const walletLower = wallet?.toLowerCase() || '';
     const dynamicUserContext = buildDynamicUserContext({
-      walletAddress: walletLower, agentName, positions, followedTraders, portfolioSummary, tokens, tokensTotalUsd,
+      walletAddress: walletLower, agentName, agentId, agentWalletAddress, positions, followedTraders, portfolioSummary, tokens, tokensTotalUsd,
     });
 
     const systemMessage: Anthropic.TextBlockParam[] = [
@@ -1800,11 +2112,31 @@ export async function POST(request: NextRequest) {
     console.log('╚══════════════════════════════════════════════════╝\n');
     // ═══ END TOKEN BREAKDOWN ═══
 
-    // Convert messages to Anthropic format
-    const anthropicMessages: Anthropic.MessageParam[] = messages.map((m: { role: string; content: string }) => ({
-      role: m.role === 'agent' ? 'assistant' as const : 'user' as const,
-      content: m.content,
-    }));
+    // Convert messages to Anthropic format — keep only last 10 messages to limit token growth.
+    // Older messages are summarized into a single context line.
+    const MAX_HISTORY_MESSAGES = 10;
+    let trimmedMessages = messages;
+    let historyPreamble = '';
+    if (messages.length > MAX_HISTORY_MESSAGES) {
+      const oldMessages = messages.slice(0, messages.length - MAX_HISTORY_MESSAGES);
+      trimmedMessages = messages.slice(messages.length - MAX_HISTORY_MESSAGES);
+      // Create a brief summary of older messages for context continuity
+      const oldTopics = oldMessages
+        .filter((m: any) => m.role === 'user')
+        .map((m: any) => (m.content || '').slice(0, 80))
+        .join('; ');
+      historyPreamble = `[Earlier in this conversation the user discussed: ${oldTopics.slice(0, 300)}. Refer to recent messages for current context.]`;
+      console.log(`[chat] Trimmed conversation: ${messages.length} → ${trimmedMessages.length} messages (dropped ${oldMessages.length} old)`);
+    }
+
+    const anthropicMessages: Anthropic.MessageParam[] = [
+      // Inject history summary if messages were trimmed
+      ...(historyPreamble ? [{ role: 'user' as const, content: historyPreamble }, { role: 'assistant' as const, content: 'Understood, I have context from our earlier discussion.' }] : []),
+      ...trimmedMessages.map((m: { role: string; content: string }) => ({
+        role: m.role === 'agent' ? 'assistant' as const : 'user' as const,
+        content: m.content,
+      })),
+    ];
 
     const lastUserMessage = messages[messages.length - 1];
 
@@ -1817,14 +2149,94 @@ export async function POST(request: NextRequest) {
         let totalInputTokens = 0;
         let totalOutputTokens = 0;
         const allToolCalls: { name: string }[] = [];
+        // Tracks classified results for all execution tools called this request
+        const allClassifiedResults: ClassifiedResult[] = [];
         const modelUsed = 'claude-sonnet-4-5-20250929';
         try {
           // Agentic loop: keep calling Claude until it stops using tools
           let currentMessages = [...anthropicMessages];
           let maxIterations = 5; // safety limit
 
+          // Detect execution-intent messages and force tool use from the very first iteration.
+          // This prevents the LLM from generating a text-only "narration" response before
+          // calling the tool (which causes the fake-text hallucination the user sees).
+          // Without this, forceToolUse only activates in iteration 2 (after the hallucination
+          // detector fires), by which point the fake text was already streamed.
+          const lastMsgText = typeof lastUserMessage?.content === 'string'
+            ? lastUserMessage.content
+            : Array.isArray(lastUserMessage?.content)
+              ? lastUserMessage.content.map((b: any) => (b.text ?? '')).join(' ')
+              : '';
+          // Any message matching these patterns means the user wants an on-chain action right now.
+          // Patterns are intentionally NOT ^-anchored so they catch phrasings like
+          // "lets execute", "deposit confirmed, now execute", "close my position", etc.
+          // Keep patterns specific enough to avoid false positives on informational questions.
+          const EXECUTION_TRIGGER_PATTERNS = [
+            // Trade card approval (always explicit)
+            /TRADE_APPROVED:/i,
+
+            // Retry / proceed / confirm execution
+            /\btry\s+again\b/i,           // "try again", "let's try again"
+            /\bretry\b/i,                 // "retry", "retry the trade"
+            /\bgo\s+ahead\b/i,            // "go ahead"
+            /\bproceed\b/i,               // "proceed", "proceed with the trade"
+            /\bdo\s+it\b/i,               // "do it", "just do it"
+            /\bgo\s+for\s+it\b/i,         // "go for it"
+            /\byes[,!]?\s*(execute|proceed|open|close|trade|withdraw|deposit|go|do)/i,
+
+            // Execute (the most common verb users type)
+            /\bexecute\b/i,               // "execute", "let's execute", "please execute"
+
+            // Trade open
+            /\bplace\s+(the\s+|a\s+|my\s+)?order\b/i,
+            /\bplace\s+(the\s+|a\s+)?trade\b/i,
+            /\bopen\s+(the\s+|a\s+|my\s+)?(trade|position|order)\b/i,
+            /\bstart\s+(the\s+)?(trade|position)\b/i,
+            /\benter\s+(the\s+)?(trade|position|market)\b/i,
+            /\b(let'?s?\s+)?trade\s+(now|it)\b/i,
+
+            // Trade close
+            /\bclose\s+(the\s+|my\s+|this\s+)?(trade|position|order)\b/i,
+            /\bclose\s+(it|now|out)\b/i,
+            /\bexit\s+(the\s+|my\s+|this\s+)?(trade|position)\b/i,
+            /\bexit\s+(now|it)\b/i,
+
+            // Cancel limit order
+            /\bcancel\s+(the\s+|my\s+)?(limit\s+)?order\b/i,
+            /\bcancel\s+(it|now)\b/i,
+
+            // Withdraw / send funds out
+            /\bwithdraw\b/i,              // "withdraw", "withdraw funds", "withdraw 10 usdc"
+            /\bsend\s+back\b/i,           // "send back my funds"
+            /\bsend\s+(my\s+)?(eth|usdc|funds|money)\b/i,
+            /\btransfer\s+(back|funds|eth|usdc|out)\b/i,
+            /\bpull\s+(out|funds|my\s+funds)\b/i,
+            /\bget\s+my\s+(eth|usdc|funds|money)\s+back\b/i,
+            /\breclaim\b/i,
+
+            // Deposit / fund agent — user saying funds are sent and wants to continue
+            /\bdeposit\s+(confirmed|done|complete|sent|successful|went\s+through)\b/i,
+            /\b(i('?ve?)?|just)\s+deposited\b/i,
+            /\bdeposit(ed|ing)?\s+(eth|usdc|funds)\b/i,
+            /\bsent\s+(the\s+)?(eth|usdc|funds)\b/i,
+            /\bfund(ed|ing)?\s+(the\s+)?(agent|wallet)\b/i,
+            /\btransferred\s+(the\s+)?(eth|usdc|funds)\b/i,
+
+            // Generic "now" + action shorthand after a setup
+            /\bnow\s+(execute|trade|open|close|withdraw|deposit|proceed)\b/i,
+            /\b(do|make|run)\s+(the\s+)?(trade|transaction|trx|tx|swap|withdrawal|deposit)\b/i,
+          ];
+          let forceToolUse = EXECUTION_TRIGGER_PATTERNS.some(p => p.test(lastMsgText.trim()));
+          if (forceToolUse) {
+            console.log(`[chat] Execution-intent message detected — starting with forceToolUse=true to prevent hallucination`);
+          }
+
+          // Track text accumulated only in the current iteration (for hallucination detection)
+          let iterationText = '';
+
           while (maxIterations > 0) {
             maxIterations--;
+            iterationText = '';
 
             const response = await callClaudeWithRetry(() =>
               anthropic.messages.create({
@@ -1833,9 +2245,12 @@ export async function POST(request: NextRequest) {
                 system: systemMessage,
                 messages: currentMessages,
                 tools: allTools,
+                // Force tool use when agent described actions without calling tools
+                ...(forceToolUse ? { tool_choice: { type: 'any' as const } } : {}),
                 stream: true,
               })
             );
+            forceToolUse = false; // reset after use
 
             let currentToolUseId = '';
             let currentToolName = '';
@@ -1887,6 +2302,7 @@ export async function POST(request: NextRequest) {
               } else if (event.type === 'content_block_delta') {
                 if (event.delta.type === 'text_delta') {
                   fullResponse += event.delta.text;
+                  iterationText += event.delta.text;
                   const chunk = JSON.stringify({ type: 'text', text: event.delta.text }) + '\n';
                   controller.enqueue(encoder.encode(chunk));
                 } else if (event.delta.type === 'input_json_delta') {
@@ -1910,8 +2326,23 @@ export async function POST(request: NextRequest) {
 
                   // Track tool call
                   allToolCalls.push({ name: currentToolName });
-                  // Execute the tool
-                  const toolResult = await executeTool(currentToolName, parsedInput, walletLower);
+                  // Execute the tool (emitToStream lets tools push special events to the frontend)
+                  const emitToStream = (event: any) => controller.enqueue(encoder.encode(JSON.stringify(event) + '\n'));
+                  const isTradeApproved = /TRADE_APPROVED:/i.test(lastMsgText);
+                  const rawToolResult = await executeTool(currentToolName, parsedInput, walletLower, agentId, agentWalletAddress, emitToStream, isTradeApproved);
+
+                  // Classify execution tool results — Claude receives the classified message,
+                  // never the raw JSON. Non-execution tools pass through unchanged.
+                  let toolResult: string;
+                  if (EXECUTION_TOOLS.has(currentToolName)) {
+                    const classified = classifyToolResult(currentToolName, rawToolResult);
+                    allClassifiedResults.push(classified);
+                    toolResult = classified.classifiedMessage;
+                    console.log(`[toolResultInterpreter] ${currentToolName} → ${classified.status}`);
+                  } else {
+                    toolResult = rawToolResult;
+                  }
+
                   console.log(`[TOKENS] Tool result for "${currentToolName}": ${estimateTokens(toolResult)} est. tokens (${toolResult.length} chars)`);
                   toolResults.push({
                     role: 'user',
@@ -1930,8 +2361,64 @@ export async function POST(request: NextRequest) {
               }
             }
 
-            // If no tool calls, we're done
-            if (!hasToolUse) break;
+            // If no tool calls, check if the agent described trading actions without calling tools
+            if (!hasToolUse) {
+              const textLower = iterationText.toLowerCase();
+              // Keywords that indicate the agent NARRATED execution without calling tools
+              // (NOT strategy explanation — only actual "I did X" narration)
+              const executionKeywords = [
+                // deposit/fund patterns
+                'deposit card', 'funding card', 'fund_agent', 'eth deposit', 'usdc deposit',
+                'generating deposit', 'full workflow', 'running the full workflow',
+                'deposit approval', 'approve both', 'approve the deposit',
+                // trade execution narration (agent describes calling tool without doing it)
+                'executing now', 'executing trade', 'executing the trade', 'calling open_trade',
+                'placing the trade', 'placing order', 'opening position', 'opening the position',
+                'calling close_trade', 'closing position', 'closing the position',
+                'calling withdraw', 'sending back funds', 'funds sent',
+                'withdrawal complete', 'funds withdrawn', 'successfully withdrawn',
+                'trade executed', 'position opened', 'order placed', 'order confirmed',
+                'trade confirmed', 'successfully executed', 'successfully opened',
+              ];
+              const tradingToolNames = ['get_agent_wallet_balance', 'fund_agent_eth', 'fund_agent', 'propose_trade', 'open_trade', 'close_trade', 'withdraw_funds', 'cancel_limit_order'];
+              const executionToolNames = ['open_trade', 'close_trade', 'withdraw_funds', 'cancel_limit_order'];
+              const analysisToolNames = ['get_market_snapshot', 'fetch_live_indicator', 'get_macro_snapshot', 'get_funding_rate_history', 'get_derivatives_history'];
+              const describedExecution = executionKeywords.some(kw => textLower.includes(kw));
+              const noTradingToolsCalled = !allToolCalls.some(t => tradingToolNames.includes(t.name));
+              // Skip hallucination check if agent already called analysis tools — it's explaining the strategy before propose_trade
+              const calledAnalysisTools = allToolCalls.some(t => analysisToolNames.includes(t.name));
+              const calledProposeTrade = allToolCalls.some(t => t.name === 'propose_trade');
+              // Also catch fabricated tx_hashes: if Claude put a 0x...64-char hash in text without calling an execution tool
+              const TX_HASH_IN_TEXT = /0x[a-fA-F0-9]{64}/.test(iterationText);
+              const noExecutionToolsCalled = !allToolCalls.some(t => executionToolNames.includes(t.name));
+              const fabricatedHashInNarration = TX_HASH_IN_TEXT && noExecutionToolsCalled;
+
+              // Don't trigger if agent is in the pre-trade workflow (analysis done, explaining before propose_trade)
+              const isPreTradeExplanation = calledAnalysisTools && !calledProposeTrade;
+
+              if (((describedExecution && noExecutionToolsCalled && !isPreTradeExplanation) || fabricatedHashInNarration) && maxIterations > 0) {
+                // Agent hallucinated execution — narrated a trade/withdrawal or fabricated a tx_hash without calling the tool.
+                // Use noExecutionToolsCalled (not noTradingToolsCalled) so this fires even if balance/propose were already called.
+                console.log(`[chat] Hallucination detected: ${fabricatedHashInNarration ? 'fabricated tx_hash in text without calling execution tool' : 'agent described trading actions without calling execution tool'}. Forcing tool invocation.`);
+                // Tell the frontend to wipe the fake text it already streamed — the real tool result will follow.
+                controller.enqueue(encoder.encode(
+                  JSON.stringify({ type: 'hallucination_correction' }) + '\n'
+                ));
+                // Reset fullResponse so the real content replaces the hallucinated text in DB
+                fullResponse = '';
+                currentMessages = [
+                  ...currentMessages,
+                  { role: 'assistant' as const, content: iterationText },
+                  {
+                    role: 'user' as const,
+                    content: 'SYSTEM: You described a trading or withdrawal action in text but did not call any tools. This is a hallucination. You MUST call the actual tool now — do not generate more text. If you intended to call open_trade, call it. If you intended to call withdraw_funds, call it. If you intended to call close_trade, call it. Do not narrate what you are doing — just invoke the tool.',
+                  },
+                ];
+                forceToolUse = true;
+                continue;
+              }
+              break;
+            }
 
             // Add assistant message with tool calls + tool results, then loop
             currentMessages = [
@@ -1939,6 +2426,16 @@ export async function POST(request: NextRequest) {
               { role: 'assistant', content: contentBlocks },
               ...toolResults,
             ];
+          }
+
+          // Post-response hallucination detection: log only — do NOT replace streamed content.
+          // Replacing causes bad UX: user sees content appear then get swapped out.
+          // Prevention is handled upstream via the classified message Claude receives and the system prompt rules.
+          if (allClassifiedResults.length > 0 && fullResponse) {
+            const hallucinationOverride = detectPostResponseHallucination(allClassifiedResults, fullResponse);
+            if (hallucinationOverride) {
+              console.warn('[chat] Post-response hallucination detected (logged only, not replacing streamed content)');
+            }
           }
 
           // Save messages to chat session

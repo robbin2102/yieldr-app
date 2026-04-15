@@ -38,6 +38,9 @@ export interface IPosition extends Document {
   apr?: number;
   unclaimedFees?: number;
 
+  // Agent wallet that holds the position (for agent-executed trades)
+  agentWallet?: string;
+
   // Metadata
   createdAt: Date;
   updatedAt: Date;
@@ -99,6 +102,9 @@ const PositionSchema: Schema = new Schema(
     token1: String,
     apr: Number,
     unclaimedFees: Number,
+
+    // Agent wallet (for agent-executed trades via Bankr)
+    agentWallet: { type: String, lowercase: true },
 
     // Metadata
     createdAt: {

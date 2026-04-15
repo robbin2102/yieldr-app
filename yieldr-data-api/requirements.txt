@@ -1,8 +1,8 @@
 # === Core FastAPI ===
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
-pydantic==2.5.0
-pydantic-settings==2.1.0
+pydantic==2.10.4
+pydantic-settings==2.7.1
 
 # === Database ===
 motor==3.3.2
@@ -11,14 +11,16 @@ pymongo==4.6.0
 # === HTTP Client ===
 httpx==0.25.1
 
-# === Data Processing (for later parts) ===
-pandas==2.0.3
-numpy==1.24.3
-# pandas-ta will be added in Part 4 when needed
-
 # === Utilities ===
 python-dotenv==1.0.0
 
 # === Avantis Trade Execution ===
 avantis-trader-sdk==0.8.16
 web3==6.20.4
+
+# === CDP Per-Agent Wallet Signing ===
+# cdp-sdk is incompatible with avantis-trader-sdk: both pin conflicting web3 versions
+# (cdp-sdk requires web3>=7.6.0, avantis-trader-sdk requires web3<7).
+# CDP signing is implemented via lazy imports in router.py with LocalSigner fallback.
+# Re-add cdp-sdk here once avantis-trader-sdk supports web3>=7.
+# cdp-sdk>=1.0.0

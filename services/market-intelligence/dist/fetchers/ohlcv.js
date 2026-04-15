@@ -6,7 +6,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.fetchAndStoreOhlcv = fetchAndStoreOhlcv;
 exports.getLatestOhlcv = getLatestOhlcv;
 /**
- * Fetches 15-minute OHLCV candles from TAAPI /bulk (binance spot exchange)
+ * Fetches 15-minute OHLCV candles from TAAPI /bulk (binancefutures exchange)
  * and upserts them into the ohlcv_15m collection.
  *
  * Called on the OHLCV cron schedule (:03, :18, :33, :48).
@@ -30,7 +30,7 @@ function sleep(ms) {
 }
 async function postBulkCandles(coins) {
     const constructs = coins.map(sym => ({
-        exchange: 'binance', // spot exchange (not binancefutures) for OHLCV
+        exchange: config_1.config.taapi.exchange, // binancefutures — matches TAAPI subscription
         symbol: `${sym}/USDT`,
         interval: '15m',
         indicators: [{ indicator: 'candle', id: `candle_${sym}` }],
@@ -53,7 +53,14 @@ async function postBulkCandles(coins) {
                 const text = await res.text();
                 throw new Error(`TAAPI ${res.status}: ${text.slice(0, 200)}`);
             }
-            return parseCandleResponse(await res.json(), coins);
+            const json = await res.json();
+            if (json.errors || json.error) {
+                logger_1.logger.warn('OHLCV', `TAAPI bulk response contains errors: ${JSON.stringify(json.errors ?? json.error).slice(0, 300)}`);
+            }
+            if (!json.data) {
+                logger_1.logger.warn('OHLCV', `TAAPI bulk response missing data field — keys: ${Object.keys(json).join(', ')}`);
+            }
+            return parseCandleResponse(json, coins);
         }
         catch (err) {
             if (attempt === 4)

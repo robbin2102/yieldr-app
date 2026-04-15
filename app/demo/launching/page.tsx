@@ -31,6 +31,7 @@ export default function LaunchingPage() {
     { id: 3, text: 'Scanning positions', status: 'pending', visible: false },
     { id: 4, text: 'Detecting tokens', status: 'pending', visible: false },
     { id: 5, text: 'Following top traders', status: 'pending', visible: false },
+    { id: 6, text: 'Creating agent wallet', status: 'pending', visible: false },
   ]);
 
   const [portfolioValue, setPortfolioValue] = useState(0);
@@ -132,8 +133,31 @@ export default function LaunchingPage() {
     };
   }, []);
 
-  // Save positions to MongoDB - both /api/positions (production) and /api/demo/agents (agent record)
-  const saveData = useCallback(async (walletAddress: string, data: any) => {
+  // Step 1 of 2: Create agent in DB + provision CDP wallet. Returns agentWalletAddress or null.
+  const createAgent = useCallback(async (walletAddress: string): Promise<string | null> => {
+    const setup = JSON.parse(localStorage.getItem('agentSetup') || '{}');
+    try {
+      const res = await fetch('/api/demo/agents', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: setup.name || 'AlphaHunter',
+          ownerWallet: walletAddress,
+          markets: setup.markets || ['perps'],
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        return data.agentWalletAddress || data.agent?.agentWalletAddress || null;
+      }
+    } catch (error) {
+      console.error('Error creating agent:', error);
+    }
+    return null;
+  }, []);
+
+  // Step 2 of 2: Persist scanned positions to DB (agent already exists at this point).
+  const savePositions = useCallback(async (walletAddress: string, data: any) => {
     const setup = JSON.parse(localStorage.getItem('agentSetup') || '{}');
 
     // Save to production positions collection
@@ -154,7 +178,7 @@ export default function LaunchingPage() {
       console.error('Error saving positions:', error);
     }
 
-    // Save to agents collection
+    // Update agent record with scanned positions
     try {
       await fetch('/api/demo/agents', {
         method: 'POST',
@@ -167,7 +191,7 @@ export default function LaunchingPage() {
         }),
       });
     } catch (error) {
-      console.error('Error saving agent:', error);
+      console.error('Error updating agent positions:', error);
     }
   }, []);
 
@@ -201,18 +225,21 @@ export default function LaunchingPage() {
 
       // Step 1: Initialize
       startStep(1);
-      await new Promise(r => setTimeout(r, 1500));
+      await new Promise(r => setTimeout(r, 1200));
       completeStep(1);
-      setProgress(25);
+      setProgress(10);
 
       // Step 2: Connect wallet
       await new Promise(r => setTimeout(r, 200));
       startStep(2);
-      await new Promise(r => setTimeout(r, 1500));
+      await new Promise(r => setTimeout(r, 800));
       completeStep(2, shortWallet);
-      setProgress(50);
+      setProgress(25);
 
-      // Step 3: Scan positions (real API calls)
+      // Kick off agent creation in background (needed before savePositions + follow-traders)
+      const agentPromise = createAgent(address);
+
+      // Step 3: Scan positions (real API calls — runs concurrently with agent creation)
       await new Promise(r => setTimeout(r, 200));
       startStep(3);
       const posData = await scanPositions(address);
@@ -222,11 +249,12 @@ export default function LaunchingPage() {
       if (posData.counts.lp > 0) parts.push(`${posData.counts.lp} LP positions`);
       if (posData.counts.polymarket > 0) parts.push(`${posData.counts.polymarket} prediction positions`);
       const posDetail = parts.length > 0 ? `Found ${parts.join(' + ')}` : 'No positions found';
-      completeStep(3, posDetail, true);
-      setProgress(60);
+      completeStep(3, posDetail, perpCount > 0 || posData.counts.polymarket > 0);
+      setProgress(45);
 
-      // Save positions to MongoDB (before step 5 so agent exists)
-      await saveData(address, posData);
+      // Await agent creation before persisting positions (agent must exist in DB)
+      const agentWalletAddress = await agentPromise;
+      await savePositions(address, posData);
 
       // Step 4: Detect tokens across chains
       await new Promise(r => setTimeout(r, 200));
@@ -246,12 +274,13 @@ export default function LaunchingPage() {
             if (count > 0) {
               tokenDetail = `${count} tokens ($${tokenTotalUsd.toLocaleString(undefined, { maximumFractionDigits: 0 })}) on ${chains.size} chain${chains.size > 1 ? 's' : ''}`;
             }
-            // Cache tokens in agent (one-time save during onboarding)
+            // Cache tokens in agent
+            const setup2 = JSON.parse(localStorage.getItem('agentSetup') || '{}');
             await fetch('/api/demo/agents', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
-                name: setup.name || 'AlphaHunter',
+                name: setup2.name || 'AlphaHunter',
                 ownerWallet: address,
                 cachedTokenBalances: tokenList,
                 cachedTokensTotalUsd: tokenTotalUsd,
@@ -262,8 +291,8 @@ export default function LaunchingPage() {
       } catch (e) {
         console.error('Token scan failed:', e);
       }
-      completeStep(4, tokenDetail, true);
-      setProgress(80);
+      completeStep(4, tokenDetail, tokenTotalUsd > 0);
+      setProgress(65);
 
       // Step 5: Follow top traders (real API call)
       await new Promise(r => setTimeout(r, 200));
@@ -286,6 +315,18 @@ export default function LaunchingPage() {
         console.error('Follow traders failed:', e);
       }
       completeStep(5, followDetail, true);
+      setProgress(85);
+
+      // Step 6: Show agent wallet result (creation already completed above)
+      await new Promise(r => setTimeout(r, 200));
+      startStep(6);
+      await new Promise(r => setTimeout(r, 400));
+      if (agentWalletAddress) {
+        const shortAgentWallet = `${agentWalletAddress.slice(0, 10)}...${agentWalletAddress.slice(-6)}`;
+        completeStep(6, `Wallet: ${shortAgentWallet}`, true);
+      } else {
+        completeStep(6, 'Agent created — wallet pending CDP setup');
+      }
       setProgress(100);
 
       // Show discovery
@@ -310,7 +351,7 @@ export default function LaunchingPage() {
     };
 
     run();
-  }, [mounted, address, startStep, completeStep, scanPositions, saveData]);
+  }, [mounted, address, startStep, completeStep, scanPositions, createAgent, savePositions]);
 
   const handleLetsGo = () => {
     // Store auth wallet for persistent login

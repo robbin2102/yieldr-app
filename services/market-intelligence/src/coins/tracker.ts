@@ -3,6 +3,7 @@ import { logger } from '../utils/logger';
 import { TrackedCoins } from '../models';
 
 const TAAPI_EXCHANGE_SYMBOLS_URL = `${config.taapi.baseUrl}/exchange-symbols`;
+// Only used when CoinGlass is enabled
 const CG_COINS_MARKETS_URL = `${config.coinglass.baseUrl}/api/futures/coins-markets`;
 
 // Stablecoins and tokens we never want to track
@@ -40,8 +41,8 @@ export async function refreshTrackedCoins(): Promise<{ all: string[]; full: stri
   const taapiSymbols = await fetchTaapiSymbols();
   logger.info('Tracker', `TAAPI binancefutures symbols: ${taapiSymbols.size}`);
 
-  const cgCoins = await fetchCoinGlassMarkets();
-  logger.info('Tracker', `CoinGlass coins: ${cgCoins.length}`);
+  const cgCoins = config.coinglass.enabled ? await fetchCoinGlassMarkets() : [];
+  logger.info('Tracker', `CoinGlass coins: ${cgCoins.length}${!config.coinglass.enabled ? ' (disabled)' : ''}`);
 
   let all: string[];
   let excluded: string[] = [];

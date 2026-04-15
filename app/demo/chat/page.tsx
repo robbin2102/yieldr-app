@@ -1,7 +1,8 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { useAccount, useDisconnect } from 'wagmi';
+import { useAccount, useDisconnect, useSendTransaction } from 'wagmi';
+import { useConnectModal } from '@rainbow-me/rainbowkit';
 import { useRouter } from 'next/navigation';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -48,9 +49,12 @@ interface FollowedTrader {
 
 interface ChatMessage {
   id: string;
-  role: 'agent' | 'user';
+  role: 'agent' | 'user' | 'action';
   content: string;
   time: string;
+  actionType?: 'deposit_request' | 'deposit_eth_request' | 'trade_approval';
+  actionData?: any;
+  actionDone?: boolean; // true after user approves/cancels
 }
 
 interface TokenBalance {
@@ -126,6 +130,7 @@ function formatPnl(v: number | undefined): string {
   const abs = Math.abs(v);
   const sign = v >= 0 ? '+' : '-';
   if (abs >= 1000) return `${sign}$${(abs / 1000).toFixed(1)}K`;
+  if (abs < 10) return `${sign}$${abs.toFixed(2)}`;
   return `${sign}$${abs.toFixed(0)}`;
 }
 
@@ -192,6 +197,8 @@ export default function ChatPage() {
   const router = useRouter();
   const { address, isConnected, isReconnecting } = useAccount();
   const { disconnect } = useDisconnect();
+  const { sendTransactionAsync } = useSendTransaction();
+  const { openConnectModal } = useConnectModal();
 
   // Auth
   const [authChecking, setAuthChecking] = useState(true);
@@ -207,6 +214,18 @@ export default function ChatPage() {
   const [showYldrModal, setShowYldrModal] = useState(false);
   const [yldrInput, setYldrInput] = useState(100);
   const [mobPanelHidden, setMobPanelHidden] = useState(false);
+
+  // Funds modal state
+  const [showFundsModal, setShowFundsModal] = useState(false);
+  const [fundsAgentWallet, setFundsAgentWallet] = useState('');
+  const [fundsEth, setFundsEth] = useState(0);
+  const [fundsUsdc, setFundsUsdc] = useState(0);
+  const [fundsLoading, setFundsLoading] = useState(false);
+  const [fundsCopied, setFundsCopied] = useState(false);
+
+  // Action card state (deposit approval, trade approval)
+  const [actionTxLoading, setActionTxLoading] = useState<Record<string, boolean>>({});
+  const [actionTxResult, setActionTxResult] = useState<Record<string, { ok: boolean; hash?: string; error?: string }>>({});
 
   // Credits
   const [creditsUsed, setCreditsUsed] = useState(0);
@@ -226,6 +245,14 @@ export default function ChatPage() {
   const [unreadAlerts, setUnreadAlerts] = useState(0);
   const [expandedAlerts, setExpandedAlerts] = useState<Set<string>>(new Set());
 
+  // Agent position polling (5 min cycle, starts on position_opened, stops when no active positions)
+  const POSITION_POLL_INTERVAL = 300; // 5 minutes in seconds
+  const [agentPositions, setAgentPositions] = useState<PerpPosition[]>([]);
+  const [positionPollingActive, setPositionPollingActive] = useState(false);
+  const [positionCountdown, setPositionCountdown] = useState(POSITION_POLL_INTERVAL);
+  const positionPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const positionCountdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
   // Ticker state
 
   // Chat
@@ -235,6 +262,8 @@ export default function ChatPage() {
   const [toolStatus, setToolStatus] = useState<string | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  // Buffers action cards emitted during streaming; flushed to messages after stream ends
+  const pendingActionCards = useRef<ChatMessage[]>([]);
 
   // Sessions
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -383,6 +412,95 @@ export default function ChatPage() {
     }, 30000);
     return () => clearInterval(iv);
   }, [mounted, effectiveWallet, fetchMonitoring, fetchAlerts]);
+
+  // ── Agent position polling (5 min cycle)
+  // Read positions from DB (fast, no chain sync)
+  const fetchAgentPositionsFromDB = useCallback(async (wallet: string) => {
+    try {
+      const res = await fetch(`/api/demo/positions?wallet=${wallet}`);
+      if (res.ok) {
+        const d = await res.json();
+        const positions = d.positions || [];
+        setAgentPositions(positions);
+        if (positions.length === 0) setPositionPollingActive(false);
+      }
+    } catch (err) {
+      console.error('[position-poll] DB fetch error:', err);
+    }
+  }, []);
+
+  // Sync with chain then read (slower, used for periodic refresh)
+  const syncAgentPositions = useCallback(async (wallet: string) => {
+    try {
+      const res = await fetch(`/api/demo/positions?wallet=${wallet}`, { method: 'POST' });
+      if (res.ok) {
+        const d = await res.json();
+        const positions = d.positions || [];
+        setAgentPositions(positions);
+        if (positions.length === 0) setPositionPollingActive(false);
+      }
+    } catch (err) {
+      console.error('[position-poll] sync error:', err);
+    }
+  }, []);
+
+  const startPositionPolling = useCallback(() => {
+    if (positionPollingActive) return; // already running
+    setPositionPollingActive(true);
+    setPositionCountdown(POSITION_POLL_INTERVAL);
+  }, [positionPollingActive]);
+
+  const stopPositionPolling = useCallback(() => {
+    setPositionPollingActive(false);
+    setAgentPositions([]);
+    setPositionCountdown(POSITION_POLL_INTERVAL);
+  }, []);
+
+  // Manage the polling interval and countdown timer
+  useEffect(() => {
+    // Clear any existing intervals
+    if (positionPollRef.current) { clearInterval(positionPollRef.current); positionPollRef.current = null; }
+    if (positionCountdownRef.current) { clearInterval(positionCountdownRef.current); positionCountdownRef.current = null; }
+
+    if (!positionPollingActive || !effectiveWallet) return;
+
+    // Initial fetch from DB (fast — shows position saved by open_trade)
+    fetchAgentPositionsFromDB(effectiveWallet);
+
+    // Countdown timer (ticks every 1s)
+    positionCountdownRef.current = setInterval(() => {
+      setPositionCountdown(prev => {
+        if (prev <= 1) return POSITION_POLL_INTERVAL; // reset after reaching 0
+        return prev - 1;
+      });
+    }, 1000);
+
+    // Periodic chain sync every 5 minutes (updates PnL, current price, etc.)
+    positionPollRef.current = setInterval(() => {
+      syncAgentPositions(effectiveWallet);
+      setPositionCountdown(POSITION_POLL_INTERVAL); // reset countdown
+    }, POSITION_POLL_INTERVAL * 1000);
+
+    return () => {
+      if (positionPollRef.current) clearInterval(positionPollRef.current);
+      if (positionCountdownRef.current) clearInterval(positionCountdownRef.current);
+    };
+  }, [positionPollingActive, effectiveWallet, fetchAgentPositionsFromDB, syncAgentPositions]);
+
+  // Check on mount if there are already active agent positions → resume polling
+  useEffect(() => {
+    if (!mounted || !effectiveWallet) return;
+    fetch(`/api/demo/positions?wallet=${effectiveWallet}`)
+      .then(r => r.json())
+      .then(d => {
+        const positions = d.positions || [];
+        if (positions.length > 0) {
+          setAgentPositions(positions);
+          setPositionPollingActive(true);
+        }
+      })
+      .catch(() => {});
+  }, [mounted, effectiveWallet]);
 
   // ── Ticker rotation
   const activeTasks = monitoringTasks.filter(t => t.status === 'active');
@@ -633,21 +751,24 @@ export default function ChatPage() {
   }, [hasEarlierMessages, loadEarlierMessages, loadingEarlier]);
 
   // ── Send message
-  const handleSend = useCallback(async () => {
-    const text = inputValue.trim();
+  const handleSend = useCallback(async (overrideText?: string) => {
+    const text = (overrideText !== undefined ? overrideText : inputValue).trim();
     if (!text || isStreaming || creditsExceeded || !effectiveWallet) return;
-    setInputValue('');
-    if (textareaRef.current) textareaRef.current.style.height = 'auto';
+    if (overrideText === undefined) {
+      setInputValue('');
+      if (textareaRef.current) textareaRef.current.style.height = 'auto';
+    }
 
     const now = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
     const userMsg: ChatMessage = { id: Date.now().toString(), role: 'user', content: text, time: now };
     const agentMsgId = (Date.now() + 1).toString();
 
     setMessages(prev => [...prev, userMsg, { id: agentMsgId, role: 'agent', content: '', time: now }]);
+    pendingActionCards.current = []; // reset card buffer for this request
     setIsStreaming(true);
 
     const apiMessages = [...messages, userMsg]
-      .filter(m => m.content.trim())
+      .filter(m => m.content.trim() && m.role !== 'action')
       .map(m => ({ role: m.role, content: m.content }));
 
     try {
@@ -680,13 +801,54 @@ export default function ChatPage() {
             if (parsed.type === 'text') {
               setToolStatus(null);
               setMessages(prev => prev.map(m => m.id === agentMsgId ? { ...m, content: m.content + parsed.text } : m));
+            } else if (parsed.type === 'hallucination_correction') {
+              // Wipe any fabricated content already streamed so the correction replaces it
+              setMessages(prev => prev.map(m => m.id === agentMsgId ? { ...m, content: '' } : m));
             } else if (parsed.type === 'tool_status') {
               setToolStatus(parsed.status);
+            } else if (parsed.type === 'agent_activity') {
+              setToolStatus(parsed.message);
             } else if (parsed.type === 'session') {
               setSessionId(parsed.sessionId);
               loadChatSessions();
             } else if (parsed.type === 'error') {
               setMessages(prev => prev.map(m => m.id === agentMsgId ? { ...m, content: m.content || `Error: ${parsed.error}` } : m));
+            } else if (parsed.type === 'deposit_request') {
+              // Buffer — add after streaming ends so cards appear below the complete agent message
+              pendingActionCards.current.push({
+                id: `deposit-${Date.now()}`,
+                role: 'action',
+                content: '',
+                time: now,
+                actionType: 'deposit_request',
+                actionData: { amount: parsed.amount, agent_wallet: parsed.agent_wallet, unsigned_tx: parsed.unsigned_tx },
+              });
+            } else if (parsed.type === 'deposit_eth_request') {
+              pendingActionCards.current.push({
+                id: `deposit-eth-${Date.now()}`,
+                role: 'action',
+                content: '',
+                time: now,
+                actionType: 'deposit_eth_request',
+                actionData: { amount_eth: parsed.amount_eth, agent_wallet: parsed.agent_wallet, unsigned_tx: parsed.unsigned_tx },
+              });
+            } else if (parsed.type === 'trade_approval') {
+              pendingActionCards.current.push({
+                id: `trade-${Date.now()}`,
+                role: 'action',
+                content: '',
+                time: now,
+                actionType: 'trade_approval',
+                actionData: { params: parsed.params, rationale: parsed.rationale, position_size: parsed.position_size, entry_conditions: parsed.entry_conditions || [], exit_conditions: parsed.exit_conditions || [] },
+              });
+            } else if (parsed.type === 'position_opened') {
+              // Trade executed — start 5m position polling cycle
+              startPositionPolling();
+              // Immediate fetch from DB to show the just-saved position
+              if (effectiveWallet) fetchAgentPositionsFromDB(effectiveWallet);
+            } else if (parsed.type === 'position_closed') {
+              // Position closed — refresh from DB, polling auto-stops when 0 positions
+              if (effectiveWallet) fetchAgentPositionsFromDB(effectiveWallet);
             }
           } catch {}
         }
@@ -697,6 +859,13 @@ export default function ChatPage() {
 
     setIsStreaming(false);
     setToolStatus(null);
+    // Flush buffered action cards — capture into local var FIRST so the setState
+    // callback closes over the snapshot, not the ref (which is cleared immediately after).
+    const cardsToFlush = [...pendingActionCards.current];
+    pendingActionCards.current = [];
+    if (cardsToFlush.length > 0) {
+      setMessages(prev => [...prev, ...cardsToFlush]);
+    }
     if (effectiveWallet) fetchCredits(effectiveWallet);
     // Re-poll monitoring after each message (a task may have been created)
     if (effectiveWallet) {
@@ -705,7 +874,7 @@ export default function ChatPage() {
         fetchAlerts(effectiveWallet);
       }, 2000);
     }
-  }, [inputValue, isStreaming, creditsExceeded, messages, effectiveWallet, sessionId, loadChatSessions, fetchCredits, fetchMonitoring, fetchAlerts]);
+  }, [inputValue, isStreaming, creditsExceeded, messages, effectiveWallet, sessionId, loadChatSessions, fetchCredits, fetchMonitoring, fetchAlerts, startPositionPolling, fetchAgentPositionsFromDB]);
 
   // ── Logout
   const handleLogout = useCallback(() => {
@@ -715,6 +884,115 @@ export default function ChatPage() {
     disconnect();
     router.push('/demo');
   }, [disconnect, router]);
+
+  // ── Open Funds modal — fetch agent wallet address + live balance
+  const handleOpenFundsModal = useCallback(async () => {
+    setShowFundsModal(true);
+    setFundsLoading(true);
+    setFundsAgentWallet('');
+    setFundsEth(0);
+    setFundsUsdc(0);
+    try {
+      const wallet = authenticatedWallet || address?.toLowerCase() || '';
+      if (!wallet) return;
+      const agentRes = await fetch(`/api/demo/agents?wallet=${wallet}`);
+      if (!agentRes.ok) return;
+      const agentData = await agentRes.json();
+      const agentWallet: string = agentData.agent?.agentWalletAddress || '';
+      setFundsAgentWallet(agentWallet);
+      if (agentWallet) {
+        const balRes = await fetch(`/api/avantis/balance?agent_wallet_address=${encodeURIComponent(agentWallet)}`);
+        if (balRes.ok) {
+          const bal = await balRes.json();
+          setFundsEth(bal.eth_balance ?? 0);
+          setFundsUsdc(bal.usdc_balance ?? 0);
+        }
+      }
+    } catch {}
+    setFundsLoading(false);
+  }, [authenticatedWallet, address]);
+
+  // ── Execute deposit (called from deposit_request action card)
+  const handleDepositApprove = useCallback(async (msgId: string, unsignedTx: { to: string; data: string; value: string; chainId: number }) => {
+    if (isReconnecting) {
+      setActionTxResult(prev => ({ ...prev, [msgId]: { ok: false, error: 'Wallet is reconnecting — please try again in a moment.' } }));
+      return;
+    }
+    if (!isConnected) {
+      openConnectModal?.();
+      return;
+    }
+    setActionTxLoading(prev => ({ ...prev, [msgId]: true }));
+    try {
+      const hash = await sendTransactionAsync({
+        to: unsignedTx.to as `0x${string}`,
+        data: unsignedTx.data as `0x${string}`,
+        value: BigInt(0),
+        chainId: unsignedTx.chainId,
+      });
+      setActionTxResult(prev => ({ ...prev, [msgId]: { ok: true, hash } }));
+      setMessages(prev => prev.map(m => m.id === msgId ? { ...m, actionDone: true } : m));
+      // Insert success message into chat
+      const now = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+      setMessages(prev => [...prev, {
+        id: `deposit-success-${Date.now()}`,
+        role: 'agent',
+        content: `Deposit submitted — [View on BaseScan](https://basescan.org/tx/${hash})\n\nYour USDC is on its way to the agent wallet. This usually confirms in ~5 seconds on Base.`,
+        time: now,
+      }]);
+    } catch (err: any) {
+      const errMsg = err?.shortMessage || err?.message || 'Transaction rejected';
+      setActionTxResult(prev => ({ ...prev, [msgId]: { ok: false, error: errMsg } }));
+    }
+    setActionTxLoading(prev => ({ ...prev, [msgId]: false }));
+  }, [sendTransactionAsync, isConnected, isReconnecting, openConnectModal]);
+
+  // ── Execute ETH gas deposit (native transfer)
+  const handleEthDepositApprove = useCallback(async (msgId: string, unsignedTx: { to: string; data: string; value: string; chainId: number }) => {
+    if (isReconnecting) {
+      setActionTxResult(prev => ({ ...prev, [msgId]: { ok: false, error: 'Wallet is reconnecting — please try again in a moment.' } }));
+      return;
+    }
+    if (!isConnected) {
+      openConnectModal?.();
+      return;
+    }
+    setActionTxLoading(prev => ({ ...prev, [msgId]: true }));
+    try {
+      const hash = await sendTransactionAsync({
+        to: unsignedTx.to as `0x${string}`,
+        data: unsignedTx.data as `0x${string}`,
+        value: BigInt(unsignedTx.value),
+        chainId: unsignedTx.chainId,
+      });
+      setActionTxResult(prev => ({ ...prev, [msgId]: { ok: true, hash } }));
+      setMessages(prev => prev.map(m => m.id === msgId ? { ...m, actionDone: true } : m));
+      const now = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+      setMessages(prev => [...prev, {
+        id: `eth-deposit-success-${Date.now()}`,
+        role: 'agent',
+        content: `ETH deposit submitted — [View on BaseScan](https://basescan.org/tx/${hash})\n\nGas is on its way to the agent wallet. Usually confirms in ~5 seconds on Base.`,
+        time: now,
+      }]);
+    } catch (err: any) {
+      const errMsg = err?.shortMessage || err?.message || 'Transaction rejected';
+      setActionTxResult(prev => ({ ...prev, [msgId]: { ok: false, error: errMsg } }));
+    }
+    setActionTxLoading(prev => ({ ...prev, [msgId]: false }));
+  }, [sendTransactionAsync, isConnected, isReconnecting, openConnectModal]);
+
+  // ── Approve trade — sends full params JSON so Claude can call open_trade directly
+  const handleTradeApprove = useCallback((msgId: string, params: any) => {
+    setMessages(prev => prev.map(m => m.id === msgId ? { ...m, actionDone: true } : m));
+    handleSend(`TRADE_APPROVED:${JSON.stringify(params)}`);
+  }, [handleSend]);
+
+  // ── Cancel trade — pre-fills textarea
+  const handleTradeCancel = useCallback((msgId: string) => {
+    setMessages(prev => prev.map(m => m.id === msgId ? { ...m, actionDone: true } : m));
+    setInputValue('Cancel the proposed trade, I changed my mind.');
+    textareaRef.current?.focus();
+  }, []);
 
   // ── Toggle card expansion
   const toggleCard = (key: string) => {
@@ -773,7 +1051,7 @@ export default function ChatPage() {
             onClick={() => router.push('/agents')}
           >Agents</button>
           <button className={`${s.navTab} ${s.disabled}`} title="Coming soon">Traders</button>
-          <button className={`${s.navTab} ${s.disabled}`} title="Coming soon">Funds</button>
+          <button className={s.navTab} onClick={handleOpenFundsModal}>Funds</button>
         </div>
         <div className={s.topnavRight}>
           <div className={s.tokenDisplay} onClick={() => setShowYldrModal(true)} title="AI credits used">
@@ -789,6 +1067,34 @@ export default function ChatPage() {
           <button className={s.mobToggle} onClick={() => setMobPanelHidden(p => !p)}>☰</button>
         </div>
       </nav>
+
+      {/* ═══ DEMO BANNER ═══ */}
+      <div style={{
+        background: 'linear-gradient(90deg, #1a1a2e 0%, #16213e 50%, #1a1a2e 100%)',
+        borderBottom: '1px solid rgba(0, 212, 170, 0.2)',
+        padding: '6px 16px',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: '8px',
+        fontSize: '12px',
+        color: 'rgba(255,255,255,0.7)',
+        letterSpacing: '0.3px',
+      }}>
+        <span style={{ color: '#00d4aa', fontWeight: 600 }}>DEMO</span>
+        <span style={{ opacity: 0.4 }}>|</span>
+        <span>This terminal is for demo purposes only. Full version launching soon.</span>
+        <span style={{
+          marginLeft: '8px',
+          background: 'rgba(0, 212, 170, 0.15)',
+          color: '#00d4aa',
+          padding: '2px 8px',
+          borderRadius: '4px',
+          fontSize: '10px',
+          fontWeight: 600,
+          letterSpacing: '0.5px',
+        }}>BETA COMING SOON</span>
+      </div>
 
       {/* ═══ APP BODY ═══ */}
       <div className={s.appBody}>
@@ -843,14 +1149,132 @@ export default function ChatPage() {
             {/* ══ POSITIONS TAB ══ */}
             {activeLeftTab === 'positions' && (
               <>
-                {/* Perpetuals */}
+                {/* Agent Positions (Bankr wallet) */}
+                {(agentPositions.length > 0 || positionPollingActive) && (
+                  <>
+                    <div className={s.sectionDivider}>
+                      <span className={`${s.sdDot} ${s.perp}`}></span>
+                      Agent Positions
+                      <span className={s.sdCount}>{agentPositions.length} open</span>
+                      {positionPollingActive && (
+                        <span className={s.sdCount} style={{ marginLeft: 'auto', opacity: 0.6, fontSize: '10px', fontFamily: 'monospace' }}>
+                          ⟳ {Math.floor(positionCountdown / 60)}:{String(positionCountdown % 60).padStart(2, '0')}
+                        </span>
+                      )}
+                    </div>
+
+                    {agentPositions.length === 0 ? (
+                      <div className={s.emptyState}>
+                        <div className={s.emptyIcon}>⏳</div>
+                        <div className={s.emptyTitle}>Waiting for position data...</div>
+                        <div className={s.emptyText}>Position was just opened. Data refreshes every 5 minutes.</div>
+                      </div>
+                    ) : (
+                      agentPositions.map((pos, i) => {
+                        const key = `agent-${i}`;
+                        const isExpanded = expandedCards.has(key);
+                        const pair = pos.pair || '—';
+                        const symbol = normaliseSymbol(pair);
+                        const pills = getPillsForPosition(pair);
+                        const alertDotType = hasUnreadAlertForPosition(pair);
+                        const lastAlert = getLastAlertForPosition(pair);
+                        const isLong = (pos.direction || '').toUpperCase().includes('LONG');
+                        const pnlPos = (pos.pnl || 0) >= 0;
+                        return (
+                          <div key={key} className={s.posCard} id={`card-agent-${symbol}`}>
+                            <div className={s.posHeader} onClick={() => toggleCard(key)}>
+                              <div className={s.posAssetWrap}>
+                                <span className={s.posAsset}>{symbol}</span>
+                                <span className={`${s.posTag} ${isLong ? s.long : s.short}`}>
+                                  {isLong ? 'LONG' : 'SHORT'}{pos.leverage ? ` ${pos.leverage}×` : ''}
+                                </span>
+                                <span className={s.posVenue}>Avantis</span>
+                                {alertDotType && (
+                                  <span className={`${s.posAlertDot} ${s.visible} ${s[alertDotType]}`}></span>
+                                )}
+                              </div>
+                              <div className={s.posPnlWrap}>
+                                <div className={`${s.posPnl} ${pnlPos ? s.g : s.r}`}>{formatPnl(pos.pnl)}</div>
+                                <div className={`${s.posPnlSub} ${pnlPos ? s.g : s.r}`}>{formatPct(pos.roi)}</div>
+                              </div>
+                              <span className={`${s.chevron} ${isExpanded ? s.open : ''}`}>▾</span>
+                            </div>
+
+                            {pills.length > 0 && (
+                              <div className={s.pillsRow}>
+                                {pills.map((p, pi) => (
+                                  <span key={pi} className={`${s.sigPill} ${s[p.color] ?? ''}`}>{p.label}</span>
+                                ))}
+                              </div>
+                            )}
+
+                            <div className={`${s.posStats} ${s.perpStats}`}>
+                              <div className={s.psItem}>
+                                <div className={s.psLbl}>Entry</div>
+                                <div className={s.psVal}>{formatPrice(pos.entryPrice)}</div>
+                              </div>
+                              <div className={s.psItem}>
+                                <div className={s.psLbl}>Mark</div>
+                                <div className={s.psVal}>{formatPrice(pos.currentPrice)}</div>
+                              </div>
+                              <div className={s.psItem}>
+                                <div className={s.psLbl}>Size</div>
+                                <div className={s.psVal}>{formatUsd(pos.positionSize || pos.margin)}</div>
+                              </div>
+                              <div className={s.psItem}>
+                                <div className={s.psLbl}>Margin</div>
+                                <div className={s.psVal}>{formatUsd(pos.margin)}</div>
+                              </div>
+                            </div>
+
+                            {/* Expanded signal detail */}
+                            <div className={`${s.signalBlock} ${isExpanded ? s.open : ''}`}>
+                              {lastAlert ? (
+                                <div className={s.signalItem}>
+                                  <span className={`${s.sigDot} ${lastAlert.severity === 'critical' ? s.r : lastAlert.severity === 'warning' ? s.y : s.g}`}></span>
+                                  <div className={s.sigBody}>
+                                    <div className={s.sigTop}><span className={s.sigName}>{lastAlert.title}</span></div>
+                                    <div className={s.sigNote}>{lastAlert.message}</div>
+                                  </div>
+                                  <span className={s.sigTime}>{timeAgo(lastAlert.createdAt)}</span>
+                                </div>
+                              ) : pills.length > 0 ? (
+                                <div className={s.signalItem}>
+                                  <span className={`${s.sigDot} ${s.b}`}></span>
+                                  <div className={s.sigBody}>
+                                    <div className={s.sigTop}><span className={s.sigName}>Monitoring active</span></div>
+                                    <div className={s.sigNote}>Agent monitoring this position with strategy signals.</div>
+                                  </div>
+                                </div>
+                              ) : (
+                                <div className={s.signalItem}>
+                                  <span className={`${s.sigDot} ${s.n}`}></span>
+                                  <div className={s.sigBody}>
+                                    <div className={s.sigTop}><span className={s.sigName}>Monitor pending</span></div>
+                                    <div className={s.sigNote}>Agent should create a monitoring task for this trade shortly.</div>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
+                  </>
+                )}
+
+                {/* Perpetuals — only show positions with meaningful PnL (> $0.10) */}
+                {(() => {
+                  const activePerpPositions = perpPositions.filter(p => Math.abs(p.pnl || 0) > 0.1);
+                  return (
+                    <>
                 <div className={s.sectionDivider}>
                   <span className={`${s.sdDot} ${s.perp}`}></span>
                   Perpetuals
-                  <span className={s.sdCount}>{perpPositions.length} open</span>
+                  <span className={s.sdCount}>{activePerpPositions.length} open</span>
                 </div>
 
-                {perpPositions.length === 0 ? (
+                {activePerpPositions.length === 0 ? (
                   <div className={s.emptyState}>
                     <div className={s.emptyIcon}>📊</div>
                     <div className={s.emptyTitle}>No perpetual positions found</div>
@@ -859,7 +1283,7 @@ export default function ChatPage() {
                     </div>
                   </div>
                 ) : (
-                  perpPositions.map((pos, i) => {
+                  activePerpPositions.map((pos, i) => {
                     const key = `perp-${i}`;
                     const isExpanded = expandedCards.has(key);
                     const pair = pos.pair || '—';
@@ -952,6 +1376,9 @@ export default function ChatPage() {
                     );
                   })
                 )}
+                    </>
+                  );
+                })()}
 
                 {/* Predictions */}
                 <div className={s.sectionDivider}>
@@ -1307,6 +1734,163 @@ export default function ChatPage() {
               const isEmpty = !msg.content.trim();
               const isLastAgent = isAgent && i === messages.length - 1;
 
+              // ── Action cards (deposit / trade approval)
+              if (msg.role === 'action') {
+                const txState = actionTxResult[msg.id];
+                const txLoading = actionTxLoading[msg.id];
+
+                if (msg.actionType === 'deposit_eth_request') {
+                  const { amount_eth, agent_wallet, unsigned_tx } = msg.actionData || {};
+                  return (
+                    <div key={msg.id} className={s.actionCard}>
+                      <div className={s.actionCardHdr}>
+                        <span className={s.actionCardIcon}>⛽</span>
+                        <span className={s.actionCardTitle}>Deposit {amount_eth} ETH for Gas</span>
+                      </div>
+                      <div className={s.actionCardMeta}>
+                        To: <span className={s.actionCardAddr}>{agent_wallet ? `${agent_wallet.slice(0,10)}...${agent_wallet.slice(-6)}` : '—'}</span>
+                        &nbsp;·&nbsp;Network: Base
+                      </div>
+                      {txState?.ok ? (
+                        <div className={s.actionCardSuccess}>
+                          ✓ ETH deposit submitted — <a href={`https://basescan.org/tx/${txState.hash}`} target="_blank" rel="noopener noreferrer">View on BaseScan</a>
+                        </div>
+                      ) : txState?.error ? (
+                        <>
+                          <div className={s.actionCardError}>{txState.error}</div>
+                          <button
+                            className={s.actionCardBtn}
+                            onClick={() => { setActionTxResult(prev => { const n = { ...prev }; delete n[msg.id]; return n; }); handleEthDepositApprove(msg.id, unsigned_tx); }}
+                            disabled={txLoading}
+                          >
+                            {txLoading ? 'Approving...' : 'Retry — Send ETH'}
+                          </button>
+                        </>
+                      ) : msg.actionDone ? (
+                        <div className={s.actionCardDone}>ETH deposit approved</div>
+                      ) : (
+                        <button
+                          className={s.actionCardBtn}
+                          onClick={() => handleEthDepositApprove(msg.id, unsigned_tx)}
+                          disabled={txLoading}
+                        >
+                          {txLoading ? 'Approving...' : `Approve — Send ${amount_eth} ETH`}
+                        </button>
+                      )}
+                    </div>
+                  );
+                }
+
+                if (msg.actionType === 'deposit_request') {
+                  const { amount, agent_wallet, unsigned_tx } = msg.actionData || {};
+                  return (
+                    <div key={msg.id} className={s.actionCard}>
+                      <div className={s.actionCardHdr}>
+                        <span className={s.actionCardIcon}>💳</span>
+                        <span className={s.actionCardTitle}>Deposit {amount} USDC to Agent Wallet</span>
+                      </div>
+                      <div className={s.actionCardMeta}>
+                        To: <span className={s.actionCardAddr}>{agent_wallet ? `${agent_wallet.slice(0,10)}...${agent_wallet.slice(-6)}` : '—'}</span>
+                        &nbsp;·&nbsp;Network: Base
+                      </div>
+                      {txState?.ok ? (
+                        <div className={s.actionCardSuccess}>
+                          ✓ Deposit submitted — <a href={`https://basescan.org/tx/${txState.hash}`} target="_blank" rel="noopener noreferrer">View on BaseScan</a>
+                        </div>
+                      ) : txState?.error ? (
+                        <>
+                          <div className={s.actionCardError}>{txState.error}</div>
+                          <button
+                            className={s.actionCardBtn}
+                            onClick={() => { setActionTxResult(prev => { const n = { ...prev }; delete n[msg.id]; return n; }); handleDepositApprove(msg.id, unsigned_tx); }}
+                            disabled={txLoading}
+                          >
+                            {txLoading ? 'Approving...' : 'Retry — Send USDC'}
+                          </button>
+                        </>
+                      ) : msg.actionDone ? (
+                        <div className={s.actionCardDone}>Deposit approved</div>
+                      ) : (
+                        <button
+                          className={s.actionCardBtn}
+                          onClick={() => handleDepositApprove(msg.id, unsigned_tx)}
+                          disabled={txLoading}
+                        >
+                          {txLoading ? 'Approving...' : `Approve — Send ${amount} USDC`}
+                        </button>
+                      )}
+                    </div>
+                  );
+                }
+
+                if (msg.actionType === 'trade_approval') {
+                  const { params, rationale, position_size, entry_conditions, exit_conditions } = msg.actionData || {};
+                  const p = params || {};
+                  const isLong = p.direction === 'LONG';
+                  const hasConditions = (entry_conditions?.length > 0) || (exit_conditions?.length > 0);
+                  return (
+                    <div key={msg.id} className={s.actionCard}>
+                      <div className={s.actionCardHdr}>
+                        <span className={s.actionCardIcon}>{isLong ? '📈' : '📉'}</span>
+                        <span className={s.actionCardTitle}>Trade Proposal — {p.direction} {p.pair}</span>
+                      </div>
+
+                      {/* Section 1: Strategy Conditions */}
+                      {hasConditions && (
+                        <div className={s.tradeCardSection}>
+                          <div className={s.tradeCardSectionTitle}>📋 Strategy Conditions</div>
+                          {entry_conditions?.length > 0 && (
+                            <div className={s.tradeCardConditions}>
+                              <div className={s.tradeCardCondLabel}>Entry signals:</div>
+                              {entry_conditions.map((c: string, i: number) => (
+                                <div key={i} className={s.tradeCardCond}>• {c}</div>
+                              ))}
+                            </div>
+                          )}
+                          {exit_conditions?.length > 0 && (
+                            <div className={s.tradeCardConditions} style={{marginTop: 4}}>
+                              <div className={s.tradeCardCondLabel}>Exit rules:</div>
+                              {exit_conditions.map((c: string, i: number) => (
+                                <div key={i} className={s.tradeCardCond}>• {c}</div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Section 2: Execution Details */}
+                      <div className={s.tradeCardSection}>
+                        <div className={s.tradeCardSectionTitle}>⚡ Position Execution</div>
+                        <div className={s.tradeCardGrid}>
+                          <div className={s.tradeCardItem}><span className={s.tradeCardLbl}>Collateral</span><span className={s.tradeCardVal}>${p.collateral} USDC</span></div>
+                          <div className={s.tradeCardItem}><span className={s.tradeCardLbl}>Leverage</span><span className={s.tradeCardVal}>{p.leverage}×</span></div>
+                          <div className={s.tradeCardItem}><span className={s.tradeCardLbl}>Position</span><span className={s.tradeCardVal}>${position_size}</span></div>
+                          <div className={s.tradeCardItem}><span className={s.tradeCardLbl}>Type</span><span className={s.tradeCardVal}>{p.order_type || 'MARKET'}</span></div>
+                          <div className={s.tradeCardItem}><span className={s.tradeCardLbl}>Take Profit</span><span className={s.tradeCardVal} style={{color:'#00C805'}}>+{p.tp_pct}%</span></div>
+                          <div className={s.tradeCardItem}><span className={s.tradeCardLbl}>Stop Loss</span><span className={s.tradeCardVal} style={{color:'#FF3B3B'}}>-{p.sl_pct}%</span></div>
+                        </div>
+                        {rationale && <div className={s.actionCardMeta} style={{marginTop: 6}}>{rationale}</div>}
+                      </div>
+
+                      {msg.actionDone ? (
+                        <div className={s.actionCardDone}>Response sent — waiting for agent...</div>
+                      ) : (
+                        <div className={s.tradeCardBtns}>
+                          <button className={s.tradeApproveBtn} onClick={() => handleTradeApprove(msg.id, p)}>
+                            ✓ Approve &amp; Execute
+                          </button>
+                          <button className={s.tradeCancelBtn} onClick={() => handleTradeCancel(msg.id)}>
+                            ✕ Cancel
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  );
+                }
+
+                return null;
+              }
+
               return (
                 <div key={msg.id} className={s.msg}>
                   <div className={s.msgHdr}>
@@ -1374,13 +1958,88 @@ export default function ChatPage() {
               />
               <button
                 className={s.chatSendBtn}
-                onClick={handleSend}
+                onClick={() => handleSend()}
                 disabled={isStreaming || creditsExceeded}
               >↑</button>
             </div>
           </div>
         </div>{/* /rightPanel */}
       </div>{/* /appBody */}
+
+      {/* ═══ FUNDS MODAL ═══ */}
+      {showFundsModal && (
+        <div className={s.modalOverlay} onClick={e => { if (e.target === e.currentTarget) setShowFundsModal(false); }}>
+          <div className={s.modal}>
+            <div className={s.modalHdr}>
+              <div>
+                <div className={s.modalTitle}>Agent Wallet</div>
+                <div className={s.modalSub}>Deposit to fund your agent. Withdraw via chat.</div>
+              </div>
+              <button className={s.modalClose} onClick={() => setShowFundsModal(false)}>✕</button>
+            </div>
+            <div className={s.modalBody}>
+              {fundsLoading ? (
+                <div className={s.fundsLoading}>Loading wallet info...</div>
+              ) : !fundsAgentWallet ? (
+                <div className={s.fundsLoading}>No agent wallet found. Create an agent first.</div>
+              ) : (
+                <>
+                  <div className={s.fundsWalletBlock}>
+                    <div className={s.fundsWalletLabel}>Agent Wallet Address (Base)</div>
+                    <div className={s.fundsWalletRow}>
+                      <span className={s.fundsWalletAddr}>
+                        {fundsAgentWallet.slice(0, 10)}...{fundsAgentWallet.slice(-6)}
+                      </span>
+                      <button
+                        className={s.fundsCopyBtn}
+                        onClick={() => {
+                          navigator.clipboard.writeText(fundsAgentWallet);
+                          setFundsCopied(true);
+                          setTimeout(() => setFundsCopied(false), 2000);
+                        }}
+                      >{fundsCopied ? '✓ Copied' : 'Copy'}</button>
+                    </div>
+                  </div>
+
+                  <div className={s.fundsBalRow}>
+                    <div className={s.fundsBalItem}>
+                      <span className={s.fundsBalLabel}>ETH balance</span>
+                      <span className={`${s.fundsBalVal} ${fundsEth < 0.001 ? s.fundsBalWarn : s.fundsBalOk}`}>
+                        {fundsEth.toFixed(6)} ETH
+                      </span>
+                    </div>
+                    <div className={s.fundsBalItem}>
+                      <span className={s.fundsBalLabel}>USDC balance</span>
+                      <span className={`${s.fundsBalVal} ${fundsUsdc === 0 ? s.fundsBalWarn : s.fundsBalOk}`}>
+                        {fundsUsdc.toFixed(2)} USDC
+                      </span>
+                    </div>
+                  </div>
+
+                  {fundsEth < 0.0002 && (
+                    <div className={s.fundsGasWarn}>
+                      ⚠ Send at least 0.0002 ETH for gas before trading
+                    </div>
+                  )}
+
+                  <div className={s.fundsInstructions}>
+                    <div className={s.fundsStepTitle}>To deposit:</div>
+                    <ol className={s.fundsStepList}>
+                      <li>Copy the agent wallet address above</li>
+                      <li>Switch MetaMask to <strong>Base</strong> network</li>
+                      <li>Send ETH (gas) and/or USDC to the address</li>
+                    </ol>
+                  </div>
+
+                  <div className={s.fundsWithdrawNote}>
+                    To withdraw, say in chat: <em>"withdraw 0.005 ETH to my wallet"</em> or <em>"send back 10 USDC"</em>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ═══ YLDR MODAL ═══ */}
       {showYldrModal && (

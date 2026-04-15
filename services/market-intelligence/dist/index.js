@@ -109,6 +109,30 @@ async function main() {
     });
     // Connect to MongoDB (after server is up so healthcheck doesn't time out)
     await (0, db_1.connectDB)();
+    // Probe external connectivity — logs the actual err.cause so we can diagnose
+    // network failures (DNS, TLS, TCP timeout, etc.) immediately on startup.
+    const probes = [
+        ['TAAPI', 'https://api.taapi.io/'],
+        ['Binance', 'https://api.binance.com/api/v3/ping'],
+    ];
+    if (config_1.config.coinglass.enabled) {
+        probes.push(['CoinGlass', 'https://open-api-v4.coinglass.com/']);
+    }
+    else {
+        logger_1.logger.info('Connectivity', 'CoinGlass disabled (COINGLASS_ENABLED != true) — skipping probe');
+    }
+    for (const [name, url] of probes) {
+        try {
+            const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+            logger_1.logger.info('Connectivity', `${name} reachable — HTTP ${res.status}`);
+        }
+        catch (err) {
+            const cause = err.cause
+                ? `${err.cause?.code ?? ''} ${err.cause?.message ?? String(err.cause)}`.trim()
+                : 'no cause';
+            logger_1.logger.error('Connectivity', `${name} UNREACHABLE — ${err.message} (${cause})`);
+        }
+    }
     // Load (or refresh) tracked coins on startup
     logger_1.logger.info('Startup', 'Loading tracked coins...');
     const { all } = await (0, tracker_1.loadTrackedCoins)();

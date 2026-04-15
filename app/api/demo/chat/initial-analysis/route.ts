@@ -78,14 +78,18 @@ Here's what I can do for you:
 🔍 **Discover Alpha**
 I track top traders on Hyperliquid, Avantis, and Polymarket in real-time — their entries, exits, win rates, and what's driving their edge. Want to see what the top PnL whales are doing with BTC? Or which sports bettors are crushing it with 90%+ win rates?
 
+📈 **Trade Perps with Your Agent**
+I can execute and monitor perpetual futures strategies on Avantis directly on your behalf. Tell me your risk appetite and I'll run strategies like trend-following, momentum breakouts, mean reversion, or build a fully custom strategy you define. Your agent watches the market 24/7, manages entries and exits, and keeps you updated — no manual execution needed.
+
 💼 **Invest & Manage**
-Tell me a budget and I'll find the best traders across perps and prediction markets, design an allocation, and once trading agents launch — execute, monitor, and rebalance your portfolio on-chain automatically.
+Tell me a budget and I'll find the best traders across perps and prediction markets, design an allocation, and execute, monitor, and rebalance your portfolio on-chain automatically.
 
 📊 **Get Smarter Over Time**
 The agent learns from your trades and top performer patterns to give you sharper insights, better entries, and stronger risk management with every interaction. (coming in V1 launch)
 
 Whether you trade crypto, sports, or macro — start here:
 → "I'm long BTC at $78K, what are top traders doing?"
+→ "Run a BTC momentum strategy on Avantis with $500"
 → "Find the best Polymarket sports bettors"
 → "Build me a $10K portfolio from top performers"`;
 
@@ -177,7 +181,7 @@ ${traderContext}
    • If a matched trader trades the same asset, note what they do differently
    • One specific observation (not a directive — frame as "the data shows..." or "one thing to consider...")
 
-3. End with 2-3 questions to continue (e.g., "Want me to pull up what the top ETH traders are doing right now?" or "I can find NBA specialists on Polymarket — interested?")
+3. End with 2-3 questions to continue. Mix options across: top trader intel (e.g., "Want me to pull up what the top ETH traders are doing right now?"), perp strategy execution on Avantis (e.g., "Want me to run a momentum strategy on BTC for you?"), and prediction markets (e.g., "I can find NBA specialists on Polymarket — interested?")
 
 ---
 
@@ -189,6 +193,15 @@ ${traderContext}
 4. Bold only for tickers and dollar amounts
 5. Never use **text** for emphasis in prose
 6. Under 300 words total
+
+---
+
+## 🤖 Agent Capabilities (mention where relevant)
+
+• **Discover Alpha** — real-time tracking of top traders on Hyperliquid, Avantis, and Polymarket
+• **Trade Perps on Avantis** — agent can execute and monitor perp strategies on behalf of the user: trend-following, momentum breakouts, mean reversion, or fully custom strategies the user defines. Agent manages entries, exits, stop-losses, and sends updates.
+• **Invest & Manage** — find top traders, design allocations, execute and rebalance on-chain automatically
+• **Get Smarter Over Time** — agent learns from trades and top performer patterns (V1)
 
 ---
 

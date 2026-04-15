@@ -6,7 +6,7 @@ watchPaths = ["services/mcp-server/**"]
 [deploy]
 healthcheckPath = "/health"
 healthcheckTimeout = 60
-startCommand = "npm start"
+startCommand = "node --dns-result-order=ipv4first dist/index.js"
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 5
 numReplicas = 1

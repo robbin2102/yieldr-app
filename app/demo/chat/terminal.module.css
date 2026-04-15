@@ -1426,6 +1426,116 @@
 .roiValue { font-family: var(--font-mono); font-size: 0.72rem; font-weight: 700; color: var(--green); margin-bottom: 2px; }
 .roiMultiple { font-family: var(--font-mono); font-size: 0.58rem; font-weight: 700; color: var(--yellow); }
 
+/* ═══ FUNDS MODAL ═══ */
+.fundsLoading {
+  color: var(--fg3);
+  font-size: 0.72rem;
+  text-align: center;
+  padding: 24px 0;
+}
+.fundsWalletBlock {
+  margin-bottom: 14px;
+}
+.fundsWalletLabel {
+  font-size: 0.65rem;
+  color: var(--fg3);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 6px;
+}
+.fundsWalletRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg0);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+.fundsWalletAddr {
+  flex: 1;
+  font-family: monospace;
+  font-size: 0.72rem;
+  color: var(--fg1);
+  word-break: break-all;
+}
+.fundsCopyBtn {
+  background: var(--border2);
+  border: 1px solid var(--border2);
+  border-radius: 4px;
+  color: var(--fg2);
+  font-size: 0.65rem;
+  padding: 3px 8px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s, color 0.15s;
+}
+.fundsCopyBtn:hover { background: var(--green); color: #000; }
+.fundsBalRow {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.fundsBalItem {
+  background: var(--bg0);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.fundsBalLabel {
+  font-size: 0.63rem;
+  color: var(--fg3);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.fundsBalVal {
+  font-size: 0.82rem;
+  font-weight: 600;
+  font-family: monospace;
+}
+.fundsBalOk { color: var(--green); }
+.fundsBalWarn { color: #f59e0b; }
+.fundsGasWarn {
+  background: rgba(245,158,11,0.08);
+  border: 1px solid rgba(245,158,11,0.25);
+  border-radius: 6px;
+  color: #f59e0b;
+  font-size: 0.7rem;
+  padding: 8px 10px;
+  margin-bottom: 14px;
+}
+.fundsInstructions {
+  margin-bottom: 12px;
+}
+.fundsStepTitle {
+  font-size: 0.7rem;
+  color: var(--fg2);
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+.fundsStepList {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--fg3);
+  font-size: 0.7rem;
+  line-height: 1.7;
+}
+.fundsStepList strong { color: var(--fg2); }
+.fundsWithdrawNote {
+  background: rgba(0,200,5,0.05);
+  border: 1px solid rgba(0,200,5,0.15);
+  border-radius: 6px;
+  color: var(--fg3);
+  font-size: 0.68rem;
+  padding: 8px 10px;
+  line-height: 1.5;
+}
+.fundsWithdrawNote em { color: var(--green); font-style: normal; }
+
 /* ═══ AGENTS PAGE ═══ */
 .agentsPage {
   position: fixed;
@@ -1491,3 +1601,134 @@
 
 /* Position relative for history sidebar */
 .chatHdrWrap { position: relative; }
+
+/* ═══ ACTION CARDS (deposit request, trade approval) ═══ */
+.actionCard {
+  margin: 6px 0 10px;
+  padding: 12px 14px;
+  background: var(--bg2);
+  border: 1px solid var(--border2);
+  border-radius: 8px;
+  border-left: 3px solid var(--green-border);
+  max-width: 420px;
+}
+.actionCardHdr {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 8px;
+}
+.actionCardIcon { font-size: 1rem; }
+.actionCardTitle {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--t1);
+  letter-spacing: 0.01em;
+}
+.actionCardMeta {
+  font-size: 0.62rem;
+  color: var(--t3);
+  margin-bottom: 8px;
+}
+.actionCardAddr {
+  font-family: monospace;
+  color: var(--t2);
+}
+.actionCardBtn {
+  width: 100%;
+  padding: 8px 0;
+  background: var(--green);
+  border: none;
+  border-radius: 5px;
+  color: #000;
+  font-size: 0.7rem;
+  font-weight: 700;
+  font-family: var(--font-sans);
+  cursor: pointer;
+  transition: opacity 0.15s;
+  letter-spacing: 0.02em;
+}
+.actionCardBtn:hover { opacity: 0.88; }
+.actionCardBtn:disabled { opacity: 0.4; cursor: not-allowed; }
+.actionCardSuccess {
+  font-size: 0.65rem;
+  color: var(--green);
+  padding: 4px 0;
+}
+.actionCardSuccess a { color: inherit; }
+.actionCardError {
+  font-size: 0.65rem;
+  color: #FF3B3B;
+  padding: 4px 0;
+}
+.actionCardDone {
+  font-size: 0.65rem;
+  color: var(--t3);
+  padding: 4px 0;
+  font-style: italic;
+}
+
+/* Trade card specific */
+.tradeCardSection {
+  margin-bottom: 10px;
+}
+.tradeCardSectionTitle {
+  font-size: 0.58rem;
+  color: var(--t3);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 700;
+  margin-bottom: 6px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+.tradeCardConditions { margin-bottom: 2px; }
+.tradeCardCondLabel {
+  font-size: 0.55rem;
+  color: var(--t3);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 3px;
+}
+.tradeCardCond {
+  font-size: 0.62rem;
+  color: var(--t2);
+  line-height: 1.5;
+}
+.tradeCardGrid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px 10px;
+  margin-bottom: 10px;
+}
+.tradeCardItem { display: flex; flex-direction: column; gap: 2px; }
+.tradeCardLbl { font-size: 0.58rem; color: var(--t3); text-transform: uppercase; letter-spacing: 0.04em; }
+.tradeCardVal { font-size: 0.68rem; color: var(--t1); font-weight: 600; }
+.tradeCardBtns { display: flex; gap: 8px; margin-top: 4px; }
+.tradeApproveBtn {
+  flex: 1;
+  padding: 7px 0;
+  background: var(--green);
+  border: none;
+  border-radius: 5px;
+  color: #000;
+  font-size: 0.68rem;
+  font-weight: 700;
+  font-family: var(--font-sans);
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+.tradeApproveBtn:hover { opacity: 0.88; }
+.tradeCancelBtn {
+  flex: 0 0 auto;
+  padding: 7px 12px;
+  background: transparent;
+  border: 1px solid var(--border2);
+  border-radius: 5px;
+  color: var(--t3);
+  font-size: 0.68rem;
+  font-family: var(--font-sans);
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+.tradeCancelBtn:hover { border-color: #FF3B3B; color: #FF3B3B; }

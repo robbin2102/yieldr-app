@@ -9,6 +9,7 @@ export declare const config: {
         rateDelayMs: number;
     };
     coinglass: {
+        enabled: boolean;
         readonly apiKey: string;
         baseUrl: string;
         rateDelayMs: number;

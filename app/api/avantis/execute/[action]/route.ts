@@ -7,8 +7,11 @@ import AgentTrade, { TradeAction } from '@/models/AgentTrade';
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
-const PYTHON_URL       = process.env.PYTHON_SERVICE_URL    || 'http://localhost:8001';
-const DATA_API_SECRET  = process.env.YIELDR_DATA_API_SECRET || '';
+function normalizeUrl(url: string) {
+  return !url.startsWith('http://') && !url.startsWith('https://') ? `https://${url}` : url;
+}
+const PYTHON_URL       = normalizeUrl(process.env.PYTHON_SERVICE_URL || 'http://localhost:8001');
+const DATA_API_SECRET  = process.env.YIELDR_DATA_API_SECRET || process.env.API_KEY || '';
 const INTERNAL_SECRET  = process.env.YIELDR_INTERNAL_SECRET || '';
 
 // Map Next.js action slug → Python endpoint path
@@ -68,9 +71,11 @@ export async function POST(
   }
 
   const { action } = await params;
+  console.log(`[avantis/execute/${action}] ── REQUEST RECEIVED ──`);
   const pythonEndpoint = ACTION_MAP[action];
 
   if (!pythonEndpoint) {
+    console.error(`[avantis/execute/${action}] Unknown action`);
     return NextResponse.json(
       { error: `Unknown action: ${action}. Valid: ${Object.keys(ACTION_MAP).join(', ')}` },
       { status: 400 }
@@ -98,10 +103,16 @@ export async function POST(
   const tradeAction = resolveTradeAction(action, tradeParams.order_type);
 
   // ── Proxy to Python service ─────────────────────────────────────────────────
+  // agent_wallet_address is intentionally NOT passed — Python uses the static
+  // AGENT_WALLET_PRIVATE_KEY (bankr wallet) which has pre-approved USDC allowances.
+  const pythonBody = { ...tradeParams };
+  console.log(`[avantis/execute/${action}] → Python ${PYTHON_URL}/trade/${pythonEndpoint} body.pair=${pythonBody.pair} body.collateral=${pythonBody.collateral}`);
   let result: Record<string, any>;
   try {
-    result = await proxyToPython(pythonEndpoint, tradeParams);
+    result = await proxyToPython(pythonEndpoint, pythonBody);
+    console.log(`[avantis/execute/${action}] ← Python OK tx_hash=${result.tx_hash ?? result.trade?.tx_hash ?? 'none'}`);
   } catch (err: any) {
+    console.error(`[avantis/execute/${action}] ← Python ERROR: ${err.message}`);
     // Log failed attempt to agent_trades
     if (agentId && userId) {
       await AgentTrade.create({

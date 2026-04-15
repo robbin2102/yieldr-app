@@ -1,6 +1,56 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { createPrivateKey } from 'crypto';
 import connectDB from '@/lib/mongoose';
 import Agent from '@/models/Agent';
+import { CdpClient } from '@coinbase/cdp-sdk';
+
+// Lazy CDP client — only instantiated if env vars are present
+function getCdpClient(): CdpClient | null {
+  const apiKeyId     = process.env.CDP_API_KEY_ID;
+  const walletSecret = process.env.CDP_WALLET_SECRET;
+
+  // Normalize escaped \n → real newlines (handles .env.local single-line PEM storage)
+  let apiKeySecret = (process.env.CDP_API_KEY_SECRET || '').replace(/\\n/g, '\n');
+  // CDP SDK requires PKCS#8 ("BEGIN PRIVATE KEY"). If we have SEC1 ("BEGIN EC PRIVATE KEY"),
+  // convert it automatically using Node's crypto module.
+  if (apiKeySecret.includes('BEGIN EC PRIVATE KEY')) {
+    try {
+      apiKeySecret = createPrivateKey(apiKeySecret).export({ type: 'pkcs8', format: 'pem' }) as string;
+    } catch (err: any) {
+      console.error('[CDP] SEC1→PKCS#8 conversion failed:', err.message);
+    }
+  }
+  console.log('[CDP] env check — KEY_ID:', apiKeyId ? 'SET' : 'MISSING', '| KEY_SECRET:', apiKeySecret ? 'SET' : 'MISSING', '| WALLET_SECRET:', walletSecret ? 'SET' : 'MISSING');
+  if (!apiKeyId || !apiKeySecret || !walletSecret) return null;
+  try {
+    return new CdpClient({ apiKeyId, apiKeySecret, walletSecret });
+  } catch (err: any) {
+    console.error('[CDP] client init failed:', err.message);
+    return null;
+  }
+}
+
+// Creates a unique CDP wallet per agent.
+// idempotencyKey = ownerWallet + agentSlug so that:
+//   • same agent re-created with same name → same wallet (safe retry / idempotent)
+//   • different agents for the same user  → different wallets (isolation)
+async function createAgentWallet(
+  ownerWallet: string,
+  agentSlug: string,
+): Promise<{ address: string; cdpWalletId: string } | null> {
+  const cdp = getCdpClient();
+  if (!cdp) return null;
+  try {
+    const account = await cdp.evm.createAccount({
+      name: `yieldr-${agentSlug.slice(0, 20)}`,
+      idempotencyKey: `yieldr-agent-${ownerWallet.toLowerCase()}-${agentSlug}`,
+    });
+    return { address: account.address, cdpWalletId: account.address };
+  } catch (err: any) {
+    console.error('[CDP] wallet creation failed:', err.message);
+    return null;
+  }
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -50,12 +100,34 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: true, agent: existingAgent, updated: true });
     }
 
+    // Derive the agentId slug ahead of save (mirrors Mongoose pre-save hook)
+    const agentSlug = name
+      .toLowerCase()
+      .trim()
+      .replace(/[^a-z0-9\s-]/g, '')
+      .replace(/\s+/g, '-')
+      .replace(/-+/g, '-')
+      .slice(0, 40);
+
+    // New agent — provision a dedicated CDP agentic wallet (unique per agent)
+    const wallet = await createAgentWallet(ownerWallet, agentSlug);
+    if (wallet) {
+      agentData.agentWalletAddress = wallet.address;
+      agentData.cdpWalletId        = wallet.cdpWalletId;
+      agentData.agentWalletNetworkId = 'base-mainnet';
+    }
+
     const agent = new Agent({
       ownerWallet: ownerWallet.toLowerCase(),
       ...agentData,
     });
     await agent.save();
-    return NextResponse.json({ success: true, agent, created: true });
+    return NextResponse.json({
+      success: true,
+      agent,
+      created: true,
+      agentWalletAddress: wallet?.address ?? null,
+    });
   } catch (error) {
     console.error('Error creating agent:', error);
     return NextResponse.json({ error: 'Failed to create agent' }, { status: 500 });

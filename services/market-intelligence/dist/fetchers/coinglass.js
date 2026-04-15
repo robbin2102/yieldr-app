@@ -90,6 +90,10 @@ async function fetchAggregateData(trackedCoins) {
             liq_short_24h: null,
         });
     }
+    if (!config_1.config.coinglass.enabled) {
+        logger_1.logger.info('CoinGlass', 'CoinGlass disabled (COINGLASS_ENABLED != true) — skipping aggregate fetch');
+        return result;
+    }
     const trackedSet = new Set(trackedCoins.map(c => c.toUpperCase()));
     // 1. funding-rate/exchange-list → current funding rates
     // Response: [{ symbol, stablecoin_margin_list: [{ exchange, funding_rate }], token_margin_list }]
@@ -138,6 +142,9 @@ async function fetchPerCoinData(symbol) {
         basis: null,
         errors: [],
     };
+    if (!config_1.config.coinglass.enabled) {
+        return result;
+    }
     const pair = `${symbol}USDT`; // e.g. BTCUSDT — required by pair-level endpoints
     // NOTE: Funding rate, OI history, and long/short ratios are now sourced from the
     // binance-fetcher service (Singapore) which writes to binance_funding_1h and
@@ -184,6 +191,9 @@ async function fetchPerCoinData(symbol) {
 // Response: [{ time, premium, premium_rate }]
 async function fetchCoinbasePremium() {
     const result = { btc: null, eth: null };
+    if (!config_1.config.coinglass.enabled) {
+        return result;
+    }
     const data = await cgGet('/api/coinbase-premium-index?interval=4h&limit=1');
     if (data && Array.isArray(data) && data.length > 0) {
         const latest = data[data.length - 1];
@@ -197,6 +207,10 @@ async function fetchCoinbasePremium() {
 }
 // ─── Macro / Daily endpoints ─────────────────────────────────────────────────
 async function fetchMacroData() {
+    if (!config_1.config.coinglass.enabled) {
+        logger_1.logger.info('CoinGlass', 'CoinGlass disabled — skipping macro data fetch');
+        return { btcEtfFlows: null, ethEtfFlows: null, btcEtfNetAssets: null, fearGreed: null, stablecoinMcap: null };
+    }
     logger_1.logger.info('CoinGlass', 'Fetching daily macro data');
     const [btcEtfFlows, ethEtfFlows, btcEtfNetAssets, fearGreed, stablecoinMcap] = await Promise.all([
         cgGet('/api/etf/bitcoin/flow-history?limit=1'),

@@ -1,8 +1,13 @@
+import sys
+import os
+# Force unbuffered stdout so Railway captures all print() logs immediately
+os.environ.setdefault("PYTHONUNBUFFERED", "1")
+sys.stdout.reconfigure(line_buffering=True)
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import asyncio
-import os
 from pathlib import Path
 from dotenv import load_dotenv
 from web3 import Web3
@@ -17,6 +22,8 @@ print(f"[DIAG] .env.local path: {_env_path} (exists={_env_path.exists()})")
 print(f"[DIAG] AGENT_WALLET_PRIVATE_KEY loaded: len={len(_raw_pk)}, repr_first10={repr(_raw_pk[:10])}")
 print(f"[DIAG] API_KEY loaded: {'yes (len=' + str(len(os.getenv('API_KEY',''))) + ')' if os.getenv('API_KEY') else 'NO'}")
 print(f"[DIAG] QUICKNODE_BASE_RPC_URL: {'set' if os.getenv('QUICKNODE_BASE_RPC_URL') else 'NOT SET'}")
+print(f"[DIAG] CDP_SERVICE_URL: {os.getenv('CDP_SERVICE_URL', 'NOT SET')}")
+print(f"[DIAG] CDP_SERVICE_SECRET: {'set (len=' + str(len(os.getenv('CDP_SERVICE_SECRET',''))) + ')' if os.getenv('CDP_SERVICE_SECRET') else 'NOT SET'}")
 # ─────────────────────────────────────────────────────────────────────────────
 
 from avantis_trader_sdk import TraderClient, FeedClient
