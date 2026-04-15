@@ -24,6 +24,11 @@ const log = createLogger('Pipeline');
 // ../../scripts = poly-agent/scripts/ in both cases
 const SCRIPTS_DIR = path.resolve(__dirname, '../../scripts');
 
+// Scripts use  path.resolve(process.cwd(), 'services/.private/poly-agent/env.polyagent')
+// for env loading — that path is only valid from the project root.
+// PROJECT_ROOT = yieldr-app/  (4 levels up from scripts/)
+const PROJECT_ROOT = path.resolve(SCRIPTS_DIR, '../../../..');
+
 let isRunning = false;
 let intervalId: NodeJS.Timeout | null = null;
 
@@ -37,7 +42,7 @@ function runScript(name: string, args: string[] = []): Promise<{ durationMs: num
     const proc = spawn('npx', ['tsx', scriptPath, ...args], {
       stdio: 'inherit',
       env: process.env,
-      cwd: process.cwd(),
+      cwd: PROJECT_ROOT,  // scripts resolve env.polyagent relative to project root
       shell: true,
     });
 

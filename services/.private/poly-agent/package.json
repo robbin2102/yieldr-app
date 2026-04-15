@@ -8,13 +8,13 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "pipeline": "tsx src/pipeline-service.ts",
-    "pipeline:leaderboard": "tsx scripts/fetch-leaderboard.ts",
-    "pipeline:consistent": "tsx scripts/find-consistent-traders.ts",
-    "pipeline:profile": "tsx scripts/bulk-profile-ahf.ts",
-    "pipeline:profile:sample": "tsx scripts/bulk-profile-ahf.ts --sample=5",
-    "pipeline:edge": "tsx scripts/edge-ranked-traders.ts",
-    "pipeline:edge:top": "tsx scripts/edge-ranked-traders.ts --top=20",
-    "pipeline:full": "tsx scripts/fetch-leaderboard.ts && tsx scripts/find-consistent-traders.ts && tsx scripts/bulk-profile-ahf.ts && tsx scripts/edge-ranked-traders.ts"
+    "pipeline:leaderboard": "cd ../../.. && tsx services/.private/poly-agent/scripts/fetch-leaderboard.ts",
+    "pipeline:consistent": "cd ../../.. && tsx services/.private/poly-agent/scripts/find-consistent-traders.ts",
+    "pipeline:profile": "cd ../../.. && tsx services/.private/poly-agent/scripts/bulk-profile-ahf.ts",
+    "pipeline:profile:sample": "cd ../../.. && tsx services/.private/poly-agent/scripts/bulk-profile-ahf.ts --sample=5",
+    "pipeline:edge": "cd ../../.. && tsx services/.private/poly-agent/scripts/edge-ranked-traders.ts",
+    "pipeline:edge:top": "cd ../../.. && tsx services/.private/poly-agent/scripts/edge-ranked-traders.ts --top=20",
+    "pipeline:full": "cd ../../.. && tsx services/.private/poly-agent/scripts/fetch-leaderboard.ts && tsx services/.private/poly-agent/scripts/find-consistent-traders.ts && tsx services/.private/poly-agent/scripts/bulk-profile-ahf.ts && tsx services/.private/poly-agent/scripts/edge-ranked-traders.ts"
   },
   "dependencies": {
     "@polymarket/clob-client": "^5.8.1",
