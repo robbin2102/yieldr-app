@@ -1,17 +1,27 @@
 {
   "name": "poly-agent",
   "version": "1.0.0",
-  "description": "Polymarket Copy Trading Agent",
+  "description": "Polymarket Copy Trading Agent + Trader Ranking Pipeline",
   "main": "dist/index.js",
   "scripts": {
     "dev": "ts-node src/index.ts",
     "build": "tsc",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "pipeline": "tsx src/pipeline-service.ts",
+    "pipeline:leaderboard": "tsx scripts/fetch-leaderboard.ts",
+    "pipeline:consistent": "tsx scripts/find-consistent-traders.ts",
+    "pipeline:profile": "tsx scripts/bulk-profile-ahf.ts",
+    "pipeline:profile:sample": "tsx scripts/bulk-profile-ahf.ts --sample=5",
+    "pipeline:edge": "tsx scripts/edge-ranked-traders.ts",
+    "pipeline:edge:top": "tsx scripts/edge-ranked-traders.ts --top=20",
+    "pipeline:full": "tsx scripts/fetch-leaderboard.ts && tsx scripts/find-consistent-traders.ts && tsx scripts/bulk-profile-ahf.ts && tsx scripts/edge-ranked-traders.ts"
   },
   "dependencies": {
     "@polymarket/clob-client": "^5.8.1",
+    "axios": "^1.15.0",
     "dotenv": "^16.3.1",
     "ethers": "^5.7.2",
+    "mongodb": "^6.21.0",
     "mongoose": "^8.0.3",
     "tslib": "^2.8.1",
     "ws": "^8.14.2"
@@ -20,6 +30,7 @@
     "@types/node": "^20.10.4",
     "@types/ws": "^8.5.10",
     "ts-node": "^10.9.2",
+    "tsx": "^4.21.0",
     "typescript": "^5.3.3"
   }
 }
