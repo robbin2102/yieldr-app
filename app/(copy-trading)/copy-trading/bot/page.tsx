@@ -73,7 +73,6 @@ interface PortfolioSummary {
   totalBotPnl: number | null;
   botROCE: number | null;
   trades24h: number;
-  pipelineAge: string | null;
 }
 
 interface ExecWindow {
@@ -179,6 +178,8 @@ export default function BotDashboard() {
   const [execHealth,  setExecHealth]  = useState<ExecHealth | null>(null);
   const [loading,     setLoading]     = useState(true);
   const [stopping,    setStopping]    = useState<string | null>(null);
+  const [actStatus,   setActStatus]   = useState<string>('ALL');
+  const [actTrader,   setActTrader]   = useState<string>('ALL');
 
   async function fetchAll() {
     try {
@@ -425,35 +426,14 @@ export default function BotDashboard() {
               </tbody>
             </table>
           </div>
-          {/* Issues + suggestions */}
-          {execHealth.issues.filter(i => i.reason !== 'BELOW_AVG' && i.reason !== 'GROUPED_BELOW_AVG' && i.reason !== 'DUPLICATE' && i.reason !== 'NON_TRADE').length > 0 && (
-            <div className="border-t border-[#1A1A1A] px-4 py-3 space-y-1.5">
-              <div className="text-[9px] text-[#6E6E6E] tracking-widest mb-2">ISSUES & FIXES</div>
-              {execHealth.issues
-                .filter(i => !['BELOW_AVG','GROUPED_BELOW_AVG','DUPLICATE','NON_TRADE'].includes(i.reason))
-                .map(({ reason, count, suggestion }) => (
-                  <div key={reason} className="flex items-start gap-3 text-[11px]">
-                    <span className="text-[#FF8C00] font-bold w-32 flex-shrink-0">
-                      {reason.replace(/_/g, ' ')} ({count}×)
-                    </span>
-                    <span className="text-[#9E9E9E]">{suggestion}</span>
-                  </div>
-                ))}
-            </div>
-          )}
         </div>
       )}
 
       {/* ── Portfolio Strip + Open Positions ── */}
       {portSummary && (
         <div className="bg-[#0A0A0A] border border-[#1A1A1A] rounded overflow-hidden">
-          <div className="px-4 py-2 border-b border-[#1A1A1A] flex items-center justify-between">
+          <div className="px-4 py-2 border-b border-[#1A1A1A]">
             <span className="text-[10px] text-[#00C805] tracking-widest font-bold">BOT PORTFOLIO</span>
-            {portSummary.pipelineAge && (
-              <span className="text-[10px] text-[#6E6E6E]">
-                pipeline {timeAgo(portSummary.pipelineAge)}
-              </span>
-            )}
           </div>
           {/* Summary strip */}
           <div className="grid grid-cols-6 gap-0 border-b border-[#1A1A1A]">
@@ -522,9 +502,48 @@ export default function BotDashboard() {
 
       {/* ── Live Activity Log ── */}
       <div className="bg-[#0A0A0A] border border-[#1A1A1A] rounded overflow-hidden">
-        <div className="px-4 py-2 border-b border-[#1A1A1A] flex items-center justify-between">
+        <div className="px-4 py-2 border-b border-[#1A1A1A] flex items-center gap-3 flex-wrap">
           <span className="text-[10px] text-[#00C805] tracking-widest font-bold">LIVE ACTIVITY</span>
-          <span className="text-[10px] text-[#6E6E6E]">last {activity.length}</span>
+          {/* Status filter */}
+          <div className="flex items-center gap-1">
+            {['ALL','FILLED','SKIPPED','FAILED'].map(s => (
+              <button key={s} onClick={() => setActStatus(s)}
+                className="px-2 py-0.5 text-[9px] rounded border transition-colors"
+                style={{
+                  borderColor: actStatus === s ? '#00C805' : '#1A1A1A',
+                  color: actStatus === s ? '#00C805' : '#6E6E6E',
+                  background: actStatus === s ? '#00C80510' : 'transparent',
+                }}>
+                {s}
+              </button>
+            ))}
+          </div>
+          {/* Trader filter */}
+          {traders.length > 0 && (
+            <div className="flex items-center gap-1 flex-wrap">
+              <button onClick={() => setActTrader('ALL')}
+                className="px-2 py-0.5 text-[9px] rounded border transition-colors"
+                style={{
+                  borderColor: actTrader === 'ALL' ? '#00C805' : '#1A1A1A',
+                  color: actTrader === 'ALL' ? '#00C805' : '#6E6E6E',
+                  background: actTrader === 'ALL' ? '#00C80510' : 'transparent',
+                }}>
+                ALL TRADERS
+              </button>
+              {[...new Set(activity.map(a => a.traderLabel))].filter(Boolean).map(label => (
+                <button key={label} onClick={() => setActTrader(label)}
+                  className="px-2 py-0.5 text-[9px] rounded border transition-colors"
+                  style={{
+                    borderColor: actTrader === label ? '#00C805' : '#1A1A1A',
+                    color: actTrader === label ? '#00C805' : '#6E6E6E',
+                    background: actTrader === label ? '#00C80510' : 'transparent',
+                  }}>
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
+          <span className="ml-auto text-[10px] text-[#6E6E6E]">last {activity.length}</span>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-xs">
@@ -539,7 +558,10 @@ export default function BotDashboard() {
               {activity.length === 0 && (
                 <tr><td colSpan={8} className="px-4 py-6 text-center text-[#6E6E6E]">No activity</td></tr>
               )}
-              {activity.map(a => (
+              {activity.filter(a =>
+                (actStatus === 'ALL' || a.status === actStatus) &&
+                (actTrader === 'ALL' || a.traderLabel === actTrader)
+              ).map(a => (
                 <tr key={a._id} className="border-b border-[#0F0F0F] hover:bg-[#111] transition-colors">
                   <td className="px-2 py-1.5 text-[#6E6E6E] whitespace-nowrap">{timeAgo(a.createdAt)}</td>
                   <td className="px-2 py-1.5 text-[#9E9E9E] whitespace-nowrap">{a.traderLabel}</td>

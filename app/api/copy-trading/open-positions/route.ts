@@ -3,154 +3,101 @@ import clientPromise, { dbName } from '@/lib/mongodb';
 
 export const dynamic = 'force-dynamic';
 
+const DATA_API   = process.env.POLYMARKET_DATA_API ?? 'https://data-api.polymarket.com';
+const BOT_WALLET = (process.env.BOT_WALLET_ADDRESS ?? '').toLowerCase();
+
 function normalTitle(t: string): string {
   return (t ?? '').toLowerCase().trim().replace(/[?!.\s]+$/, '').replace(/\s+/g, ' ');
 }
 
 export async function GET() {
   try {
+    if (!BOT_WALLET) {
+      return NextResponse.json({ success: false, error: 'BOT_WALLET_ADDRESS not configured' }, { status: 500 });
+    }
+
     const client = await clientPromise;
     const db = client.db(dbName);
 
-    // All FILLED BUY trades = bot's position book
-    const filledTrades = await db.collection('ahf-copyTrades')
-      .find({ status: 'FILLED', side: 'BUY' })
-      .toArray();
+    // Fetch bot's actual on-chain positions from Polymarket data API
+    const posRes = await fetch(
+      `${DATA_API}/positions?user=${BOT_WALLET}&sizeThreshold=0.01&limit=500`,
+    );
+    const posRaw = await posRes.json() as any;
+    const rawAll: any[] = Array.isArray(posRaw) ? posRaw : (posRaw.data ?? []);
 
-    if (filledTrades.length === 0) {
-      return NextResponse.json({ success: true, positions: [], summary: {
-        openCount: 0, openValue: 0, unrealizedPnl: 0,
-        totalBotPnl: null, botROCE: null, pipelineAge: null,
-      }});
-    }
+    // Keep only active open positions (price between 0–1, value > $1)
+    const openRaw = rawAll.filter((p: any) => {
+      const size     = parseFloat(p.size         ?? '0');
+      const curPrice = parseFloat(p.curPrice     ?? p.currentPrice ?? '0');
+      const curVal   = parseFloat(p.currentValue ?? String(size * curPrice));
+      return curVal > 1 && curPrice > 0 && curPrice < 1;
+    });
 
-    // Group by title+outcome+sourceWallet
-    const groupMap = new Map<string, {
-      conditionId: string | null;
-      title: string; outcome: string;
-      sourceWallet: string; traderLabel: string;
-      totalFilledUsdc: number; totalFilledSize: number;
-      weightedPriceSum: number; tradeCount: number;
-      lastFilled: number | null;
-    }>();
+    // Parallel: filled buys for trader-label enrichment + portfolio meta
+    const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const [filledBuys, allocEvents, copyTraders, trades24h] = await Promise.all([
+      db.collection('ahf-copyTrades')
+        .find({ status: 'FILLED', side: 'BUY' })
+        .project({ title: 1, outcome: 1, traderLabel: 1, sourceWallet: 1 })
+        .toArray(),
+      db.collection('ahf-allocationEvents').aggregate([
+        { $sort: { runAt: -1 } },
+        { $group: { _id: '$wallet', doc: { $first: '$$ROOT' } } },
+        { $replaceRoot: { newRoot: '$doc' } },
+      ]).toArray(),
+      db.collection('ahf-copyTraders').find({}).toArray(),
+      db.collection('ahf-copyTrades').countDocuments({ status: 'FILLED', createdAt: { $gte: since24h } }),
+    ]);
 
-    for (const t of filledTrades as any[]) {
-      const key = `${t.title ?? ''}:${t.outcome ?? ''}:${t.sourceWallet ?? ''}`;
-      if (!groupMap.has(key)) {
-        groupMap.set(key, {
-          conditionId: t.conditionId ?? null,
-          title: t.title ?? '', outcome: t.outcome ?? '',
-          sourceWallet: t.sourceWallet ?? '', traderLabel: t.traderLabel ?? '',
-          totalFilledUsdc: 0, totalFilledSize: 0, weightedPriceSum: 0,
-          tradeCount: 0, lastFilled: null,
-        });
-      }
-      const g = groupMap.get(key)!;
-      const fu = t.filledUsdc   ?? 0;
-      const fs = t.filledSize   ?? 0;
-      const fp = t.avgFillPrice ?? 0;
-      g.totalFilledUsdc  += fu;
-      g.totalFilledSize  += fs;
-      g.weightedPriceSum += fp * fu;
-      g.tradeCount++;
-      if (t.filledAt != null && (g.lastFilled == null || t.filledAt > g.lastFilled)) {
-        g.lastFilled = t.filledAt;
+    // Build title+outcome → traderLabel lookup
+    const labelMap = new Map<string, string>();
+    for (const t of filledBuys as any[]) {
+      const key = `${normalTitle(t.title ?? '')}:${(t.outcome ?? '').toLowerCase()}`;
+      if (!labelMap.has(key)) {
+        labelMap.set(key, (t as any).traderLabel ?? ((t as any).sourceWallet as string)?.slice(0, 8) ?? '—');
       }
     }
 
-    const traderWallets = [...new Set([...groupMap.values()].map(g => g.sourceWallet.toLowerCase()))];
+    // Build position list
+    const positions = openRaw.map((p: any) => {
+      const size         = parseFloat(p.size         ?? '0');
+      const curPrice     = parseFloat(p.curPrice     ?? p.currentPrice ?? '0');
+      const avgPrice     = parseFloat(p.avgPrice     ?? p.averagePrice ?? '0');
+      const currentValue = parseFloat(p.currentValue ?? String(size * curPrice));
+      const initialValue = parseFloat(p.initialValue ?? String(size * avgPrice));
+      const cashPnl      = parseFloat(p.cashPnl      ?? String(currentValue - initialValue));
 
-    // Get trader open positions from pipeline-materialized collection
-    const traderPositions = await db.collection('polymarket-openPositions')
-      .find({ wallet: { $in: traderWallets } })
-      .toArray();
+      const key         = `${normalTitle(p.title ?? '')}:${(p.outcome ?? '').toLowerCase()}`;
+      const traderLabel = labelMap.get(key) ?? '—';
 
-    // Build lookup maps: conditionId+outcome+wallet AND normalized-title+outcome+wallet
-    const byConditionId = new Map<string, any>();
-    const byTitle       = new Map<string, any>();
-    for (const p of traderPositions as any[]) {
-      const w = (p.wallet ?? '').toLowerCase();
-      if (p.conditionId) byConditionId.set(`${p.conditionId}:${p.outcome}:${w}`, p);
-      byTitle.set(`${normalTitle(p.title)}:${(p.outcome ?? '').toLowerCase()}:${w}`, p);
-    }
-
-    // Pipeline freshness
-    const newestDate = (traderPositions as any[]).reduce((max: Date | null, p: any) => {
-      const d = p.lastUpdatedAt ? new Date(p.lastUpdatedAt) : null;
-      return !d ? max : (!max || d > max ? d : max);
-    }, null);
-
-    // Build position list — ONLY include where we can confirm curPrice > 0 (open)
-    const positions: any[] = [];
-    for (const g of groupMap.values()) {
-      const w = g.sourceWallet.toLowerCase();
-      const condKey  = g.conditionId ? `${g.conditionId}:${g.outcome}:${w}` : null;
-      const titleKey = `${normalTitle(g.title)}:${g.outcome.toLowerCase()}:${w}`;
-      const traderPos = (condKey && byConditionId.get(condKey)) ?? byTitle.get(titleKey);
-
-      // Only show confirmed open positions (curPrice > 0 from trader's portfolio)
-      if (!traderPos || !(traderPos.curPrice > 0)) continue;
-
-      const avgFillPrice = g.totalFilledUsdc > 0
-        ? g.weightedPriceSum / g.totalFilledUsdc : 0;
-      const curPrice       = traderPos.curPrice as number;
-      const estimatedPnl   = g.totalFilledSize > 0
-        ? (curPrice - avgFillPrice) * g.totalFilledSize : 0;
-      const currentValue   = curPrice * g.totalFilledSize;
-
-      positions.push({
-        title:           g.title,
-        outcome:         g.outcome,
-        conditionId:     g.conditionId,
-        traderLabel:     g.traderLabel,
-        sourceWallet:    g.sourceWallet,
-        avgFillPrice,
-        totalFilledUsdc: g.totalFilledUsdc,
-        totalFilledSize: g.totalFilledSize,
-        tradeCount:      g.tradeCount,
-        lastFilled:      g.lastFilled,
+      return {
+        title:           p.title ?? 'Unknown',
+        outcome:         p.outcome ?? '—',
+        traderLabel,
+        avgFillPrice:    avgPrice,
+        totalFilledUsdc: initialValue,
+        totalFilledSize: size,
         curPrice,
         currentValue,
-        estimatedPnl,
-      });
-    }
-
-    // Sort by estimated PnL desc
-    positions.sort((a, b) => b.estimatedPnl - a.estimatedPnl);
+        estimatedPnl:    cashPnl,
+      };
+    }).sort((a: any, b: any) => b.estimatedPnl - a.estimatedPnl);
 
     // Portfolio summary
     const openCount     = positions.length;
-    const openValue     = positions.reduce((s, p) => s + p.currentValue, 0);
-    const unrealizedPnl = positions.reduce((s, p) => s + p.estimatedPnl, 0);
+    const openValue     = positions.reduce((s: number, p: any) => s + p.currentValue, 0);
+    const unrealizedPnl = positions.reduce((s: number, p: any) => s + p.estimatedPnl, 0);
 
-    // Bot total PnL + ROCE from latest alloc events
-    const latestAllocEvents = await db.collection('ahf-allocationEvents').aggregate([
-      { $sort: { runAt: -1 } },
-      { $group: { _id: '$wallet', doc: { $first: '$$ROOT' } } },
-      { $replaceRoot: { newRoot: '$doc' } },
-    ]).toArray();
+    const totalAlloc  = (copyTraders  as any[]).reduce((s: number, t: any) => s + (t.allocationUsdc ?? 0), 0);
+    const totalBotPnl = (allocEvents  as any[]).reduce((s: number, e: any) => s + (e.bPnl ?? 0), 0);
+    const botROCE     = totalAlloc > 0 ? (totalBotPnl / totalAlloc) * 100 : null;
 
-    const copyTraders = await db.collection('ahf-copyTraders').find({}).toArray();
-    const totalAlloc = (copyTraders as any[]).reduce((s: number, t: any) => s + (t.allocationUsdc ?? 0), 0);
-    const totalBotPnl = (latestAllocEvents as any[]).reduce((s: number, e: any) => s + (e.bPnl ?? 0), 0);
-    const botROCE = totalAlloc > 0 ? (totalBotPnl / totalAlloc) * 100 : null;
-
-    // 24h total trades (filled)
-    const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
-    const trades24h = await db.collection('ahf-copyTrades')
-      .countDocuments({ status: 'FILLED', createdAt: { $gte: since24h } });
-
-    const summary = {
-      openCount,
-      openValue,
-      unrealizedPnl,
-      totalBotPnl,
-      botROCE,
-      trades24h,
-      pipelineAge: newestDate,
-    };
-
-    return NextResponse.json({ success: true, positions, summary });
+    return NextResponse.json({
+      success: true,
+      positions,
+      summary: { openCount, openValue, unrealizedPnl, totalBotPnl, botROCE, trades24h },
+    });
   } catch (error: any) {
     console.error('Error fetching open positions:', error);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
