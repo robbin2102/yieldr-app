@@ -178,96 +178,119 @@ interface Stats {
   // Bot cashflow (from MongoDB FILLED docs + data API redeems)
   bBought: number; bSold: number; bRedeemed: number; bOpenVal: number;
   bRealized: number; bTotal: number;
+  // ROCE — % based, scales with allocation
+  traderROCE: number;  // tTotal / allocationUsdc
+  botROCE:    number;  // bTotal / allocationUsdc
   // Activity counts
   detected: number; filled: number; skips: Record<string, number>;
   // Missed conviction PnL
   missedPnl: number;
   // Pipeline edge data
-  edgeScore: number | null;
+  edgeScore:      number | null;
   edgeConfidence: string | null;
-  edgeRank: number | null;
-  daysInactive: number | null;
+  edgeRank:       number | null;
+  edgeSpecialty:  string | null;
+  daysInactive:   number | null;
   // Failure classification
   failureType: 'EXEC_FAIL' | 'TRADER_FAIL' | 'NONE';
   action: string; reason: string;
 }
 
-// ── recommendation (with execution vs trader failure labeling) ───────────────
+const SPORTS_SPECIALTIES = new Set(['sports', 'esports', 'nba', 'nfl', 'soccer', 'cricket']);
+
+// ── recommendation ────────────────────────────────────────────────────────────
+// Hard stops (4, binary — bypass scaling entirely):
+//   1. botROCE < -50%           — lost half allocation, real capital protection
+//   2. Dormant > 4d             — trader not active
+//   3. Edge < 0.1               — statistical edge gone
+//   4. Specialty drift          — moved to sports/esports category
+//
+// Scaling (ROCE-based — traderROCE = tTotal/alloc, botROCE = bTotal/alloc):
+//   SCALE_UP:   traderROCE > +20% AND edge > 0.15  → double allocation
+//   SCALE_UP:   traderROCE > +40% AND edge > 0.20  → double again
+//   SOFT_STOP:  traderROCE < -30%                   → $0 new entries
+//   SCALE_DOWN: traderROCE < -15%                   → halve allocation
+//
+// Execution gate: skip_rate > 60% → EXEC_FAIL, suspend scaling decisions
 function recommend(s: Stats): { action: string; reason: string; failureType: 'EXEC_FAIL' | 'TRADER_FAIL' | 'NONE' } {
-  const topSkip  = Object.entries(s.skips).sort((a,b) => b[1]-a[1])[0]?.[0] ?? '';
-  const capRate  = s.detected > 0 ? s.filled / s.detected : 0;
-  const snpCount = s.skips['SELL_NO_POSITION'] ?? 0;
+  const topSkip    = Object.entries(s.skips).sort((a,b) => b[1]-a[1])[0]?.[0] ?? '';
+  const snpCount   = s.skips['SELL_NO_POSITION'] ?? 0;
   const allocCount = s.skips['ALLOCATION_FULL'] ?? 0;
+  const totalSkips = Object.values(s.skips).reduce((a, b) => a + b, 0);
+  const skipRate   = s.detected > 0 ? totalSkips / s.detected : 0;
+  const pct        = (n: number) => `${(n * 100).toFixed(1)}%`;
 
-  // ── HARD STOPS (bypass everything, close positions) ───────────────────────
+  // ── HARD STOPS (4 only — binary, bypass everything) ──────────────────────
 
-  // Dormant trader — no on-chain activity >4 days
+  // 1. Bot lost > 50% of allocation — real capital floor
+  if (s.botROCE < -0.50) {
+    return { action: '🔴 HARD_STOP', failureType: 'TRADER_FAIL',
+      reason: `botROCE ${pct(s.botROCE)} — lost >50% of allocation ($${s.alloc})` };
+  }
+  // 2. Trader dormant > 4 days
   if (s.daysInactive !== null && s.daysInactive > 4) {
     return { action: '🔴 HARD_STOP', failureType: 'TRADER_FAIL',
-      reason: `trader dormant ${s.daysInactive}d (>4d threshold)` };
+      reason: `trader dormant ${s.daysInactive}d — not trading their own book` };
   }
-  // Edge collapsed below 0.1
+  // 3. Edge collapsed
   if (s.edgeScore !== null && s.edgeScore < 0.1) {
     return { action: '🔴 HARD_STOP', failureType: 'TRADER_FAIL',
-      reason: `edge collapsed (${s.edgeScore.toFixed(3)}, confidence=${s.edgeConfidence})` };
+      reason: `edge collapsed to ${s.edgeScore.toFixed(3)} (confidence=${s.edgeConfidence})` };
   }
-  // Bot realized loss > $50
-  if (s.bRealized < -50) {
+  // 4. Specialty drift to sports/esports
+  if (s.edgeSpecialty && SPORTS_SPECIALTIES.has(s.edgeSpecialty.toLowerCase())) {
     return { action: '🔴 HARD_STOP', failureType: 'TRADER_FAIL',
-      reason: `bot realized loss ${$(s.bRealized)} exceeds -$50 threshold` };
-  }
-  // Trader hemorrhaging
-  if (s.tTotal < -500 && s.tRealized < -100) {
-    return { action: '🔴 HARD_STOP', failureType: 'TRADER_FAIL',
-      reason: `trader losing: realized ${$(s.tRealized)}, total ${$(s.tTotal)}` };
-  }
-  if (s.bTotal < -15 && s.tTotal < -100) {
-    return { action: '🔴 HARD_STOP', failureType: 'TRADER_FAIL',
-      reason: `both trader and bot losing` };
+      reason: `specialty drifted to "${s.edgeSpecialty}" — outside copy-trade mandate` };
   }
 
-  // ── EXECUTION FAILURES (trader ok, our side broken) ───────────────────────
-
-  // Allocation exhausted — profitable trader but we can't follow
-  if (s.tTotal > 50 && topSkip === 'ALLOCATION_FULL') {
-    return { action: '🟡 INCREASE_ALLOC [EXEC_FAIL]', failureType: 'EXEC_FAIL',
-      reason: `trader ${$(s.tTotal)} but allocation maxed ($${s.spent.toFixed(0)}/$${s.alloc}) — ${allocCount} trades missed` };
-  }
-  // Buy entries missing — bot never entered positions trader is profiting on
-  if (s.tTotal > 30 && snpCount > s.detected * 0.4) {
+  // ── EXECUTION GATE — skip_rate > 60% means our data is unreliable ────────
+  // Flag only, don't penalise allocation based on bad execution data.
+  if (skipRate > 0.60) {
+    const topSkipNote = topSkip ? ` (top skip: ${topSkip})` : '';
     return { action: '🟡 FIX_ENTRY [EXEC_FAIL]', failureType: 'EXEC_FAIL',
-      reason: `trader ${$(s.tTotal)} but ${snpCount} SELL_NO_POSITION — reduce DETECTOR_INTERVAL_MS` };
-  }
-  // Market quality issues — spread/drift blocking execution
-  if (s.tTotal > 50 && topSkip === 'WIDE_SPREAD' && capRate < 0.05) {
-    return { action: '🟡 WATCH [EXEC_FAIL]', failureType: 'EXEC_FAIL',
-      reason: `trader ${$(s.tTotal)} but trades too illiquid (WIDE_SPREAD) — reduce DETECTOR_INTERVAL_MS to 5s` };
+      reason: `skip_rate ${pct(skipRate)} >60% — execution unreliable${topSkipNote}, suspend scaling` };
   }
 
-  // ── SCALING / CONTINUE ────────────────────────────────────────────────────
+  // ── EXEC_FAIL sub-cases (skip_rate ok but specific execution issue) ───────
+  if (snpCount > s.detected * 0.4) {
+    return { action: '🟡 FIX_ENTRY [EXEC_FAIL]', failureType: 'EXEC_FAIL',
+      reason: `trader tROCE ${pct(s.traderROCE)} but ${snpCount} SELL_NO_POSITION — set DETECTOR_INTERVAL_MS=5000` };
+  }
+  if (s.traderROCE > 0.20 && topSkip === 'ALLOCATION_FULL') {
+    return { action: '🟡 INCREASE_ALLOC [EXEC_FAIL]', failureType: 'EXEC_FAIL',
+      reason: `tROCE ${pct(s.traderROCE)} but allocation maxed ($${s.spent.toFixed(0)}/$${s.alloc}) — ${allocCount} trades missed` };
+  }
 
-  // Scale up: bot profitable + good edge
-  if (s.bRealized > 20 && s.edgeScore !== null && s.edgeScore > 0.15) {
+  // ── SCALING (ROCE-based, trader-driven) ───────────────────────────────────
+
+  // Soft stop — trader losing significantly
+  if (s.traderROCE < -0.30) {
+    return { action: '🔴 SOFT_STOP', failureType: 'TRADER_FAIL',
+      reason: `tROCE ${pct(s.traderROCE)} < -30% — $0 new entries, keep open positions` };
+  }
+  // Scale down — trader losing, not yet soft-stop
+  if (s.traderROCE < -0.15) {
+    return { action: '🟠 SCALE_DOWN', failureType: 'TRADER_FAIL',
+      reason: `tROCE ${pct(s.traderROCE)} < -15% — halve allocation ($${s.alloc} → $${Math.floor(s.alloc / 2)})` };
+  }
+  // Scale up (level 2) — strong performance + strong edge
+  if (s.traderROCE > 0.40 && s.edgeScore !== null && s.edgeScore > 0.20) {
+    return { action: '🟢 SCALE_UP_L2', failureType: 'NONE',
+      reason: `tROCE ${pct(s.traderROCE)} >40%, edge=${s.edgeScore.toFixed(3)} >0.20 — double again ($${s.alloc} → $${Math.min(s.alloc * 2, s.alloc * 10)})` };
+  }
+  // Scale up (level 1)
+  if (s.traderROCE > 0.20 && s.edgeScore !== null && s.edgeScore > 0.15) {
     return { action: '🟢 SCALE_UP', failureType: 'NONE',
-      reason: `bot ${$(s.bRealized)} realized, edge=${s.edgeScore.toFixed(3)} — double allocation` };
+      reason: `tROCE ${pct(s.traderROCE)} >20%, edge=${s.edgeScore.toFixed(3)} >0.15 — double allocation ($${s.alloc} → $${s.alloc * 2})` };
   }
-  // Scale down: bot losing but not hard-stop level
-  if (s.bRealized < -25 && s.bRealized >= -50) {
-    return { action: '🟠 SCALE_DOWN', failureType: 'NONE',
-      reason: `bot realized ${$(s.bRealized)} — halve allocation` };
-  }
-  // Normal continue
-  if (s.tTotal > 30 && capRate > 0.04) {
+  // Continue — profitable or neutral
+  if (s.traderROCE >= 0) {
     const edgeNote = s.edgeScore != null ? ` | edge=${s.edgeScore.toFixed(3)}` : '';
     return { action: '🟢 CONTINUE', failureType: 'NONE',
-      reason: `trader ${$(s.tTotal)}, bot ${$(s.bTotal)}, cap ${(capRate*100).toFixed(0)}%${edgeNote}` };
-  }
-  if (s.tRealized >= 0 && s.tTotal > 0) {
-    return { action: '🟢 CONTINUE', failureType: 'NONE',
-      reason: `trader profitable — realized ${$(s.tRealized)}` };
+      reason: `tROCE ${pct(s.traderROCE)}, bROCE ${pct(s.botROCE)}${edgeNote}` };
   }
   return { action: '🟡 WATCH', failureType: 'NONE',
-    reason: `mixed signals — tTotal ${$(s.tTotal)}, bot ${$(s.bTotal)}` };
+    reason: `tROCE ${pct(s.traderROCE)}, bROCE ${pct(s.botROCE)} — monitor next cycle` };
 }
 
 // ── main ──────────────────────────────────────────────────────────────────────
@@ -388,6 +411,9 @@ async function main() {
       if (!isNaN(lastMs)) daysInactive = Math.floor((Date.now() - lastMs) / 86_400_000);
     }
 
+    const traderROCE = tr.allocationUsdc > 0 ? tTotal / tr.allocationUsdc : 0;
+    const botROCE    = tr.allocationUsdc > 0 ? bTotal / tr.allocationUsdc : 0;
+
     const s: Stats = {
       label: tr.label, wallet: tr.wallet,
       avgBet: tr.avgBet, baseBet: tr.baseBetUsdc, maxBet: tr.maxBetUsdc,
@@ -395,10 +421,12 @@ async function main() {
       positionCap,
       tBought, tSold, tRedeemed, tOpenVal, tRealized, tTotal,
       bBought, bSold, bRedeemed, bOpenVal, bRealized, bTotal,
+      traderROCE, botROCE,
       detected, filled, skips, missedPnl,
-      edgeScore: edge?.edge ?? null,
+      edgeScore:      edge?.edge ?? null,
       edgeConfidence: edge?.confidence ?? null,
-      edgeRank: edge?.overall_rank ?? null,
+      edgeRank:       edge?.overall_rank ?? null,
+      edgeSpecialty:  edge?.specialty ?? null,
       daysInactive,
       failureType: 'NONE',
       action: '', reason: '',
@@ -458,35 +486,46 @@ async function main() {
   console.log('\n' + '═'.repeat(W));
   console.log('  ALLOCATION MANAGEMENT');
   console.log('═'.repeat(W));
-  console.log('\n  Rules:');
-  console.log('    Per-position cap:  30% of allocationUsdc (scales dynamically with allocation changes)');
-  console.log('    SCALE_UP:          bot realized > +$20 AND edge > 0.15     → double allocation');
-  console.log('    SCALE_DOWN:        bot realized < -$25                      → halve allocation');
-  console.log('    HARD_STOP:         bot realized < -$50 OR dormant >4d OR edge <0.1 → close all positions');
+  console.log('\n  Rules (all % based — scale automatically with any starting allocation):');
+  console.log('    Per-position cap:  30% of allocationUsdc');
+  console.log('    SCALE_UP L1:       traderROCE > +20% AND edge > 0.15   → double allocation');
+  console.log('    SCALE_UP L2:       traderROCE > +40% AND edge > 0.20   → double again (max 10x start)');
+  console.log('    SCALE_DOWN:        traderROCE < -15%                    → halve allocation');
+  console.log('    SOFT_STOP:         traderROCE < -30%                    → $0 new entries, keep open positions');
+  console.log('    HARD_STOP #1:      botROCE    < -50%                    → close all (real capital floor)');
+  console.log('    HARD_STOP #2:      dormant    >  4d                     → close all');
+  console.log('    HARD_STOP #3:      edge       <  0.1                    → close all');
+  console.log('    HARD_STOP #4:      specialty drift to sports/esports    → close all');
+  console.log('    EXEC_GATE:         skip_rate  > 60%                     → suspend scaling, fix execution first');
   console.log();
   console.log(
     '  ' + pad('Trader', 22) +
-    rpad('Alloc', 8) + rpad('Spent', 8) + rpad('Avail', 8) + rpad('PosCap', 8) +
-    rpad('Edge', 7) + rpad('Rank', 6) + rpad('Inactive', 9) +
-    rpad('B.Real', 9) + '  ' + pad('Failure', 12) + 'Recommendation'
+    rpad('Alloc', 8) + rpad('Spent', 8) + rpad('PosCap', 8) +
+    rpad('tROCE', 8) + rpad('bROCE', 8) +
+    rpad('Edge', 7) + rpad('Specialty', 12) + rpad('Inactive', 9) +
+    '  ' + pad('Failure', 12) + 'Next Alloc'
   );
   console.log('  ' + '─'.repeat(W - 2));
   for (const s of allStats) {
     const inactiveLbl = s.daysInactive != null ? `${s.daysInactive}d` : '—';
+    const pct = (n: number) => `${(n * 100).toFixed(1)}%`;
     const newAlloc =
-      s.action.includes('HARD_STOP')    ? '$0 (close)' :
-      s.action.includes('SCALE_DOWN')   ? `$${Math.floor(s.alloc / 2)}` :
-      s.action.includes('SCALE_UP')     ? `$${Math.floor(s.alloc * 2)}` :
-      s.action.includes('INCREASE_ALLOC') ? `$${Math.floor(s.alloc * 2)}` :
+      s.action.includes('HARD_STOP') || s.action.includes('SOFT_STOP')
+        ? '$0 (close/stop)' :
+      s.action.includes('SCALE_DOWN')
+        ? `$${Math.floor(s.alloc / 2)}` :
+      s.action.includes('SCALE_UP')
+        ? `$${Math.min(s.alloc * 2, s.alloc * 10)} (×2)` :
+      s.action.includes('INCREASE_ALLOC')
+        ? `$${s.alloc * 2} (×2)` :
       `$${s.alloc} (hold)`;
     console.log(
       '  ' + pad(s.label, 22) +
-      rpad('$'+s.alloc, 8) + rpad('$'+s.spent.toFixed(0), 8) +
-      rpad('$'+(s.alloc - s.spent).toFixed(0), 8) + rpad('$'+s.positionCap.toFixed(0), 8) +
+      rpad('$'+s.alloc, 8) + rpad('$'+s.spent.toFixed(0), 8) + rpad('$'+s.positionCap.toFixed(0), 8) +
+      rpad(pct(s.traderROCE), 8) + rpad(pct(s.botROCE), 8) +
       rpad(s.edgeScore != null ? s.edgeScore.toFixed(3) : '—', 7) +
-      rpad(s.edgeRank != null ? '#'+s.edgeRank : '—', 6) +
-      rpad(inactiveLbl, 9) +
-      rpad($(s.bRealized), 9) + '  ' +
+      rpad(s.edgeSpecialty ?? '—', 12) +
+      rpad(inactiveLbl, 9) + '  ' +
       pad(s.failureType, 12) + newAlloc
     );
   }
