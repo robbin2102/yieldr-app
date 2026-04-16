@@ -5,10 +5,11 @@ export const dynamic = 'force-dynamic';
 
 export async function GET(
   _req: NextRequest,
-  { params }: { params: { wallet: string } },
+  { params }: { params: Promise<{ wallet: string }> },
 ) {
   try {
-    const wallet = params.wallet.toLowerCase();
+    const { wallet: rawWallet } = await params;
+    const wallet = rawWallet.toLowerCase();
     const client = await clientPromise;
     const db = client.db(dbName);
 

@@ -58,47 +58,59 @@ interface OpenPosition {
   title: string;
   outcome: string;
   traderLabel: string;
-  sourceWallet: string;
   avgFillPrice: number;
   totalFilledUsdc: number;
   totalFilledSize: number;
-  tradeCount: number;
-  lastFilled: number | null;
-  curPrice: number | null;
-  traderStillIn: boolean;
-  traderSize: number | null;
-  estimatedPnl: number | null;
+  curPrice: number;
+  currentValue: number;
+  estimatedPnl: number;
 }
 
-interface PositionSummary {
-  totalPositions: number;
-  totalDeployed: number;
-  traderExitedCount: number;
-  estimatedPnl: number | null;
+interface PortfolioSummary {
+  openCount: number;
+  openValue: number;
+  unrealizedPnl: number;
+  totalBotPnl: number | null;
+  botROCE: number | null;
+  trades24h: number;
   pipelineAge: string | null;
+}
+
+interface ExecWindow {
+  label: string;
+  detected: number;
+  filled: number;
+  execSkips: number;
+  convFilter: number;
+  fillRate: number | null;
+  skipBreakdown: Record<string, number>;
+}
+
+interface ExecHealth {
+  windows: ExecWindow[];
+  trend: 'improving' | 'degrading' | 'stable' | 'insufficient';
+  trendDelta: number;
+  issues: { reason: string; count: number; suggestion: string }[];
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 const ACTION_COLORS: Record<string, string> = {
-  HARD_STOP:    '#FF4757',
-  SOFT_STOP:    '#FF6B6B',
-  SCALE_DOWN:   '#FF8C00',
-  SCALE_UP:     '#00C805',
-  CONTINUE:     '#00C805',
-  HOLD:         '#9E9E9E',
-  WATCH:        '#FFD000',
-  EXEC_FAIL:    '#6BA3F5',
-  FIX_ENTRY:    '#6BA3F5',
-  INCREASE_ALLOC: '#6BA3F5',
+  HARD_STOP: '#FF4757', SOFT_STOP: '#FF6B6B', SCALE_DOWN: '#FF8C00',
+  SCALE_UP: '#00C805', CONTINUE: '#00C805', HOLD: '#9E9E9E',
+  WATCH: '#FFD000', FIX_ENTRY: '#6BA3F5', INCREASE_ALLOC: '#6BA3F5',
 };
-
 function actionColor(code: string): string {
-  if (!code) return '#9E9E9E';
-  for (const [key, color] of Object.entries(ACTION_COLORS)) {
-    if (code.toUpperCase().includes(key)) return color;
+  for (const [k, c] of Object.entries(ACTION_COLORS)) {
+    if ((code ?? '').toUpperCase().includes(k)) return c;
   }
   return '#9E9E9E';
+}
+
+function failureColor(t: string) {
+  if (t === 'EXEC_FAIL')   return '#6BA3F5';
+  if (t === 'TRADER_FAIL') return '#FF8C00';
+  return '#444';
 }
 
 function statusColor(s: string): string {
@@ -112,11 +124,18 @@ function statusColor(s: string): string {
   }
 }
 
-function fmt$(n: number, decimals = 0): string {
+function fmt$(n: number, dec = 0): string {
   const abs = Math.abs(n);
   const sign = n < 0 ? '-' : '';
   if (abs >= 1000) return `${sign}$${(abs / 1000).toFixed(1)}k`;
-  return `${sign}$${abs.toFixed(decimals)}`;
+  return `${sign}$${abs.toFixed(dec)}`;
+}
+
+function fmtSigned$(n: number): string {
+  const abs = Math.abs(n);
+  const sign = n >= 0 ? '+' : '-';
+  if (abs >= 1000) return `${sign}$${(abs / 1000).toFixed(1)}k`;
+  return `${sign}$${abs.toFixed(2)}`;
 }
 
 function fmtPct(n: number): string {
@@ -133,64 +152,70 @@ function timeAgo(iso: string): string {
 }
 
 function skipLabel(code: string | null): string {
-  if (!code) return '';
   const m: Record<string, string> = {
     BELOW_AVG: 'below avg', ALLOCATION_FULL: 'alloc', POSITION_CAP_FULL: 'pos cap',
     NO_ORDERBOOK: 'no book', SELL_NO_POSITION: 'no pos', DUPLICATE: 'dup',
     ORDER_FAILED: 'fail', NON_TRADE: 'non-trade', WIDE_SPREAD: 'spread',
     PRICEDRIFT_FAILED: 'drift', GROUPED_BELOW_AVG: 'grouped',
   };
-  return m[code] ?? code.toLowerCase();
+  return code ? (m[code] ?? code.toLowerCase()) : '';
+}
+
+function trendLabel(t: string, delta: number): { text: string; color: string } {
+  if (t === 'improving') return { text: `↑ improving (+${(delta * 100).toFixed(1)}% vs 7d)`, color: '#00C805' };
+  if (t === 'degrading') return { text: `↓ degrading (${(delta * 100).toFixed(1)}% vs 7d)`,  color: '#FF4757' };
+  if (t === 'stable')    return { text: '→ stable vs 7d', color: '#9E9E9E' };
+  return { text: 'insufficient data', color: '#6E6E6E' };
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export default function BotDashboard() {
-  const [traders,      setTraders]      = useState<TraderRow[]>([]);
-  const [systemStats,  setSystemStats]  = useState<SystemStats | null>(null);
-  const [activity,     setActivity]     = useState<ActivityItem[]>([]);
-  const [positions,    setPositions]    = useState<OpenPosition[]>([]);
-  const [posSummary,   setPosSummary]   = useState<PositionSummary | null>(null);
-  const [loading,      setLoading]      = useState(true);
-  const [lastUpdated,  setLastUpdated]  = useState<Date | null>(null);
+  const [traders,     setTraders]     = useState<TraderRow[]>([]);
+  const [systemStats, setSystemStats] = useState<SystemStats | null>(null);
+  const [activity,    setActivity]    = useState<ActivityItem[]>([]);
+  const [positions,   setPositions]   = useState<OpenPosition[]>([]);
+  const [portSummary, setPortSummary] = useState<PortfolioSummary | null>(null);
+  const [execHealth,  setExecHealth]  = useState<ExecHealth | null>(null);
+  const [loading,     setLoading]     = useState(true);
+  const [stopping,    setStopping]    = useState<string | null>(null);
 
   async function fetchAll() {
     try {
-      const [statsRes, actRes, posRes] = await Promise.all([
+      const [statsRes, actRes, posRes, execRes] = await Promise.all([
         fetch('/api/copy-trading/bot-stats'),
         fetch('/api/copy-trading/activity'),
         fetch('/api/copy-trading/open-positions'),
+        fetch('/api/copy-trading/exec-health'),
       ]);
-      const [statsData, actData, posData] = await Promise.all([
-        statsRes.json(), actRes.json(), posRes.json(),
+      const [s, a, p, e] = await Promise.all([
+        statsRes.json(), actRes.json(), posRes.json(), execRes.json(),
       ]);
-      if (statsData.success) { setTraders(statsData.traders); setSystemStats(statsData.systemStats); }
-      if (actData.success)   setActivity(actData.activity);
-      if (posData.success)   { setPositions(posData.positions); setPosSummary(posData.summary); }
-      setLastUpdated(new Date());
-    } catch (e) { console.error('fetch error', e); }
+      if (s.success) { setTraders(s.traders); setSystemStats(s.systemStats); }
+      if (a.success) setActivity(a.activity);
+      if (p.success) { setPositions(p.positions); setPortSummary(p.summary); }
+      if (e.success) setExecHealth(e);
+    } catch (err) { console.error(err); }
     finally { setLoading(false); }
   }
 
   useEffect(() => {
     fetchAll();
-    const interval = setInterval(fetchAll, 60_000);
-    return () => clearInterval(interval);
+    const iv = setInterval(fetchAll, 60_000);
+    return () => clearInterval(iv);
   }, []);
 
-  // ── skip breakdown ────────────────────────────────────────────────────────
-  const execSkipNames = ['ALLOCATION_FULL','POSITION_CAP_FULL','NO_ORDERBOOK',
-    'SELL_NO_POSITION','DUPLICATE','ORDER_FAILED','NON_TRADE','WIDE_SPREAD','PRICEDRIFT_FAILED'];
-  const aggSkip     = systemStats?.aggSkipCounts ?? {};
-  const belowAvg    = (aggSkip['BELOW_AVG'] ?? 0) + (aggSkip['GROUPED_BELOW_AVG'] ?? 0);
-  const execSkips   = execSkipNames.reduce((s, k) => s + (aggSkip[k] ?? 0), 0);
-  const totalFilled = systemStats?.totalFilled ?? 0;
-  const execBase    = totalFilled + execSkips;
-  const topExecSkips = execSkipNames
-    .map(k => ({ k, n: aggSkip[k] ?? 0 }))
-    .filter(x => x.n > 0)
-    .sort((a, b) => b.n - a.n)
-    .slice(0, 5);
+  async function stopTrader(wallet: string) {
+    setStopping(wallet);
+    try {
+      await fetch('/api/copy-trading/edge-ranked', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ wallet, action: 'stop' }),
+      });
+      setTraders(prev => prev.map(t => t.wallet === wallet ? { ...t, active: false } : t));
+    } finally { setStopping(null); }
+  }
 
   if (loading) {
     return (
@@ -200,22 +225,24 @@ export default function BotDashboard() {
     );
   }
 
+  const trend = execHealth
+    ? trendLabel(execHealth.trend, execHealth.trendDelta)
+    : null;
+
   return (
     <div className="space-y-4 font-mono">
 
-      {/* ── System Status Strip ── */}
-      <div className="grid grid-cols-6 gap-2">
+      {/* ── System Strip (4 boxes) ── */}
+      <div className="grid grid-cols-4 gap-2">
         {[
-          { label: 'TRADERS',    value: `${systemStats?.activeTraders ?? 0} active` },
-          { label: 'DET/FILL',   value: `${systemStats?.totalFilled ?? 0}/${systemStats?.totalDetected ?? 0}` },
-          { label: 'FILL RATE',  value: `${((systemStats?.fillRate ?? 0) * 100).toFixed(0)}%` },
-          { label: 'BOT PnL',    value: fmt$(systemStats?.totalBotPnl ?? 0, 2),
+          { label: 'TRADERS',  value: `${systemStats?.activeTraders ?? 0} active / ${systemStats?.totalTraders ?? 0}` },
+          { label: 'DET/FILL', value: `${systemStats?.totalFilled ?? 0} / ${systemStats?.totalDetected ?? 0}` },
+          { label: 'BOT PnL',  value: fmtSigned$(systemStats?.totalBotPnl ?? 0),
             color: (systemStats?.totalBotPnl ?? 0) >= 0 ? '#00C805' : '#FF4757' },
-          { label: 'MISSED',     value: fmt$(systemStats?.totalMissedPnl ?? 0, 2),
-            color: (systemStats?.totalMissedPnl ?? 0) > 0 ? '#FF4757' : '#6E6E6E' },
-          { label: 'UPDATED',    value: lastUpdated ? timeAgo(lastUpdated.toISOString()) : '—' },
+          { label: 'MISSED',   value: fmtSigned$(systemStats?.totalMissedPnl ?? 0),
+            color: (systemStats?.totalMissedPnl ?? 0) > 0 ? '#FF8C00' : '#6E6E6E' },
         ].map(({ label, value, color }) => (
-          <div key={label} className="bg-[#0A0A0A] border border-[#1A1A1A] rounded px-3 py-2">
+          <div key={label} className="bg-[#0A0A0A] border border-[#1A1A1A] rounded px-4 py-3">
             <div className="text-[9px] text-[#6E6E6E] tracking-widest mb-1">{label}</div>
             <div className="text-sm font-bold" style={{ color: color ?? '#E0E0E0' }}>{value}</div>
           </div>
@@ -232,7 +259,8 @@ export default function BotDashboard() {
           <table className="w-full text-xs">
             <thead>
               <tr className="border-b border-[#1A1A1A]">
-                {['Trader','T.PnL','B.PnL','tROCE','bROCE','T.Act','B.Act','Det/Fill','Edge','Missed','Alloc','Action'].map(h => (
+                {['Trader','T.PnL','B.PnL','tROCE','bROCE','T.Act','B.Act','Det/Fill',
+                  'Edge','Missed','Alloc','Action','Failure',''].map(h => (
                   <th key={h} className="px-2 py-1.5 text-left text-[10px] text-[#6E6E6E] tracking-wider whitespace-nowrap font-normal">
                     {h}
                   </th>
@@ -241,42 +269,47 @@ export default function BotDashboard() {
             </thead>
             <tbody>
               {traders.length === 0 && (
-                <tr><td colSpan={12} className="px-4 py-6 text-center text-[#6E6E6E] text-xs">
+                <tr><td colSpan={14} className="px-4 py-6 text-center text-[#6E6E6E]">
                   No allocation data yet
                 </td></tr>
               )}
               {traders.map(t => {
-                const aColor  = actionColor(t.actionCode);
-                const bPnlClr = t.bPnl    >= 0 ? '#00C805' : '#FF4757';
-                const tPnlClr = t.tTotal  >= 0 ? '#00C805' : '#FF4757';
+                const aC = actionColor(t.actionCode);
                 return (
                   <tr key={t.wallet} className="border-b border-[#0F0F0F] hover:bg-[#111] transition-colors">
-                    {/* Trader (clickable) */}
+                    {/* Trader */}
                     <td className="px-2 py-1.5 whitespace-nowrap">
-                      <Link href={`/copy-trading/bot/${t.wallet}`} className="flex items-center gap-1.5 hover:text-white group">
+                      <Link href={`/copy-trading/bot/${t.wallet}`}
+                        className="flex items-center gap-1.5 group">
                         <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${t.active ? 'bg-[#00C805]' : 'bg-[#FF4757]'}`} />
-                        <span className="text-[#E0E0E0] group-hover:text-[#00C805] transition-colors font-medium">{t.label}</span>
+                        <span className="text-[#E0E0E0] group-hover:text-[#00C805] transition-colors font-medium">
+                          {t.label}
+                        </span>
                       </Link>
                     </td>
                     {/* T.PnL */}
-                    <td className="px-2 py-1.5 font-bold" style={{ color: tPnlClr }}>
-                      {fmt$(t.tTotal, 2)}
+                    <td className="px-2 py-1.5 font-bold"
+                      style={{ color: t.tTotal >= 0 ? '#00C805' : '#FF4757' }}>
+                      {fmtSigned$(t.tTotal)}
                     </td>
                     {/* B.PnL */}
-                    <td className="px-2 py-1.5 font-bold" style={{ color: bPnlClr }}>
-                      {fmt$(t.bPnl, 2)}
+                    <td className="px-2 py-1.5 font-bold"
+                      style={{ color: t.bPnl >= 0 ? '#00C805' : '#FF4757' }}>
+                      {fmtSigned$(t.bPnl)}
                     </td>
                     {/* tROCE */}
-                    <td className="px-2 py-1.5" style={{ color: t.traderROCE >= 0 ? '#00C805' : '#FF4757' }}>
+                    <td className="px-2 py-1.5"
+                      style={{ color: t.traderROCE >= 0 ? '#00C805' : '#FF4757' }}>
                       {fmtPct(t.traderROCE)}
                     </td>
                     {/* bROCE */}
-                    <td className="px-2 py-1.5" style={{ color: t.botROCE >= 0 ? '#00C805' : '#FF4757' }}>
+                    <td className="px-2 py-1.5"
+                      style={{ color: t.botROCE >= 0 ? '#00C805' : '#FF4757' }}>
                       {fmtPct(t.botROCE)}
                     </td>
-                    {/* T.Act */}
+                    {/* T.Act 24h */}
                     <td className="px-2 py-1.5 text-[#9E9E9E]">{t.tAct24h}</td>
-                    {/* B.Act */}
+                    {/* B.Act 24h */}
                     <td className="px-2 py-1.5 text-[#9E9E9E]">{t.bAct24h}</td>
                     {/* Det/Fill */}
                     <td className="px-2 py-1.5 text-[#9E9E9E] whitespace-nowrap">
@@ -295,22 +328,40 @@ export default function BotDashboard() {
                       )}
                     </td>
                     {/* Missed */}
-                    <td className="px-2 py-1.5" style={{ color: t.missedPnl > 0 ? '#FF8C00' : '#6E6E6E' }}>
-                      {t.missedPnl > 0 ? fmt$(t.missedPnl, 2) : '—'}
+                    <td className="px-2 py-1.5"
+                      style={{ color: t.missedPnl > 0 ? '#FF8C00' : '#6E6E6E' }}>
+                      {t.missedPnl > 0 ? fmtSigned$(t.missedPnl) : '—'}
                     </td>
                     {/* Alloc */}
                     <td className="px-2 py-1.5 text-[#9E9E9E] whitespace-nowrap">
                       {fmt$(t.spentUsdc)}<span className="text-[#444]">/</span>{fmt$(t.allocationUsdc)}
                     </td>
                     {/* Action */}
-                    <td className="px-2 py-1.5 whitespace-nowrap">
-                      <span className="font-bold text-[10px]" style={{ color: aColor }}>
+                    <td className="px-2 py-1.5">
+                      <span className="font-bold text-[10px]" style={{ color: aC }}>
                         {t.actionCode || '—'}
                       </span>
-                      {t.failureType !== 'NONE' && (
-                        <span className="ml-1 text-[9px] text-[#6BA3F5]">
-                          [{t.failureType === 'EXEC_FAIL' ? 'EXC' : 'TRD'}]
+                    </td>
+                    {/* Failure type (separate column) */}
+                    <td className="px-2 py-1.5 whitespace-nowrap">
+                      {t.failureType !== 'NONE' ? (
+                        <span className="text-[10px] font-bold"
+                          style={{ color: failureColor(t.failureType) }}>
+                          {t.failureType === 'EXEC_FAIL' ? 'EXEC' : 'TRADER'}
                         </span>
+                      ) : (
+                        <span className="text-[#444] text-[10px]">—</span>
+                      )}
+                    </td>
+                    {/* Stop CTA */}
+                    <td className="px-2 py-1.5">
+                      {t.active && (
+                        <button
+                          disabled={stopping === t.wallet}
+                          onClick={() => stopTrader(t.wallet)}
+                          className="px-2 py-0.5 text-[10px] rounded border border-[#FF4757]/30 text-[#FF4757] hover:bg-[#FF4757]/10 transition-colors disabled:opacity-40">
+                          {stopping === t.wallet ? '…' : 'STOP'}
+                        </button>
                       )}
                     </td>
                   </tr>
@@ -321,123 +372,151 @@ export default function BotDashboard() {
         </div>
       </div>
 
-      {/* ── Exec Health (compact) + Open Positions Summary ── */}
-      <div className="grid grid-cols-2 gap-4">
-
-        {/* Exec health */}
-        <div className="bg-[#0A0A0A] border border-[#1A1A1A] rounded overflow-hidden">
-          <div className="px-4 py-2 border-b border-[#1A1A1A]">
-            <span className="text-[10px] text-[#00C805] tracking-widest font-bold">EXECUTION HEALTH</span>
-          </div>
-          <div className="p-4 space-y-2">
-            <div className="flex justify-between text-xs">
-              <span className="text-[#9E9E9E]">Exec gate fill</span>
-              <span className="text-[#E0E0E0] font-mono">
-                {execBase > 0
-                  ? `${((totalFilled / execBase) * 100).toFixed(1)}%`
-                  : '—'}
-                <span className="text-[#6E6E6E] ml-2 text-[11px]">
-                  {totalFilled} filled / {execSkips} exec-skipped / {belowAvg} conviction-filtered
-                </span>
-              </span>
-            </div>
-            {topExecSkips.length > 0 && (
-              <div className="border-t border-[#1A1A1A] pt-2 space-y-1">
-                {topExecSkips.map(({ k, n }) => (
-                  <div key={k} className="flex justify-between text-[11px]">
-                    <span className="text-[#6E6E6E]">{skipLabel(k)}</span>
-                    <span className="text-[#9E9E9E]">{n}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-            {topExecSkips.length === 0 && (
-              <div className="text-[11px] text-[#6E6E6E]">No execution failures</div>
-            )}
-          </div>
-        </div>
-
-        {/* Portfolio summary */}
+      {/* ── Exec Health by Timeframe ── */}
+      {execHealth && (
         <div className="bg-[#0A0A0A] border border-[#1A1A1A] rounded overflow-hidden">
           <div className="px-4 py-2 border-b border-[#1A1A1A] flex items-center justify-between">
-            <span className="text-[10px] text-[#00C805] tracking-widest font-bold">BOT PORTFOLIO</span>
-            {posSummary?.pipelineAge && (
-              <span className="text-[10px] text-[#6E6E6E]">
-                pipeline {timeAgo(posSummary.pipelineAge)}
+            <span className="text-[10px] text-[#00C805] tracking-widest font-bold">EXECUTION HEALTH</span>
+            {trend && (
+              <span className="text-[10px] font-bold" style={{ color: trend.color }}>
+                {trend.text}
               </span>
             )}
           </div>
-          <div className="p-4 grid grid-cols-2 gap-3">
-            {[
-              { label: 'Positions',    value: String(posSummary?.totalPositions ?? 0) },
-              { label: 'Deployed',     value: fmt$(posSummary?.totalDeployed ?? 0) },
-              { label: 'Est. PnL',     value: posSummary?.estimatedPnl != null
-                  ? fmt$(posSummary.estimatedPnl, 2)
-                  : '—',
-                color: (posSummary?.estimatedPnl ?? 0) >= 0 ? '#00C805' : '#FF4757' },
-              { label: 'Trader Exited', value: String(posSummary?.traderExitedCount ?? 0),
-                color: (posSummary?.traderExitedCount ?? 0) > 0 ? '#FF8C00' : '#6E6E6E' },
-            ].map(({ label, value, color }) => (
-              <div key={label}>
-                <div className="text-[10px] text-[#6E6E6E] mb-0.5">{label}</div>
-                <div className="text-sm font-bold" style={{ color: color ?? '#E0E0E0' }}>{value}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      {/* ── Open Positions Table ── */}
-      {positions.length > 0 && (
-        <div className="bg-[#0A0A0A] border border-[#1A1A1A] rounded overflow-hidden">
-          <div className="px-4 py-2 border-b border-[#1A1A1A]">
-            <span className="text-[10px] text-[#00C805] tracking-widest font-bold">OPEN POSITIONS</span>
-          </div>
+          {/* Timeframe table */}
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead>
                 <tr className="border-b border-[#1A1A1A]">
-                  {['Market','Out','Trader','B.Entry','Deployed','Cur Price','Est PnL','Trader'].map(h => (
-                    <th key={h} className="px-2 py-1.5 text-left text-[10px] text-[#6E6E6E] tracking-wider whitespace-nowrap font-normal">
+                  {['Period','Detected','Filled','Fill%','Exec Skips','Conv Filter','Trend vs 7d'].map(h => (
+                    <th key={h} className="px-3 py-1.5 text-left text-[10px] text-[#6E6E6E] tracking-wider font-normal whitespace-nowrap">
                       {h}
                     </th>
                   ))}
                 </tr>
               </thead>
               <tbody>
-                {positions.map((p, i) => (
-                  <tr key={i}
-                    className={`border-b border-[#0F0F0F] hover:bg-[#111] transition-colors ${
-                      !p.traderStillIn ? 'bg-[#FF8C00]/5' : ''
-                    }`}>
-                    <td className="px-2 py-1.5 max-w-[220px] truncate text-[#E0E0E0]">{p.title}</td>
-                    <td className="px-2 py-1.5">
-                      <span className={`font-bold ${p.outcome?.toLowerCase() === 'yes' ? 'text-[#00C805]' : 'text-[#FF4757]'}`}>
-                        {p.outcome?.toUpperCase()}
-                      </span>
-                    </td>
-                    <td className="px-2 py-1.5 text-[#9E9E9E]">{p.traderLabel}</td>
-                    <td className="px-2 py-1.5 text-[#9E9E9E]">{p.avgFillPrice.toFixed(3)}</td>
-                    <td className="px-2 py-1.5 text-[#9E9E9E]">{fmt$(p.totalFilledUsdc)}</td>
-                    <td className="px-2 py-1.5 text-[#9E9E9E]">
-                      {p.curPrice != null ? p.curPrice.toFixed(3) : '—'}
-                    </td>
-                    <td className="px-2 py-1.5 font-bold"
-                      style={{ color: (p.estimatedPnl ?? 0) >= 0 ? '#00C805' : '#FF4757' }}>
-                      {p.estimatedPnl != null ? fmt$(p.estimatedPnl, 2) : '—'}
-                    </td>
-                    {/* Trader still in */}
-                    <td className="px-2 py-1.5">
-                      {p.traderStillIn
-                        ? <span className="text-[10px] text-[#00C805]">HOLDING</span>
-                        : <span className="text-[10px] font-bold text-[#FF8C00]">EXITED</span>
-                      }
-                    </td>
-                  </tr>
-                ))}
+                {execHealth.windows.map((w, i) => {
+                  const fillPct = w.fillRate != null ? (w.fillRate * 100).toFixed(1) + '%' : '—';
+                  const base7d  = execHealth.windows[1]?.fillRate;
+                  let trendCell = '—';
+                  let trendClr  = '#6E6E6E';
+                  if (i > 0 && w.fillRate != null && base7d != null) {
+                    const d = w.fillRate - base7d;
+                    trendCell = d >= 0 ? `+${(d * 100).toFixed(1)}%` : `${(d * 100).toFixed(1)}%`;
+                    trendClr  = d > 0.02 ? '#00C805' : d < -0.02 ? '#FF4757' : '#9E9E9E';
+                  }
+                  if (i === 1) { trendCell = '(base)'; trendClr = '#6E6E6E'; }
+                  return (
+                    <tr key={w.label} className="border-b border-[#0F0F0F]">
+                      <td className="px-3 py-1.5 text-[#9E9E9E] font-bold">{w.label}</td>
+                      <td className="px-3 py-1.5 text-[#9E9E9E]">{w.detected}</td>
+                      <td className="px-3 py-1.5 text-[#9E9E9E]">{w.filled}</td>
+                      <td className="px-3 py-1.5 font-bold"
+                        style={{ color: w.fillRate != null && w.fillRate > 0.5 ? '#00C805' : '#FF8C00' }}>
+                        {fillPct}
+                      </td>
+                      <td className="px-3 py-1.5 text-[#9E9E9E]">{w.execSkips}</td>
+                      <td className="px-3 py-1.5 text-[#6E6E6E]">{w.convFilter}</td>
+                      <td className="px-3 py-1.5" style={{ color: trendClr }}>{trendCell}</td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
+          {/* Issues + suggestions */}
+          {execHealth.issues.filter(i => i.reason !== 'BELOW_AVG' && i.reason !== 'GROUPED_BELOW_AVG' && i.reason !== 'DUPLICATE' && i.reason !== 'NON_TRADE').length > 0 && (
+            <div className="border-t border-[#1A1A1A] px-4 py-3 space-y-1.5">
+              <div className="text-[9px] text-[#6E6E6E] tracking-widest mb-2">ISSUES & FIXES</div>
+              {execHealth.issues
+                .filter(i => !['BELOW_AVG','GROUPED_BELOW_AVG','DUPLICATE','NON_TRADE'].includes(i.reason))
+                .map(({ reason, count, suggestion }) => (
+                  <div key={reason} className="flex items-start gap-3 text-[11px]">
+                    <span className="text-[#FF8C00] font-bold w-32 flex-shrink-0">
+                      {reason.replace(/_/g, ' ')} ({count}×)
+                    </span>
+                    <span className="text-[#9E9E9E]">{suggestion}</span>
+                  </div>
+                ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Portfolio Strip + Open Positions ── */}
+      {portSummary && (
+        <div className="bg-[#0A0A0A] border border-[#1A1A1A] rounded overflow-hidden">
+          <div className="px-4 py-2 border-b border-[#1A1A1A] flex items-center justify-between">
+            <span className="text-[10px] text-[#00C805] tracking-widest font-bold">BOT PORTFOLIO</span>
+            {portSummary.pipelineAge && (
+              <span className="text-[10px] text-[#6E6E6E]">
+                pipeline {timeAgo(portSummary.pipelineAge)}
+              </span>
+            )}
+          </div>
+          {/* Summary strip */}
+          <div className="grid grid-cols-6 gap-0 border-b border-[#1A1A1A]">
+            {[
+              { label: 'OPEN POS',      value: String(portSummary.openCount) },
+              { label: 'OPEN VALUE',    value: fmt$(portSummary.openValue, 2) },
+              { label: 'UNREAL. PnL',  value: fmtSigned$(portSummary.unrealizedPnl),
+                color: portSummary.unrealizedPnl >= 0 ? '#00C805' : '#FF4757' },
+              { label: 'TOTAL PnL',    value: portSummary.totalBotPnl != null
+                  ? fmtSigned$(portSummary.totalBotPnl) : '—',
+                color: (portSummary.totalBotPnl ?? 0) >= 0 ? '#00C805' : '#FF4757' },
+              { label: 'BOT ROCE',     value: portSummary.botROCE != null
+                  ? fmtPct(portSummary.botROCE) : '—',
+                color: (portSummary.botROCE ?? 0) >= 0 ? '#00C805' : '#FF4757' },
+              { label: 'TRADES 24h',   value: String(portSummary.trades24h) },
+            ].map(({ label, value, color }) => (
+              <div key={label} className="px-4 py-3 border-r border-[#1A1A1A] last:border-r-0">
+                <div className="text-[9px] text-[#6E6E6E] tracking-widest mb-1">{label}</div>
+                <div className="text-sm font-bold" style={{ color: color ?? '#E0E0E0' }}>{value}</div>
+              </div>
+            ))}
+          </div>
+          {/* Positions table */}
+          {positions.length > 0 ? (
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b border-[#1A1A1A]">
+                    {['Market','Out','Trader','B.Entry','Cur Price','Cur Value','Est PnL'].map(h => (
+                      <th key={h} className="px-2 py-1.5 text-left text-[10px] text-[#6E6E6E] tracking-wider whitespace-nowrap font-normal">
+                        {h}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {positions.map((p, i) => (
+                    <tr key={i} className="border-b border-[#0F0F0F] hover:bg-[#111] transition-colors">
+                      <td className="px-2 py-1.5 max-w-[240px] truncate text-[#E0E0E0]">{p.title}</td>
+                      <td className="px-2 py-1.5">
+                        <span className={`font-bold ${p.outcome?.toLowerCase() === 'yes' ? 'text-[#00C805]' : 'text-[#FF4757]'}`}>
+                          {p.outcome?.toUpperCase()}
+                        </span>
+                      </td>
+                      <td className="px-2 py-1.5 text-[#9E9E9E]">{p.traderLabel}</td>
+                      <td className="px-2 py-1.5 text-[#9E9E9E]">{p.avgFillPrice.toFixed(3)}</td>
+                      <td className="px-2 py-1.5 text-[#9E9E9E]">{p.curPrice.toFixed(3)}</td>
+                      <td className="px-2 py-1.5 text-[#9E9E9E]">{fmt$(p.currentValue, 2)}</td>
+                      <td className="px-2 py-1.5 font-bold"
+                        style={{ color: p.estimatedPnl >= 0 ? '#00C805' : '#FF4757' }}>
+                        {fmtSigned$(p.estimatedPnl)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="px-4 py-5 text-xs text-[#6E6E6E]">
+              No confirmed open positions — either no fills yet, or pipeline data is stale.
+              Run the pipeline to refresh position data.
+            </div>
+          )}
         </div>
       )}
 
@@ -458,9 +537,7 @@ export default function BotDashboard() {
             </thead>
             <tbody>
               {activity.length === 0 && (
-                <tr><td colSpan={8} className="px-4 py-6 text-center text-[#6E6E6E] text-xs">
-                  No activity logged yet
-                </td></tr>
+                <tr><td colSpan={8} className="px-4 py-6 text-center text-[#6E6E6E]">No activity</td></tr>
               )}
               {activity.map(a => (
                 <tr key={a._id} className="border-b border-[#0F0F0F] hover:bg-[#111] transition-colors">
@@ -475,7 +552,7 @@ export default function BotDashboard() {
                   </td>
                   <td className="px-2 py-1.5 text-[#9E9E9E]">{fmt$(a.traderBetUsdc)}</td>
                   <td className="px-2 py-1.5 text-[#9E9E9E]">
-                    {a.status === 'FILLED' && a.filledUsdc != null ? fmt$(a.filledUsdc) : a.copyBetUsdc > 0 ? fmt$(a.copyBetUsdc) : '—'}
+                    {a.status === 'FILLED' && a.filledUsdc != null ? fmt$(a.filledUsdc, 2) : a.copyBetUsdc > 0 ? fmt$(a.copyBetUsdc) : '—'}
                   </td>
                   <td className="px-2 py-1.5">
                     <span className="font-bold text-[10px]" style={{ color: statusColor(a.status) }}>{a.status}</span>
