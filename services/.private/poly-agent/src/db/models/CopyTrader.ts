@@ -37,6 +37,13 @@ export interface ICopyTrader extends Document {
   tradesSkipped:   number;
   skipReasonCounts: Record<string, number>;
 
+  // Allocation management — written by analyze-allocations each run.
+  // Provides current recommendation state for UI without joining to ahf-allocationEvents.
+  allocAction:      string;    // latest action code, e.g. "SCALE_UP_L2"
+  allocReason:      string;    // human-readable reason
+  allocFailureType: string;    // "EXEC_FAIL" | "TRADER_FAIL" | "NONE"
+  allocCheckedAt:   Date | null;
+
   createdAt: Date;
   updatedAt: Date;
 }
@@ -66,6 +73,11 @@ const copyTraderSchema = new mongoose.Schema<ICopyTrader>({
   tradesExecuted:   { type: Number, default: 0 },
   tradesSkipped:    { type: Number, default: 0 },
   skipReasonCounts: { type: Map, of: Number, default: {} },
+
+  allocAction:      { type: String, default: '' },
+  allocReason:      { type: String, default: '' },
+  allocFailureType: { type: String, default: '' },
+  allocCheckedAt:   { type: Date,   default: null },
 
 }, { timestamps: true, collection: 'ahf-copyTraders' });
 

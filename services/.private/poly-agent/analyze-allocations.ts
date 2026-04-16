@@ -18,21 +18,25 @@
  *   HARD_STOP:  bot realized < -$50 OR dormant >4d OR edge <0.1
  *
  * Usage:
- *   npx tsx analyze-allocations.ts                      # all traders
- *   npx tsx analyze-allocations.ts --trader T3-Active    # single trader
- *   npx tsx analyze-allocations.ts --min-usdc 10         # hide tiny markets in detail
+ *   npx tsx analyze-allocations.ts                        # all traders, writes to MongoDB
+ *   npx tsx analyze-allocations.ts --dry-run              # analysis only, no DB writes
+ *   npx tsx analyze-allocations.ts --trader T3-Active     # single trader
+ *   npx tsx analyze-allocations.ts --min-usdc 10          # hide tiny markets in detail
  */
 
 import mongoose from 'mongoose';
-import { config }    from './src/config';
-import { connectDB } from './src/db/connection';
-import { CopyTrade }  from './src/db/models/CopyTrade';
-import { CopyTrader } from './src/db/models/CopyTrader';
+import { config }         from './src/config';
+import { connectDB }      from './src/db/connection';
+import { CopyTrade }      from './src/db/models/CopyTrade';
+import { CopyTrader }     from './src/db/models/CopyTrader';
+import { AllocationEvent } from './src/db/models/AllocationEvent';
 
 // ── CLI args ──────────────────────────────────────────────────────────────────
 function argVal(n: string) { const i = process.argv.indexOf(`--${n}`); return i !== -1 ? process.argv[i+1] : undefined; }
 const FILTER_TRADER = argVal('trader');
 const MIN_USDC      = parseFloat(argVal('min-usdc') ?? '5');
+// --dry-run: print analysis but skip all MongoDB writes
+const DRY_RUN       = process.argv.includes('--dry-run');
 
 // ── formatting ────────────────────────────────────────────────────────────────
 const pad  = (s: any, n: number) => String(s).slice(0, n).padEnd(n);
@@ -660,13 +664,82 @@ async function main() {
   console.log('  · Edge scores from ahf-edgeRankedTraders (pipeline). Missing = trader not in ranked pool.');
   console.log('  · Per-position cap: 30% of allocationUsdc (not fixed $). Scales dynamically.');
   console.log('  · Failure types: EXEC_FAIL = our side (allocation/spread/entry), TRADER_FAIL = trader issue.');
-  console.log('  · HARD_STOP triggers: bot realized < -$50, dormant >4d, edge < 0.1.');
+  console.log('  · HARD_STOP triggers: botROCE < -50%, dormant >4d, edge < 0.1.');
   console.log('  · Missed$: est. PnL on above-avgBet trades blocked by ALLOC_FULL/PRICEDRIFT/WIDE_SPREAD.');
   console.log('  · To reduce SELL_NO_POSITION/WIDE_SPREAD: set DETECTOR_INTERVAL_MS=5000 in Railway.');
   console.log('  · Grouped BELOW_AVG scanner: GROUP_SCAN_INTERVAL_MS (10m) / GROUP_SCAN_WINDOW_MS (30m).');
   console.log('  · B.Redeem: USDC bot received from resolved YES positions, fetched from Polymarket data API.');
   console.log(`  · Portfolio total value: $${[...botPortfolio.values()].reduce((s,p) => s + p.curPrice * p.size, 0).toFixed(2)} across ${botPortfolio.size} open positions.`);
+  if (DRY_RUN) console.log('  · DRY RUN — no MongoDB writes performed.');
   console.log('═'.repeat(W) + '\n');
+
+  // ══ 5. PERSIST ALLOCATION EVENTS ══════════════════════════════════════════
+  // Write one event per trader to ahf-allocationEvents (append-only audit log).
+  // Also update current-state fields on ahf-copyTraders for fast UI lookups.
+  // Use --dry-run flag to skip writes (safe for ad-hoc analysis).
+  if (!DRY_RUN) {
+    const runAt = new Date();
+    process.stdout.write('Writing allocation events to MongoDB... ');
+
+    const events = allStats.map(s => {
+      // Recompute exec rates (same logic as recommend())
+      const belowAvgCount = (s.skips['BELOW_AVG'] ?? 0) + (s.skips['GROUPED_BELOW_AVG'] ?? 0);
+      const totalSkips    = Object.values(s.skips).reduce((a, b) => a + b, 0);
+      const execSkipRate  = s.detected > 0 ? (totalSkips - belowAvgCount) / s.detected : 0;
+      const belowAvgRate  = s.detected > 0 ? belowAvgCount / s.detected : 0;
+      // Strip leading emoji to get a clean queryable action code
+      const actionCode    = s.action.replace(/^[^\x00-\x7F]+\s*/, '');
+
+      return {
+        wallet:        s.wallet.toLowerCase(),
+        label:         s.label,
+        runAt,
+        action:        s.action,
+        actionCode,
+        failureType:   s.failureType,
+        reason:        s.reason,
+        allocBefore:   s.alloc,
+        allocAfter:    null,   // operator applies manually; a future run will show the new allocBefore
+        positionCap:   s.positionCap,
+        spentUsdc:     s.spent,
+        traderROCE:    s.traderROCE,
+        botROCE:       s.botROCE,
+        edgeScore:     s.edgeScore,
+        edgeSpecialty: s.edgeSpecialty,
+        edgeConfidence:s.edgeConfidence,
+        daysInactive:  s.daysInactive,
+        execSkipRate,
+        belowAvgRate,
+        skipCounts:    s.skips,
+        tBought:       s.tBought,
+        tRealized:     s.tRealized,
+        tOpenVal:      s.tOpenVal,
+        tTotal:        s.tTotal,
+        bCost:         s.bBought,
+        bPnl:          s.bTotal,
+        detected:      s.detected,
+        filled:        s.filled,
+        missedPnl:     s.missedPnl,
+      };
+    });
+
+    await AllocationEvent.insertMany(events);
+
+    // Update current-state snapshot on each CopyTrader doc
+    await Promise.all(allStats.map(s =>
+      CopyTrader.updateOne(
+        { wallet: s.wallet.toLowerCase() },
+        { $set: {
+            allocAction:      s.action.replace(/^[^\x00-\x7F]+\s*/, ''),
+            allocReason:      s.reason,
+            allocFailureType: s.failureType,
+            allocCheckedAt:   runAt,
+        }}
+      )
+    ));
+
+    console.log(`done — ${events.length} events written to ahf-allocationEvents.`);
+  }
 
   await mongoose.disconnect();
 }
