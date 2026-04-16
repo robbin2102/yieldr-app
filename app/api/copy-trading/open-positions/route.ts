@@ -34,12 +34,11 @@ export async function GET() {
       return curVal > 1 && curPrice > 0;
     });
 
-    // Parallel: filled buys + portfolio meta + trader open positions for "still holding" check
+    // Parallel: all detected trades (for traderHolding calc) + filled buys (for label) + meta
     const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
-    const [filledBuys, allocEvents, copyTraders, trades24h] = await Promise.all([
+    const [allTrades, allocEvents, copyTraders, trades24h] = await Promise.all([
       db.collection('ahf-copyTrades')
-        .find({ status: 'FILLED', side: 'BUY' })
-        .project({ title: 1, outcome: 1, traderLabel: 1, sourceWallet: 1 })
+        .find({}, { projection: { title: 1, outcome: 1, side: 1, traderBetUsdc: 1, traderLabel: 1, sourceWallet: 1, skipReason: 1 } })
         .toArray(),
       db.collection('ahf-allocationEvents').aggregate([
         { $sort: { runAt: -1 } },
@@ -50,30 +49,22 @@ export async function GET() {
       db.collection('ahf-copyTrades').countDocuments({ status: 'FILLED', createdAt: { $gte: since24h } }),
     ]);
 
-    // Fetch trader open positions for "still holding" check
-    const traderWallets = (copyTraders as any[]).map((t: any) => (t.wallet ?? '').toLowerCase());
-    const traderPositions = traderWallets.length > 0
-      ? await db.collection('polymarket-openPositions')
-          .find({ wallet: { $in: traderWallets } })
-          .project({ title: 1, outcome: 1, curPrice: 1 })
-          .toArray()
-      : [];
-
-    // Build set of title+outcome keys where ANY tracked trader still holds (curPrice > 0)
-    const traderHoldSet = new Set<string>();
-    for (const tp of traderPositions as any[]) {
-      if ((tp.curPrice ?? 0) > 0) {
-        traderHoldSet.add(`${normalTitle(tp.title ?? '')}:${(tp.outcome ?? '').toLowerCase()}`);
-      }
-    }
-
-    // Build title+outcome → traderLabel lookup from our filled buys
-    const labelMap = new Map<string, string>();
-    for (const t of filledBuys as any[]) {
+    // Compute traderHolding from trade history: tBought > tSold means trader still in
+    // (more reliable than pipeline polymarket-openPositions which only covers leaderboard wallets)
+    const holdMap = new Map<string, { tBought: number; tSold: number; traderLabel: string }>();
+    for (const t of allTrades as any[]) {
+      if (t.skipReason === 'NON_TRADE') continue;
       const key = `${normalTitle(t.title ?? '')}:${(t.outcome ?? '').toLowerCase()}`;
-      if (!labelMap.has(key)) {
-        labelMap.set(key, (t as any).traderLabel ?? ((t as any).sourceWallet as string)?.slice(0, 8) ?? '—');
+      if (!holdMap.has(key)) {
+        holdMap.set(key, {
+          tBought: 0, tSold: 0,
+          traderLabel: t.traderLabel ?? (t.sourceWallet as string)?.slice(0, 8) ?? '—',
+        });
       }
+      const h = holdMap.get(key)!;
+      if (t.side === 'BUY')  h.tBought += t.traderBetUsdc ?? 0;
+      if (t.side === 'SELL') h.tSold   += t.traderBetUsdc ?? 0;
+      if (!h.traderLabel && t.traderLabel) h.traderLabel = t.traderLabel;
     }
 
     // Build position list
@@ -86,8 +77,10 @@ export async function GET() {
       const cashPnl      = parseFloat(p.cashPnl      ?? String(currentValue - initialValue));
 
       const key          = `${normalTitle(p.title ?? '')}:${(p.outcome ?? '').toLowerCase()}`;
-      const traderLabel  = labelMap.get(key) ?? '—';
-      const traderHolding = traderHoldSet.has(key);
+      const hold         = holdMap.get(key);
+      const traderLabel  = hold?.traderLabel ?? '—';
+      // Trader still holding if they bought meaningfully more than they sold
+      const traderHolding = hold ? hold.tBought > hold.tSold * 1.05 : false;
 
       return {
         title:           p.title ?? 'Unknown',

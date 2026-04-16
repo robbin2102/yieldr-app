@@ -88,16 +88,21 @@ async function main() {
   // Market indexer starts immediately
   startMarketIndexer();
 
-  // Pipeline starts 5 min after market indexer to avoid overlap on first run
+  // Pipeline: check last-run time in MongoDB — skips if ran within 24h on redeploy.
+  // 1-minute delay so market indexer gets a head start on first-ever run.
   setTimeout(() => {
-    startPipeline(PIPELINE_CONFIG.INTERVALS.PIPELINE);
-  }, 5 * 60 * 1000);
+    startPipeline(PIPELINE_CONFIG.INTERVALS.PIPELINE).catch(
+      err => console.error('[Pipeline] startPipeline error:', err),
+    );
+  }, 1 * 60 * 1000);
 
-  // Allocation checker starts 10 min after boot — after pipeline has had a chance
-  // to run on first deploy. Independent 4h cycle, does not block pipeline.
+  // Allocation checker: check last-run time in MongoDB — respects 4h cadence across restarts.
+  // 2-minute delay to ensure DB is ready.
   setTimeout(() => {
-    startAllocationChecker(PIPELINE_CONFIG.INTERVALS.ANALYZE_ALLOCATIONS);
-  }, 10 * 60 * 1000);
+    startAllocationChecker(PIPELINE_CONFIG.INTERVALS.ANALYZE_ALLOCATIONS).catch(
+      err => console.error('[Pipeline] startAllocationChecker error:', err),
+    );
+  }, 2 * 60 * 1000);
 
   console.log('');
   console.log('================================================================');

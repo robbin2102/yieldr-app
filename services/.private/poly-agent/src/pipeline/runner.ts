@@ -20,6 +20,7 @@ import * as path from 'path';
 import { createLogger } from './logger';
 import { runMaterialization } from './materialize';
 import { snapshotEdgeRankedTraders } from './snapshot';
+import { getPipelineDB } from './db';
 
 const log = createLogger('Pipeline');
 
@@ -28,10 +29,26 @@ const log = createLogger('Pipeline');
 const SCRIPTS_DIR = path.resolve(__dirname, '../../scripts');
 
 // CWD for spawned scripts = poly-agent root (one level above scripts/).
-// - Docker:    /app/scripts/.. = /app  (writable, progress file lands here)
-// - Local svc: poly-agent/scripts/.. = poly-agent/ (env inherited from parent)
-// - Local individual scripts handled by `cd ../../..` in npm scripts
 const SCRIPTS_CWD = path.resolve(SCRIPTS_DIR, '..');
+
+const META_KEY = 'pipeline';
+
+async function getLastPipelineRun(): Promise<Date | null> {
+  try {
+    const doc = await (await getPipelineDB())
+      .collection('ahf-pipelineMeta')
+      .findOne({ _id: META_KEY as any });
+    return doc?.lastRun ? new Date(doc.lastRun) : null;
+  } catch { return null; }
+}
+
+async function setLastPipelineRun(): Promise<void> {
+  try {
+    await (await getPipelineDB())
+      .collection('ahf-pipelineMeta')
+      .updateOne({ _id: META_KEY as any }, { $set: { lastRun: new Date() } }, { upsert: true });
+  } catch (e: any) { log.warn(`Failed to persist last-run time: ${e.message}`); }
+}
 
 let isRunning = false;
 let intervalId: NodeJS.Timeout | null = null;
@@ -46,7 +63,7 @@ function runScript(name: string, args: string[] = []): Promise<{ durationMs: num
     const proc = spawn('npx', ['tsx', scriptPath, ...args], {
       stdio: 'inherit',
       env: process.env,
-      cwd: SCRIPTS_CWD,   // /app in Docker (writable); env inherited from parent process
+      cwd: SCRIPTS_CWD,
       shell: true,
     });
 
@@ -124,6 +141,8 @@ export async function runFullPipeline(): Promise<void> {
     log.info('================================================================');
     log.info('');
 
+    await setLastPipelineRun();
+
   } catch (error: any) {
     const totalMs = Date.now() - pipelineStart;
     log.error(`Pipeline failed after ${(totalMs / 60_000).toFixed(1)}m: ${error.message}`);
@@ -132,10 +151,30 @@ export async function runFullPipeline(): Promise<void> {
   }
 }
 
-export function startPipeline(intervalMs: number): void {
+export async function startPipeline(intervalMs: number): Promise<void> {
+  const lastRun = await getLastPipelineRun();
+  const now = Date.now();
+
+  const schedule = () => {
+    runFullPipeline().catch(err => log.error(`Pipeline error: ${err.message}`));
+  };
+
+  if (lastRun) {
+    const elapsed = now - lastRun.getTime();
+    if (elapsed < intervalMs) {
+      const delay = intervalMs - elapsed;
+      log.info(`Pipeline ran ${(elapsed / 3_600_000).toFixed(1)}h ago — next run in ${(delay / 3_600_000).toFixed(1)}h`);
+      setTimeout(() => {
+        schedule();
+        intervalId = setInterval(schedule, intervalMs);
+      }, delay);
+      return;
+    }
+  }
+
   log.info(`Starting pipeline (every ${(intervalMs / 3_600_000).toFixed(0)}h)`);
-  runFullPipeline();
-  intervalId = setInterval(runFullPipeline, intervalMs);
+  schedule();
+  intervalId = setInterval(schedule, intervalMs);
 }
 
 export function stopPipeline(): void {
