@@ -3,6 +3,13 @@ import clientPromise, { dbName } from '@/lib/mongodb';
 
 export const dynamic = 'force-dynamic';
 
+const DATA_API   = process.env.POLYMARKET_DATA_API ?? 'https://data-api.polymarket.com';
+const BOT_WALLET = (process.env.BOT_WALLET_ADDRESS ?? '').toLowerCase();
+
+function normalTitle(t: string): string {
+  return (t ?? '').toLowerCase().trim().replace(/[?!.\s]+$/, '').replace(/\s+/g, ' ');
+}
+
 export async function GET(
   _req: NextRequest,
   { params }: { params: Promise<{ wallet: string }> },
@@ -13,8 +20,8 @@ export async function GET(
     const client = await clientPromise;
     const db = client.db(dbName);
 
-    // Parallel fetch: edge profile, copy config, alloc history, raw trades, trader open positions
-    const [edgeDoc, copyConfig, allocHistory, rawTrades, traderOpenPositions] = await Promise.all([
+    // Parallel fetch: mongo data + bot's live positions from Polymarket API
+    const [edgeDoc, copyConfig, allocHistory, rawTrades, traderOpenPositions, botPosRaw] = await Promise.all([
       db.collection('ahf-edgeRankedTraders').findOne({ wallet }),
       db.collection('ahf-copyTraders').findOne({ wallet }),
       db.collection('ahf-allocationEvents')
@@ -29,34 +36,44 @@ export async function GET(
       db.collection('polymarket-openPositions')
         .find({ wallet })
         .toArray(),
+      BOT_WALLET
+        ? fetch(`${DATA_API}/positions?user=${BOT_WALLET}&sizeThreshold=0.01&limit=500`)
+            .then(r => r.json()).catch(() => [])
+        : Promise.resolve([]),
     ]);
 
     if (!copyConfig && rawTrades.length === 0) {
       return NextResponse.json({ success: false, error: 'Trader not found' }, { status: 404 });
     }
 
-    // Build current price map from trader's open positions (pipeline-materialized)
-    // Key: title:outcome → { curPrice, size, currentValue }
-    const priceMap = new Map<string, any>();
-    for (const p of traderOpenPositions as any[]) {
-      priceMap.set(`${p.title ?? ''}:${p.outcome ?? ''}`, p);
+    // Bot live price map: normalTitle+outcome → curPrice (source of truth for open positions)
+    const botPositions: any[] = Array.isArray(botPosRaw) ? botPosRaw : (botPosRaw?.data ?? []);
+    const botPriceMap = new Map<string, number>();
+    for (const p of botPositions) {
+      const cp = parseFloat(p.curPrice ?? p.currentPrice ?? '0');
+      if (cp > 0) {
+        botPriceMap.set(`${normalTitle(p.title ?? '')}:${(p.outcome ?? '').toLowerCase()}`, cp);
+      }
     }
 
-    // Group trades by market (title+outcome as key — most stable)
+    // Trader pipeline price map (for traderStillIn flag)
+    const traderPriceMap = new Map<string, any>();
+    for (const p of traderOpenPositions as any[]) {
+      traderPriceMap.set(`${p.title ?? ''}:${p.outcome ?? ''}`, p);
+    }
+
+    // Group trades by market (title+outcome)
     interface MarketGroup {
       conditionId: string | null;
       title: string;
       outcome: string;
-      // Trader side (all detected trades)
       tBought: number;
       tSold: number;
-      tEntrySum: number;   // weighted: price * traderBetUsdc for BUY
+      tEntrySum: number;
       tBuyCount: number;
-      // Bot side (FILLED trades only)
       bFilledUsdc: number;
       bFilledSize: number;
-      bEntrySum: number;   // weighted: avgFillPrice * filledUsdc
-      // Skips
+      bEntrySum: number;
       skipCounts: Record<string, number>;
       totalDetected: number;
       totalFilled: number;
@@ -96,12 +113,9 @@ export async function GET(
 
       if (t.status === 'FILLED') {
         m.totalFilled++;
-        const fu = t.filledUsdc  ?? 0;
-        const fs = t.filledSize  ?? 0;
-        const fp = t.avgFillPrice ?? 0;
-        m.bFilledUsdc += fu;
-        m.bFilledSize += fs;
-        m.bEntrySum   += fp * fu;
+        m.bFilledUsdc += t.filledUsdc  ?? 0;
+        m.bFilledSize += t.filledSize  ?? 0;
+        m.bEntrySum   += (t.avgFillPrice ?? 0) * (t.filledUsdc ?? 0);
       }
 
       if (t.status === 'SKIPPED' && t.skipReason) {
@@ -109,19 +123,23 @@ export async function GET(
       }
     }
 
-    // Build final market list with derived fields
+    // Build final market list
     const markets = [...marketMap.values()].map(m => {
       const tEntry = m.tBuyCount > 0 && m.tBought > 0
         ? m.tEntrySum / m.tBought : null;
       const bEntry = m.bFilledUsdc > 0
         ? m.bEntrySum / m.bFilledUsdc : null;
 
-      const priceKey   = `${m.title}:${m.outcome}`;
-      const priceInfo  = priceMap.get(priceKey);
-      const curPrice   = priceInfo?.curPrice ?? null;
-      const traderStillIn = !!priceInfo;
+      // curPrice: bot's live positions take priority (accurate); fall back to trader pipeline
+      const traderPriceKey = `${m.title}:${m.outcome}`;
+      const traderPriceInfo = traderPriceMap.get(traderPriceKey);
+      const botPriceKey    = `${normalTitle(m.title)}:${m.outcome.toLowerCase()}`;
+      const curPrice = botPriceMap.get(botPriceKey) ?? traderPriceInfo?.curPrice ?? null;
 
-      // Estimated bot PnL: (curPrice - bEntry) × bFilledSize
+      // traderStillIn: reflects trader's pipeline state
+      const traderStillIn = !!traderPriceInfo;
+
+      // Bot PnL: (curPrice - bEntry) × bFilledSize
       const bPnl = (curPrice != null && bEntry != null && m.bFilledSize > 0)
         ? (curPrice - bEntry) * m.bFilledSize
         : null;
@@ -147,7 +165,6 @@ export async function GET(
       };
     });
 
-    // Sort by tBought desc (largest trader activity first)
     markets.sort((a, b) => (b.tBought ?? 0) - (a.tBought ?? 0));
 
     const edgeProfile = edgeDoc ? {
@@ -173,16 +190,16 @@ export async function GET(
     } : null;
 
     const config = copyConfig ? {
-      label:          (copyConfig as any).label,
-      allocationUsdc: (copyConfig as any).allocationUsdc,
-      spentUsdc:      (copyConfig as any).spentUsdc,
-      active:         (copyConfig as any).active,
-      avgBet:         (copyConfig as any).avgBet,
-      maxBetUsdc:     (copyConfig as any).maxBetUsdc,
-      allocAction:    (copyConfig as any).allocAction,
-      allocReason:    (copyConfig as any).allocReason,
+      label:            (copyConfig as any).label,
+      allocationUsdc:   (copyConfig as any).allocationUsdc,
+      spentUsdc:        (copyConfig as any).spentUsdc,
+      active:           (copyConfig as any).active,
+      avgBet:           (copyConfig as any).avgBet,
+      maxBetUsdc:       (copyConfig as any).maxBetUsdc,
+      allocAction:      (copyConfig as any).allocAction,
+      allocReason:      (copyConfig as any).allocReason,
       allocFailureType: (copyConfig as any).allocFailureType,
-      allocCheckedAt: (copyConfig as any).allocCheckedAt,
+      allocCheckedAt:   (copyConfig as any).allocCheckedAt,
     } : null;
 
     const label = config?.label ?? (allocHistory[0] as any)?.label ?? wallet.slice(0, 8);
