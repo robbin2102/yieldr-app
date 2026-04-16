@@ -41,6 +41,15 @@ async function ensureIndexes(database: Db): Promise<void> {
     await openPos.createIndex({ wallet: 1, title: 1, outcome: 1 });
     await openPos.createIndex({ title: 'text' });
 
+    // ahf-edgeRankedSnapshots — 24h cycle time-series archive
+    const snapshots = database.collection(COLLECTIONS.EDGE_RANKED_SNAPSHOTS);
+    await snapshots.createIndex({ wallet: 1, snapshotAt: -1 });   // per-trader trend queries
+    await snapshots.createIndex({ snapshotAt: -1 });               // latest cycle lookup
+    await snapshots.createIndex(
+      { snapshotAt: 1 },
+      { expireAfterSeconds: 90 * 24 * 60 * 60 },                  // TTL: 90 days auto-expire
+    );
+
     console.log('[PipelineDB] Indexes verified');
   } catch (error: any) {
     console.error('[PipelineDB] Index setup error:', error.message);
@@ -78,4 +87,7 @@ export const COLLECTIONS = {
   // Materialized views (written by materialize.ts after pipeline)
   HIGH_CONVICTION_TRADES: 'x-agent-highConvictionTrades',
   OPEN_POSITIONS:         'polymarket-openPositions',
+
+  // 24h cycle snapshots — full funnel data per trader per cycle (90-day TTL)
+  EDGE_RANKED_SNAPSHOTS: 'ahf-edgeRankedSnapshots',
 } as const;

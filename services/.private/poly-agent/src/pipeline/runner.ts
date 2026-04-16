@@ -1,7 +1,7 @@
 /**
  * Pipeline Runner
  *
- * Orchestrates the 5-step trader ranking pipeline by spawning each script
+ * Orchestrates the 6-step trader ranking pipeline by spawning each script
  * sequentially via npx tsx. Scripts live in poly-agent/scripts/ and are
  * used as-is (no modification to the scripts themselves).
  *
@@ -9,14 +9,17 @@
  *   1. fetch-leaderboard.ts       → polymarket-leaderboardSnapshots
  *   2. find-consistent-traders.ts → polymarket-consistentTraders
  *   3. bulk-profile-ahf.ts        → polymarket-traderProfiles + polymarket-traderPositions
+ *      (--reset-progress ensures all wallets are re-profiled fresh every cycle)
  *   4. edge-ranked-traders.ts     → ahf-edgeRankedTraders
- *   5. materialize                → x-agent-highConvictionTrades + polymarket-openPositions
+ *   5. snapshot                   → ahf-edgeRankedSnapshots (24h time-series archive)
+ *   6. materialize                → x-agent-highConvictionTrades + polymarket-openPositions
  */
 
 import { spawn } from 'child_process';
 import * as path from 'path';
 import { createLogger } from './logger';
 import { runMaterialization } from './materialize';
+import { snapshotEdgeRankedTraders } from './snapshot';
 
 const log = createLogger('Pipeline');
 
@@ -87,12 +90,21 @@ export async function runFullPipeline(): Promise<void> {
     const step2 = await runScript('find-consistent-traders.ts');
     timings['find-consistent-traders'] = step2.durationMs;
 
-    const step3 = await runScript('bulk-profile-ahf.ts');
+    // --reset-progress ensures all wallets are re-profiled fresh on every cycle
+    const step3 = await runScript('bulk-profile-ahf.ts', ['--reset-progress']);
     timings['bulk-profile-ahf'] = step3.durationMs;
 
     const step4 = await runScript('edge-ranked-traders.ts');
     timings['edge-ranked-traders'] = step4.durationMs;
 
+    // Step 5: snapshot — full funnel data per trader archived for trend analysis
+    log.info('Running cycle snapshot...');
+    const snapStart = Date.now();
+    const snapCount = await snapshotEdgeRankedTraders();
+    timings['snapshot'] = Date.now() - snapStart;
+    log.success(`Snapshot: ${snapCount} traders archived to ahf-edgeRankedSnapshots`);
+
+    // Step 6: materialize HC trades + open positions for MCP tools
     log.info('Running materialization...');
     const matStart = Date.now();
     await runMaterialization();
