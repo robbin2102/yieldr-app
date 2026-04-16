@@ -14,6 +14,8 @@ RUN npm run build
 # ── 3. Copy runtime assets ────────────────────────────────────────
 # scripts/ are ESM, spawned at runtime via `npx tsx` — not compiled
 COPY scripts ./scripts
+# analyze-allocations.ts lives at root (not in scripts/) — copy explicitly
+COPY analyze-allocations.ts ./
 
 # ── 4. Prune devDeps, keep tsx for runtime script spawning ────────
 RUN npm prune --omit=dev && npm install tsx
