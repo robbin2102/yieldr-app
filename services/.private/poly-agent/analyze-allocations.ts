@@ -142,7 +142,7 @@ function shares(t: any): number {
 interface EdgeData {
   edge: number;
   confidence: string;
-  last_active: string;
+  last_active: number | null;   // days since last active (float), from last_active_days_ago
   overall_rank: number;
   specialty: string;
 }
@@ -155,7 +155,7 @@ async function fetchEdgeData(wallets: string[]): Promise<Map<string, EdgeData>> 
       m.set((d.wallet as string).toLowerCase(), {
         edge: d.edge ?? 0,
         confidence: d.confidence ?? 'n/a',
-        last_active: d.last_active ?? '',
+        last_active: typeof d.last_active === 'number' ? d.last_active : null,
         overall_rank: d.overall_rank ?? 999,
         specialty: d.specialty ?? 'unknown',
       });
@@ -404,16 +404,14 @@ async function main() {
     }
 
     // ── Edge data from pipeline ───────────────────────────────────────────────
+    // last_active in ahf-edgeRankedTraders = last_active_days_ago from profile-trader-v3
+    // It is already the number of days since the trader was last active (a float).
+    // Do NOT treat as a timestamp — just use it directly.
     const edge = edgeMap.get(tr.wallet.toLowerCase());
-    let daysInactive: number | null = null;
-    if (edge?.last_active) {
-      // last_active may be a Unix timestamp (seconds) or ISO date string
-      const val = edge.last_active;
-      const ms  = typeof val === 'number'
-        ? val * 1000                       // Unix seconds → ms
-        : new Date(val).getTime();         // ISO string → ms
-      if (!isNaN(ms) && ms > 0) daysInactive = Math.floor((Date.now() - ms) / 86_400_000);
-    }
+    const daysInactive: number | null =
+      edge?.last_active != null && typeof edge.last_active === 'number'
+        ? Math.floor(edge.last_active)
+        : null;
 
     // traderROCE = trader's return on their own detected capital (tTotal / tBought)
     // — measures how well the TRADER is performing in trades we can see, independent of our allocation size
