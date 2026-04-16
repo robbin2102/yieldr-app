@@ -54,6 +54,10 @@ export async function runAllocationCheck(): Promise<void> {
   isRunning = true;
   const startMs = Date.now();
 
+  // Persist start time BEFORE running so restarts respect the 4h interval
+  // even if the script crashes or is killed mid-run.
+  await setLastRun();
+
   log.info('');
   log.info('────────────────────────────────────────');
   log.info('  ALLOCATION CHECK — START              ');
@@ -71,7 +75,6 @@ export async function runAllocationCheck(): Promise<void> {
       const durationMs = Date.now() - startMs;
       if (code === 0) {
         log.success(`Allocation check completed in ${(durationMs / 1000).toFixed(1)}s`);
-        setLastRun().catch(() => {});
       } else {
         log.error(`Allocation check exited with code ${code} after ${(durationMs / 1000).toFixed(1)}s`);
       }

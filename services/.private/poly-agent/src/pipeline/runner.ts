@@ -95,6 +95,10 @@ export async function runFullPipeline(): Promise<void> {
   const pipelineStart = Date.now();
   const timings: Record<string, number> = {};
 
+  // Persist start time BEFORE heavy work so restarts respect the 24h interval
+  // even if the pipeline crashes or is killed mid-run.
+  await setLastPipelineRun();
+
   try {
     log.info('');
     log.info('================================================================');
@@ -140,8 +144,6 @@ export async function runFullPipeline(): Promise<void> {
     log.info(`  ${'TOTAL'.padEnd(30)} ${(totalMs / 60_000).toFixed(1)}m`);
     log.info('================================================================');
     log.info('');
-
-    await setLastPipelineRun();
 
   } catch (error: any) {
     const totalMs = Date.now() - pipelineStart;
