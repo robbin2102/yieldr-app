@@ -25,11 +25,14 @@
  */
 
 import mongoose from 'mongoose';
-import { config }         from './src/config';
-import { connectDB }      from './src/db/connection';
 import { CopyTrade }      from './src/db/models/CopyTrade';
 import { CopyTrader }     from './src/db/models/CopyTrader';
 import { AllocationEvent } from './src/db/models/AllocationEvent';
+
+// Use env vars directly — this script doesn't need trading bot private keys.
+const CLOB_API = process.env.CLOB_API_BASE  ?? 'https://clob.polymarket.com';
+const DATA_API = process.env.DATA_API_BASE  ?? 'https://data-api.polymarket.com';
+const BOT_ADDR = (process.env.BOT_WALLET_ADDRESS ?? '').toLowerCase();
 
 // ── CLI args ──────────────────────────────────────────────────────────────────
 function argVal(n: string) { const i = process.argv.indexOf(`--${n}`); return i !== -1 ? process.argv[i+1] : undefined; }
@@ -49,7 +52,7 @@ const priceCache = new Map<string, number>();
 async function fetchMidprice(id: string): Promise<number> {
   if (!id || priceCache.has(id)) return priceCache.get(id) ?? 0;
   try {
-    const r: any = await (await fetch(`${config.clobApiBase}/midpoint?token_id=${id}`)).json();
+    const r: any = await (await fetch(`${CLOB_API}/midpoint?token_id=${id}`)).json();
     const p = parseFloat(r.mid ?? '0');
     priceCache.set(id, p);
     return p;
@@ -75,7 +78,7 @@ async function fetchBotPortfolioPrices(): Promise<Map<string, { curPrice: number
   const m = new Map<string, { curPrice: number; size: number }>();
   let btcExcluded = 0;
   try {
-    const url = `${config.dataApiBase}/positions?user=${config.botWalletAddress}&sizeThreshold=0.01&limit=500`;
+    const url = `${DATA_API}/positions?user=${BOT_ADDR}&sizeThreshold=0.01&limit=500`;
     const res = await fetch(url);
     if (!res.ok) { process.stdout.write(`HTTP ${res.status} `); return m; }
     const raw: any = await res.json();
@@ -110,7 +113,7 @@ async function fetchBotRedemptions(): Promise<Map<string, number>> {
   try {
     while (true) {
       const url =
-        `${config.dataApiBase}/activity?user=${config.botWalletAddress}` +
+        `${DATA_API}/activity?user=${BOT_ADDR}` +
         `&limit=${limit}&offset=${offset}&sortBy=TIMESTAMP&sortDirection=DESC`;
       const res = await fetch(url);
       if (!res.ok) { process.stdout.write(`HTTP ${res.status} `); break; }
@@ -298,7 +301,15 @@ function recommend(s: Stats): { action: string; reason: string; failureType: 'EX
 
 // ── main ──────────────────────────────────────────────────────────────────────
 async function main() {
-  await connectDB();
+  const mongoUri = process.env.MONGODB_URI;
+  if (!mongoUri) throw new Error('MONGODB_URI environment variable is required');
+  await mongoose.connect(mongoUri, {
+    dbName: 'yieldr',
+    serverSelectionTimeoutMS: 30_000,
+    socketTimeoutMS: 45_000,
+    family: 4,
+  });
+  console.log('[DB] Connected to MongoDB (yieldr database)');
 
   const traders = await CopyTrader.find(FILTER_TRADER ? { label: FILTER_TRADER } : {}).sort({ label: 1 }).lean();
   if (!traders.length) { console.log('No traders found'); process.exit(0); }

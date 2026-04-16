@@ -36,10 +36,12 @@ async function getLastRun(): Promise<Date | null> {
 
 async function setLastRun(): Promise<void> {
   try {
+    const ts = new Date();
     await (await getPipelineDB())
       .collection('ahf-pipelineMeta')
-      .updateOne({ _id: META_KEY as any }, { $set: { lastRun: new Date() } }, { upsert: true });
-  } catch (e: any) { log.warn(`Failed to persist last-run time: ${e.message}`); }
+      .updateOne({ _id: META_KEY as any }, { $set: { lastRun: ts } }, { upsert: true });
+    log.info(`[META] lastRun written: ${ts.toISOString()}`);
+  } catch (e: any) { log.warn(`[META] Failed to persist last-run time: ${e.message}`); }
 }
 
 let isRunning   = false;
@@ -102,13 +104,16 @@ export async function startAllocationChecker(intervalMs: number): Promise<void> 
     const elapsed = now - lastRun.getTime();
     if (elapsed < intervalMs) {
       const delay = intervalMs - elapsed;
-      log.info(`Alloc check ran ${(elapsed / 3_600_000).toFixed(1)}h ago — next run in ${(delay / 3_600_000).toFixed(1)}h`);
+      log.info(`[STARTUP] lastRun=${lastRun.toISOString()} (${(elapsed / 3_600_000).toFixed(1)}h ago) — next run in ${(delay / 3_600_000).toFixed(1)}h`);
       setTimeout(() => {
         schedule();
         intervalId = setInterval(schedule, intervalMs);
       }, delay);
       return;
     }
+    log.info(`[STARTUP] lastRun=${lastRun.toISOString()} (${(elapsed / 3_600_000).toFixed(1)}h ago, >${(intervalMs / 3_600_000).toFixed(0)}h) — running immediately`);
+  } else {
+    log.info('[STARTUP] No lastRun found in MongoDB — running alloc check immediately');
   }
 
   log.info(`Starting allocation checker (every ${(intervalMs / 3_600_000).toFixed(0)}h)`);

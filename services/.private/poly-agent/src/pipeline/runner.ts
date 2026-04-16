@@ -44,10 +44,12 @@ async function getLastPipelineRun(): Promise<Date | null> {
 
 async function setLastPipelineRun(): Promise<void> {
   try {
+    const ts = new Date();
     await (await getPipelineDB())
       .collection('ahf-pipelineMeta')
-      .updateOne({ _id: META_KEY as any }, { $set: { lastRun: new Date() } }, { upsert: true });
-  } catch (e: any) { log.warn(`Failed to persist last-run time: ${e.message}`); }
+      .updateOne({ _id: META_KEY as any }, { $set: { lastRun: ts } }, { upsert: true });
+    log.info(`[META] lastRun written: ${ts.toISOString()}`);
+  } catch (e: any) { log.warn(`[META] Failed to persist last-run time: ${e.message}`); }
 }
 
 let isRunning = false;
@@ -165,13 +167,16 @@ export async function startPipeline(intervalMs: number): Promise<void> {
     const elapsed = now - lastRun.getTime();
     if (elapsed < intervalMs) {
       const delay = intervalMs - elapsed;
-      log.info(`Pipeline ran ${(elapsed / 3_600_000).toFixed(1)}h ago — next run in ${(delay / 3_600_000).toFixed(1)}h`);
+      log.info(`[STARTUP] lastRun=${lastRun.toISOString()} (${(elapsed / 3_600_000).toFixed(1)}h ago) — next run in ${(delay / 3_600_000).toFixed(1)}h`);
       setTimeout(() => {
         schedule();
         intervalId = setInterval(schedule, intervalMs);
       }, delay);
       return;
     }
+    log.info(`[STARTUP] lastRun=${lastRun.toISOString()} (${(elapsed / 3_600_000).toFixed(1)}h ago, >${(intervalMs / 3_600_000).toFixed(0)}h) — running immediately`);
+  } else {
+    log.info('[STARTUP] No lastRun found in MongoDB — running pipeline immediately');
   }
 
   log.info(`Starting pipeline (every ${(intervalMs / 3_600_000).toFixed(0)}h)`);
