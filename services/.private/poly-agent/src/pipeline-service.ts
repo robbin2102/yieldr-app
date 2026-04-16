@@ -27,6 +27,7 @@ import * as http from 'http';
 import { connectPipelineDB, closePipelineDB } from './pipeline/db';
 import { startMarketIndexer, stopMarketIndexer, getMarketIndexerStatus } from './pipeline/market-indexer';
 import { startPipeline, stopPipeline, getPipelineStatus } from './pipeline/runner';
+import { startAllocationChecker, stopAllocationChecker, getAllocationCheckerStatus } from './pipeline/allocation-checker';
 import { PIPELINE_CONFIG } from './pipeline/pipeline-config';
 
 let server: http.Server | null = null;
@@ -48,12 +49,14 @@ function startHealthServer(): void {
       res.end(JSON.stringify({
         status:   'running',
         monitors: {
-          marketIndexer: getMarketIndexerStatus(),
-          pipeline:      getPipelineStatus(),
+          marketIndexer:      getMarketIndexerStatus(),
+          pipeline:           getPipelineStatus(),
+          allocationChecker:  getAllocationCheckerStatus(),
         },
         intervals: {
-          marketIndex: `${PIPELINE_CONFIG.INTERVALS.MARKET_INDEX / 3_600_000}h`,
-          pipeline:    `${PIPELINE_CONFIG.INTERVALS.PIPELINE / 3_600_000}h`,
+          marketIndex:        `${PIPELINE_CONFIG.INTERVALS.MARKET_INDEX / 3_600_000}h`,
+          pipeline:           `${PIPELINE_CONFIG.INTERVALS.PIPELINE / 3_600_000}h`,
+          analyzeAllocations: `${PIPELINE_CONFIG.INTERVALS.ANALYZE_ALLOCATIONS / 3_600_000}h`,
         },
         timestamp: new Date().toISOString(),
       }));
@@ -90,6 +93,12 @@ async function main() {
     startPipeline(PIPELINE_CONFIG.INTERVALS.PIPELINE);
   }, 5 * 60 * 1000);
 
+  // Allocation checker starts 10 min after boot — after pipeline has had a chance
+  // to run on first deploy. Independent 4h cycle, does not block pipeline.
+  setTimeout(() => {
+    startAllocationChecker(PIPELINE_CONFIG.INTERVALS.ANALYZE_ALLOCATIONS);
+  }, 10 * 60 * 1000);
+
   console.log('');
   console.log('================================================================');
   console.log('              SERVICE RUNNING                                   ');
@@ -98,6 +107,7 @@ async function main() {
   console.log(`  Status:     http://localhost:${PIPELINE_CONFIG.PORT}/status`);
   console.log(`  Market:     every ${PIPELINE_CONFIG.INTERVALS.MARKET_INDEX / 3_600_000}h (starts immediately)`);
   console.log(`  Pipeline:   every ${PIPELINE_CONFIG.INTERVALS.PIPELINE / 3_600_000}h (starts in 5m)`);
+  console.log(`  Alloc:      every ${PIPELINE_CONFIG.INTERVALS.ANALYZE_ALLOCATIONS / 3_600_000}h (starts in 10m)`);
   console.log('================================================================');
   console.log('');
 }
@@ -106,6 +116,7 @@ async function shutdown(signal: string) {
   console.log(`\n[Pipeline] Received ${signal}, shutting down...`);
   stopMarketIndexer();
   stopPipeline();
+  stopAllocationChecker();
   if (server) server.close();
   await closePipelineDB();
   process.exit(0);
