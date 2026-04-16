@@ -34,11 +34,12 @@ export async function GET() {
       return curVal > 1 && curPrice > 0;
     });
 
-    // Parallel: all detected trades (for traderHolding calc) + filled buys (for label) + meta
+    // Parallel: filled buys (for label/sourceWallet) + portfolio meta
     const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
-    const [allTrades, allocEvents, copyTraders, trades24h] = await Promise.all([
+    const [filledBuys, allocEvents, copyTraders, trades24h] = await Promise.all([
       db.collection('ahf-copyTrades')
-        .find({}, { projection: { title: 1, outcome: 1, side: 1, traderBetUsdc: 1, traderLabel: 1, sourceWallet: 1, skipReason: 1 } })
+        .find({ status: 'FILLED', side: 'BUY' })
+        .project({ title: 1, outcome: 1, traderLabel: 1, sourceWallet: 1 })
         .toArray(),
       db.collection('ahf-allocationEvents').aggregate([
         { $sort: { runAt: -1 } },
@@ -49,23 +50,33 @@ export async function GET() {
       db.collection('ahf-copyTrades').countDocuments({ status: 'FILLED', createdAt: { $gte: since24h } }),
     ]);
 
-    // Compute traderHolding from trade history: tBought > tSold means trader still in
-    // (more reliable than pipeline polymarket-openPositions which only covers leaderboard wallets)
-    const holdMap = new Map<string, { tBought: number; tSold: number; traderLabel: string }>();
-    for (const t of allTrades as any[]) {
-      if (t.skipReason === 'NON_TRADE') continue;
+    // Build title+outcome → traderLabel lookup + unique source wallets
+    const labelMap = new Map<string, string>();
+    const sourceWalletMap = new Map<string, string>(); // normKey → sourceWallet
+    for (const t of filledBuys as any[]) {
       const key = `${normalTitle(t.title ?? '')}:${(t.outcome ?? '').toLowerCase()}`;
-      if (!holdMap.has(key)) {
-        holdMap.set(key, {
-          tBought: 0, tSold: 0,
-          traderLabel: t.traderLabel ?? (t.sourceWallet as string)?.slice(0, 8) ?? '—',
-        });
+      if (!labelMap.has(key)) {
+        labelMap.set(key, (t as any).traderLabel ?? ((t as any).sourceWallet as string)?.slice(0, 8) ?? '—');
+        if ((t as any).sourceWallet) sourceWalletMap.set(key, ((t as any).sourceWallet as string).toLowerCase());
       }
-      const h = holdMap.get(key)!;
-      if (t.side === 'BUY')  h.tBought += t.traderBetUsdc ?? 0;
-      if (t.side === 'SELL') h.tSold   += t.traderBetUsdc ?? 0;
-      if (!h.traderLabel && t.traderLabel) h.traderLabel = t.traderLabel;
     }
+
+    // Fetch each source trader's actual on-chain positions to determine traderHolding
+    const uniqueSourceWallets = [...new Set(sourceWalletMap.values())];
+    const traderHoldSet = new Set<string>(); // normKey where trader still has value
+    await Promise.all(uniqueSourceWallets.map(async (sw) => {
+      try {
+        const r = await fetch(`${DATA_API}/positions?user=${sw}&sizeThreshold=0.01&limit=500`);
+        const raw = await r.json() as any;
+        const pos: any[] = Array.isArray(raw) ? raw : (raw?.data ?? []);
+        for (const p of pos) {
+          const cv = parseFloat(p.currentValue ?? '0');
+          if (cv > 0.01) {
+            traderHoldSet.add(`${normalTitle(p.title ?? '')}:${(p.outcome ?? '').toLowerCase()}`);
+          }
+        }
+      } catch { /* ignore — show EXIT if API unavailable */ }
+    }));
 
     // Build position list
     const positions = openRaw.map((p: any) => {
@@ -76,11 +87,9 @@ export async function GET() {
       const initialValue = parseFloat(p.initialValue ?? String(size * avgPrice));
       const cashPnl      = parseFloat(p.cashPnl      ?? String(currentValue - initialValue));
 
-      const key          = `${normalTitle(p.title ?? '')}:${(p.outcome ?? '').toLowerCase()}`;
-      const hold         = holdMap.get(key);
-      const traderLabel  = hold?.traderLabel ?? '—';
-      // Trader still holding if they bought meaningfully more than they sold
-      const traderHolding = hold ? hold.tBought > hold.tSold * 1.05 : false;
+      const key           = `${normalTitle(p.title ?? '')}:${(p.outcome ?? '').toLowerCase()}`;
+      const traderLabel   = labelMap.get(key) ?? '—';
+      const traderHolding = traderHoldSet.has(key);
 
       return {
         title:           p.title ?? 'Unknown',

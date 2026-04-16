@@ -20,8 +20,8 @@ export async function GET(
     const client = await clientPromise;
     const db = client.db(dbName);
 
-    // Parallel fetch: mongo data + bot's live positions from Polymarket API
-    const [edgeDoc, copyConfig, allocHistory, rawTrades, traderOpenPositions, botPosRaw] = await Promise.all([
+    // Parallel fetch: mongo data + trader's live positions + bot's live positions from Polymarket API
+    const [edgeDoc, copyConfig, allocHistory, rawTrades, traderPosRaw, botPosRaw] = await Promise.all([
       db.collection('ahf-edgeRankedTraders').findOne({ wallet }),
       db.collection('ahf-copyTraders').findOne({ wallet }),
       db.collection('ahf-allocationEvents')
@@ -33,9 +33,8 @@ export async function GET(
         .find({ sourceWallet: wallet })
         .sort({ createdAt: -1 })
         .toArray(),
-      db.collection('polymarket-openPositions')
-        .find({ wallet })
-        .toArray(),
+      fetch(`${DATA_API}/positions?user=${wallet}&sizeThreshold=0.01&limit=500`)
+        .then(r => r.json()).catch(() => []),
       BOT_WALLET
         ? fetch(`${DATA_API}/positions?user=${BOT_WALLET}&sizeThreshold=0.01&limit=500`)
             .then(r => r.json()).catch(() => [])
@@ -46,6 +45,16 @@ export async function GET(
       return NextResponse.json({ success: false, error: 'Trader not found' }, { status: 404 });
     }
 
+    // Trader's real on-chain positions → traderStillIn set (normalTitle+outcome)
+    const traderPositions: any[] = Array.isArray(traderPosRaw) ? traderPosRaw : (traderPosRaw?.data ?? []);
+    const traderHoldSet = new Set<string>();
+    for (const p of traderPositions) {
+      const cv = parseFloat(p.currentValue ?? '0');
+      if (cv > 0.01) {
+        traderHoldSet.add(`${normalTitle(p.title ?? '')}:${(p.outcome ?? '').toLowerCase()}`);
+      }
+    }
+
     // Bot live price map: normalTitle+outcome → curPrice (source of truth for open positions)
     const botPositions: any[] = Array.isArray(botPosRaw) ? botPosRaw : (botPosRaw?.data ?? []);
     const botPriceMap = new Map<string, number>();
@@ -54,12 +63,6 @@ export async function GET(
       if (cp > 0) {
         botPriceMap.set(`${normalTitle(p.title ?? '')}:${(p.outcome ?? '').toLowerCase()}`, cp);
       }
-    }
-
-    // Trader pipeline price map (for traderStillIn flag)
-    const traderPriceMap = new Map<string, any>();
-    for (const p of traderOpenPositions as any[]) {
-      traderPriceMap.set(`${p.title ?? ''}:${p.outcome ?? ''}`, p);
     }
 
     // Group trades by market (title+outcome)
@@ -130,14 +133,12 @@ export async function GET(
       const bEntry = m.bFilledUsdc > 0
         ? m.bEntrySum / m.bFilledUsdc : null;
 
-      // curPrice: bot's live positions take priority (accurate); fall back to trader pipeline
-      const traderPriceKey = `${m.title}:${m.outcome}`;
-      const traderPriceInfo = traderPriceMap.get(traderPriceKey);
-      const botPriceKey    = `${normalTitle(m.title)}:${m.outcome.toLowerCase()}`;
-      const curPrice = botPriceMap.get(botPriceKey) ?? traderPriceInfo?.curPrice ?? null;
+      // curPrice: bot's live positions first (accurate); fall back to trader's live positions
+      const normKey    = `${normalTitle(m.title)}:${m.outcome.toLowerCase()}`;
+      const curPrice   = botPriceMap.get(normKey) ?? null;
 
-      // traderStillIn: reflects trader's pipeline state
-      const traderStillIn = !!traderPriceInfo;
+      // traderStillIn: trader's actual wallet still holds this position (on-chain data)
+      const traderStillIn = traderHoldSet.has(normKey);
 
       // Bot PnL: (curPrice - bEntry) × bFilledSize
       const bPnl = (curPrice != null && bEntry != null && m.bFilledSize > 0)

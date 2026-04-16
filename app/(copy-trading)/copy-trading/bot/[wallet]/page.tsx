@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { use, useEffect, useState } from 'react';
 import Link from 'next/link';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -165,7 +165,8 @@ function skipSummary(counts: Record<string, number>): string {
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
-export default function TraderDetailPage({ params }: { params: { wallet: string } }) {
+export default function TraderDetailPage({ params }: { params: Promise<{ wallet: string }> }) {
+  const { wallet } = use(params);
   const [data,    setData]    = useState<TraderDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error,   setError]   = useState<string | null>(null);
@@ -174,7 +175,7 @@ export default function TraderDetailPage({ params }: { params: { wallet: string 
   useEffect(() => {
     async function fetchDetail() {
       try {
-        const res = await fetch(`/api/copy-trading/trader-detail/${params.wallet}`);
+        const res = await fetch(`/api/copy-trading/trader-detail/${wallet}`);
         const json = await res.json();
         if (json.success) setData(json);
         else setError(json.error ?? 'Unknown error');
@@ -185,7 +186,7 @@ export default function TraderDetailPage({ params }: { params: { wallet: string 
       }
     }
     fetchDetail();
-  }, [params.wallet]);
+  }, [wallet]);
 
   if (loading) {
     return (
