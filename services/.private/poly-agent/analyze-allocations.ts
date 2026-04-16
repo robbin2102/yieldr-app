@@ -178,9 +178,9 @@ interface Stats {
   // Bot cashflow (from MongoDB FILLED docs + data API redeems)
   bBought: number; bSold: number; bRedeemed: number; bOpenVal: number;
   bRealized: number; bTotal: number;
-  // ROCE — % based, scales with allocation
-  traderROCE: number;  // tTotal / allocationUsdc
-  botROCE:    number;  // bTotal / allocationUsdc
+  // ROCE — % based, independent of allocation size
+  traderROCE: number;  // tTotal / tBought  — trader's return on their own detected capital
+  botROCE:    number;  // bTotal / allocationUsdc — our return on our allocated capital
   // Activity counts
   detected: number; filled: number; skips: Record<string, number>;
   // Missed conviction PnL
@@ -407,11 +407,19 @@ async function main() {
     const edge = edgeMap.get(tr.wallet.toLowerCase());
     let daysInactive: number | null = null;
     if (edge?.last_active) {
-      const lastMs = new Date(edge.last_active).getTime();
-      if (!isNaN(lastMs)) daysInactive = Math.floor((Date.now() - lastMs) / 86_400_000);
+      // last_active may be a Unix timestamp (seconds) or ISO date string
+      const val = edge.last_active;
+      const ms  = typeof val === 'number'
+        ? val * 1000                       // Unix seconds → ms
+        : new Date(val).getTime();         // ISO string → ms
+      if (!isNaN(ms) && ms > 0) daysInactive = Math.floor((Date.now() - ms) / 86_400_000);
     }
 
-    const traderROCE = tr.allocationUsdc > 0 ? tTotal / tr.allocationUsdc : 0;
+    // traderROCE = trader's return on their own detected capital (tTotal / tBought)
+    // — measures how well the TRADER is performing in trades we can see, independent of our allocation size
+    // botROCE   = our return on our allocated capital (bTotal / allocationUsdc)
+    // — measures how much WE made; used only for the hard floor check
+    const traderROCE = tBought > 0 ? tTotal / tBought : 0;
     const botROCE    = tr.allocationUsdc > 0 ? bTotal / tr.allocationUsdc : 0;
 
     const s: Stats = {
@@ -486,17 +494,17 @@ async function main() {
   console.log('\n' + '═'.repeat(W));
   console.log('  ALLOCATION MANAGEMENT');
   console.log('═'.repeat(W));
-  console.log('\n  Rules (all % based — scale automatically with any starting allocation):');
+  console.log('\n  Rules (tROCE = trader\'s return on their own detected capital = tTotal/tBought):');
   console.log('    Per-position cap:  30% of allocationUsdc');
-  console.log('    SCALE_UP L1:       traderROCE > +20% AND edge > 0.15   → double allocation');
-  console.log('    SCALE_UP L2:       traderROCE > +40% AND edge > 0.20   → double again (max 10x start)');
-  console.log('    SCALE_DOWN:        traderROCE < -15%                    → halve allocation');
-  console.log('    SOFT_STOP:         traderROCE < -30%                    → $0 new entries, keep open positions');
-  console.log('    HARD_STOP #1:      botROCE    < -50%                    → close all (real capital floor)');
-  console.log('    HARD_STOP #2:      dormant    >  4d                     → close all');
-  console.log('    HARD_STOP #3:      edge       <  0.1                    → close all');
-  console.log('    HARD_STOP #4:      specialty drift to sports/esports    → close all');
-  console.log('    EXEC_GATE:         skip_rate  > 60%                     → suspend scaling, fix execution first');
+  console.log('    SCALE_UP L1:       tROCE > +20% AND edge > 0.15  → double allocation');
+  console.log('    SCALE_UP L2:       tROCE > +40% AND edge > 0.20  → double again (max 10x start)');
+  console.log('    SCALE_DOWN:        tROCE < -15%                   → halve allocation');
+  console.log('    SOFT_STOP:         tROCE < -30%                   → $0 new entries, keep open positions');
+  console.log('    HARD_STOP #1:      bROCE < -50% (bTotal/alloc)   → close all (real capital floor)');
+  console.log('    HARD_STOP #2:      dormant > 4d                   → close all');
+  console.log('    HARD_STOP #3:      edge    < 0.1                  → close all');
+  console.log('    HARD_STOP #4:      specialty drift (sports/esports) → close all');
+  console.log('    EXEC_GATE:         skip_rate > 60%                → suspend scaling, fix execution first');
   console.log();
   console.log(
     '  ' + pad('Trader', 22) +
