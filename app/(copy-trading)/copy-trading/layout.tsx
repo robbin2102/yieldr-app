@@ -5,6 +5,8 @@ import { usePathname } from 'next/navigation';
 
 const navItems = [
   { href: '/copy-trading', label: 'Dashboard', icon: '📊' },
+  { href: '/copy-trading/bot', label: 'Bot', icon: '🤖' },
+  { href: '/copy-trading/edge-traders', label: 'Edge Traders', icon: '🎯' },
   { href: '/copy-trading/alerts', label: 'Alerts', icon: '🔔' },
   { href: '/copy-trading/positions', label: 'Positions', icon: '💰' },
   { href: '/copy-trading/traders', label: 'Traders', icon: '👥' },
