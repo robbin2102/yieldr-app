@@ -19,15 +19,28 @@ export async function GET() {
     const copyTraders = await db.collection('ahf-copyTraders').find({}).toArray();
     const traderByWallet = new Map(copyTraders.map((t: any) => [t.wallet, t]));
 
+    // 24h activity counts per trader from ahf-copyTrades
+    const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const act24h = await db.collection('ahf-copyTrades').aggregate([
+      { $match: { createdAt: { $gte: since24h } } },
+      { $group: {
+        _id: '$sourceWallet',
+        tAct24h: { $sum: 1 },
+        bAct24h: { $sum: { $cond: [{ $eq: ['$status', 'FILLED'] }, 1, 0] } },
+      }},
+    ]).toArray();
+    const act24hMap = new Map(act24h.map((a: any) => [a._id, a]));
+
     // Build merged trader rows
     const traders = latestEvents.map((ev: any) => {
-      const ct = traderByWallet.get(ev.wallet) ?? {};
+      const ct  = traderByWallet.get(ev.wallet) ?? {};
+      const a24 = act24hMap.get(ev.wallet) ?? { tAct24h: 0, bAct24h: 0 };
       return {
         wallet:      ev.wallet,
         label:       ev.label,
         runAt:       ev.runAt,
 
-        // PnL snapshot from alloc event
+        // PnL snapshot
         tBought:     ev.tBought   ?? 0,
         tRealized:   ev.tRealized ?? 0,
         tOpenVal:    ev.tOpenVal  ?? 0,
@@ -52,37 +65,37 @@ export async function GET() {
         skipCounts:   ev.skipCounts   ?? {},
         missedPnl:    ev.missedPnl    ?? 0,
 
+        // 24h activity
+        tAct24h: a24.tAct24h,
+        bAct24h: a24.bAct24h,
+
         // Decision
         action:      ev.action      ?? '',
         actionCode:  ev.actionCode  ?? '',
         failureType: ev.failureType ?? 'NONE',
         reason:      ev.reason      ?? '',
 
-        // Allocation state
-        allocBefore: ev.allocBefore ?? 0,
-        allocAfter:  ev.allocAfter  ?? null,
-        positionCap: ev.positionCap ?? 0,
-        spentUsdc:   (ct as any).spentUsdc ?? ev.spentUsdc ?? 0,
-
-        // Live config from copyTrader
+        // Allocation
+        allocBefore:    ev.allocBefore ?? 0,
+        allocAfter:     ev.allocAfter  ?? null,
+        positionCap:    ev.positionCap ?? 0,
+        spentUsdc:      (ct as any).spentUsdc ?? ev.spentUsdc ?? 0,
         allocationUsdc: (ct as any).allocationUsdc ?? ev.allocBefore ?? 0,
         active:         (ct as any).active ?? true,
       };
     });
 
-    // Sort: active first, then by label
     traders.sort((a, b) => {
       if (a.active !== b.active) return a.active ? -1 : 1;
       return a.label.localeCompare(b.label);
     });
 
-    // System-level aggregates
+    // System aggregates
     const totalDetected = traders.reduce((s, t) => s + t.detected, 0);
     const totalFilled   = traders.reduce((s, t) => s + t.filled,   0);
     const totalMissed   = traders.reduce((s, t) => s + t.missedPnl, 0);
     const totalBPnl     = traders.reduce((s, t) => s + t.bPnl,     0);
 
-    // Aggregate skip counts across all traders
     const aggSkipCounts: Record<string, number> = {};
     for (const t of traders) {
       if (t.skipCounts && typeof t.skipCounts === 'object') {
@@ -93,13 +106,13 @@ export async function GET() {
     }
 
     const systemStats = {
-      totalTraders:  traders.length,
-      activeTraders: traders.filter(t => t.active).length,
+      totalTraders:   traders.length,
+      activeTraders:  traders.filter(t => t.active).length,
       totalDetected,
       totalFilled,
-      fillRate:      totalDetected > 0 ? totalFilled / totalDetected : 0,
+      fillRate:       totalDetected > 0 ? totalFilled / totalDetected : 0,
       totalMissedPnl: totalMissed,
-      totalBotPnl:   totalBPnl,
+      totalBotPnl:    totalBPnl,
       aggSkipCounts,
     };
 
