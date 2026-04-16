@@ -196,24 +196,23 @@ interface Stats {
   action: string; reason: string;
 }
 
-const SPORTS_SPECIALTIES = new Set(['sports', 'esports', 'nba', 'nfl', 'soccer', 'cricket']);
-
 // ── recommendation ────────────────────────────────────────────────────────────
-// Hard stops (4, binary — bypass scaling entirely):
-//   1. botROCE < -50%           — lost half allocation, real capital protection
-//   2. Dormant > 4d             — trader not active
-//   3. Edge < 0.1               — statistical edge gone
-//   4. Specialty drift          — moved to sports/esports category
+// Hard stops (3, binary — bypass scaling entirely):
+//   1. botROCE < -50%  — lost half our allocation, real capital floor
+//   2. Dormant > 4d    — trader not active on their own book
+//   3. Edge < 0.1      — statistical edge gone
+//   (Specialty filter removed — handled at trader selection time, not runtime)
 //
-// Scaling (ROCE-based — traderROCE = tTotal/alloc, botROCE = bTotal/alloc):
-//   SCALE_UP:   traderROCE > +20% AND edge > 0.15  → double allocation
-//   SCALE_UP:   traderROCE > +40% AND edge > 0.20  → double again
-//   SOFT_STOP:  traderROCE < -30%                   → $0 new entries
-//   SCALE_DOWN: traderROCE < -15%                   → halve allocation
+// Scaling (ROCE-based — traderROCE = tTotal/tBought, botROCE = bTotal/alloc):
+//   SCALE_UP L2: traderROCE > +40% AND edge > 0.20  → double allocation
+//   SCALE_UP L1: traderROCE > +20% AND edge > 0.15  → double allocation
+//   SOFT_STOP:   traderROCE < -30%                   → $0 new entries, keep open
+//   SCALE_DOWN:  traderROCE < -15%                   → halve allocation
+//   WATCH:       traderROCE < 0                      → monitor, no change
+//   CONTINUE:    traderROCE >= 0                     → hold allocation
 //
-// Execution gate: skip_rate > 60% → EXEC_FAIL, suspend scaling decisions
+// Execution gate: exec_skip_rate > 60% (excl. BELOW_AVG) → hold alloc, fix infra
 function recommend(s: Stats): { action: string; reason: string; failureType: 'EXEC_FAIL' | 'TRADER_FAIL' | 'NONE' } {
-  const snpCount      = s.skips['SELL_NO_POSITION'] ?? 0;
   const allocCount    = s.skips['ALLOCATION_FULL'] ?? 0;
   const belowAvgCount = (s.skips['BELOW_AVG'] ?? 0) + (s.skips['GROUPED_BELOW_AVG'] ?? 0);
   const totalSkips    = Object.values(s.skips).reduce((a, b) => a + b, 0);
@@ -245,11 +244,6 @@ function recommend(s: Stats): { action: string; reason: string; failureType: 'EX
     return { action: '🔴 HARD_STOP', failureType: 'TRADER_FAIL',
       reason: `edge collapsed to ${s.edgeScore.toFixed(3)} (confidence=${s.edgeConfidence})` };
   }
-  // 4. Specialty drift to sports/esports
-  if (s.edgeSpecialty && SPORTS_SPECIALTIES.has(s.edgeSpecialty.toLowerCase())) {
-    return { action: '🔴 HARD_STOP', failureType: 'TRADER_FAIL',
-      reason: `specialty drifted to "${s.edgeSpecialty}" — outside copy-trade mandate` };
-  }
 
   // ── EXECUTION GATE — exec_skip_rate > 60% means infrastructure is failing ─
   // Excludes BELOW_AVG/GROUPED_BELOW_AVG (intentional filters, not failures).
@@ -260,11 +254,7 @@ function recommend(s: Stats): { action: string; reason: string; failureType: 'EX
       reason: `exec_skip_rate ${pct(execSkipRate)} >60%${topNote} | below_avg ${pct(belowAvgRate)} (expected)` };
   }
 
-  // ── EXEC_FAIL sub-cases (exec gate ok but specific execution issue) ───────
-  if (snpCount > s.detected * 0.4) {
-    return { action: '🟡 FIX_ENTRY [EXEC_FAIL]', failureType: 'EXEC_FAIL',
-      reason: `tROCE ${pct(s.traderROCE)} but ${snpCount} SELL_NO_POSITION (${pct(snpCount/s.detected)} of detected) — set DETECTOR_INTERVAL_MS=5000` };
-  }
+  // ── EXEC_FAIL sub-case: allocation is the binding constraint ─────────────
   if (s.traderROCE > 0.20 && execTopSkip === 'ALLOCATION_FULL') {
     return { action: '🟡 INCREASE_ALLOC [EXEC_FAIL]', failureType: 'EXEC_FAIL',
       reason: `tROCE ${pct(s.traderROCE)} but allocation maxed ($${s.spent.toFixed(0)}/$${s.alloc}) — ${allocCount} trades missed` };
@@ -510,7 +500,6 @@ async function main() {
   console.log('    HARD_STOP #1:      bROCE < -50% (bTotal/alloc)   → close all (real capital floor)');
   console.log('    HARD_STOP #2:      dormant > 4d                   → close all');
   console.log('    HARD_STOP #3:      edge    < 0.1                  → close all');
-  console.log('    HARD_STOP #4:      specialty drift (sports/esports) → close all');
   console.log('    EXEC_GATE:         exec_skip_rate > 60% (excl. BELOW_AVG) → hold alloc, fix execution');
   console.log();
   console.log(
