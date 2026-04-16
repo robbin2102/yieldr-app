@@ -46,11 +46,13 @@ interface ActivityItem {
   outcome: string;
   side: 'BUY' | 'SELL';
   traderBetUsdc: number;
+  traderPrice: number | null;
   copyBetUsdc: number;
   status: string;
   skipReason: string | null;
   createdAt: string;
   filledUsdc: number | null;
+  avgFillPrice: number | null;
   totalLatencyMs: number | null;
 }
 
@@ -59,6 +61,8 @@ interface OpenPosition {
   outcome: string;
   traderLabel: string;
   traderHolding: boolean;
+  traderPrice: number | null;
+  driftPct: number | null;
   avgFillPrice: number;
   totalFilledUsdc: number;
   totalFilledSize: number;
@@ -374,62 +378,6 @@ export default function BotDashboard() {
         </div>
       </div>
 
-      {/* ── Exec Health by Timeframe ── */}
-      {execHealth && (
-        <div className="bg-[#0A0A0A] border border-[#1A1A1A] rounded overflow-hidden">
-          <div className="px-4 py-2 border-b border-[#1A1A1A] flex items-center justify-between">
-            <span className="text-[10px] text-[#00C805] tracking-widest font-bold">EXECUTION HEALTH</span>
-            {trend && (
-              <span className="text-[10px] font-bold" style={{ color: trend.color }}>
-                {trend.text}
-              </span>
-            )}
-          </div>
-          {/* Timeframe table */}
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs">
-              <thead>
-                <tr className="border-b border-[#1A1A1A]">
-                  {['Period','Detected','Filled','Fill%','Exec Skips','Conv Filter','Trend vs 7d'].map(h => (
-                    <th key={h} className="px-3 py-1.5 text-left text-[10px] text-[#6E6E6E] tracking-wider font-normal whitespace-nowrap">
-                      {h}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {execHealth.windows.map((w, i) => {
-                  const fillPct = w.fillRate != null ? (w.fillRate * 100).toFixed(1) + '%' : '—';
-                  const base7d  = execHealth.windows[1]?.fillRate;
-                  let trendCell = '—';
-                  let trendClr  = '#6E6E6E';
-                  if (i > 0 && w.fillRate != null && base7d != null) {
-                    const d = w.fillRate - base7d;
-                    trendCell = d >= 0 ? `+${(d * 100).toFixed(1)}%` : `${(d * 100).toFixed(1)}%`;
-                    trendClr  = d > 0.02 ? '#00C805' : d < -0.02 ? '#FF4757' : '#9E9E9E';
-                  }
-                  if (i === 1) { trendCell = '(base)'; trendClr = '#6E6E6E'; }
-                  return (
-                    <tr key={w.label} className="border-b border-[#0F0F0F]">
-                      <td className="px-3 py-1.5 text-[#9E9E9E] font-bold">{w.label}</td>
-                      <td className="px-3 py-1.5 text-[#9E9E9E]">{w.detected}</td>
-                      <td className="px-3 py-1.5 text-[#9E9E9E]">{w.filled}</td>
-                      <td className="px-3 py-1.5 font-bold"
-                        style={{ color: w.fillRate != null && w.fillRate > 0.5 ? '#00C805' : '#FF8C00' }}>
-                        {fillPct}
-                      </td>
-                      <td className="px-3 py-1.5 text-[#9E9E9E]">{w.execSkips}</td>
-                      <td className="px-3 py-1.5 text-[#6E6E6E]">{w.convFilter}</td>
-                      <td className="px-3 py-1.5" style={{ color: trendClr }}>{trendCell}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
       {/* ── Portfolio Strip + Open Positions ── */}
       {portSummary && (
         <div className="bg-[#0A0A0A] border border-[#1A1A1A] rounded overflow-hidden">
@@ -463,7 +411,7 @@ export default function BotDashboard() {
               <table className="w-full text-xs">
                 <thead>
                   <tr className="border-b border-[#1A1A1A]">
-                    {['Market','Out','Trader','B.Entry','Cur Price','Cur Value','Est PnL','T.Hold'].map(h => (
+                    {['Market','Out','Trader','T.Price','B.Entry','Drift%','Cur Price','Cur Value','Est PnL','T.Hold'].map(h => (
                       <th key={h} className="px-2 py-1.5 text-left text-[10px] text-[#6E6E6E] tracking-wider whitespace-nowrap font-normal">
                         {h}
                       </th>
@@ -480,7 +428,14 @@ export default function BotDashboard() {
                         </span>
                       </td>
                       <td className="px-2 py-1.5 text-[#9E9E9E]">{p.traderLabel}</td>
+                      <td className="px-2 py-1.5 text-[#9E9E9E]">
+                        {p.traderPrice != null ? p.traderPrice.toFixed(3) : '—'}
+                      </td>
                       <td className="px-2 py-1.5 text-[#9E9E9E]">{p.avgFillPrice.toFixed(3)}</td>
+                      <td className="px-2 py-1.5 font-bold"
+                        style={{ color: p.driftPct == null ? '#6E6E6E' : p.driftPct > 2 ? '#FF8C00' : p.driftPct < -2 ? '#00C805' : '#9E9E9E' }}>
+                        {p.driftPct != null ? `${p.driftPct >= 0 ? '+' : ''}${p.driftPct.toFixed(1)}%` : '—'}
+                      </td>
                       <td className="px-2 py-1.5 text-[#9E9E9E]">{p.curPrice.toFixed(3)}</td>
                       <td className="px-2 py-1.5 text-[#9E9E9E]">{fmt$(p.currentValue, 2)}</td>
                       <td className="px-2 py-1.5 font-bold"
@@ -556,14 +511,14 @@ export default function BotDashboard() {
           <table className="w-full text-xs">
             <thead>
               <tr className="border-b border-[#1A1A1A]">
-                {['Time','Trader','Market','Dir','Trader $','Bot $','Status','Note'].map(h => (
+                {['Time','Trader','Market','Dir','Trader $','T.Price','Bot $','B.Price','Status','Note'].map(h => (
                   <th key={h} className="px-2 py-1.5 text-left text-[10px] text-[#6E6E6E] tracking-wider font-normal whitespace-nowrap">{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {activity.length === 0 && (
-                <tr><td colSpan={8} className="px-4 py-6 text-center text-[#6E6E6E]">No activity</td></tr>
+                <tr><td colSpan={10} className="px-4 py-6 text-center text-[#6E6E6E]">No activity</td></tr>
               )}
               {activity.filter(a =>
                 (actStatus === 'ALL' || a.status === actStatus) &&
@@ -581,7 +536,13 @@ export default function BotDashboard() {
                   </td>
                   <td className="px-2 py-1.5 text-[#9E9E9E]">{fmt$(a.traderBetUsdc)}</td>
                   <td className="px-2 py-1.5 text-[#9E9E9E]">
+                    {a.traderPrice != null ? a.traderPrice.toFixed(3) : '—'}
+                  </td>
+                  <td className="px-2 py-1.5 text-[#9E9E9E]">
                     {a.status === 'FILLED' && a.filledUsdc != null ? fmt$(a.filledUsdc, 2) : a.copyBetUsdc > 0 ? fmt$(a.copyBetUsdc) : '—'}
+                  </td>
+                  <td className="px-2 py-1.5 text-[#9E9E9E]">
+                    {a.status === 'FILLED' && a.avgFillPrice != null ? a.avgFillPrice.toFixed(3) : '—'}
                   </td>
                   <td className="px-2 py-1.5">
                     <span className="font-bold text-[10px]" style={{ color: statusColor(a.status) }}>{a.status}</span>
@@ -596,6 +557,61 @@ export default function BotDashboard() {
           </table>
         </div>
       </div>
+
+      {/* ── Exec Health by Timeframe ── */}
+      {execHealth && (
+        <div className="bg-[#0A0A0A] border border-[#1A1A1A] rounded overflow-hidden">
+          <div className="px-4 py-2 border-b border-[#1A1A1A] flex items-center justify-between">
+            <span className="text-[10px] text-[#00C805] tracking-widest font-bold">EXECUTION HEALTH</span>
+            {trend && (
+              <span className="text-[10px] font-bold" style={{ color: trend.color }}>
+                {trend.text}
+              </span>
+            )}
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b border-[#1A1A1A]">
+                  {['Period','Detected','Filled','Fill%','Exec Skips','Conv Filter','Trend vs 7d'].map(h => (
+                    <th key={h} className="px-3 py-1.5 text-left text-[10px] text-[#6E6E6E] tracking-wider font-normal whitespace-nowrap">
+                      {h}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {execHealth.windows.map((w, i) => {
+                  const fillPct = w.fillRate != null ? (w.fillRate * 100).toFixed(1) + '%' : '—';
+                  const base7d  = execHealth.windows[1]?.fillRate;
+                  let trendCell = '—';
+                  let trendClr  = '#6E6E6E';
+                  if (i > 0 && w.fillRate != null && base7d != null) {
+                    const d = w.fillRate - base7d;
+                    trendCell = d >= 0 ? `+${(d * 100).toFixed(1)}%` : `${(d * 100).toFixed(1)}%`;
+                    trendClr  = d > 0.02 ? '#00C805' : d < -0.02 ? '#FF4757' : '#9E9E9E';
+                  }
+                  if (i === 1) { trendCell = '(base)'; trendClr = '#6E6E6E'; }
+                  return (
+                    <tr key={w.label} className="border-b border-[#0F0F0F]">
+                      <td className="px-3 py-1.5 text-[#9E9E9E] font-bold">{w.label}</td>
+                      <td className="px-3 py-1.5 text-[#9E9E9E]">{w.detected}</td>
+                      <td className="px-3 py-1.5 text-[#9E9E9E]">{w.filled}</td>
+                      <td className="px-3 py-1.5 font-bold"
+                        style={{ color: w.fillRate != null && w.fillRate > 0.5 ? '#00C805' : '#FF8C00' }}>
+                        {fillPct}
+                      </td>
+                      <td className="px-3 py-1.5 text-[#9E9E9E]">{w.execSkips}</td>
+                      <td className="px-3 py-1.5 text-[#6E6E6E]">{w.convFilter}</td>
+                      <td className="px-3 py-1.5" style={{ color: trendClr }}>{trendCell}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
     </div>
   );

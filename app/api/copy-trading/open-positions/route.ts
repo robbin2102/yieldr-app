@@ -39,7 +39,7 @@ export async function GET() {
     const [filledBuys, allocEvents, copyTraders, trades24h] = await Promise.all([
       db.collection('ahf-copyTrades')
         .find({ status: 'FILLED', side: 'BUY' })
-        .project({ title: 1, outcome: 1, traderLabel: 1, sourceWallet: 1 })
+        .project({ title: 1, outcome: 1, traderLabel: 1, sourceWallet: 1, traderPrice: 1, traderBetUsdc: 1 })
         .toArray(),
       db.collection('ahf-allocationEvents').aggregate([
         { $sort: { runAt: -1 } },
@@ -50,14 +50,21 @@ export async function GET() {
       db.collection('ahf-copyTrades').countDocuments({ status: 'FILLED', createdAt: { $gte: since24h } }),
     ]);
 
-    // Build title+outcome → traderLabel lookup + unique source wallets
+    // Build title+outcome → traderLabel lookup + unique source wallets + weighted trader entry price
     const labelMap = new Map<string, string>();
     const sourceWalletMap = new Map<string, string>(); // normKey → sourceWallet
+    const traderPriceSumMap = new Map<string, { priceSum: number; usdcSum: number }>();
     for (const t of filledBuys as any[]) {
       const key = `${normalTitle(t.title ?? '')}:${(t.outcome ?? '').toLowerCase()}`;
       if (!labelMap.has(key)) {
         labelMap.set(key, (t as any).traderLabel ?? ((t as any).sourceWallet as string)?.slice(0, 8) ?? '—');
         if ((t as any).sourceWallet) sourceWalletMap.set(key, ((t as any).sourceWallet as string).toLowerCase());
+      }
+      const tp = parseFloat((t as any).traderPrice ?? '0');
+      const tu = parseFloat((t as any).traderBetUsdc ?? '0');
+      if (tp > 0 && tu > 0) {
+        const prev = traderPriceSumMap.get(key) ?? { priceSum: 0, usdcSum: 0 };
+        traderPriceSumMap.set(key, { priceSum: prev.priceSum + tp * tu, usdcSum: prev.usdcSum + tu });
       }
     }
 
@@ -91,11 +98,19 @@ export async function GET() {
       const traderLabel   = labelMap.get(key) ?? '—';
       const traderHolding = traderHoldSet.has(key);
 
+      const tpEntry    = traderPriceSumMap.get(key);
+      const traderPrice = tpEntry && tpEntry.usdcSum > 0 ? tpEntry.priceSum / tpEntry.usdcSum : null;
+      const driftPct   = traderPrice != null && traderPrice > 0 && avgPrice > 0
+        ? ((avgPrice - traderPrice) / traderPrice) * 100
+        : null;
+
       return {
         title:           p.title ?? 'Unknown',
         outcome:         p.outcome ?? '—',
         traderLabel,
         traderHolding,
+        traderPrice,
+        driftPct,
         avgFillPrice:    avgPrice,
         totalFilledUsdc: initialValue,
         totalFilledSize: size,

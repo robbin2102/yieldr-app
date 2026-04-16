@@ -21,6 +21,7 @@ export async function GET() {
       outcome:       t.outcome       ?? '',
       side:          t.side          ?? 'BUY',
       traderBetUsdc: t.traderBetUsdc ?? 0,
+      traderPrice:   t.traderPrice   ?? null,
       copyBetUsdc:   t.copyBetUsdc   ?? 0,
       status:        t.status        ?? 'DETECTED',
       skipReason:    t.skipReason    ?? null,
