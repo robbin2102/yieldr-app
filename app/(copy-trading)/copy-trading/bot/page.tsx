@@ -58,6 +58,7 @@ interface OpenPosition {
   title: string;
   outcome: string;
   traderLabel: string;
+  traderHolding: boolean;
   avgFillPrice: number;
   totalFilledUsdc: number;
   totalFilledSize: number;
@@ -462,7 +463,7 @@ export default function BotDashboard() {
               <table className="w-full text-xs">
                 <thead>
                   <tr className="border-b border-[#1A1A1A]">
-                    {['Market','Out','Trader','B.Entry','Cur Price','Cur Value','Est PnL'].map(h => (
+                    {['Market','Out','Trader','B.Entry','Cur Price','Cur Value','Est PnL','T.Hold'].map(h => (
                       <th key={h} className="px-2 py-1.5 text-left text-[10px] text-[#6E6E6E] tracking-wider whitespace-nowrap font-normal">
                         {h}
                       </th>
@@ -485,6 +486,12 @@ export default function BotDashboard() {
                       <td className="px-2 py-1.5 font-bold"
                         style={{ color: p.estimatedPnl >= 0 ? '#00C805' : '#FF4757' }}>
                         {fmtSigned$(p.estimatedPnl)}
+                      </td>
+                      <td className="px-2 py-1.5">
+                        <span className="text-[10px] font-bold"
+                          style={{ color: p.traderHolding ? '#00C805' : '#FF4757' }}>
+                          {p.traderHolding ? 'HOLD' : 'EXIT'}
+                        </span>
                       </td>
                     </tr>
                   ))}

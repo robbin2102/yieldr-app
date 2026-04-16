@@ -26,15 +26,15 @@ export async function GET() {
     const posRaw = await posRes.json() as any;
     const rawAll: any[] = Array.isArray(posRaw) ? posRaw : (posRaw.data ?? []);
 
-    // Keep only active open positions (price between 0–1, value > $1)
+    // Keep positions with value > $1 and price > 0 (includes resolved at $1.00)
     const openRaw = rawAll.filter((p: any) => {
       const size     = parseFloat(p.size         ?? '0');
       const curPrice = parseFloat(p.curPrice     ?? p.currentPrice ?? '0');
       const curVal   = parseFloat(p.currentValue ?? String(size * curPrice));
-      return curVal > 1 && curPrice > 0 && curPrice < 1;
+      return curVal > 1 && curPrice > 0;
     });
 
-    // Parallel: filled buys for trader-label enrichment + portfolio meta
+    // Parallel: filled buys + portfolio meta + trader open positions for "still holding" check
     const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
     const [filledBuys, allocEvents, copyTraders, trades24h] = await Promise.all([
       db.collection('ahf-copyTrades')
@@ -50,7 +50,24 @@ export async function GET() {
       db.collection('ahf-copyTrades').countDocuments({ status: 'FILLED', createdAt: { $gte: since24h } }),
     ]);
 
-    // Build title+outcome → traderLabel lookup
+    // Fetch trader open positions for "still holding" check
+    const traderWallets = (copyTraders as any[]).map((t: any) => (t.wallet ?? '').toLowerCase());
+    const traderPositions = traderWallets.length > 0
+      ? await db.collection('polymarket-openPositions')
+          .find({ wallet: { $in: traderWallets } })
+          .project({ title: 1, outcome: 1, curPrice: 1 })
+          .toArray()
+      : [];
+
+    // Build set of title+outcome keys where ANY tracked trader still holds (curPrice > 0)
+    const traderHoldSet = new Set<string>();
+    for (const tp of traderPositions as any[]) {
+      if ((tp.curPrice ?? 0) > 0) {
+        traderHoldSet.add(`${normalTitle(tp.title ?? '')}:${(tp.outcome ?? '').toLowerCase()}`);
+      }
+    }
+
+    // Build title+outcome → traderLabel lookup from our filled buys
     const labelMap = new Map<string, string>();
     for (const t of filledBuys as any[]) {
       const key = `${normalTitle(t.title ?? '')}:${(t.outcome ?? '').toLowerCase()}`;
@@ -68,13 +85,15 @@ export async function GET() {
       const initialValue = parseFloat(p.initialValue ?? String(size * avgPrice));
       const cashPnl      = parseFloat(p.cashPnl      ?? String(currentValue - initialValue));
 
-      const key         = `${normalTitle(p.title ?? '')}:${(p.outcome ?? '').toLowerCase()}`;
-      const traderLabel = labelMap.get(key) ?? '—';
+      const key          = `${normalTitle(p.title ?? '')}:${(p.outcome ?? '').toLowerCase()}`;
+      const traderLabel  = labelMap.get(key) ?? '—';
+      const traderHolding = traderHoldSet.has(key);
 
       return {
         title:           p.title ?? 'Unknown',
         outcome:         p.outcome ?? '—',
         traderLabel,
+        traderHolding,
         avgFillPrice:    avgPrice,
         totalFilledUsdc: initialValue,
         totalFilledSize: size,
@@ -89,8 +108,8 @@ export async function GET() {
     const openValue     = positions.reduce((s: number, p: any) => s + p.currentValue, 0);
     const unrealizedPnl = positions.reduce((s: number, p: any) => s + p.estimatedPnl, 0);
 
-    const totalAlloc  = (copyTraders  as any[]).reduce((s: number, t: any) => s + (t.allocationUsdc ?? 0), 0);
-    const totalBotPnl = (allocEvents  as any[]).reduce((s: number, e: any) => s + (e.bPnl ?? 0), 0);
+    const totalAlloc  = (copyTraders as any[]).reduce((s: number, t: any) => s + (t.allocationUsdc ?? 0), 0);
+    const totalBotPnl = (allocEvents as any[]).reduce((s: number, e: any) => s + (e.bPnl ?? 0), 0);
     const botROCE     = totalAlloc > 0 ? (totalBotPnl / totalAlloc) * 100 : null;
 
     return NextResponse.json({
