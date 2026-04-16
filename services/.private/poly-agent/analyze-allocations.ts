@@ -213,12 +213,20 @@ const SPORTS_SPECIALTIES = new Set(['sports', 'esports', 'nba', 'nfl', 'soccer',
 //
 // Execution gate: skip_rate > 60% → EXEC_FAIL, suspend scaling decisions
 function recommend(s: Stats): { action: string; reason: string; failureType: 'EXEC_FAIL' | 'TRADER_FAIL' | 'NONE' } {
-  const topSkip    = Object.entries(s.skips).sort((a,b) => b[1]-a[1])[0]?.[0] ?? '';
-  const snpCount   = s.skips['SELL_NO_POSITION'] ?? 0;
-  const allocCount = s.skips['ALLOCATION_FULL'] ?? 0;
-  const totalSkips = Object.values(s.skips).reduce((a, b) => a + b, 0);
-  const skipRate   = s.detected > 0 ? totalSkips / s.detected : 0;
-  const pct        = (n: number) => `${(n * 100).toFixed(1)}%`;
+  const snpCount      = s.skips['SELL_NO_POSITION'] ?? 0;
+  const allocCount    = s.skips['ALLOCATION_FULL'] ?? 0;
+  const belowAvgCount = (s.skips['BELOW_AVG'] ?? 0) + (s.skips['GROUPED_BELOW_AVG'] ?? 0);
+  const totalSkips    = Object.values(s.skips).reduce((a, b) => a + b, 0);
+  // Exec-only rate: BELOW_AVG/GROUPED_BELOW_AVG are intentional filters, not execution failures.
+  // Only real infrastructure failures (SNP, WIDE_SPREAD, PRICEDRIFT, ALLOC_FULL) count here.
+  const execSkips    = totalSkips - belowAvgCount;
+  const execSkipRate = s.detected > 0 ? execSkips / s.detected : 0;
+  const belowAvgRate = s.detected > 0 ? belowAvgCount / s.detected : 0;
+  // Top skip overall; top exec skip excludes intentional below-avg filters
+  const execTopSkip = Object.entries(s.skips)
+    .filter(([k]) => k !== 'BELOW_AVG' && k !== 'GROUPED_BELOW_AVG')
+    .sort((a, b) => b[1] - a[1])[0]?.[0] ?? '';
+  const pct = (n: number) => `${(n * 100).toFixed(1)}%`;
 
   // ── HARD STOPS (4 only — binary, bypass everything) ──────────────────────
 
@@ -243,20 +251,21 @@ function recommend(s: Stats): { action: string; reason: string; failureType: 'EX
       reason: `specialty drifted to "${s.edgeSpecialty}" — outside copy-trade mandate` };
   }
 
-  // ── EXECUTION GATE — skip_rate > 60% means our data is unreliable ────────
-  // Flag only, don't penalise allocation based on bad execution data.
-  if (skipRate > 0.60) {
-    const topSkipNote = topSkip ? ` (top skip: ${topSkip})` : '';
+  // ── EXECUTION GATE — exec_skip_rate > 60% means infrastructure is failing ─
+  // Excludes BELOW_AVG/GROUPED_BELOW_AVG (intentional filters, not failures).
+  // Hold allocation at current level — do not penalise a good trader for our infra issues.
+  if (execSkipRate > 0.60) {
+    const topNote = execTopSkip ? ` (top: ${execTopSkip})` : '';
     return { action: '🟡 FIX_ENTRY [EXEC_FAIL]', failureType: 'EXEC_FAIL',
-      reason: `skip_rate ${pct(skipRate)} >60% — execution unreliable${topSkipNote}, suspend scaling` };
+      reason: `exec_skip_rate ${pct(execSkipRate)} >60%${topNote} | below_avg ${pct(belowAvgRate)} (expected)` };
   }
 
-  // ── EXEC_FAIL sub-cases (skip_rate ok but specific execution issue) ───────
+  // ── EXEC_FAIL sub-cases (exec gate ok but specific execution issue) ───────
   if (snpCount > s.detected * 0.4) {
     return { action: '🟡 FIX_ENTRY [EXEC_FAIL]', failureType: 'EXEC_FAIL',
-      reason: `trader tROCE ${pct(s.traderROCE)} but ${snpCount} SELL_NO_POSITION — set DETECTOR_INTERVAL_MS=5000` };
+      reason: `tROCE ${pct(s.traderROCE)} but ${snpCount} SELL_NO_POSITION (${pct(snpCount/s.detected)} of detected) — set DETECTOR_INTERVAL_MS=5000` };
   }
-  if (s.traderROCE > 0.20 && topSkip === 'ALLOCATION_FULL') {
+  if (s.traderROCE > 0.20 && execTopSkip === 'ALLOCATION_FULL') {
     return { action: '🟡 INCREASE_ALLOC [EXEC_FAIL]', failureType: 'EXEC_FAIL',
       reason: `tROCE ${pct(s.traderROCE)} but allocation maxed ($${s.spent.toFixed(0)}/$${s.alloc}) — ${allocCount} trades missed` };
   }
@@ -502,7 +511,7 @@ async function main() {
   console.log('    HARD_STOP #2:      dormant > 4d                   → close all');
   console.log('    HARD_STOP #3:      edge    < 0.1                  → close all');
   console.log('    HARD_STOP #4:      specialty drift (sports/esports) → close all');
-  console.log('    EXEC_GATE:         skip_rate > 60%                → suspend scaling, fix execution first');
+  console.log('    EXEC_GATE:         exec_skip_rate > 60% (excl. BELOW_AVG) → hold alloc, fix execution');
   console.log();
   console.log(
     '  ' + pad('Trader', 22) +
@@ -541,10 +550,15 @@ async function main() {
   console.log('  RECOMMENDATIONS');
   console.log('═'.repeat(W));
   for (const s of allStats) {
-    const skipSummary = Object.entries(s.skips).sort((a,b)=>b[1]-a[1]).slice(0,4)
+    const skipSummary = Object.entries(s.skips).sort((a,b)=>b[1]-a[1]).slice(0,5)
       .map(([k,v]) => `${k}:${v}`).join('  ');
+    const ba  = (s.skips['BELOW_AVG'] ?? 0) + (s.skips['GROUPED_BELOW_AVG'] ?? 0);
+    const tot = Object.values(s.skips).reduce((a,b)=>a+b, 0);
+    const execRate = s.detected > 0 ? ((tot - ba) / s.detected * 100).toFixed(0) : '0';
+    const baRate   = s.detected > 0 ? (ba / s.detected * 100).toFixed(0) : '0';
+    const rateNote = tot > 0 ? `  [exec_skip: ${execRate}%  below_avg: ${baRate}%]` : '';
     console.log(`\n  ${s.action.padEnd(30)}  ${pad(s.label, 22)}  ${s.reason}`);
-    if (skipSummary) console.log(`  ${''.padEnd(30)}  ${''.padEnd(22)}  Skips → ${skipSummary}`);
+    if (skipSummary) console.log(`  ${''.padEnd(30)}  ${''.padEnd(22)}  Skips → ${skipSummary}${rateNote}`);
   }
 
   // ══ 4. PER-TRADER DETAIL ══════════════════════════════════════════════════
