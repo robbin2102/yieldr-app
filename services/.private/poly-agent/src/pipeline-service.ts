@@ -24,7 +24,6 @@ dotenv.config({ path: path.resolve(__dirname, '../.env') });
 dotenv.config({ path: path.resolve(__dirname, '../env.polyagent') });
 
 import * as http from 'http';
-import * as path from 'path';
 import { spawn } from 'child_process';
 import { connectPipelineDB, closePipelineDB } from './pipeline/db';
 import { startMarketIndexer, stopMarketIndexer, getMarketIndexerStatus } from './pipeline/market-indexer';
