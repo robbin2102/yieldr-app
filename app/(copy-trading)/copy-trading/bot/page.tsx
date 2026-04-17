@@ -193,8 +193,9 @@ export default function BotDashboard() {
   const [actStatus,   setActStatus]   = useState<string>('ALL');
   const [actTrader,   setActTrader]   = useState<string>('ALL');
   const [showStopped, setShowStopped] = useState(false);
-  const [adminBusy,   setAdminBusy]   = useState<string | null>(null);
-  const [adminLog,    setAdminLog]    = useState<string | null>(null);
+  const [adminBusy,      setAdminBusy]      = useState<string | null>(null);
+  const [adminLog,       setAdminLog]       = useState<string | null>(null);
+  const [pendingConfirm, setPendingConfirm] = useState<string | null>(null);
 
   async function fetchAll() {
     try {
@@ -222,9 +223,10 @@ export default function BotDashboard() {
   }, []);
 
   async function redeemAll() {
-    if (!confirm('Redeem all resolved positions? This will send on-chain transactions.')) return;
+    if (pendingConfirm !== 'redeem-all') { setPendingConfirm('redeem-all'); return; }
+    setPendingConfirm(null);
     setAdminBusy('redeem-all');
-    setAdminLog('[REDEEM ALL] running… (watch your terminal for live output)');
+    setAdminLog('[REDEEM ALL] running…');
     try {
       const res  = await fetch('/api/copy-trading/admin/redeem-all', { method: 'POST' });
       const data = await res.json();
@@ -236,10 +238,11 @@ export default function BotDashboard() {
   }
 
   async function sellPosition(p: OpenPosition) {
-    if (!p.tokenId) { alert('No tokenId available for this position'); return; }
-    if (!confirm(`Sell ${p.totalFilledSize.toFixed(2)} shares of "${p.title}" [${p.outcome}]? This will send an on-chain order.`)) return;
+    if (!p.tokenId) { setAdminLog('No tokenId available for this position'); return; }
+    if (pendingConfirm !== p.tokenId) { setPendingConfirm(p.tokenId); return; }
+    setPendingConfirm(null);
     setAdminBusy(p.tokenId);
-    setAdminLog(`[SELL ${p.title.slice(0, 40)}] running… sell-position.ts can take 15-45s across 3 GTT attempts (passive → mid → cross). Watch your terminal for live output.`);
+    setAdminLog(`[SELL ${p.title.slice(0, 40)}] running… up to 4 attempts (passive→mid→cross→bid). Output streams to Railway logs.`);
     try {
       const res  = await fetch('/api/copy-trading/admin/sell-position', {
         method:  'POST',
@@ -456,8 +459,12 @@ export default function BotDashboard() {
               <button
                 disabled={adminBusy === 'redeem-all'}
                 onClick={redeemAll}
-                className="px-2 py-0.5 text-[10px] rounded border border-[#00C805]/40 text-[#00C805] hover:bg-[#00C805]/10 transition-colors disabled:opacity-40 font-bold">
-                {adminBusy === 'redeem-all' ? 'REDEEMING…' : 'REDEEM ALL'}
+                className={`px-2 py-0.5 text-[10px] rounded border transition-colors disabled:opacity-40 font-bold ${
+                  pendingConfirm === 'redeem-all'
+                    ? 'border-[#FF4757]/70 text-[#FF4757] bg-[#FF4757]/10'
+                    : 'border-[#00C805]/40 text-[#00C805] hover:bg-[#00C805]/10'
+                }`}>
+                {adminBusy === 'redeem-all' ? 'REDEEMING…' : pendingConfirm === 'redeem-all' ? 'CONFIRM?' : 'REDEEM ALL'}
               </button>
             )}
           </div>
@@ -530,8 +537,12 @@ export default function BotDashboard() {
                           <button
                             disabled={adminBusy === p.tokenId}
                             onClick={() => sellPosition(p)}
-                            className="px-2 py-0.5 text-[10px] rounded border border-[#FF8C00]/40 text-[#FF8C00] hover:bg-[#FF8C00]/10 transition-colors disabled:opacity-40 font-bold">
-                            {adminBusy === p.tokenId ? '…' : 'SELL'}
+                            className={`px-2 py-0.5 text-[10px] rounded border transition-colors disabled:opacity-40 font-bold ${
+                              pendingConfirm === p.tokenId
+                                ? 'border-[#FF4757]/70 text-[#FF4757] bg-[#FF4757]/10'
+                                : 'border-[#FF8C00]/40 text-[#FF8C00] hover:bg-[#FF8C00]/10'
+                            }`}>
+                            {adminBusy === p.tokenId ? '…' : pendingConfirm === p.tokenId ? 'CONFIRM?' : 'SELL'}
                           </button>
                         )}
                         {p.redeemable && (
@@ -555,7 +566,7 @@ export default function BotDashboard() {
       {/* ── Admin action log (modal overlay) ── */}
       {adminLog && (
         <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4"
-          onClick={() => { if (!adminBusy) setAdminLog(null); }}>
+          onClick={() => { if (!adminBusy) { setAdminLog(null); setPendingConfirm(null); } }}>
           <div className="bg-[#0A0A0A] border border-[#1A1A1A] rounded max-w-3xl w-full max-h-[80vh] flex flex-col"
             onClick={(e) => e.stopPropagation()}>
             <div className="px-4 py-2 border-b border-[#1A1A1A] flex items-center justify-between">

@@ -20,10 +20,21 @@ const SCRIPT_PATH    = path.join(POLY_AGENT_DIR, 'redeem-positions.ts');
 
 export async function POST(_req: NextRequest) {
   if (process.env.NODE_ENV === 'production') {
-    return NextResponse.json(
-      { success: false, error: 'Admin actions are disabled in production. Run on localhost or via the bot service.' },
-      { status: 403 },
-    );
+    const serviceUrl = process.env.PIPELINE_SERVICE_URL;
+    const token      = process.env.ADMIN_TOKEN;
+    if (!serviceUrl || !token) {
+      return NextResponse.json(
+        { success: false, error: 'PIPELINE_SERVICE_URL / ADMIN_TOKEN not configured on this deployment' },
+        { status: 503 },
+      );
+    }
+    const upstream = await fetch(`${serviceUrl}/admin/redeem-all`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      signal:  AbortSignal.timeout(240_000),
+    });
+    const data = await upstream.json();
+    return NextResponse.json(data, { status: upstream.status });
   }
 
   const { exitCode, stdout, stderr } = await runScript([SCRIPT_PATH, '--execute']);

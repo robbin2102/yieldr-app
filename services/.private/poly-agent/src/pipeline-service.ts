@@ -24,6 +24,8 @@ dotenv.config({ path: path.resolve(__dirname, '../.env') });
 dotenv.config({ path: path.resolve(__dirname, '../env.polyagent') });
 
 import * as http from 'http';
+import * as path from 'path';
+import { spawn } from 'child_process';
 import { connectPipelineDB, closePipelineDB } from './pipeline/db';
 import { startMarketIndexer, stopMarketIndexer, getMarketIndexerStatus } from './pipeline/market-indexer';
 import { startPipeline, stopPipeline, getPipelineStatus } from './pipeline/runner';
@@ -32,8 +34,72 @@ import { PIPELINE_CONFIG } from './pipeline/pipeline-config';
 
 let server: http.Server | null = null;
 
+// ── Admin script runner (sell / redeem) ────────────────────────────────────────
+// __dirname = dist/ (compiled) or src/ (tsx dev). Poly-agent root is one up.
+const POLY_AGENT_DIR = path.resolve(__dirname, '..');
+
+const POLY_AGENT_OWNED_KEYS = [
+  'BOT_WALLET_ADDRESS', 'BOT_PRIVATE_KEY',
+  'POLYMARKET_API_KEY', 'POLYMARKET_API_SECRET', 'POLYMARKET_PASSPHRASE',
+  'POLYGON_RPC_URL', 'CHAIN_ID',
+  'DATA_API_BASE', 'CLOB_API_BASE', 'WSS_MARKET', 'WSS_USER',
+];
+function cleanEnv(): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  for (const k of POLY_AGENT_OWNED_KEYS) delete env[k];
+  return env;
+}
+
+function runAdminScript(args: string[], tag: string): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+  return new Promise((resolve) => {
+    console.log(`${tag} spawn: npx tsx ${args.join(' ')}`);
+    const startMs = Date.now();
+    const proc = spawn('npx', ['tsx', ...args], { cwd: POLY_AGENT_DIR, env: cleanEnv() });
+    let stdout = '', stderr = '';
+    proc.stdout.on('data', (d: Buffer) => { const s = d.toString(); stdout += s; process.stdout.write(`${tag} ${s}`); });
+    proc.stderr.on('data', (d: Buffer) => { const s = d.toString(); stderr += s; process.stderr.write(`${tag} ${s}`); });
+    proc.on('close', (code: number | null) => {
+      console.log(`${tag} exit=${code} in ${((Date.now() - startMs) / 1000).toFixed(1)}s`);
+      resolve({ exitCode: code ?? -1, stdout, stderr });
+    });
+    proc.on('error', (err: Error) => {
+      console.error(`${tag} spawn error:`, err.message);
+      resolve({ exitCode: -1, stdout, stderr: stderr + '\n' + err.message });
+    });
+  });
+}
+
+function parseBody(req: http.IncomingMessage): Promise<any> {
+  return new Promise((resolve, reject) => {
+    let body = '';
+    req.on('data', (chunk) => { body += chunk; });
+    req.on('end', () => { try { resolve(JSON.parse(body || '{}')); } catch { reject(new Error('Invalid JSON')); } });
+    req.on('error', reject);
+  });
+}
+
+function cors(res: http.ServerResponse): void {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+}
+
+function json(res: http.ServerResponse, status: number, data: object): void {
+  cors(res);
+  res.writeHead(status, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify(data));
+}
+
+function checkAuth(req: http.IncomingMessage): boolean {
+  const token = process.env.ADMIN_TOKEN;
+  if (!token) return false;
+  const auth = req.headers['authorization'] ?? '';
+  return auth === `Bearer ${token}`;
+}
+
+// ── HTTP server ────────────────────────────────────────────────────────────────
 function startHealthServer(): void {
-  server = http.createServer((req, res) => {
+  server = http.createServer(async (req, res) => {
     if (req.url === '/health') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({
@@ -61,6 +127,33 @@ function startHealthServer(): void {
         timestamp: new Date().toISOString(),
       }));
       return;
+    }
+
+    // CORS preflight
+    if (req.method === 'OPTIONS') { cors(res); res.writeHead(204); res.end(); return; }
+
+    // POST /admin/sell-position
+    if (req.method === 'POST' && req.url === '/admin/sell-position') {
+      if (!checkAuth(req)) return json(res, 401, { success: false, error: 'Unauthorized' });
+      let body: any;
+      try { body = await parseBody(req); } catch { return json(res, 400, { success: false, error: 'Invalid JSON' }); }
+      const { tokenId, size } = body as { tokenId?: string; size?: number };
+      if (!tokenId || typeof tokenId !== 'string' || !/^\d+$/.test(tokenId))
+        return json(res, 400, { success: false, error: 'tokenId (numeric string) required' });
+      const sizeNum = Number(size);
+      if (!Number.isFinite(sizeNum) || sizeNum <= 0)
+        return json(res, 400, { success: false, error: 'size (positive number) required' });
+      const scriptPath = path.join(POLY_AGENT_DIR, 'sell-position.ts');
+      const result = await runAdminScript([scriptPath, '--token', tokenId, '--size', String(sizeNum)], '[sell-position]');
+      return json(res, 200, { success: result.exitCode === 0, ...result });
+    }
+
+    // POST /admin/redeem-all
+    if (req.method === 'POST' && req.url === '/admin/redeem-all') {
+      if (!checkAuth(req)) return json(res, 401, { success: false, error: 'Unauthorized' });
+      const scriptPath = path.join(POLY_AGENT_DIR, 'redeem-positions.ts');
+      const result = await runAdminScript([scriptPath, '--execute'], '[redeem-all]');
+      return json(res, 200, { success: result.exitCode === 0, ...result });
     }
 
     res.writeHead(404);
