@@ -48,9 +48,13 @@ export async function GET() {
         bCost:       ev.bCost     ?? 0,
         bPnl:        ev.bPnl      ?? 0,
 
-        // ROCE
-        traderROCE:  ev.traderROCE ?? 0,
-        botROCE:     ev.botROCE    ?? 0,
+        // ROCE — both expressed as % (e.g. 25.5 = 25.5%) for consistent fmtPct() display
+        // tROCE: prefer profiler 30d % (matches edge-ranked list); fall back to raw ratio×100
+        traderROCE: ev.edgeRoce30d != null
+          ? ev.edgeRoce30d
+          : (ev.traderROCE ?? 0) * 100,
+        // bROCE: 30d-normalised decimal → convert to % for display
+        botROCE:    (ev.botROCE ?? 0) * 100,
 
         // Edge
         edgeScore:      ev.edgeScore      ?? null,

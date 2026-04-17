@@ -152,6 +152,7 @@ interface EdgeData {
   last_active: number | null;   // days since last active (float), from last_active_days_ago
   overall_rank: number;
   specialty: string;
+  roce_30d: number | null;      // profiler v3 30d ROCE % (e.g. 25.5 = 25.5%)
 }
 async function fetchEdgeData(wallets: string[]): Promise<Map<string, EdgeData>> {
   const m = new Map<string, EdgeData>();
@@ -165,6 +166,7 @@ async function fetchEdgeData(wallets: string[]): Promise<Map<string, EdgeData>> 
         last_active: typeof d.last_active === 'number' ? d.last_active : null,
         overall_rank: d.overall_rank ?? 999,
         specialty: d.specialty ?? 'unknown',
+        roce_30d: d.roce_30d ?? null,
       });
     }
     console.log(`Loaded edge data for ${m.size}/${wallets.length} traders from ahf-edgeRankedTraders.`);
@@ -185,9 +187,10 @@ interface Stats {
   // Bot cashflow (from MongoDB FILLED docs + data API redeems)
   bBought: number; bSold: number; bRedeemed: number; bOpenVal: number;
   bRealized: number; bTotal: number;
-  // ROCE — % based, independent of allocation size
-  traderROCE: number;  // tTotal / tBought  — trader's return on their own detected capital
-  botROCE:    number;  // bTotal / allocationUsdc — our return on our allocated capital
+  // ROCE
+  traderROCE:    number;  // tTotal / tBought  — raw ratio, used for action-code thresholds
+  botROCE:       number;  // bTotal / bCapAvg30d — 30d-normalised, for display
+  botROCEfloor:  number;  // bTotal / allocationUsdc — fraction of allocation lost, for hard-stop only
   // Activity counts
   detected: number; filled: number; skips: Record<string, number>;
   // Missed conviction PnL
@@ -197,6 +200,7 @@ interface Stats {
   edgeConfidence: string | null;
   edgeRank:       number | null;
   edgeSpecialty:  string | null;
+  edgeRoce30d:    number | null;  // profiler 30d ROCE % — matches edge-ranked display
   daysInactive:   number | null;
   // Failure classification
   failureType: 'EXEC_FAIL' | 'TRADER_FAIL' | 'NONE';
@@ -205,12 +209,12 @@ interface Stats {
 
 // ── recommendation ────────────────────────────────────────────────────────────
 // Hard stops (3, binary — bypass scaling entirely):
-//   1. botROCE < -50%  — lost half our allocation, real capital floor
-//   2. Dormant > 4d    — trader not active on their own book
-//   3. Edge < 0.1      — statistical edge gone
+//   1. botROCEfloor < -50%  — lost half our allocation (bTotal/allocationUsdc), real capital floor
+//   2. Dormant > 4d          — trader not active on their own book
+//   3. Edge < 0.1            — statistical edge gone
 //   (Specialty filter removed — handled at trader selection time, not runtime)
 //
-// Scaling (ROCE-based — traderROCE = tTotal/tBought, botROCE = bTotal/alloc):
+// Scaling (ROCE-based — traderROCE = tTotal/tBought; botROCE = bTotal/bCapAvg30d for display):
 //   SCALE_UP L2: traderROCE > +40% AND edge > 0.20  → double allocation
 //   SCALE_UP L1: traderROCE > +20% AND edge > 0.15  → double allocation
 //   SOFT_STOP:   traderROCE < -30%                   → $0 new entries, keep open
@@ -237,9 +241,9 @@ function recommend(s: Stats): { action: string; reason: string; failureType: 'EX
   // ── HARD STOPS (4 only — binary, bypass everything) ──────────────────────
 
   // 1. Bot lost > 50% of allocation — real capital floor
-  if (s.botROCE < -0.50) {
+  if (s.botROCEfloor < -0.50) {
     return { action: '🔴 HARD_STOP', failureType: 'TRADER_FAIL',
-      reason: `botROCE ${pct(s.botROCE)} — lost >50% of allocation ($${s.alloc})` };
+      reason: `botROCE ${pct(s.botROCEfloor)} — lost >50% of allocation ($${s.alloc})` };
   }
   // 2. Trader dormant > 4 days
   if (s.daysInactive !== null && s.daysInactive > 4) {
@@ -428,11 +432,22 @@ async function main() {
         : null;
 
     // traderROCE = trader's return on their own detected capital (tTotal / tBought)
-    // — measures how well the TRADER is performing in trades we can see, independent of our allocation size
-    // botROCE   = our return on our allocated capital (bTotal / allocationUsdc)
-    // — measures how much WE made; used only for the hard floor check
+    // — raw ratio; kept for action-code thresholds (SCALE_UP/SOFT_STOP/etc.)
     const traderROCE = tBought > 0 ? tTotal / tBought : 0;
-    const botROCE    = tr.allocationUsdc > 0 ? bTotal / tr.allocationUsdc : 0;
+
+    // botROCE (display) = bTotal / avg-capital-deployed-per-active-day over last 30d
+    // Matches the same daily-normalised methodology profiler v3 uses for traderROCE.
+    // Avoids inflation from recycled capital and allocation-level changes.
+    const cutoff30d    = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const bBuyFills30d = bBuyFills.filter((t: any) => t.createdAt && new Date(t.createdAt) >= cutoff30d);
+    const bBought30d   = bBuyFills30d.reduce((s: number, t: any) => s + (t.filledUsdc ?? 0), 0);
+    const bDays30d     = new Set(bBuyFills30d.map((t: any) => new Date(t.createdAt).toDateString())).size;
+    const bCapAvg30d   = bDays30d > 0 ? bBought30d / bDays30d : (tr.allocationUsdc || 1);
+    const botROCE      = bTotal / bCapAvg30d;   // decimal ratio, same scale as traderROCE
+
+    // botROCEfloor = fraction of allocation lost — used ONLY for the hard-stop check.
+    // allocationUsdc is the right denominator here (capital we committed, not avg deployed).
+    const botROCEfloor = tr.allocationUsdc > 0 ? bTotal / tr.allocationUsdc : 0;
 
     const s: Stats = {
       label: tr.label, wallet: tr.wallet,
@@ -441,12 +456,13 @@ async function main() {
       positionCap,
       tBought, tSold, tRedeemed, tOpenVal, tRealized, tTotal,
       bBought, bSold, bRedeemed, bOpenVal, bRealized, bTotal,
-      traderROCE, botROCE,
+      traderROCE, botROCE, botROCEfloor,
       detected, filled, skips, missedPnl,
       edgeScore:      edge?.edge ?? null,
       edgeConfidence: edge?.confidence ?? null,
       edgeRank:       edge?.overall_rank ?? null,
       edgeSpecialty:  edge?.specialty ?? null,
+      edgeRoce30d:    edge?.roce_30d ?? null,
       daysInactive,
       failureType: 'NONE',
       action: '', reason: '',
@@ -714,10 +730,12 @@ async function main() {
         positionCap:   s.positionCap,
         spentUsdc:     s.spent,
         traderROCE:    s.traderROCE,
-        botROCE:       s.botROCE,
+        botROCE:       s.botROCE,       // 30d-normalised decimal (bTotal / bCapAvg30d)
+        botROCEfloor:  s.botROCEfloor,  // fraction of allocation lost (for hard-stop audit)
         edgeScore:     s.edgeScore,
         edgeSpecialty: s.edgeSpecialty,
         edgeConfidence:s.edgeConfidence,
+        edgeRoce30d:   s.edgeRoce30d,  // profiler 30d ROCE % — matches edge-ranked display
         daysInactive:  s.daysInactive,
         execSkipRate,
         belowAvgRate,
