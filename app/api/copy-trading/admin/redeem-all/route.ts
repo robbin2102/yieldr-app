@@ -30,11 +30,27 @@ export async function POST(_req: NextRequest) {
   return NextResponse.json({ success: exitCode === 0, exitCode, stdout, stderr });
 }
 
+// Keys owned by poly-agent/.env.polyagent. Stripped from the spawned env so the
+// script's dotenv.config() can load the authoritative values from disk instead
+// of inheriting (possibly placeholder) versions from the Next.js parent process.
+const POLY_AGENT_OWNED_KEYS = [
+  'BOT_WALLET_ADDRESS', 'BOT_PRIVATE_KEY',
+  'POLYMARKET_API_KEY', 'POLYMARKET_API_SECRET', 'POLYMARKET_PASSPHRASE',
+  'POLYGON_RPC_URL', 'CHAIN_ID',
+  'DATA_API_BASE', 'CLOB_API_BASE', 'WSS_MARKET', 'WSS_USER',
+];
+
+function cleanEnv(): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  for (const k of POLY_AGENT_OWNED_KEYS) delete env[k];
+  return env;
+}
+
 function runScript(args: string[]): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
     const proc = spawn('npx', ['tsx', ...args], {
       cwd: POLY_AGENT_DIR,
-      env: process.env,
+      env: cleanEnv(),
     });
 
     let stdout = '';
