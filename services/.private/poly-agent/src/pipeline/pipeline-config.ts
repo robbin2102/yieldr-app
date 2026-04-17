@@ -20,7 +20,7 @@ export const PIPELINE_CONFIG = {
   INTERVALS: {
     MARKET_INDEX:        24 * 60 * 60 * 1000,  // 24 hours
     PIPELINE:            24 * 60 * 60 * 1000,  // 24 hours (once daily)
-    ANALYZE_ALLOCATIONS:  4 * 60 * 60 * 1000,  // 4 hours
+    ANALYZE_ALLOCATIONS: 10 * 60 * 1000,  // 10 minutes
   },
 
   // Market indexing

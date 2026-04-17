@@ -104,19 +104,24 @@ export async function startAllocationChecker(intervalMs: number): Promise<void> 
     const elapsed = now - lastRun.getTime();
     if (elapsed < intervalMs) {
       const delay = intervalMs - elapsed;
-      log.info(`[STARTUP] lastRun=${lastRun.toISOString()} (${(elapsed / 3_600_000).toFixed(1)}h ago) — next run in ${(delay / 3_600_000).toFixed(1)}h`);
+      const fmtDelay = delay < 3_600_000 ? `${(delay / 60_000).toFixed(1)}m` : `${(delay / 3_600_000).toFixed(1)}h`;
+      const fmtElapsed = elapsed < 3_600_000 ? `${(elapsed / 60_000).toFixed(1)}m` : `${(elapsed / 3_600_000).toFixed(1)}h`;
+      log.info(`[STARTUP] lastRun=${lastRun.toISOString()} (${fmtElapsed} ago) — next run in ${fmtDelay}`);
       setTimeout(() => {
         schedule();
         intervalId = setInterval(schedule, intervalMs);
       }, delay);
       return;
     }
-    log.info(`[STARTUP] lastRun=${lastRun.toISOString()} (${(elapsed / 3_600_000).toFixed(1)}h ago, >${(intervalMs / 3_600_000).toFixed(0)}h) — running immediately`);
+    const fmtElapsed2 = elapsed < 3_600_000 ? `${(elapsed / 60_000).toFixed(1)}m` : `${(elapsed / 3_600_000).toFixed(1)}h`;
+    const fmtInterval = intervalMs < 3_600_000 ? `${(intervalMs / 60_000).toFixed(0)}m` : `${(intervalMs / 3_600_000).toFixed(0)}h`;
+    log.info(`[STARTUP] lastRun=${lastRun.toISOString()} (${fmtElapsed2} ago, >${fmtInterval}) — running immediately`);
   } else {
     log.info('[STARTUP] No lastRun found in MongoDB — running alloc check immediately');
   }
 
-  log.info(`Starting allocation checker (every ${(intervalMs / 3_600_000).toFixed(0)}h)`);
+  const fmtInterval2 = intervalMs < 3_600_000 ? `${(intervalMs / 60_000).toFixed(0)}m` : `${(intervalMs / 3_600_000).toFixed(0)}h`;
+  log.info(`Starting allocation checker (every ${fmtInterval2})`);
   schedule();
   intervalId = setInterval(schedule, intervalMs);
 }
