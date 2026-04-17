@@ -549,13 +549,22 @@ export default function BotDashboard() {
               Run the pipeline to refresh position data.
             </div>
           )}
-          {adminLog && (
-            <div className="border-t border-[#1A1A1A] px-4 py-3 flex items-start gap-3">
-              <pre className="flex-1 text-[10px] text-[#9E9E9E] whitespace-pre-wrap max-h-64 overflow-auto">{adminLog}</pre>
+        </div>
+      )}
+
+      {/* ── Admin action log (modal overlay) ── */}
+      {adminLog && (
+        <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4"
+          onClick={() => setAdminLog(null)}>
+          <div className="bg-[#0A0A0A] border border-[#1A1A1A] rounded max-w-3xl w-full max-h-[80vh] flex flex-col"
+            onClick={(e) => e.stopPropagation()}>
+            <div className="px-4 py-2 border-b border-[#1A1A1A] flex items-center justify-between">
+              <span className="text-[10px] text-[#00C805] tracking-widest font-bold">ADMIN OUTPUT</span>
               <button onClick={() => setAdminLog(null)}
-                className="text-[10px] text-[#6E6E6E] hover:text-[#E0E0E0] transition-colors">close</button>
+                className="text-[10px] text-[#6E6E6E] hover:text-[#E0E0E0] transition-colors">close ✕</button>
             </div>
-          )}
+            <pre className="flex-1 px-4 py-3 text-[10px] text-[#9E9E9E] whitespace-pre-wrap overflow-auto">{adminLog}</pre>
+          </div>
         </div>
       )}
 

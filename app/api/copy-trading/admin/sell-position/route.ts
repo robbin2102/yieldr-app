@@ -44,16 +44,15 @@ export async function POST(req: NextRequest) {
 function runScript(args: string[]): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
     const proc = spawn('npx', ['tsx', ...args], {
-      cwd:   POLY_AGENT_DIR,
-      env:   process.env,
-      shell: true,
+      cwd: POLY_AGENT_DIR,
+      env: process.env,
     });
 
     let stdout = '';
     let stderr = '';
-    proc.stdout.on('data', (d) => { stdout += d.toString(); });
-    proc.stderr.on('data', (d) => { stderr += d.toString(); });
-    proc.on('close', (code) => resolve({ exitCode: code ?? -1, stdout, stderr }));
-    proc.on('error', (err)  => resolve({ exitCode: -1, stdout, stderr: stderr + '\n' + err.message }));
+    proc.stdout.on('data', (d: Buffer) => { stdout += d.toString(); });
+    proc.stderr.on('data', (d: Buffer) => { stderr += d.toString(); });
+    proc.on('close', (code: number | null) => resolve({ exitCode: code ?? -1, stdout, stderr }));
+    proc.on('error', (err: Error) => resolve({ exitCode: -1, stdout, stderr: stderr + '\n' + err.message }));
   });
 }
