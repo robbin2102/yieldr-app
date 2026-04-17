@@ -117,6 +117,11 @@ export async function GET() {
         curPrice,
         currentValue,
         estimatedPnl:    cashPnl,
+        // For SELL / REDEEM actions
+        tokenId:         p.asset ?? p.tokenId ?? null,
+        conditionId:     p.conditionId ?? null,
+        negRisk:         p.negRisk === true,
+        redeemable:      p.redeemable === true || curPrice >= 0.99,
       };
     }).sort((a: any, b: any) => b.estimatedPnl - a.estimatedPnl);
 

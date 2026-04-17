@@ -81,23 +81,39 @@ export async function GET() {
         positionCap:    ev.positionCap ?? 0,
         spentUsdc:      (ct as any).spentUsdc ?? ev.spentUsdc ?? 0,
         allocationUsdc: (ct as any).allocationUsdc ?? ev.allocBefore ?? 0,
-        active:         (ct as any).active ?? true,
+        active:         (ct as any).active  ?? true,
+        removed:        (ct as any).removed === true,
       };
     });
 
-    traders.sort((a, b) => {
-      if (a.active !== b.active) return a.active ? -1 : 1;
+    // Tier: active (copying) / paused (active but throttled) / stopped (not active)
+    // PAUSED_ACTIONS covers the states where allocation is held/reduced but we still
+    // want to see live detections. HARD_STOP implies active=false, so it lands in stopped.
+    const PAUSED_ACTIONS = ['SOFT_STOP', 'SCALE_DOWN', 'WATCH', 'FIX_ENTRY', 'HOLD'];
+    for (const t of traders as any[]) {
+      const code = (t.actionCode || '').toUpperCase();
+      if (!t.active)                                t.tier = 'stopped';
+      else if (PAUSED_ACTIONS.some(a => code.includes(a))) t.tier = 'paused';
+      else                                          t.tier = 'active';
+    }
+
+    // Hide fully-removed traders (active=false AND removed=true) from the summary.
+    const visible = (traders as any[]).filter(t => !t.removed);
+
+    visible.sort((a: any, b: any) => {
+      const order = { active: 0, paused: 1, stopped: 2 } as Record<string, number>;
+      if (order[a.tier] !== order[b.tier]) return order[a.tier] - order[b.tier];
       return a.label.localeCompare(b.label);
     });
 
-    // System aggregates
-    const totalDetected = traders.reduce((s, t) => s + t.detected, 0);
-    const totalFilled   = traders.reduce((s, t) => s + t.filled,   0);
-    const totalMissed   = traders.reduce((s, t) => s + t.missedPnl, 0);
-    const totalBPnl     = traders.reduce((s, t) => s + t.bPnl,     0);
+    // System aggregates (exclude removed traders)
+    const totalDetected = visible.reduce((s: number, t: any) => s + t.detected, 0);
+    const totalFilled   = visible.reduce((s: number, t: any) => s + t.filled,   0);
+    const totalMissed   = visible.reduce((s: number, t: any) => s + t.missedPnl, 0);
+    const totalBPnl     = visible.reduce((s: number, t: any) => s + t.bPnl,     0);
 
     const aggSkipCounts: Record<string, number> = {};
-    for (const t of traders) {
+    for (const t of visible as any[]) {
       if (t.skipCounts && typeof t.skipCounts === 'object') {
         for (const [k, v] of Object.entries(t.skipCounts as Record<string, number>)) {
           aggSkipCounts[k] = (aggSkipCounts[k] ?? 0) + Number(v);
@@ -106,8 +122,10 @@ export async function GET() {
     }
 
     const systemStats = {
-      totalTraders:   traders.length,
-      activeTraders:  traders.filter(t => t.active).length,
+      totalTraders:   visible.length,
+      activeTraders:  visible.filter((t: any) => t.tier === 'active').length,
+      pausedTraders:  visible.filter((t: any) => t.tier === 'paused').length,
+      stoppedTraders: visible.filter((t: any) => t.tier === 'stopped').length,
       totalDetected,
       totalFilled,
       fillRate:       totalDetected > 0 ? totalFilled / totalDetected : 0,
@@ -116,7 +134,7 @@ export async function GET() {
       aggSkipCounts,
     };
 
-    return NextResponse.json({ success: true, traders, systemStats });
+    return NextResponse.json({ success: true, traders: visible, systemStats });
   } catch (error: any) {
     console.error('Error fetching bot stats:', error);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });

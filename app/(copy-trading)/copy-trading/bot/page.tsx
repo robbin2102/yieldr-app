@@ -26,11 +26,14 @@ interface TraderRow {
   spentUsdc: number;
   allocationUsdc: number;
   active: boolean;
+  tier: 'active' | 'paused' | 'stopped';
 }
 
 interface SystemStats {
   totalTraders: number;
   activeTraders: number;
+  pausedTraders?: number;
+  stoppedTraders?: number;
   totalDetected: number;
   totalFilled: number;
   fillRate: number;
@@ -69,6 +72,10 @@ interface OpenPosition {
   curPrice: number;
   currentValue: number;
   estimatedPnl: number;
+  tokenId: string | null;
+  conditionId: string | null;
+  negRisk: boolean;
+  redeemable: boolean;
 }
 
 interface PortfolioSummary {
@@ -185,6 +192,9 @@ export default function BotDashboard() {
   const [stopping,    setStopping]    = useState<string | null>(null);
   const [actStatus,   setActStatus]   = useState<string>('ALL');
   const [actTrader,   setActTrader]   = useState<string>('ALL');
+  const [showStopped, setShowStopped] = useState(false);
+  const [adminBusy,   setAdminBusy]   = useState<string | null>(null);
+  const [adminLog,    setAdminLog]    = useState<string | null>(null);
 
   async function fetchAll() {
     try {
@@ -211,15 +221,53 @@ export default function BotDashboard() {
     return () => clearInterval(iv);
   }, []);
 
-  async function stopTrader(wallet: string) {
+  async function redeemAll() {
+    if (!confirm('Redeem all resolved positions? This will send on-chain transactions.')) return;
+    setAdminBusy('redeem-all');
+    setAdminLog(null);
+    try {
+      const res  = await fetch('/api/copy-trading/admin/redeem-all', { method: 'POST' });
+      const data = await res.json();
+      setAdminLog(`[REDEEM ALL] exit=${data.exitCode ?? '?'}\n\n${data.stdout || ''}${data.stderr ? '\n--- STDERR ---\n' + data.stderr : ''}`);
+      fetchAll();
+    } catch (e: any) {
+      setAdminLog(`[REDEEM ALL] error: ${e.message}`);
+    } finally { setAdminBusy(null); }
+  }
+
+  async function sellPosition(p: OpenPosition) {
+    if (!p.tokenId) { alert('No tokenId available for this position'); return; }
+    if (!confirm(`Sell ${p.totalFilledSize.toFixed(2)} shares of "${p.title}" [${p.outcome}]? This will send an on-chain order.`)) return;
+    setAdminBusy(p.tokenId);
+    setAdminLog(null);
+    try {
+      const res  = await fetch('/api/copy-trading/admin/sell-position', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ tokenId: p.tokenId, size: p.totalFilledSize }),
+      });
+      const data = await res.json();
+      setAdminLog(`[SELL ${p.title.slice(0, 40)}] exit=${data.exitCode ?? '?'}\n\n${data.stdout || ''}${data.stderr ? '\n--- STDERR ---\n' + data.stderr : ''}`);
+      fetchAll();
+    } catch (e: any) {
+      setAdminLog(`[SELL] error: ${e.message}`);
+    } finally { setAdminBusy(null); }
+  }
+
+  async function patchTrader(wallet: string, action: 'start' | 'stop' | 'remove') {
+    if (action === 'remove' && !confirm('Remove this trader from the detector? They will be hidden from the summary. Open positions will remain — use REDEEM/SELL to exit them.')) return;
     setStopping(wallet);
     try {
       await fetch('/api/copy-trading/edge-ranked', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ wallet, action: 'stop' }),
+        body: JSON.stringify({ wallet, action }),
       });
-      setTraders(prev => prev.map(t => t.wallet === wallet ? { ...t, active: false } : t));
+      if (action === 'remove') {
+        setTraders(prev => prev.filter(t => t.wallet !== wallet));
+      } else {
+        await fetchAll();
+      }
     } finally { setStopping(null); }
   }
 
@@ -255,134 +303,163 @@ export default function BotDashboard() {
         ))}
       </div>
 
-      {/* ── Trader Summary Table ── */}
-      <div className="bg-[#0A0A0A] border border-[#1A1A1A] rounded overflow-hidden">
-        <div className="px-4 py-2 border-b border-[#1A1A1A] flex items-center justify-between">
-          <span className="text-[10px] text-[#00C805] tracking-widest font-bold">TRADER SUMMARY</span>
-          <span className="text-[10px] text-[#6E6E6E]">{traders.length} tracked</span>
-        </div>
-        <div className="overflow-x-auto">
-          <table className="w-full text-xs">
-            <thead>
-              <tr className="border-b border-[#1A1A1A]">
-                {['Trader','T.PnL','B.PnL','tROCE','bROCE','T.Act','B.Act','Det/Fill',
-                  'Edge','Missed','Alloc','Action','Failure',''].map(h => (
-                  <th key={h} className="px-2 py-1.5 text-left text-[10px] text-[#6E6E6E] tracking-wider whitespace-nowrap font-normal">
-                    {h}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {traders.length === 0 && (
-                <tr><td colSpan={14} className="px-4 py-6 text-center text-[#6E6E6E]">
-                  No allocation data yet
-                </td></tr>
-              )}
-              {traders.map(t => {
-                const aC = actionColor(t.actionCode);
-                return (
-                  <tr key={t.wallet} className="border-b border-[#0F0F0F] hover:bg-[#111] transition-colors">
-                    {/* Trader */}
-                    <td className="px-2 py-1.5 whitespace-nowrap">
-                      <Link href={`/copy-trading/bot/${t.wallet}`}
-                        className="flex items-center gap-1.5 group">
-                        <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${t.active ? 'bg-[#00C805]' : 'bg-[#FF4757]'}`} />
-                        <span className="text-[#E0E0E0] group-hover:text-[#00C805] transition-colors font-medium">
-                          {t.label}
-                        </span>
-                      </Link>
-                    </td>
-                    {/* T.PnL */}
-                    <td className="px-2 py-1.5 font-bold"
-                      style={{ color: t.tTotal >= 0 ? '#00C805' : '#FF4757' }}>
-                      {fmtSigned$(t.tTotal)}
-                    </td>
-                    {/* B.PnL */}
-                    <td className="px-2 py-1.5 font-bold"
-                      style={{ color: t.bPnl >= 0 ? '#00C805' : '#FF4757' }}>
-                      {fmtSigned$(t.bPnl)}
-                    </td>
-                    {/* tROCE */}
-                    <td className="px-2 py-1.5"
-                      style={{ color: t.traderROCE >= 0 ? '#00C805' : '#FF4757' }}>
-                      {fmtPct(t.traderROCE)}
-                    </td>
-                    {/* bROCE */}
-                    <td className="px-2 py-1.5"
-                      style={{ color: t.botROCE >= 0 ? '#00C805' : '#FF4757' }}>
-                      {fmtPct(t.botROCE)}
-                    </td>
-                    {/* T.Act 24h */}
-                    <td className="px-2 py-1.5 text-[#9E9E9E]">{t.tAct24h}</td>
-                    {/* B.Act 24h */}
-                    <td className="px-2 py-1.5 text-[#9E9E9E]">{t.bAct24h}</td>
-                    {/* Det/Fill */}
-                    <td className="px-2 py-1.5 text-[#9E9E9E] whitespace-nowrap">
-                      {t.detected > 0 ? `${t.filled}/${t.detected}` : '—'}
-                      {t.execSkipRate > 0.3 && (
-                        <span className="ml-1 text-[#FF8C00]">
-                          ({(t.execSkipRate * 100).toFixed(0)}%)
-                        </span>
-                      )}
-                    </td>
-                    {/* Edge */}
-                    <td className="px-2 py-1.5 text-[#9E9E9E]">
-                      {t.edgeScore != null ? t.edgeScore.toFixed(3) : '—'}
-                      {t.edgeConfidence === 'confirmed' && (
-                        <span className="ml-0.5 text-[8px] text-[#00C805]">✓</span>
-                      )}
-                    </td>
-                    {/* Missed */}
-                    <td className="px-2 py-1.5"
-                      style={{ color: t.missedPnl > 0 ? '#FF8C00' : '#6E6E6E' }}>
-                      {t.missedPnl > 0 ? fmtSigned$(t.missedPnl) : '—'}
-                    </td>
-                    {/* Alloc */}
-                    <td className="px-2 py-1.5 text-[#9E9E9E] whitespace-nowrap">
-                      {fmt$(t.spentUsdc)}<span className="text-[#444]">/</span>{fmt$(t.allocationUsdc)}
-                    </td>
-                    {/* Action */}
-                    <td className="px-2 py-1.5">
-                      <span className="font-bold text-[10px]" style={{ color: aC }}>
-                        {t.actionCode || '—'}
-                      </span>
-                    </td>
-                    {/* Failure type (separate column) */}
-                    <td className="px-2 py-1.5 whitespace-nowrap">
-                      {t.failureType !== 'NONE' ? (
-                        <span className="text-[10px] font-bold"
-                          style={{ color: failureColor(t.failureType) }}>
-                          {t.failureType === 'EXEC_FAIL' ? 'EXEC' : 'TRADER'}
-                        </span>
-                      ) : (
-                        <span className="text-[#444] text-[10px]">—</span>
-                      )}
-                    </td>
-                    {/* Stop CTA */}
-                    <td className="px-2 py-1.5">
-                      {t.active && (
-                        <button
-                          disabled={stopping === t.wallet}
-                          onClick={() => stopTrader(t.wallet)}
-                          className="px-2 py-0.5 text-[10px] rounded border border-[#FF4757]/30 text-[#FF4757] hover:bg-[#FF4757]/10 transition-colors disabled:opacity-40">
-                          {stopping === t.wallet ? '…' : 'STOP'}
-                        </button>
-                      )}
-                    </td>
+      {/* ── Trader Summary (three-tier) ── */}
+      {(() => {
+        const activeRows  = traders.filter(t => t.tier === 'active');
+        const pausedRows  = traders.filter(t => t.tier === 'paused');
+        const stoppedRows = traders.filter(t => t.tier === 'stopped');
+
+        const HEADERS = ['Trader','T.PnL','B.PnL','tROCE','bROCE','T.Act','B.Act','Det/Fill',
+          'Edge','Missed','Alloc','Action','Failure',''];
+
+        function renderRow(t: TraderRow) {
+          const aC    = actionColor(t.actionCode);
+          const dimmed = t.tier !== 'active';
+          return (
+            <tr key={t.wallet}
+              className={`border-b border-[#0F0F0F] hover:bg-[#111] transition-colors ${dimmed ? 'opacity-60' : ''}`}>
+              <td className="px-2 py-1.5 whitespace-nowrap">
+                <Link href={`/copy-trading/bot/${t.wallet}`} className="flex items-center gap-1.5 group">
+                  <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
+                    t.tier === 'active' ? 'bg-[#00C805]' :
+                    t.tier === 'paused' ? 'bg-[#FFD000]' : 'bg-[#FF4757]'
+                  }`} />
+                  <span className="text-[#E0E0E0] group-hover:text-[#00C805] transition-colors font-medium">
+                    {t.label}
+                  </span>
+                </Link>
+              </td>
+              <td className="px-2 py-1.5 font-bold" style={{ color: t.tTotal >= 0 ? '#00C805' : '#FF4757' }}>{fmtSigned$(t.tTotal)}</td>
+              <td className="px-2 py-1.5 font-bold" style={{ color: t.bPnl >= 0 ? '#00C805' : '#FF4757' }}>{fmtSigned$(t.bPnl)}</td>
+              <td className="px-2 py-1.5" style={{ color: t.traderROCE >= 0 ? '#00C805' : '#FF4757' }}>{fmtPct(t.traderROCE)}</td>
+              <td className="px-2 py-1.5" style={{ color: t.botROCE >= 0 ? '#00C805' : '#FF4757' }}>{fmtPct(t.botROCE)}</td>
+              <td className="px-2 py-1.5 text-[#9E9E9E]">{t.tAct24h}</td>
+              <td className="px-2 py-1.5 text-[#9E9E9E]">{t.bAct24h}</td>
+              <td className="px-2 py-1.5 text-[#9E9E9E] whitespace-nowrap">
+                {t.detected > 0 ? `${t.filled}/${t.detected}` : '—'}
+                {t.execSkipRate > 0.3 && (
+                  <span className="ml-1 text-[#FF8C00]">({(t.execSkipRate * 100).toFixed(0)}%)</span>
+                )}
+              </td>
+              <td className="px-2 py-1.5 text-[#9E9E9E]">
+                {t.edgeScore != null ? t.edgeScore.toFixed(3) : '—'}
+                {t.edgeConfidence === 'confirmed' && <span className="ml-0.5 text-[8px] text-[#00C805]">✓</span>}
+              </td>
+              <td className="px-2 py-1.5" style={{ color: t.missedPnl > 0 ? '#FF8C00' : '#6E6E6E' }}>
+                {t.missedPnl > 0 ? fmtSigned$(t.missedPnl) : '—'}
+              </td>
+              <td className="px-2 py-1.5 text-[#9E9E9E] whitespace-nowrap">
+                {fmt$(t.spentUsdc)}<span className="text-[#444]">/</span>{fmt$(t.allocationUsdc)}
+              </td>
+              <td className="px-2 py-1.5">
+                <span className="font-bold text-[10px]" style={{ color: aC }}>{t.actionCode || '—'}</span>
+              </td>
+              <td className="px-2 py-1.5 whitespace-nowrap">
+                {t.failureType !== 'NONE' ? (
+                  <span className="text-[10px] font-bold" style={{ color: failureColor(t.failureType) }}>
+                    {t.failureType === 'EXEC_FAIL' ? 'EXEC' : 'TRADER'}
+                  </span>
+                ) : <span className="text-[#444] text-[10px]">—</span>}
+              </td>
+              <td className="px-2 py-1.5 whitespace-nowrap">
+                <div className="flex items-center gap-1">
+                  {t.tier !== 'stopped' && (
+                    <button
+                      disabled={stopping === t.wallet}
+                      onClick={() => patchTrader(t.wallet, 'stop')}
+                      className="px-2 py-0.5 text-[10px] rounded border border-[#FF4757]/30 text-[#FF4757] hover:bg-[#FF4757]/10 transition-colors disabled:opacity-40">
+                      {stopping === t.wallet ? '…' : 'STOP'}
+                    </button>
+                  )}
+                  {t.tier === 'stopped' && (
+                    <>
+                      <button
+                        disabled={stopping === t.wallet}
+                        onClick={() => patchTrader(t.wallet, 'start')}
+                        className="px-2 py-0.5 text-[10px] rounded border border-[#00C805]/40 text-[#00C805] hover:bg-[#00C805]/10 transition-colors disabled:opacity-40">
+                        RESUME
+                      </button>
+                      <button
+                        disabled={stopping === t.wallet}
+                        onClick={() => patchTrader(t.wallet, 'remove')}
+                        className="px-2 py-0.5 text-[10px] rounded border border-[#6E6E6E]/40 text-[#6E6E6E] hover:bg-[#6E6E6E]/10 transition-colors disabled:opacity-40">
+                        REMOVE
+                      </button>
+                    </>
+                  )}
+                </div>
+              </td>
+            </tr>
+          );
+        }
+
+        function renderTable(rows: TraderRow[]) {
+          return (
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b border-[#1A1A1A]">
+                    {HEADERS.map(h => (
+                      <th key={h} className="px-2 py-1.5 text-left text-[10px] text-[#6E6E6E] tracking-wider whitespace-nowrap font-normal">{h}</th>
+                    ))}
                   </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </div>
+                </thead>
+                <tbody>{rows.map(renderRow)}</tbody>
+              </table>
+            </div>
+          );
+        }
+
+        return (
+          <div className="space-y-3">
+            {/* Active + Paused — single table, visually grouped */}
+            <div className="bg-[#0A0A0A] border border-[#1A1A1A] rounded overflow-hidden">
+              <div className="px-4 py-2 border-b border-[#1A1A1A] flex items-center justify-between">
+                <span className="text-[10px] text-[#00C805] tracking-widest font-bold">TRADER SUMMARY</span>
+                <span className="text-[10px] text-[#6E6E6E]">
+                  {activeRows.length} active
+                  {pausedRows.length > 0 && <span className="text-[#FFD000]"> · {pausedRows.length} paused</span>}
+                  {stoppedRows.length > 0 && <span className="text-[#6E6E6E]"> · {stoppedRows.length} stopped</span>}
+                </span>
+              </div>
+              {activeRows.length + pausedRows.length === 0 ? (
+                <div className="px-4 py-6 text-center text-[#6E6E6E] text-xs">No active or paused traders</div>
+              ) : (
+                renderTable([...activeRows, ...pausedRows])
+              )}
+            </div>
+
+            {/* Stopped — collapsed by default */}
+            {stoppedRows.length > 0 && (
+              <div className="bg-[#0A0A0A] border border-[#1A1A1A] rounded overflow-hidden">
+                <button
+                  onClick={() => setShowStopped(v => !v)}
+                  className="w-full px-4 py-2 border-b border-[#1A1A1A] flex items-center justify-between hover:bg-[#111] transition-colors">
+                  <span className="text-[10px] text-[#6E6E6E] tracking-widest font-bold">
+                    {showStopped ? '▼' : '▶'} STOPPED ({stoppedRows.length})
+                  </span>
+                  <span className="text-[10px] text-[#6E6E6E]">RESUME or REMOVE</span>
+                </button>
+                {showStopped && renderTable(stoppedRows)}
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       {/* ── Portfolio Strip + Open Positions ── */}
       {portSummary && (
         <div className="bg-[#0A0A0A] border border-[#1A1A1A] rounded overflow-hidden">
-          <div className="px-4 py-2 border-b border-[#1A1A1A]">
+          <div className="px-4 py-2 border-b border-[#1A1A1A] flex items-center justify-between">
             <span className="text-[10px] text-[#00C805] tracking-widest font-bold">BOT PORTFOLIO</span>
+            {positions.some(p => p.redeemable) && (
+              <button
+                disabled={adminBusy === 'redeem-all'}
+                onClick={redeemAll}
+                className="px-2 py-0.5 text-[10px] rounded border border-[#00C805]/40 text-[#00C805] hover:bg-[#00C805]/10 transition-colors disabled:opacity-40 font-bold">
+                {adminBusy === 'redeem-all' ? 'REDEEMING…' : 'REDEEM ALL'}
+              </button>
+            )}
           </div>
           {/* Summary strip */}
           <div className="grid grid-cols-6 gap-0 border-b border-[#1A1A1A]">
@@ -411,7 +488,7 @@ export default function BotDashboard() {
               <table className="w-full text-xs">
                 <thead>
                   <tr className="border-b border-[#1A1A1A]">
-                    {['Market','Out','Trader','T.Price','B.Entry','Drift%','Cur Price','Cur Value','Est PnL','T.Hold'].map(h => (
+                    {['Market','Out','Trader','T.Price','B.Entry','Drift%','Cur Price','Cur Value','Est PnL','T.Hold','Action'].map(h => (
                       <th key={h} className="px-2 py-1.5 text-left text-[10px] text-[#6E6E6E] tracking-wider whitespace-nowrap font-normal">
                         {h}
                       </th>
@@ -448,6 +525,19 @@ export default function BotDashboard() {
                           {p.traderHolding ? 'HOLD' : 'EXIT'}
                         </span>
                       </td>
+                      <td className="px-2 py-1.5 whitespace-nowrap">
+                        {!p.traderHolding && !p.redeemable && p.tokenId && (
+                          <button
+                            disabled={adminBusy === p.tokenId}
+                            onClick={() => sellPosition(p)}
+                            className="px-2 py-0.5 text-[10px] rounded border border-[#FF8C00]/40 text-[#FF8C00] hover:bg-[#FF8C00]/10 transition-colors disabled:opacity-40 font-bold">
+                            {adminBusy === p.tokenId ? '…' : 'SELL'}
+                          </button>
+                        )}
+                        {p.redeemable && (
+                          <span className="text-[9px] text-[#00C805]">resolved</span>
+                        )}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -457,6 +547,13 @@ export default function BotDashboard() {
             <div className="px-4 py-5 text-xs text-[#6E6E6E]">
               No confirmed open positions — either no fills yet, or pipeline data is stale.
               Run the pipeline to refresh position data.
+            </div>
+          )}
+          {adminLog && (
+            <div className="border-t border-[#1A1A1A] px-4 py-3 flex items-start gap-3">
+              <pre className="flex-1 text-[10px] text-[#9E9E9E] whitespace-pre-wrap max-h-64 overflow-auto">{adminLog}</pre>
+              <button onClick={() => setAdminLog(null)}
+                className="text-[10px] text-[#6E6E6E] hover:text-[#E0E0E0] transition-colors">close</button>
             </div>
           )}
         </div>

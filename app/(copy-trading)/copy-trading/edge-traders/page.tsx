@@ -39,8 +39,7 @@ interface EdgeTrader {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function fmtPval(p: number): string {
-  if (p < 0.0001) return p.toExponential(1);
-  if (p < 0.001)  return p.toFixed(4);
+  if (p < 0.01) return p.toExponential(2);
   return p.toFixed(3);
 }
 

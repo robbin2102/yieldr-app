@@ -72,21 +72,31 @@ export async function GET() {
   }
 }
 
-// PATCH — toggle copy trading on/off for a trader
+// PATCH — start | stop | remove a trader
+//   start  : active=true, removed=false
+//   stop   : active=false (keeps record, can be resumed)
+//   remove : active=false, removed=true — hides from all detectors/UI.
+//            Detector (src/index.ts) already filters CopyTrader.find({ active: true })
+//            so removed rows never enter the detector loop.
 export async function PATCH(request: NextRequest) {
   try {
     const body = await request.json();
     const { wallet, action } = body;
-    if (!wallet || !['start', 'stop'].includes(action)) {
-      return NextResponse.json({ success: false, error: 'wallet and action (start|stop) required' }, { status: 400 });
+    if (!wallet || !['start', 'stop', 'remove'].includes(action)) {
+      return NextResponse.json({ success: false, error: 'wallet and action (start|stop|remove) required' }, { status: 400 });
     }
 
     const client = await clientPromise;
     const db = client.db(dbName);
 
+    const update: Record<string, any> = { updatedAt: new Date() };
+    if (action === 'start')  { update.active = true;  update.removed = false; }
+    if (action === 'stop')   { update.active = false; }
+    if (action === 'remove') { update.active = false; update.removed = true; }
+
     await db.collection('ahf-copyTraders').updateOne(
       { wallet: wallet.toLowerCase() },
-      { $set: { active: action === 'start', updatedAt: new Date() } },
+      { $set: update },
       { upsert: false },
     );
 
