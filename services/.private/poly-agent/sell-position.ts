@@ -12,6 +12,7 @@
  *   Attempt 1: bestAsk              — passive maker, waits for buyer
  *   Attempt 2: midpoint             — (bestBid + bestAsk) / 2
  *   Attempt 3: bestBid + $0.001     — just above bid, near-certain fill
+ *   Attempt 4: bestBid (market)     — only if spread < 3%; skipped if spread ≥ 3%
  *
  * BUY:
  *   Places GTD order at --price. Retries up to 3 attempts at same price
@@ -230,13 +231,62 @@ async function main() {
     }
   }
 
+  // ── Attempt 4: market sell at bestBid (only if spread < 3%) ──────────────────
+  if (!isBuy && !fixedPrice) {
+    const freshBook4  = await fetchBook();
+    const spread4     = freshBook4.bestAsk > 0
+      ? (freshBook4.bestAsk - freshBook4.bestBid) / freshBook4.bestAsk
+      : 1;
+    const spreadPct4  = (spread4 * 100).toFixed(2);
+
+    console.log(`\n── Attempt 4/4  [market-bid] ──────────────────────────────────`);
+    console.log(`  Bid $${freshBook4.bestBid.toFixed(4)}  Ask $${freshBook4.bestAsk.toFixed(4)}  spread ${spreadPct4}%`);
+
+    if (spread4 >= 0.03) {
+      console.error(`  Spread ${spreadPct4}% ≥ 3% — skipping market fill to avoid wide-spread loss.`);
+    } else {
+      const price4      = parseFloat(Math.max(0.001, freshBook4.bestBid).toFixed(4));
+      const expiration4 = Math.floor(Date.now() / 1000) + 60 + GTD_SECONDS;
+      console.log(`  SELL ${remainingSize.toFixed(4)} sh @ $${price4}  ≈ $${(remainingSize * price4).toFixed(2)} USDC  (market/taker)`);
+
+      const order4 = await client.createOrder({
+        tokenID: tokenId!, price: price4, size: remainingSize,
+        side: Side.SELL, feeRateBps, nonce: 0, expiration: expiration4,
+      });
+
+      const resp4: any = await client.postOrder(order4, OrderType.GTD);
+      const orderId4   = resp4?.orderID ?? resp4?.id ?? '';
+
+      if (!orderId4) {
+        const errMsg = String(resp4?.error ?? resp4?.errorMsg ?? JSON.stringify(resp4)).slice(0, 200);
+        console.error(`  ❌ Order rejected: ${errMsg}`);
+      } else {
+        console.log(`  → order ${orderId4.slice(0, 14)}...`);
+        console.log(`  Waiting for fill (${GTD_SECONDS}s)...`);
+
+        const { result: result4, filledSize: filled4 } = await waitForFillOrExpiry(orderId4, remainingSize);
+
+        if (filled4 > 0) {
+          totalFilledSize += filled4;
+          totalFilledCost += filled4 * price4;
+        }
+
+        if (result4 === 'filled') {
+          const avgPrice = totalFilledCost / totalFilledSize;
+          console.log(`\n✅ SELL COMPLETE (market fill)`);
+          console.log(`   Filled: ${totalFilledSize.toFixed(4)} sh  avg $${avgPrice.toFixed(4)}  ≈ $${totalFilledCost.toFixed(2)} USDC`);
+          console.log(`   Check: https://polymarket.com/portfolio\n`);
+          process.exit(0);
+        }
+        console.log(`  ⏱  Expired unfilled`);
+      }
+    }
+  }
+
   const summary = totalFilledSize > 0
     ? `Partially filled ${totalFilledSize.toFixed(4)}/${totalSize} sh @ avg $${(totalFilledCost / totalFilledSize).toFixed(4)}`
-    : `No fill after ${MAX_ATTEMPTS} attempts`;
-  console.error(`\n❌ ${summary}. Market may be illiquid or price too far from market.`);
-  if (!isBuy && !fixedPrice) {
-    console.error(`   Try: npx tsx sell-position.ts --token ${tokenId} --size ${remainingSize.toFixed(4)} --price ${(book.bestBid - 0.01).toFixed(4)}\n`);
-  }
+    : `No fill after 4 attempts`;
+  console.error(`\n❌ ${summary}. Market may be illiquid.`);
   process.exit(totalFilledSize > 0 ? 0 : 1);
 }
 
