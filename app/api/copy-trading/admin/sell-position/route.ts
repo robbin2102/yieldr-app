@@ -59,6 +59,10 @@ function cleanEnv(): NodeJS.ProcessEnv {
 
 function runScript(args: string[]): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
+    const tag = '[sell-position]';
+    console.log(`${tag} spawn: npx tsx ${args.join(' ')}`);
+    const startMs = Date.now();
+
     const proc = spawn('npx', ['tsx', ...args], {
       cwd: POLY_AGENT_DIR,
       env: cleanEnv(),
@@ -66,9 +70,27 @@ function runScript(args: string[]): Promise<{ exitCode: number; stdout: string; 
 
     let stdout = '';
     let stderr = '';
-    proc.stdout.on('data', (d: Buffer) => { stdout += d.toString(); });
-    proc.stderr.on('data', (d: Buffer) => { stderr += d.toString(); });
-    proc.on('close', (code: number | null) => resolve({ exitCode: code ?? -1, stdout, stderr }));
-    proc.on('error', (err: Error) => resolve({ exitCode: -1, stdout, stderr: stderr + '\n' + err.message }));
+
+    // Stream to the Next.js server terminal so progress is visible
+    // while the request is in flight.
+    proc.stdout.on('data', (d: Buffer) => {
+      const s = d.toString();
+      stdout += s;
+      process.stdout.write(`${tag} ${s}`);
+    });
+    proc.stderr.on('data', (d: Buffer) => {
+      const s = d.toString();
+      stderr += s;
+      process.stderr.write(`${tag} ${s}`);
+    });
+
+    proc.on('close', (code: number | null) => {
+      console.log(`${tag} exit=${code} in ${((Date.now() - startMs) / 1000).toFixed(1)}s`);
+      resolve({ exitCode: code ?? -1, stdout, stderr });
+    });
+    proc.on('error', (err: Error) => {
+      console.error(`${tag} spawn error:`, err.message);
+      resolve({ exitCode: -1, stdout, stderr: stderr + '\n' + err.message });
+    });
   });
 }

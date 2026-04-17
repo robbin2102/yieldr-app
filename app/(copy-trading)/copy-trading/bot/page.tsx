@@ -224,7 +224,7 @@ export default function BotDashboard() {
   async function redeemAll() {
     if (!confirm('Redeem all resolved positions? This will send on-chain transactions.')) return;
     setAdminBusy('redeem-all');
-    setAdminLog(null);
+    setAdminLog('[REDEEM ALL] running… (watch your terminal for live output)');
     try {
       const res  = await fetch('/api/copy-trading/admin/redeem-all', { method: 'POST' });
       const data = await res.json();
@@ -239,7 +239,7 @@ export default function BotDashboard() {
     if (!p.tokenId) { alert('No tokenId available for this position'); return; }
     if (!confirm(`Sell ${p.totalFilledSize.toFixed(2)} shares of "${p.title}" [${p.outcome}]? This will send an on-chain order.`)) return;
     setAdminBusy(p.tokenId);
-    setAdminLog(null);
+    setAdminLog(`[SELL ${p.title.slice(0, 40)}] running… sell-position.ts can take 15-45s across 3 GTT attempts (passive → mid → cross). Watch your terminal for live output.`);
     try {
       const res  = await fetch('/api/copy-trading/admin/sell-position', {
         method:  'POST',
@@ -555,13 +555,19 @@ export default function BotDashboard() {
       {/* ── Admin action log (modal overlay) ── */}
       {adminLog && (
         <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4"
-          onClick={() => setAdminLog(null)}>
+          onClick={() => { if (!adminBusy) setAdminLog(null); }}>
           <div className="bg-[#0A0A0A] border border-[#1A1A1A] rounded max-w-3xl w-full max-h-[80vh] flex flex-col"
             onClick={(e) => e.stopPropagation()}>
             <div className="px-4 py-2 border-b border-[#1A1A1A] flex items-center justify-between">
-              <span className="text-[10px] text-[#00C805] tracking-widest font-bold">ADMIN OUTPUT</span>
-              <button onClick={() => setAdminLog(null)}
-                className="text-[10px] text-[#6E6E6E] hover:text-[#E0E0E0] transition-colors">close ✕</button>
+              <span className="text-[10px] text-[#00C805] tracking-widest font-bold">
+                ADMIN OUTPUT {adminBusy && <span className="ml-2 text-[#FFD000]">● RUNNING</span>}
+              </span>
+              <button
+                disabled={!!adminBusy}
+                onClick={() => setAdminLog(null)}
+                className="text-[10px] text-[#6E6E6E] hover:text-[#E0E0E0] transition-colors disabled:opacity-40">
+                close ✕
+              </button>
             </div>
             <pre className="flex-1 px-4 py-3 text-[10px] text-[#9E9E9E] whitespace-pre-wrap overflow-auto">{adminLog}</pre>
           </div>
