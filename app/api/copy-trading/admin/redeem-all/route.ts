@@ -28,13 +28,26 @@ export async function POST(_req: NextRequest) {
         { status: 503 },
       );
     }
-    const upstream = await fetch(`${serviceUrl}/admin/redeem-all`, {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-      signal:  AbortSignal.timeout(240_000),
-    });
-    const data = await upstream.json();
-    return NextResponse.json(data, { status: upstream.status });
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 240_000);
+      let upstream: Response;
+      try {
+        upstream = await fetch(`${serviceUrl}/admin/redeem-all`, {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+          signal:  controller.signal,
+        });
+      } finally {
+        clearTimeout(timer);
+      }
+      const text = await upstream.text();
+      let data: any;
+      try { data = JSON.parse(text); } catch { data = { success: false, error: `Non-JSON response from pipeline service: ${text.slice(0, 200)}` }; }
+      return NextResponse.json(data, { status: upstream.status });
+    } catch (e: any) {
+      return NextResponse.json({ success: false, error: `Proxy error: ${e.message}` }, { status: 502 });
+    }
   }
 
   const { exitCode, stdout, stderr } = await runScript([SCRIPT_PATH, '--execute']);
