@@ -196,24 +196,43 @@ export default function BotDashboard() {
   const [adminBusy,      setAdminBusy]      = useState<string | null>(null);
   const [adminLog,       setAdminLog]       = useState<string | null>(null);
   const [pendingConfirm, setPendingConfirm] = useState<string | null>(null);
+  const [botRunning,     setBotRunning]     = useState<boolean | null>(null);
+  const [botCtrlBusy,    setBotCtrlBusy]    = useState(false);
 
   async function fetchAll() {
     try {
-      const [statsRes, actRes, posRes, execRes] = await Promise.all([
+      const [statsRes, actRes, posRes, execRes, botStatusRes] = await Promise.all([
         fetch('/api/copy-trading/bot-stats'),
         fetch('/api/copy-trading/activity'),
         fetch('/api/copy-trading/open-positions'),
         fetch('/api/copy-trading/exec-health'),
+        fetch('/api/copy-trading/admin/bot-status'),
       ]);
-      const [s, a, p, e] = await Promise.all([
-        statsRes.json(), actRes.json(), posRes.json(), execRes.json(),
+      const [s, a, p, e, bs] = await Promise.all([
+        statsRes.json(), actRes.json(), posRes.json(), execRes.json(), botStatusRes.json(),
       ]);
       if (s.success) { setTraders(s.traders); setSystemStats(s.systemStats); }
       if (a.success) setActivity(a.activity);
       if (p.success) { setPositions(p.positions); setPortSummary(p.summary); }
       if (e.success) setExecHealth(e);
+      setBotRunning(bs.running ?? false);
     } catch (err) { console.error(err); }
     finally { setLoading(false); }
+  }
+
+  async function controlBot(action: 'start' | 'stop') {
+    setBotCtrlBusy(true);
+    try {
+      const res  = await fetch(`/api/copy-trading/admin/bot-${action}`, { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        setBotRunning(action === 'start');
+      } else {
+        setAdminLog(`[BOT ${action.toUpperCase()}] ${data.error ?? data.message ?? 'Failed'}`);
+      }
+    } catch (e: any) {
+      setAdminLog(`[BOT ${action.toUpperCase()}] error: ${e.message}`);
+    } finally { setBotCtrlBusy(false); }
   }
 
   useEffect(() => {
@@ -288,6 +307,38 @@ export default function BotDashboard() {
 
   return (
     <div className="space-y-4 font-mono">
+
+      {/* ── Bot Control Bar ── */}
+      <div className="bg-[#0A0A0A] border border-[#1A1A1A] rounded px-4 py-2.5 flex items-center gap-3">
+        <div className={`w-2 h-2 rounded-full flex-shrink-0 ${
+          botRunning === null ? 'bg-[#444]' :
+          botRunning ? 'bg-[#00C805] shadow-[0_0_6px_#00C805]' : 'bg-[#FF4757]'
+        }`} />
+        <span className="text-[10px] text-[#6E6E6E] tracking-widest">TRADING BOT</span>
+        <span className="text-[11px] font-bold" style={{
+          color: botRunning === null ? '#444' : botRunning ? '#00C805' : '#FF4757'
+        }}>
+          {botRunning === null ? 'CHECKING…' : botRunning ? 'RUNNING' : 'STOPPED'}
+        </span>
+        <div className="ml-auto flex items-center gap-2">
+          {!botRunning && (
+            <button
+              disabled={botCtrlBusy || botRunning === null}
+              onClick={() => controlBot('start')}
+              className="px-3 py-1 text-[10px] font-bold rounded border border-[#00C805] text-[#00C805] hover:bg-[#00C80515] disabled:opacity-40 transition-colors">
+              {botCtrlBusy ? 'STARTING…' : 'START BOT'}
+            </button>
+          )}
+          {botRunning && (
+            <button
+              disabled={botCtrlBusy}
+              onClick={() => controlBot('stop')}
+              className="px-3 py-1 text-[10px] font-bold rounded border border-[#FF4757] text-[#FF4757] hover:bg-[#FF475715] disabled:opacity-40 transition-colors">
+              {botCtrlBusy ? 'STOPPING…' : 'STOP BOT'}
+            </button>
+          )}
+        </div>
+      </div>
 
       {/* ── System Strip (4 boxes) ── */}
       <div className="grid grid-cols-4 gap-2">

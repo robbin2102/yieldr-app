@@ -1,7 +1,6 @@
 /**
- * Admin Service — sell/redeem endpoints only
- * No trading bot, no pipeline, no cron jobs.
- * Deployed on Fly.io to proxy admin commands from Vercel.
+ * Admin Service — sell/redeem + bot start/stop
+ * No pipeline, no cron jobs. Deployed on Fly.io.
  */
 
 import * as dotenv from 'dotenv';
@@ -12,11 +11,45 @@ dotenv.config({ path: path.resolve(__dirname, '../.env') });
 dotenv.config({ path: path.resolve(__dirname, '../env.polyagent') });
 
 import * as http from 'http';
-import { spawn } from 'child_process';
+import { spawn, ChildProcess } from 'child_process';
 
 const PORT = parseInt(process.env.PORT || '3001');
 const POLY_AGENT_DIR = path.resolve(__dirname, '..');
 
+// ── Bot process management ─────────────────────────────────────────────────────
+let botProcess: ChildProcess | null = null;
+
+function isBotRunning(): boolean {
+  return botProcess !== null && !botProcess.killed && botProcess.exitCode === null;
+}
+
+function startBot(): { success: boolean; message: string } {
+  if (isBotRunning()) return { success: false, message: 'Bot is already running' };
+  console.log('[Admin] Starting trading bot...');
+  botProcess = spawn('node', ['dist/index.js'], {
+    cwd: POLY_AGENT_DIR,
+    env: process.env,
+    stdio: 'inherit',
+  });
+  botProcess.on('exit', (code) => {
+    console.log(`[Admin] Bot process exited with code ${code}`);
+    botProcess = null;
+  });
+  botProcess.on('error', (err) => {
+    console.error('[Admin] Bot process error:', err.message);
+    botProcess = null;
+  });
+  return { success: true, message: 'Bot started' };
+}
+
+function stopBot(): { success: boolean; message: string } {
+  if (!isBotRunning()) return { success: false, message: 'Bot is not running' };
+  console.log('[Admin] Stopping trading bot...');
+  botProcess!.kill('SIGTERM');
+  return { success: true, message: 'Bot stop signal sent' };
+}
+
+// ── Admin script runner (sell/redeem) ─────────────────────────────────────────
 function runAdminScript(args: string[], tag: string): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
     console.log(`${tag} spawn: npx tsx ${args.join(' ')}`);
@@ -47,7 +80,7 @@ function parseBody(req: http.IncomingMessage): Promise<any> {
 
 function cors(res: http.ServerResponse): void {
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 }
 
@@ -72,6 +105,27 @@ const server = http.createServer(async (req, res) => {
 
   if (req.method === 'OPTIONS') { cors(res); res.writeHead(204); res.end(); return; }
 
+  // GET /admin/bot-status
+  if (req.method === 'GET' && req.url === '/admin/bot-status') {
+    if (!checkAuth(req)) return json(res, 401, { success: false, error: 'Unauthorized' });
+    return json(res, 200, { success: true, running: isBotRunning() });
+  }
+
+  // POST /admin/start-bot
+  if (req.method === 'POST' && req.url === '/admin/start-bot') {
+    if (!checkAuth(req)) return json(res, 401, { success: false, error: 'Unauthorized' });
+    const result = startBot();
+    return json(res, 200, { success: result.success, message: result.message });
+  }
+
+  // POST /admin/stop-bot
+  if (req.method === 'POST' && req.url === '/admin/stop-bot') {
+    if (!checkAuth(req)) return json(res, 401, { success: false, error: 'Unauthorized' });
+    const result = stopBot();
+    return json(res, 200, { success: result.success, message: result.message });
+  }
+
+  // POST /admin/sell-position
   if (req.method === 'POST' && req.url === '/admin/sell-position') {
     if (!checkAuth(req)) return json(res, 401, { success: false, error: 'Unauthorized' });
     let body: any;
@@ -87,6 +141,7 @@ const server = http.createServer(async (req, res) => {
     return json(res, 200, { success: result.exitCode === 0, ...result });
   }
 
+  // POST /admin/redeem-all
   if (req.method === 'POST' && req.url === '/admin/redeem-all') {
     if (!checkAuth(req)) return json(res, 401, { success: false, error: 'Unauthorized' });
     const scriptPath = path.join(POLY_AGENT_DIR, 'redeem-positions.ts');
@@ -99,8 +154,8 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`[Admin] Service running on port ${PORT}`);
-  console.log(`[Admin] Endpoints: /health, /admin/sell-position, /admin/redeem-all`);
+  console.log(`[Admin] Endpoints: /health, /admin/bot-status, /admin/start-bot, /admin/stop-bot, /admin/sell-position, /admin/redeem-all`);
 });
 
-process.on('SIGTERM', () => { server.close(); process.exit(0); });
-process.on('SIGINT',  () => { server.close(); process.exit(0); });
+process.on('SIGTERM', () => { if (isBotRunning()) botProcess!.kill('SIGTERM'); server.close(); process.exit(0); });
+process.on('SIGINT',  () => { if (isBotRunning()) botProcess!.kill('SIGTERM'); server.close(); process.exit(0); });
