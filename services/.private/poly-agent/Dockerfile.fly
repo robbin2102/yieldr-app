@@ -1,0 +1,27 @@
+FROM node:20-slim
+
+WORKDIR /app
+
+# ── 1. Install ALL deps (including devDeps for tsc) ──────────────
+COPY package.json package-lock.json* ./
+RUN npm ci
+
+# ── 2. Copy source and compile ───────────────────────────────────
+COPY tsconfig.json ./
+COPY src ./src
+RUN npm run build
+
+# ── 3. Copy runtime assets ────────────────────────────────────────
+# scripts/ are ESM, spawned at runtime via `npx tsx` — not compiled
+COPY scripts ./scripts
+# analyze-allocations.ts, sell-position.ts, redeem-positions.ts live at root — copy explicitly
+COPY analyze-allocations.ts sell-position.ts redeem-positions.ts ./
+
+# ── 4. Prune devDeps, keep tsx for runtime script spawning ────────
+RUN npm prune --omit=dev && npm install tsx
+
+# ── 5. Expose health port ─────────────────────────────────────────
+EXPOSE 3001
+
+# Trading bot entry point (not the pipeline service)
+CMD ["node", "dist/index.js"]
