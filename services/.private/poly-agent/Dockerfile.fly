@@ -6,22 +6,16 @@ WORKDIR /app
 COPY package.json package-lock.json* ./
 RUN npm ci
 
-# ── 2. Copy source and compile ───────────────────────────────────
-COPY tsconfig.json ./
+# ── 2. Copy source and compile (root-level scripts + src/) ───────
+COPY tsconfig.fly.json ./
 COPY src ./src
-RUN npm run build
+COPY sell-position.ts redeem-positions.ts ./
+RUN npx tsc --project tsconfig.fly.json
 
-# ── 3. Copy runtime assets ────────────────────────────────────────
-# scripts/ are ESM, spawned at runtime via `npx tsx` — not compiled
-COPY scripts ./scripts
-# analyze-allocations.ts, sell-position.ts, redeem-positions.ts live at root — copy explicitly
-COPY analyze-allocations.ts sell-position.ts redeem-positions.ts ./
+# ── 3. Prune devDeps (tsx no longer needed at runtime) ───────────
+RUN npm prune --omit=dev
 
-# ── 4. Prune devDeps, keep tsx for runtime script spawning ────────
-RUN npm prune --omit=dev && npm install tsx
-
-# ── 5. Expose health port ─────────────────────────────────────────
+# ── 4. Expose health port ─────────────────────────────────────────
 EXPOSE 3001
 
-# Trading bot entry point (not the pipeline service)
-CMD ["node", "dist/admin-service.js"]
+CMD ["node", "dist/src/admin-service.js"]

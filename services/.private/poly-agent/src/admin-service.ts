@@ -26,7 +26,7 @@ function isBotRunning(): boolean {
 function startBot(): { success: boolean; message: string } {
   if (isBotRunning()) return { success: false, message: 'Bot is already running' };
   console.log('[Admin] Starting trading bot...');
-  botProcess = spawn('node', ['dist/index.js'], {
+  botProcess = spawn('node', ['src/index.js'], {
     cwd: POLY_AGENT_DIR,
     env: process.env,
     stdio: 'inherit',
@@ -52,9 +52,9 @@ function stopBot(): { success: boolean; message: string } {
 // ── Admin script runner (sell/redeem) ─────────────────────────────────────────
 function runAdminScript(args: string[], tag: string): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
-    console.log(`${tag} spawn: npx tsx ${args.join(' ')}`);
+    console.log(`${tag} spawn: node ${args.join(' ')}`);
     const startMs = Date.now();
-    const proc = spawn('npx', ['tsx', ...args], { cwd: POLY_AGENT_DIR, env: process.env });
+    const proc = spawn('node', args, { cwd: POLY_AGENT_DIR, env: process.env });
     let stdout = '', stderr = '';
     proc.stdout.on('data', (d: Buffer) => { const s = d.toString(); stdout += s; process.stdout.write(`${tag} ${s}`); });
     proc.stderr.on('data', (d: Buffer) => { const s = d.toString(); stderr += s; process.stderr.write(`${tag} ${s}`); });
@@ -136,7 +136,7 @@ const server = http.createServer(async (req, res) => {
     const sizeNum = Number(size);
     if (!Number.isFinite(sizeNum) || sizeNum <= 0)
       return json(res, 400, { success: false, error: 'size (positive number) required' });
-    const scriptPath = path.join(POLY_AGENT_DIR, 'sell-position.ts');
+    const scriptPath = path.join(POLY_AGENT_DIR, 'sell-position.js');
     const result = await runAdminScript([scriptPath, '--token', tokenId, '--size', String(sizeNum)], '[sell-position]');
     return json(res, 200, { success: result.exitCode === 0, ...result });
   }
@@ -144,7 +144,7 @@ const server = http.createServer(async (req, res) => {
   // POST /admin/redeem-all
   if (req.method === 'POST' && req.url === '/admin/redeem-all') {
     if (!checkAuth(req)) return json(res, 401, { success: false, error: 'Unauthorized' });
-    const scriptPath = path.join(POLY_AGENT_DIR, 'redeem-positions.ts');
+    const scriptPath = path.join(POLY_AGENT_DIR, 'redeem-positions.js');
     const result = await runAdminScript([scriptPath, '--execute'], '[redeem-all]');
     return json(res, 200, { success: result.exitCode === 0, ...result });
   }

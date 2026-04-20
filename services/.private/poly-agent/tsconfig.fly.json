@@ -1,0 +1,26 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "commonjs",
+    "lib": ["ES2020"],
+    "outDir": "./dist",
+    "rootDir": ".",
+    "strict": false,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "declaration": false,
+    "sourceMap": false
+  },
+  "include": ["src/**/*", "sell-position.ts", "redeem-positions.ts"],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "src/modules/detector.ts",
+    "src/modules/executor.ts",
+    "src/modules/initialCopier.ts",
+    "src/modules/metrics.ts",
+    "src/modules/reconciler.ts",
+    "src/modules/executionTracker.ts"
+  ]
+}
