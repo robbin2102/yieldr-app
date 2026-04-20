@@ -1,5 +1,5 @@
 # Fly.io config for poly-agent trading bot
-# Region: Dublin (eu-west-1) — Polymarket's closest non-georestricted region
+# Region: Stockholm, Sweden (arn) — closest non-geoblocked region to Polymarket eu-west-2
 # See: https://docs.polymarket.com/api-reference/geoblock
 
 app = "poly-agent-trading"
@@ -15,11 +15,15 @@ primary_region = "arn"
 [env]
   NODE_ENV = "production"
 
+# Single machine — no HA needed for a trading bot
+[machines]
+  count = 1
+
 [[services]]
   internal_port = 3001
   protocol = "tcp"
-  auto_stop_machines = false
-  auto_start_machines = true
+  auto_stop_machines = "off"
+  auto_start_machines = false
   min_machines_running = 1
 
   [[services.ports]]

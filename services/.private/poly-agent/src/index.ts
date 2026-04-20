@@ -105,7 +105,7 @@ function startBotHealthServer(): void {
     res.writeHead(404); res.end('Not found');
   });
 
-  server.listen(BOT_PORT, () => {
+  server.listen(BOT_PORT, '0.0.0.0', () => {
     console.log(`[Bot] Health server on port ${BOT_PORT}`);
   });
 }
