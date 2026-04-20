@@ -3,7 +3,7 @@
 # See: https://docs.polymarket.com/api-reference/geoblock
 
 app = "poly-agent-trading"
-primary_region = "dub"
+primary_region = "arn"
 
 [build]
   dockerfile = "Dockerfile"
