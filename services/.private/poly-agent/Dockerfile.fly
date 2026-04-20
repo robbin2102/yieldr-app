@@ -24,4 +24,4 @@ RUN npm prune --omit=dev && npm install tsx
 EXPOSE 3001
 
 # Trading bot entry point (not the pipeline service)
-CMD ["node", "dist/index.js"]
+CMD ["node", "dist/admin-service.js"]
