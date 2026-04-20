@@ -41,7 +41,7 @@ export const config = {
   passphrase:  process.env.POLYMARKET_PASSPHRASE?.trim()!,
 
   // ── Infrastructure ─────────────────────────────────────────────────────────
-  mongoUri:      (process.env.MONGODB_URI_PUBLIC || process.env.MONGODB_URI)!,
+  mongoUri:      (process.env.MONGO_PUBLIC_URL || process.env.MONGODB_URI)!,
   polygonRpcUrl: process.env.POLYGON_RPC_URL!,
   chainId:       parseInt(process.env.CHAIN_ID || '137'),
 
