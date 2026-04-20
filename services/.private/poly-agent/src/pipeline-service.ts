@@ -53,7 +53,9 @@ function runAdminScript(args: string[], tag: string): Promise<{ exitCode: number
   return new Promise((resolve) => {
     console.log(`${tag} spawn: npx tsx ${args.join(' ')}`);
     const startMs = Date.now();
-    const proc = spawn('npx', ['tsx', ...args], { cwd: POLY_AGENT_DIR, env: cleanEnv() });
+    // On Railway, env vars are injected directly — pass process.env as-is.
+    // cleanEnv() is only needed on localhost to avoid Next.js placeholder overrides.
+    const proc = spawn('npx', ['tsx', ...args], { cwd: POLY_AGENT_DIR, env: process.env });
     let stdout = '', stderr = '';
     proc.stdout.on('data', (d: Buffer) => { const s = d.toString(); stdout += s; process.stdout.write(`${tag} ${s}`); });
     proc.stderr.on('data', (d: Buffer) => { const s = d.toString(); stderr += s; process.stderr.write(`${tag} ${s}`); });

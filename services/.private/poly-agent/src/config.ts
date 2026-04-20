@@ -24,6 +24,8 @@ if (existsSync(envPolyagentPath)) {
 } else if (existsSync(rootEnvLocalPath)) {
   console.log('[Config] ⚠️  Loading from project root .env.local (consider using .env.polyagent for better isolation)');
   dotenvConfig({ path: rootEnvLocalPath });
+} else if (process.env.BOT_PRIVATE_KEY) {
+  console.log('[Config] ✅ Using environment variables directly (Railway / injected secrets)');
 } else {
   throw new Error('No environment file found! Please create services/.private/poly-agent/.env.polyagent from .env.example');
 }
