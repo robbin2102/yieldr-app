@@ -123,9 +123,6 @@ function startBotHealthServer(): void {
  *   - Per-trader detectorIntervalMs — change poll rate per wallet in DB
  */
 async function main() {
-  // Health server first — Fly.io needs a fast response before marking healthy
-  startBotHealthServer();
-
   console.log('═══════════════════════════════════════════════════════════════');
   console.log('                    POLY-AGENT v3                               ');
   console.log('                    Multi-Trader Copy System                    ');
