@@ -125,7 +125,7 @@ const server = http.createServer(async (req, res) => {
     return json(res, 200, { success: result.success, message: result.message });
   }
 
-  // POST /admin/sell-position
+  // POST /admin/sell-position  — SSE streaming
   if (req.method === 'POST' && req.url === '/admin/sell-position') {
     if (!checkAuth(req)) return json(res, 401, { success: false, error: 'Unauthorized' });
     let body: any;
@@ -136,9 +136,29 @@ const server = http.createServer(async (req, res) => {
     const sizeNum = Number(size);
     if (!Number.isFinite(sizeNum) || sizeNum <= 0)
       return json(res, 400, { success: false, error: 'size (positive number) required' });
+
+    cors(res);
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+    });
+
     const scriptPath = path.join(POLY_AGENT_DIR, 'sell-position.js');
-    const result = await runAdminScript([scriptPath, '--token', tokenId, '--size', String(sizeNum)], '[sell-position]');
-    return json(res, 200, { success: result.exitCode === 0, ...result });
+    console.log(`[sell-position] stream: node ${scriptPath} --token ${tokenId} --size ${sizeNum}`);
+    const proc = spawn('node', [scriptPath, '--token', tokenId, '--size', String(sizeNum)], {
+      cwd: POLY_AGENT_DIR, env: process.env,
+    });
+    const emit = (obj: object) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
+    proc.stdout.on('data', (d: Buffer) => {
+      d.toString().split('\n').forEach(line => { if (line.trim()) emit({ line }); });
+    });
+    proc.stderr.on('data', (d: Buffer) => {
+      d.toString().split('\n').forEach(line => { if (line.trim()) emit({ line }); });
+    });
+    proc.on('close', (code: number | null) => { emit({ done: true, exitCode: code ?? -1 }); res.end(); });
+    proc.on('error', (err: Error) => { emit({ done: true, exitCode: -1, error: err.message }); res.end(); });
+    return;
   }
 
   // POST /admin/redeem-all

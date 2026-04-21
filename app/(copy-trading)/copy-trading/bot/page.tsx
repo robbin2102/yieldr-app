@@ -261,18 +261,42 @@ export default function BotDashboard() {
     if (pendingConfirm !== p.tokenId) { setPendingConfirm(p.tokenId); return; }
     setPendingConfirm(null);
     setAdminBusy(p.tokenId);
-    setAdminLog(`[SELL ${p.title.slice(0, 40)}] running… up to 4 attempts (passive→mid→cross→bid). Output streams to Railway logs.`);
+    const header = `[SELL ${p.title.slice(0, 40)}]`;
+    const lines: string[] = [`${header} connecting…`];
+    setAdminLog(lines.join('\n'));
     try {
-      const res  = await fetch('/api/copy-trading/admin/sell-position', {
+      const res = await fetch('/api/copy-trading/admin/sell-position', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({ tokenId: p.tokenId, size: p.totalFilledSize }),
       });
-      const data = await res.json();
-      setAdminLog(`[SELL ${p.title.slice(0, 40)}] exit=${data.exitCode ?? '?'}\n\n${data.stdout || ''}${data.stderr ? '\n--- STDERR ---\n' + data.stderr : ''}`);
+      if (!res.ok || !res.body) {
+        const data = await res.json().catch(() => ({})) as any;
+        setAdminLog(`${header} error: ${data.error ?? res.statusText}`);
+        return;
+      }
+      const reader  = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const chunks = buffer.split('\n\n');
+        buffer = chunks.pop() ?? '';
+        for (const chunk of chunks) {
+          const match = chunk.match(/^data: (.+)$/m);
+          if (!match) continue;
+          try {
+            const ev = JSON.parse(match[1]);
+            if (ev.line) { lines.push(ev.line); setAdminLog(lines.join('\n')); }
+            if (ev.done) { lines.push(`\n${header} exit=${ev.exitCode}`); setAdminLog(lines.join('\n')); }
+          } catch { /* ignore malformed SSE */ }
+        }
+      }
       fetchAll();
     } catch (e: any) {
-      setAdminLog(`[SELL] error: ${e.message}`);
+      setAdminLog(`${header} error: ${e.message}`);
     } finally { setAdminBusy(null); }
   }
 

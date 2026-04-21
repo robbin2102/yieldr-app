@@ -130,8 +130,15 @@ export async function GET() {
     const openValue     = positions.reduce((s: number, p: any) => s + p.currentValue, 0);
     const unrealizedPnl = positions.reduce((s: number, p: any) => s + p.estimatedPnl, 0);
 
-    const totalAlloc  = (copyTraders as any[]).reduce((s: number, t: any) => s + (t.allocationUsdc ?? 0), 0);
-    const totalBotPnl = (allocEvents as any[]).reduce((s: number, e: any) => s + (e.bPnl ?? 0), 0);
+    const removedWallets = new Set(
+      (copyTraders as any[]).filter((t: any) => t.removed === true).map((t: any) => (t.wallet ?? '').toLowerCase())
+    );
+    const totalAlloc  = (copyTraders as any[])
+      .filter((t: any) => !t.removed)
+      .reduce((s: number, t: any) => s + (t.allocationUsdc ?? 0), 0);
+    const totalBotPnl = (allocEvents as any[])
+      .filter((e: any) => !removedWallets.has((e.wallet ?? '').toLowerCase()))
+      .reduce((s: number, e: any) => s + (e.bPnl ?? 0), 0);
     const botROCE     = totalAlloc > 0 ? (totalBotPnl / totalAlloc) * 100 : null;
 
     return NextResponse.json({
