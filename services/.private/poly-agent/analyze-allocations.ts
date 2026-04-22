@@ -24,6 +24,12 @@
  *   npx tsx analyze-allocations.ts --min-usdc 10          # hide tiny markets in detail
  */
 
+import * as dotenv from 'dotenv';
+import * as path from 'path';
+dotenv.config({ path: path.resolve(__dirname, '.env.local') });
+dotenv.config({ path: path.resolve(__dirname, '.env') });
+dotenv.config({ path: path.resolve(__dirname, 'env.polyagent') });
+
 import mongoose from 'mongoose';
 import { CopyTrade }      from './src/db/models/CopyTrade';
 import { CopyTrader }     from './src/db/models/CopyTrader';
