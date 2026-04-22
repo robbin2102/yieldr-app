@@ -26,9 +26,11 @@
 
 import * as dotenv from 'dotenv';
 import * as path from 'path';
-dotenv.config({ path: path.resolve(__dirname, '.env.local') });
-dotenv.config({ path: path.resolve(__dirname, '.env') });
-dotenv.config({ path: path.resolve(__dirname, 'env.polyagent') });
+const _dir = process.cwd();
+dotenv.config({ path: path.resolve(_dir, '.env.local') });
+dotenv.config({ path: path.resolve(_dir, '.env') });
+dotenv.config({ path: path.resolve(_dir, 'env.polyagent') });
+dotenv.config({ path: path.resolve(_dir, '.env.polyagent') });
 
 import mongoose from 'mongoose';
 import { CopyTrade }      from './src/db/models/CopyTrade';
