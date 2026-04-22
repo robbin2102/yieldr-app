@@ -101,15 +101,23 @@ async function fetchBotPortfolioPrices(): Promise<Map<string, { curPrice: number
   return m;
 }
 
-// ── fetch all bot REDEEM events from Polymarket data API ─────────────────────
-// Returns Map<assetKey → totalUsdcRedeemed>.
-// assetKey is typically the outcome tokenId (returned in `asset` field by
-// the data API). Falls back to `conditionId` if `asset` is absent.
-async function fetchBotRedemptions(): Promise<Map<string, number>> {
-  const byAsset = new Map<string, number>();
+// ── fetch bot SELL + REDEEM events from Polymarket data API (single pass) ────
+// Returns:
+//   redemptions: Map<assetKey → totalUsdcRedeemed>
+//   sells:       Map<assetKey → { usdc, shares }> — admin sells via sell-position.ts
+//
+// Admin sells are placed directly on the CLOB and never written to ahf-copyTrades,
+// so bSold from MongoDB is always $0. This function captures them from the data API
+// so bPnl correctly credits sell proceeds and bOpenVal isn't overcounted.
+async function fetchBotActivityMaps(): Promise<{
+  redemptions: Map<string, number>;
+  sells: Map<string, { usdc: number; shares: number }>;
+}> {
+  const redemptions = new Map<string, number>();
+  const sells       = new Map<string, { usdc: number; shares: number }>();
   let offset = 0;
   const limit = 500;
-  process.stdout.write('Fetching bot redemption history from data API... ');
+  process.stdout.write('Fetching bot activity (sells + redeems) from data API... ');
   try {
     while (true) {
       const url =
@@ -122,10 +130,19 @@ async function fetchBotRedemptions(): Promise<Map<string, number>> {
       if (items.length === 0) break;
 
       for (const item of items) {
-        if ((item.type ?? '').toUpperCase() !== 'REDEEM') continue;
+        const type = (item.type ?? '').toUpperCase();
         const key  = item.asset ?? item.tokenId ?? item.conditionId ?? '';
         const usdc = parseFloat(item.usdcSize ?? item.size ?? '0');
-        if (key && usdc > 0) byAsset.set(key, (byAsset.get(key) ?? 0) + usdc);
+        if (!key || usdc <= 0) continue;
+
+        if (type === 'REDEEM') {
+          redemptions.set(key, (redemptions.get(key) ?? 0) + usdc);
+        } else if (type === 'TRADE' && (item.side ?? '').toUpperCase() === 'SELL') {
+          const price = parseFloat(item.price ?? '0');
+          const sh    = price > 0 ? usdc / price : 0;
+          const prev  = sells.get(key) ?? { usdc: 0, shares: 0 };
+          sells.set(key, { usdc: prev.usdc + usdc, shares: prev.shares + sh });
+        }
       }
 
       if (items.length < limit) break;
@@ -134,9 +151,10 @@ async function fetchBotRedemptions(): Promise<Map<string, number>> {
   } catch (e: any) {
     process.stdout.write(`WARN(${e.message}) `);
   }
-  const total = [...byAsset.values()].reduce((s, v) => s + v, 0);
-  console.log(`done — ${byAsset.size} redeemed positions, $${total.toFixed(2)} USDC total.`);
-  return byAsset;
+  const totalRedeemed = [...redemptions.values()].reduce((s, v) => s + v, 0);
+  const totalSold     = [...sells.values()].reduce((s, v) => s + v.usdc, 0);
+  console.log(`done — ${redemptions.size} redeemed ($${totalRedeemed.toFixed(2)}), ${sells.size} sold on-chain ($${totalSold.toFixed(2)}).`);
+  return { redemptions, sells };
 }
 
 // ── derive shares when traderSize is missing ──────────────────────────────────
@@ -333,8 +351,8 @@ async function main() {
   const botPortfolio = await fetchBotPortfolioPrices();
   console.log(`done — ${botPortfolio.size} open positions, $${[...botPortfolio.values()].reduce((s,p) => s + p.curPrice * p.size, 0).toFixed(2)} total value.`);
 
-  // Fetch bot redemptions from data API (all time, for all traders)
-  const botRedemptionMap = await fetchBotRedemptions();
+  // Fetch bot sells + redemptions from data API (single pass, all time)
+  const { redemptions: botRedemptionMap, sells: botSellMap } = await fetchBotActivityMaps();
 
   // Fetch edge data from pipeline
   const edgeMap = await fetchEdgeData(wallets);
@@ -376,7 +394,7 @@ async function main() {
     const bBought    = bBuyFills .reduce((s: number, t: any) => s + (t.filledUsdc ?? 0), 0);
     const bSold      = bSellFills.reduce((s: number, t: any) => s + (t.filledUsdc ?? 0), 0);
 
-    // Trader tokenIds the bot actually filled on — used to attribute redemptions
+    // Trader tokenIds the bot actually filled on — used to attribute redemptions + sells
     const bTraderTokenIds = new Set(bBuyFills.map((t: any) => t.tokenId).filter(Boolean));
 
     // Bot redeemed: sum USDC from data API REDEEM events for this trader's tokens
@@ -388,6 +406,17 @@ async function main() {
     const bNetByMkt  = new Map<string, number>();
     for (const t of bBuyFills)  bNetByMkt.set(t.tokenId ?? '', (bNetByMkt.get(t.tokenId ?? '') ?? 0) + (t.filledSize ?? 0));
     for (const t of bSellFills) bNetByMkt.set(t.tokenId ?? '', (bNetByMkt.get(t.tokenId ?? '') ?? 0) - (t.filledSize ?? 0));
+
+    // On-chain sells (admin sell-position.ts — not written to ahf-copyTrades).
+    // Credit sell proceeds and remove sold shares from net position so bOpenVal is accurate.
+    let bSoldChain = 0;
+    for (const tid of bTraderTokenIds) {
+      const chainSell = botSellMap.get(tid);
+      if (!chainSell) continue;
+      bSoldChain += chainSell.usdc;
+      bNetByMkt.set(tid, (bNetByMkt.get(tid) ?? 0) - chainSell.shares);
+    }
+
     let bOpenVal = 0;
     for (const [id, sh] of bNetByMkt) {
       if (sh <= 0) continue;
@@ -396,7 +425,7 @@ async function main() {
       const cur = priceCache.get(id) ?? 0;
       if (cur > 0.01) bOpenVal += sh * cur;
     }
-    const bRealized = -bBought + bSold;
+    const bRealized = -bBought + bSold + bSoldChain;
     const bTotal    = bRealized + bOpenVal + bRedeemed;
 
     // ── Skip counts (excluding NON_TRADE from detect count) ───────────────────
@@ -620,11 +649,14 @@ async function main() {
       const bVwap      = bBuyFills.length > 0
         ? bBuyUsdc / bBuyFills.reduce((a: number, t: any) => a + (t.filledSize ?? 0), 0)
         : 0;
-      // For bPnl: exclude open value for tokens already redeemed (cash in bRedeemed)
-      const bAlreadyRedeemed = botRedemptionMap.has(tokenId);
-      const bMktRedeemed = botRedemptionMap.get(tokenId) ?? 0;
-      const bPnl = -bBuyUsdc + bSellUsdc + bMktRedeemed +
-        (!bAlreadyRedeemed && bNetSh > 0 && cur > 0.01 ? bNetSh * cur : 0);
+      // For bPnl: include on-chain sells; exclude open value for redeemed tokens
+      const bAlreadyRedeemed  = botRedemptionMap.has(tokenId);
+      const bMktRedeemed      = botRedemptionMap.get(tokenId) ?? 0;
+      const chainSellMkt      = botSellMap.get(tokenId);
+      const bMktSoldChain     = chainSellMkt?.usdc    ?? 0;
+      const bNetShAdj         = bNetSh - (chainSellMkt?.shares ?? 0);
+      const bPnl = -bBuyUsdc + bSellUsdc + bMktRedeemed + bMktSoldChain +
+        (!bAlreadyRedeemed && bNetShAdj > 0 && cur > 0.01 ? bNetShAdj * cur : 0);
 
       const MISSED = new Set(['ALLOCATION_FULL', 'PRICEDRIFT_FAILED', 'WIDE_SPREAD']);
       let mktMissed = 0;
