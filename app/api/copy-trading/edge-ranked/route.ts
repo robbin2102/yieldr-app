@@ -82,8 +82,8 @@ export async function PATCH(request: NextRequest) {
   try {
     const body = await request.json();
     const { wallet, action } = body;
-    if (!wallet || !['start', 'stop', 'remove'].includes(action)) {
-      return NextResponse.json({ success: false, error: 'wallet and action (start|stop|remove) required' }, { status: 400 });
+    if (!wallet || !['start', 'stop', 'remove', 'alloc'].includes(action)) {
+      return NextResponse.json({ success: false, error: 'wallet and action (start|stop|remove|alloc) required' }, { status: 400 });
     }
 
     const client = await clientPromise;
@@ -93,6 +93,12 @@ export async function PATCH(request: NextRequest) {
     if (action === 'start')  { update.active = true;  update.removed = false; }
     if (action === 'stop')   { update.active = false; }
     if (action === 'remove') { update.active = false; update.removed = true; }
+    if (action === 'alloc') {
+      const newAlloc = Number(body.allocationUsdc);
+      if (!Number.isFinite(newAlloc) || newAlloc < 0)
+        return NextResponse.json({ success: false, error: 'allocationUsdc must be a non-negative number' }, { status: 400 });
+      update.allocationUsdc = newAlloc;
+    }
 
     await db.collection('ahf-copyTraders').updateOne(
       { wallet: wallet.toLowerCase() },

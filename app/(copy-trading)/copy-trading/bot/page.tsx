@@ -25,6 +25,7 @@ interface TraderRow {
   reason: string;
   spentUsdc: number;
   allocationUsdc: number;
+  allocAfter: number | null;
   active: boolean;
   tier: 'active' | 'paused' | 'stopped';
 }
@@ -198,6 +199,9 @@ export default function BotDashboard() {
   const [pendingConfirm, setPendingConfirm] = useState<string | null>(null);
   const [botRunning,     setBotRunning]     = useState<boolean | null>(null);
   const [botCtrlBusy,    setBotCtrlBusy]    = useState(false);
+  const [editingAlloc,   setEditingAlloc]   = useState<string | null>(null);
+  const [allocInput,     setAllocInput]     = useState('');
+  const [allocSaving,    setAllocSaving]    = useState<string | null>(null);
 
   async function fetchAll() {
     try {
@@ -317,6 +321,24 @@ export default function BotDashboard() {
     } finally { setStopping(null); }
   }
 
+  async function saveAlloc(wallet: string, inputStr: string) {
+    const newAlloc = parseFloat(inputStr);
+    if (!Number.isFinite(newAlloc) || newAlloc < 0) return;
+    setAllocSaving(wallet);
+    try {
+      const res = await fetch('/api/copy-trading/edge-ranked', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ wallet, action: 'alloc', allocationUsdc: newAlloc }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setTraders(prev => prev.map(t => t.wallet === wallet ? { ...t, allocationUsdc: newAlloc } : t));
+        setEditingAlloc(null);
+      }
+    } finally { setAllocSaving(null); }
+  }
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64 font-mono text-[#6E6E6E]">
@@ -426,8 +448,49 @@ export default function BotDashboard() {
               <td className="px-2 py-1.5" style={{ color: t.missedPnl > 0 ? '#FF8C00' : '#6E6E6E' }}>
                 {t.missedPnl > 0 ? fmtSigned$(t.missedPnl) : '—'}
               </td>
-              <td className="px-2 py-1.5 text-[#9E9E9E] whitespace-nowrap">
-                {fmt$(t.spentUsdc)}<span className="text-[#444]">/</span>{fmt$(t.allocationUsdc)}
+              <td className="px-2 py-1.5 whitespace-nowrap">
+                {editingAlloc === t.wallet ? (
+                  <div className="flex items-center gap-1">
+                    <span className="text-[#444] text-[10px]">$</span>
+                    <input
+                      type="number"
+                      min="0"
+                      value={allocInput}
+                      onChange={e => setAllocInput(e.target.value)}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter') saveAlloc(t.wallet, allocInput);
+                        if (e.key === 'Escape') setEditingAlloc(null);
+                      }}
+                      className="w-14 bg-[#1A1A1A] border border-[#333] rounded px-1 py-0.5 text-[11px] text-[#E0E0E0] focus:outline-none focus:border-[#00C805]"
+                      autoFocus
+                    />
+                    <button
+                      disabled={allocSaving === t.wallet}
+                      onClick={() => saveAlloc(t.wallet, allocInput)}
+                      className="px-1.5 py-0.5 text-[9px] rounded border border-[#00C805]/40 text-[#00C805] hover:bg-[#00C805]/10 disabled:opacity-40 transition-colors">
+                      {allocSaving === t.wallet ? '…' : '✓'}
+                    </button>
+                    <button onClick={() => setEditingAlloc(null)}
+                      className="text-[#6E6E6E] hover:text-[#E0E0E0] text-[10px] transition-colors">✕</button>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-1 group">
+                    <span className="text-[#9E9E9E]">
+                      {fmt$(t.spentUsdc)}<span className="text-[#444]">/</span>{fmt$(t.allocationUsdc)}
+                    </span>
+                    {t.allocAfter != null && t.allocAfter !== t.allocationUsdc && (
+                      <span className="text-[9px]" style={{ color: t.allocAfter > t.allocationUsdc ? '#00C805' : '#FF8C00' }}>
+                        →{fmt$(t.allocAfter)}
+                      </span>
+                    )}
+                    <button
+                      onClick={() => { setEditingAlloc(t.wallet); setAllocInput(String(t.allocationUsdc)); }}
+                      className="opacity-0 group-hover:opacity-100 transition-opacity text-[#444] hover:text-[#9E9E9E] text-[11px] leading-none"
+                      title="Edit allocation">
+                      ✎
+                    </button>
+                  </div>
+                )}
               </td>
               <td className="px-2 py-1.5">
                 <span className="font-bold text-[10px]" style={{ color: aC }}>{t.actionCode || '—'}</span>
