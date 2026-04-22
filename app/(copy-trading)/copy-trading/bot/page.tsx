@@ -474,7 +474,7 @@ export default function BotDashboard() {
                       className="text-[#6E6E6E] hover:text-[#E0E0E0] text-[10px] transition-colors">✕</button>
                   </div>
                 ) : (
-                  <div className="flex items-center gap-1 group">
+                  <div className="flex items-center gap-1">
                     <span className="text-[#9E9E9E]">
                       {fmt$(t.spentUsdc)}<span className="text-[#444]">/</span>{fmt$(t.allocationUsdc)}
                     </span>
@@ -485,7 +485,7 @@ export default function BotDashboard() {
                     )}
                     <button
                       onClick={() => { setEditingAlloc(t.wallet); setAllocInput(String(t.allocationUsdc)); }}
-                      className="opacity-0 group-hover:opacity-100 transition-opacity text-[#444] hover:text-[#9E9E9E] text-[11px] leading-none"
+                      className="text-[#444] hover:text-[#9E9E9E] text-[11px] leading-none transition-colors"
                       title="Edit allocation">
                       ✎
                     </button>
