@@ -398,9 +398,14 @@ export class Confirmer {
       }
     }
 
-    // Accumulate partial fills
+    // Accumulate partial fills.
+    // Cap filledCost at targetUsdc — negRisk markets report inflated share counts
+    // in fill events (gross complement shares × outcomes), so fillSize * fillPrice
+    // can be 100× the actual USDC cost. A BUY can never cost more than targetUsdc.
+    const rawDelta = fillSize * fillPrice;
+    const cappedDelta = pending.targetUsdc > 0 ? Math.min(rawDelta, pending.targetUsdc) : rawDelta;
     pending.filledSize += fillSize;
-    pending.filledCost += fillSize * fillPrice;
+    pending.filledCost += cappedDelta;
 
     const avgFillPrice  = pending.filledCost / pending.filledSize;
     const filledUsdc    = pending.filledCost;
@@ -441,7 +446,7 @@ export class Confirmer {
     // Using pending.filledCost (cumulative) here caused double-counting on partial fills:
     // each successive fill event would re-subtract the running total, not just the new increment.
     // The CANCELLATION handler does NOT call recordFill/recordSellFill — deltas cover it fully.
-    const fillDeltaUsdc = fillSize * fillPrice;
+    const fillDeltaUsdc = cappedDelta;
     if (pending.side === 'BUY') {
       await TraderLoader.recordFill(pending.traderWallet, fillDeltaUsdc);
     } else {
