@@ -204,11 +204,13 @@ async function run() {
       const lagMs   = blockTs !== null ? receivedAt - blockTs : null;
       collectedLags.push(lagMs ?? 0);
 
-      const ts     = new Date(receivedAt).toISOString().slice(11, 23);
-      const lagStr = lagMs !== null ? `${lagMs}ms` : '?ms';
+      const receivedStr = new Date(receivedAt).toISOString().slice(11, 23);
+      const blockStr    = blockTs !== null ? new Date(blockTs).toISOString().slice(11, 23) : '?';
+      const lagStr      = lagMs !== null ? `${lagMs > 0 ? '+' : ''}${lagMs}ms` : '?ms';
       console.log(
-        `[ON-CHAIN] ${ts} | #${collectedLags.length}/${MAX_EVENTS === Infinity ? '∞' : MAX_EVENTS} | ` +
-        `${role} $${usdcAmt} | wallet=${wallet} | lag=${lagStr} | exchange=${exchange} | tx=${log.transactionHash}`
+        `[ON-CHAIN] recv=${receivedStr} blockTs=${blockStr} lag=${lagStr} | ` +
+        `#${collectedLags.length}/${MAX_EVENTS === Infinity ? '∞' : MAX_EVENTS} | ` +
+        `${role} $${usdcAmt} | exchange=${exchange} | tx=${log.transactionHash}`
       );
 
       if (collectedLags.length >= MAX_EVENTS) {
