@@ -40,9 +40,10 @@ const HTTP_URL  = WS_URL.replace(/^wss:\/\//, 'https://').replace(/^ws:\/\//, 'h
 const MONGO_URI = (process.env.MONGO_PUBLIC_URL || process.env.MONGODB_URI)!;
 const DB_NAME   = process.env.MONGODB_DB_NAME || 'yieldr';
 
-const ALL_MODE  = process.argv.includes('--all');
-const maxArg    = process.argv.find(a => a.startsWith('--max='));
-const MAX_EVENTS = maxArg ? parseInt(maxArg.split('=')[1]) : (ALL_MODE ? 100 : Infinity);
+const ALL_MODE   = process.argv.includes('--all');
+const DEBUG_MODE = process.argv.includes('--debug'); // no topics filter — shows ALL logs + raw topic0
+const maxArg     = process.argv.find(a => a.startsWith('--max='));
+const MAX_EVENTS = maxArg ? parseInt(maxArg.split('=')[1]) : (ALL_MODE || DEBUG_MODE ? 20 : Infinity);
 
 // Polymarket exchange contracts on Polygon mainnet (from allowances.ts)
 const CTF_EXCHANGE      = '0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E';
@@ -113,8 +114,11 @@ async function loadTrackedWallets(): Promise<Set<string>> {
 // ── Main ──────────────────────────────────────────────────────────────────────
 async function run() {
   const startMs = Date.now();
-  console.log(`[probe-onchain] Mode: ${ALL_MODE ? `ALL trades (stop at ${MAX_EVENTS})` : 'tracked wallets only'}`);
+  const modeLabel = DEBUG_MODE ? `DEBUG (all logs, no topic filter, stop at ${MAX_EVENTS})`
+    : ALL_MODE ? `ALL trades (stop at ${MAX_EVENTS})` : 'tracked wallets only';
+  console.log(`[probe-onchain] Mode: ${modeLabel}`);
   console.log(`[probe-onchain] WS: ${WS_URL.slice(0, 50)}...`);
+  console.log(`[probe-onchain] Expected OrderFilled topic0: ${TOPIC0}`);
 
   const trackedWallets = await loadTrackedWallets();
   const collectedLags: number[] = [];
@@ -122,14 +126,14 @@ async function run() {
   const ws = new WebSocket(WS_URL);
 
   ws.on('open', () => {
-    console.log(`[probe-onchain] Connected. Subscribing to OrderFilled on both exchanges...\n`);
+    const filterDesc = DEBUG_MODE ? 'ALL logs (no topic filter)' : `OrderFilled topic`;
+    console.log(`[probe-onchain] Connected. Subscribing to ${filterDesc} on both exchanges...\n`);
+    const filterParams: any = { address: [CTF_EXCHANGE, NEG_RISK_EXCHANGE] };
+    if (!DEBUG_MODE) filterParams.topics = [TOPIC0];
     ws.send(JSON.stringify({
       jsonrpc: '2.0', id: 1,
       method:  'eth_subscribe',
-      params:  ['logs', {
-        address: [CTF_EXCHANGE, NEG_RISK_EXCHANGE],
-        topics:  [TOPIC0],
-      }],
+      params:  ['logs', filterParams],
     }));
   });
 
@@ -149,6 +153,23 @@ async function run() {
     // Record arrival time immediately
     const receivedAt = Date.now();
     const log        = msg.params.result;
+
+    // DEBUG mode: just print raw topic0 so we can verify the event signature
+    if (DEBUG_MODE) {
+      const topic0Actual = log.topics?.[0] ?? '(no topics)';
+      const contract     = log.address?.toLowerCase() === CTF_EXCHANGE.toLowerCase() ? 'CTF' : 'NEG';
+      const match        = topic0Actual === TOPIC0 ? '✅ MATCHES expected OrderFilled' : '❌ DIFFERENT from expected';
+      collectedLags.push(0);
+      console.log(
+        `[DEBUG] #${collectedLags.length} | contract=${contract} | topic0=${topic0Actual} | ${match} | tx=${log.transactionHash?.slice(0, 14)}`
+      );
+      if (collectedLags.length >= MAX_EVENTS) {
+        console.log(`\n[DEBUG] Collected ${MAX_EVENTS} raw logs. If all showed ❌, the event signature is wrong.`);
+        console.log(`[DEBUG] Expected: ${TOPIC0}`);
+        ws.close(); process.exit(0);
+      }
+      return;
+    }
 
     // Filter by tracked wallets (indexed in topics[2]=maker, topics[3]=taker)
     const maker = ('0x' + log.topics[2].slice(26)).toLowerCase();
