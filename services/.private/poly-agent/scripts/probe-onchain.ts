@@ -122,125 +122,124 @@ async function run() {
 
   const trackedWallets = await loadTrackedWallets();
   const collectedLags: number[] = [];
+  let done = false;
 
-  const ws = new WebSocket(WS_URL);
+  // ── connect() — called on startup and on every reconnect ─────────────────
+  function connect(attempt: number = 0) {
+    if (done) return;
+    const ws        = new WebSocket(WS_URL);
+    const subIds    = new Set<string>();
+    let keepalive: NodeJS.Timeout;
 
-  // Two subscription IDs — one per contract — avoids relying on array address support in eth_subscribe
-  const subIds = new Set<string>();
+    ws.on('open', () => {
+      if (attempt > 0) console.log(`[probe-onchain] Reconnected (attempt ${attempt})`);
+      const filterDesc = DEBUG_MODE ? 'ALL logs (no topic filter)' : 'OrderFilled';
+      console.log(`[probe-onchain] Connected. Subscribing to ${filterDesc} on CTF + NEG_RISK separately...\n`);
 
-  // Keep-alive ping every 20s — QuickNode drops idle WS connections after ~50-60s without this
-  const pingTimer = setInterval(() => {
-    if (ws.readyState === WebSocket.OPEN) ws.ping();
-  }, 20_000);
-
-  ws.on('open', () => {
-    const filterDesc = DEBUG_MODE ? 'ALL logs (no topic filter)' : `OrderFilled`;
-    console.log(`[probe-onchain] Connected. Subscribing to ${filterDesc} on CTF + NEG_RISK separately...\n`);
-
-    // Subscribe to each contract individually (more compatible than address array)
-    for (const [id, addr] of [[1, CTF_EXCHANGE], [2, NEG_RISK_EXCHANGE]]) {
-      const filterParams: any = { address: addr };
-      if (!DEBUG_MODE) filterParams.topics = [TOPIC0];
-      ws.send(JSON.stringify({ jsonrpc: '2.0', id, method: 'eth_subscribe', params: ['logs', filterParams] }));
-    }
-  });
-
-  ws.on('message', async (raw: Buffer) => {
-    const msg = JSON.parse(raw.toString()) as any;
-
-    // Subscription confirmations (id 1 = CTF, id 2 = NEG_RISK)
-    if (msg.id === 1 || msg.id === 2) {
-      const name = msg.id === 1 ? 'CTF_EXCHANGE' : 'NEG_RISK_EXCHANGE';
-      if (msg.error) { console.error(`[probe-onchain] Subscribe error (${name}):`, msg.error); process.exit(1); }
-      subIds.add(msg.result);
-      console.log(`[probe-onchain] Subscribed to ${name} (id=${msg.result})`);
-      if (subIds.size === 2) console.log(`[probe-onchain] Both subscriptions active. Waiting for fills...\n`);
-      return;
-    }
-
-    // Event notification
-    if (msg.method !== 'eth_subscription') return;
-
-    // Record arrival time immediately
-    const receivedAt = Date.now();
-    const log        = msg.params.result;
-
-    // DEBUG mode: just print raw topic0 so we can verify the event signature
-    if (DEBUG_MODE) {
-      const topic0Actual = log.topics?.[0] ?? '(no topics)';
-      const contract     = log.address?.toLowerCase() === CTF_EXCHANGE.toLowerCase() ? 'CTF' : 'NEG';
-      const match        = topic0Actual === TOPIC0 ? '✅ MATCHES expected OrderFilled' : '❌ DIFFERENT from expected';
-      collectedLags.push(0);
-      console.log(
-        `[DEBUG] #${collectedLags.length} | contract=${contract} | topic0=${topic0Actual} | ${match} | tx=${log.transactionHash?.slice(0, 14)}`
-      );
-      if (collectedLags.length >= MAX_EVENTS) {
-        console.log(`\n[DEBUG] Collected ${MAX_EVENTS} raw logs. If all showed ❌, the event signature is wrong.`);
-        console.log(`[DEBUG] Expected: ${TOPIC0}`);
-        ws.close(); process.exit(0);
+      // Subscribe to each contract individually
+      for (const [id, addr] of [[1, CTF_EXCHANGE], [2, NEG_RISK_EXCHANGE]]) {
+        const filterParams: any = { address: addr };
+        if (!DEBUG_MODE) filterParams.topics = [TOPIC0];
+        ws.send(JSON.stringify({ jsonrpc: '2.0', id, method: 'eth_subscribe', params: ['logs', filterParams] }));
       }
-      return;
-    }
 
-    // Filter by tracked wallets (indexed in topics[2]=maker, topics[3]=taker)
-    const maker = ('0x' + log.topics[2].slice(26)).toLowerCase();
-    const taker = ('0x' + log.topics[3].slice(26)).toLowerCase();
+      // JSON-RPC keepalive every 20s — QuickNode needs application-level traffic,
+      // WebSocket ping frames alone are not enough to prevent idle timeout
+      keepalive = setInterval(() => {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ jsonrpc: '2.0', id: 999, method: 'eth_blockNumber', params: [] }));
+        }
+      }, 20_000);
+    });
 
-    const walletMatch = trackedWallets.has(maker) || trackedWallets.has(taker);
-    if (!ALL_MODE && !walletMatch) return;
+    ws.on('message', async (raw: Buffer) => {
+      const msg = JSON.parse(raw.toString()) as any;
 
-    // Decode non-indexed args from data field
-    const parsed       = iface.parseLog({ topics: log.topics, data: log.data });
-    const makerAssetId = parsed.args.makerAssetId as ethers.BigNumber;
-    const makerPaysUsdc = makerAssetId.isZero();
-    const usdcAmt      = makerPaysUsdc
-      ? fmtUsdc(parsed.args.makerAmountFilled)
-      : fmtUsdc(parsed.args.takerAmountFilled);
+      // Ignore keepalive responses
+      if (msg.id === 999) return;
 
-    const wallet   = ALL_MODE ? maker : (trackedWallets.has(maker) ? maker : taker);
-    const role     = makerPaysUsdc ? 'BUY' : 'SELL';
-    const exchange = log.address.toLowerCase() === CTF_EXCHANGE.toLowerCase() ? 'CTF' : 'NEG';
+      // Subscription confirmations (id 1 = CTF, id 2 = NEG_RISK)
+      if (msg.id === 1 || msg.id === 2) {
+        const name = msg.id === 1 ? 'CTF_EXCHANGE' : 'NEG_RISK_EXCHANGE';
+        if (msg.error) { console.error(`[probe-onchain] Subscribe error (${name}):`, msg.error); return; }
+        subIds.add(msg.result);
+        console.log(`[probe-onchain] Subscribed to ${name} (id=${msg.result})`);
+        if (subIds.size === 2) console.log(`[probe-onchain] Both subscriptions active. Waiting for fills...\n`);
+        return;
+      }
 
-    // Block timestamp via HTTP (cached — fills in same block share one RPC call)
-    const blockTs = await fetchBlockTs(log.blockNumber);
-    const lagMs   = blockTs !== null ? receivedAt - blockTs : null;
+      if (msg.method !== 'eth_subscription') return;
 
-    collectedLags.push(lagMs ?? 0);
+      // Record arrival time immediately
+      const receivedAt = Date.now();
+      const log        = msg.params.result;
 
-    const ts     = new Date(receivedAt).toISOString().slice(11, 23);
-    const lagStr = lagMs !== null ? `${lagMs}ms` : '?ms';
+      // DEBUG mode: print raw topic0 only
+      if (DEBUG_MODE) {
+        const topic0Actual = log.topics?.[0] ?? '(no topics)';
+        const contract     = log.address?.toLowerCase() === CTF_EXCHANGE.toLowerCase() ? 'CTF' : 'NEG';
+        const match        = topic0Actual === TOPIC0 ? '✅ MATCHES OrderFilled' : '❌ DIFFERENT';
+        collectedLags.push(0);
+        console.log(`[DEBUG] #${collectedLags.length} | contract=${contract} | topic0=${topic0Actual} | ${match} | tx=${log.transactionHash}`);
+        if (collectedLags.length >= MAX_EVENTS) { done = true; ws.close(); }
+        return;
+      }
 
-    console.log(
-      `[ON-CHAIN] ${ts} | #${collectedLags.length}/${MAX_EVENTS === Infinity ? '∞' : MAX_EVENTS} | ` +
-      `${role} $${usdcAmt} | wallet=${wallet} | lag=${lagStr} | ` +
-      `exchange=${exchange} | tx=${log.transactionHash}`
-    );
+      // Wallet filter
+      const maker = ('0x' + log.topics[2].slice(26)).toLowerCase();
+      const taker = ('0x' + log.topics[3].slice(26)).toLowerCase();
+      const walletMatch = trackedWallets.has(maker) || trackedWallets.has(taker);
+      if (!ALL_MODE && !walletMatch) return;
 
-    if (collectedLags.length >= MAX_EVENTS) {
-      printSummary(collectedLags, startMs);
-      ws.close();
-      process.exit(0);
-    }
-  });
+      // Decode amounts
+      const parsed        = iface.parseLog({ topics: log.topics, data: log.data });
+      const makerAssetId  = parsed.args.makerAssetId as ethers.BigNumber;
+      const makerPaysUsdc = makerAssetId.isZero();
+      const usdcAmt       = makerPaysUsdc ? fmtUsdc(parsed.args.makerAmountFilled) : fmtUsdc(parsed.args.takerAmountFilled);
+      const wallet        = ALL_MODE ? maker : (trackedWallets.has(maker) ? maker : taker);
+      const role          = makerPaysUsdc ? 'BUY' : 'SELL';
+      const exchange      = log.address.toLowerCase() === CTF_EXCHANGE.toLowerCase() ? 'CTF' : 'NEG';
 
-  ws.on('error', (err) => {
-    console.error('[probe-onchain] WS error:', err.message);
-    process.exit(1);
-  });
+      const blockTs = await fetchBlockTs(log.blockNumber);
+      const lagMs   = blockTs !== null ? receivedAt - blockTs : null;
+      collectedLags.push(lagMs ?? 0);
 
-  ws.on('close', (code) => {
-    clearInterval(pingTimer);
-    console.log(`\n[probe-onchain] WS closed (code=${code})`);
-    printSummary(collectedLags, startMs);
-    process.exit(0);
-  });
+      const ts     = new Date(receivedAt).toISOString().slice(11, 23);
+      const lagStr = lagMs !== null ? `${lagMs}ms` : '?ms';
+      console.log(
+        `[ON-CHAIN] ${ts} | #${collectedLags.length}/${MAX_EVENTS === Infinity ? '∞' : MAX_EVENTS} | ` +
+        `${role} $${usdcAmt} | wallet=${wallet} | lag=${lagStr} | exchange=${exchange} | tx=${log.transactionHash}`
+      );
+
+      if (collectedLags.length >= MAX_EVENTS) {
+        done = true;
+        printSummary(collectedLags, startMs);
+        ws.close();
+        process.exit(0);
+      }
+    });
+
+    ws.on('error', (err) => {
+      // Log but don't exit — close event handles reconnect
+      console.error(`[probe-onchain] WS error: ${err.message}`);
+    });
+
+    ws.on('close', (code) => {
+      clearInterval(keepalive);
+      if (done) return;
+      const delay = Math.min(2000 * (attempt + 1), 10_000);
+      console.log(`[probe-onchain] WS closed (code=${code}), reconnecting in ${delay / 1000}s...`);
+      setTimeout(() => connect(attempt + 1), delay);
+    });
+  }
+
+  connect();
 
   // Allow Ctrl+C to print summary before exit
   process.on('SIGINT', () => {
-    clearInterval(pingTimer);
+    done = true;
     console.log('\n[probe-onchain] Interrupted');
     printSummary(collectedLags, startMs);
-    ws.close();
     process.exit(0);
   });
 }
