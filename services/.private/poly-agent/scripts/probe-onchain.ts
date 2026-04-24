@@ -128,6 +128,11 @@ async function run() {
   // Two subscription IDs — one per contract — avoids relying on array address support in eth_subscribe
   const subIds = new Set<string>();
 
+  // Keep-alive ping every 20s — QuickNode drops idle WS connections after ~50-60s without this
+  const pingTimer = setInterval(() => {
+    if (ws.readyState === WebSocket.OPEN) ws.ping();
+  }, 20_000);
+
   ws.on('open', () => {
     const filterDesc = DEBUG_MODE ? 'ALL logs (no topic filter)' : `OrderFilled`;
     console.log(`[probe-onchain] Connected. Subscribing to ${filterDesc} on CTF + NEG_RISK separately...\n`);
@@ -224,15 +229,15 @@ async function run() {
   });
 
   ws.on('close', (code) => {
-    if (collectedLags.length < MAX_EVENTS) {
-      console.log(`\n[probe-onchain] WS closed (code=${code})`);
-      printSummary(collectedLags, startMs);
-    }
+    clearInterval(pingTimer);
+    console.log(`\n[probe-onchain] WS closed (code=${code})`);
+    printSummary(collectedLags, startMs);
     process.exit(0);
   });
 
   // Allow Ctrl+C to print summary before exit
   process.on('SIGINT', () => {
+    clearInterval(pingTimer);
     console.log('\n[probe-onchain] Interrupted');
     printSummary(collectedLags, startMs);
     ws.close();
