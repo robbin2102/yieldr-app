@@ -270,7 +270,7 @@ export class GTTExecutor {
       this.positionReserved.set(lockKey, alreadyReserved + buyBetUsdc);
 
       const dbSpent        = await this.getPositionSpent(freshTrader.wallet, tokenId, conditionId);
-      const maxPerPosition = freshTrader.allocationUsdc * 0.20;
+      const maxPerPosition = freshTrader.allocationUsdc * config.maxPositionPct;
       // Use alreadyReserved (what was there BEFORE us) — that's the committed amount
       const positionAvail  = maxPerPosition - dbSpent - alreadyReserved;
 

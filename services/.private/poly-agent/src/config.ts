@@ -82,8 +82,9 @@ export const config = {
 
   // ── Market quality filters ─────────────────────────────────────────────────
   // Orders are skipped (not retried) when these limits are exceeded.
-  maxSpreadPct: parseFloat(process.env.MAX_SPREAD_PCT || '0.10'),  // 10% max bid-ask spread
-  maxDriftPct:  parseFloat(process.env.MAX_DRIFT_PCT  || '0.02'),  // 2% max price drift vs trader
+  maxSpreadPct:   parseFloat(process.env.MAX_SPREAD_PCT   || '0.10'),  // 10% max bid-ask spread
+  maxDriftPct:    parseFloat(process.env.MAX_DRIFT_PCT    || '0.02'),  // 2% max price drift vs trader
+  maxPositionPct: parseFloat(process.env.MAX_POSITION_PCT || '0.20'),  // 20% per-position cap of allocationUsdc
 
   // ── Heartbeat logging interval ────────────────────────────────────────────
   // How often to print the "watching" idle line per trader. Time-based so it
