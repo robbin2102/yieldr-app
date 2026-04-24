@@ -125,25 +125,31 @@ async function run() {
 
   const ws = new WebSocket(WS_URL);
 
+  // Two subscription IDs — one per contract — avoids relying on array address support in eth_subscribe
+  const subIds = new Set<string>();
+
   ws.on('open', () => {
-    const filterDesc = DEBUG_MODE ? 'ALL logs (no topic filter)' : `OrderFilled topic`;
-    console.log(`[probe-onchain] Connected. Subscribing to ${filterDesc} on both exchanges...\n`);
-    const filterParams: any = { address: [CTF_EXCHANGE, NEG_RISK_EXCHANGE] };
-    if (!DEBUG_MODE) filterParams.topics = [TOPIC0];
-    ws.send(JSON.stringify({
-      jsonrpc: '2.0', id: 1,
-      method:  'eth_subscribe',
-      params:  ['logs', filterParams],
-    }));
+    const filterDesc = DEBUG_MODE ? 'ALL logs (no topic filter)' : `OrderFilled`;
+    console.log(`[probe-onchain] Connected. Subscribing to ${filterDesc} on CTF + NEG_RISK separately...\n`);
+
+    // Subscribe to each contract individually (more compatible than address array)
+    for (const [id, addr] of [[1, CTF_EXCHANGE], [2, NEG_RISK_EXCHANGE]]) {
+      const filterParams: any = { address: addr };
+      if (!DEBUG_MODE) filterParams.topics = [TOPIC0];
+      ws.send(JSON.stringify({ jsonrpc: '2.0', id, method: 'eth_subscribe', params: ['logs', filterParams] }));
+    }
   });
 
   ws.on('message', async (raw: Buffer) => {
     const msg = JSON.parse(raw.toString()) as any;
 
-    // Subscription confirmation
-    if (msg.id === 1) {
-      if (msg.error) { console.error('[probe-onchain] Subscribe error:', msg.error); process.exit(1); }
-      console.log(`[probe-onchain] Subscribed (id=${msg.result}). Waiting for fills...\n`);
+    // Subscription confirmations (id 1 = CTF, id 2 = NEG_RISK)
+    if (msg.id === 1 || msg.id === 2) {
+      const name = msg.id === 1 ? 'CTF_EXCHANGE' : 'NEG_RISK_EXCHANGE';
+      if (msg.error) { console.error(`[probe-onchain] Subscribe error (${name}):`, msg.error); process.exit(1); }
+      subIds.add(msg.result);
+      console.log(`[probe-onchain] Subscribed to ${name} (id=${msg.result})`);
+      if (subIds.size === 2) console.log(`[probe-onchain] Both subscriptions active. Waiting for fills...\n`);
       return;
     }
 
