@@ -158,10 +158,11 @@ async function main() {
 
   const client = new MongoClient(mongoUri);
   await client.connect();
-  const db = client.db(extractDbName(mongoUri));
+  const resolvedDbName = process.env.MONGODB_DB_NAME || extractDbName(mongoUri);
+  const db = client.db(resolvedDbName);
   const snapCol = db.collection('polymarket-leaderboardSnapshots');
   const outCol  = db.collection('polymarket-consistentTraders');
-  console.log(`Connected → db: ${extractDbName(mongoUri)}\n`);
+  console.log(`Connected → db: ${resolvedDbName}\n`);
 
   if (!isDryRun) {
     await outCol.createIndex({ wallet: 1 }, { unique: true, background: true });

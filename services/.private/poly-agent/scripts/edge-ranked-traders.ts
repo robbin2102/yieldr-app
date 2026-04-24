@@ -167,7 +167,7 @@ async function main() {
 
   const client = new MongoClient(mongoUri);
   await client.connect();
-  const db = client.db(extractDbName(mongoUri));
+  const db = client.db(process.env.MONGODB_DB_NAME || extractDbName(mongoUri));
 
   // Load all v3 profiles (must have tradingConsistency)
   process.stdout.write('Loading profiles... ');

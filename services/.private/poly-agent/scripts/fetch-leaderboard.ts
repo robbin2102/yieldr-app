@@ -151,9 +151,10 @@ async function main() {
 
   const client = new MongoClient(mongoUri);
   await client.connect();
-  const db = client.db(extractDbName(mongoUri));
+  const resolvedDbName = process.env.MONGODB_DB_NAME || extractDbName(mongoUri);
+  const db = client.db(resolvedDbName);
   const col = db.collection('polymarket-leaderboardSnapshots');
-  console.log(`Connected → db: ${extractDbName(mongoUri)}`);
+  console.log(`Connected → db: ${resolvedDbName}`);
   console.log(`API base:        ${API_BASE}\n`);
 
   if (!isDryRun) {

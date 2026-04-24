@@ -127,7 +127,7 @@ async function main() {
   console.log('Connecting to MongoDB...');
   const client = new MongoClient(mongoUri);
   await client.connect();
-  const dbName = extractDbName(mongoUri);
+  const dbName = process.env.MONGODB_DB_NAME || extractDbName(mongoUri);
   const db = client.db(dbName);
   console.log(`Connected → db: ${dbName}\n`);
 
