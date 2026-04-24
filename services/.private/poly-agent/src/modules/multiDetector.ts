@@ -75,8 +75,9 @@ export class MultiDetector {
   private cycleStale   = 0;       // stale activities skipped (backlog/startup)
   private cycleByLabel = new Map<string, number>(); // label → trade count
 
-  // Per-wallet poll counts for periodic heartbeat logging
-  private pollCounts = new Map<string, number>(); // wallet → total polls with no new activity
+  // Per-wallet poll counts and last heartbeat time for periodic heartbeat logging
+  private pollCounts      = new Map<string, number>(); // wallet → total polls with no new activity
+  private lastHeartbeatAt = new Map<string, number>(); // wallet → ms timestamp of last heartbeat log
 
   /**
    * Fetch with timeout + one retry on 408/5xx.
@@ -286,13 +287,14 @@ export class MultiDetector {
     const ts = new Date().toISOString().slice(11, 19);
 
     if (newActivities.length === 0) {
-      // Periodic heartbeat so the operator can confirm polling is active with no new trades.
-      // Logs on the 1st poll (startup) and every 10th thereafter (≈ every 10m at default interval).
-      const n = (this.pollCounts.get(wallet) ?? 0) + 1;
+      const n   = (this.pollCounts.get(wallet) ?? 0) + 1;
+      const now = Date.now();
       this.pollCounts.set(wallet, n);
-      if (n === 1 || n % 10 === 0) {
-        const hts = new Date().toISOString().slice(11, 19);
-        const sinceMin = ((Date.now() - trader.lastSeenTs * 1000) / 60000).toFixed(0);
+      const lastHb = this.lastHeartbeatAt.get(wallet) ?? 0;
+      if (lastHb === 0 || now - lastHb >= config.heartbeatIntervalMs) {
+        this.lastHeartbeatAt.set(wallet, now);
+        const hts      = new Date().toISOString().slice(11, 19);
+        const sinceMin = ((now - trader.lastSeenTs * 1000) / 60000).toFixed(0);
         console.log(`[${hts}] 👁  ${trader.label}: watching (cursor ${sinceMin}m ago, poll #${n})`);
       }
       return;

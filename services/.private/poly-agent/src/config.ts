@@ -85,6 +85,11 @@ export const config = {
   maxSpreadPct: parseFloat(process.env.MAX_SPREAD_PCT || '0.10'),  // 10% max bid-ask spread
   maxDriftPct:  parseFloat(process.env.MAX_DRIFT_PCT  || '0.02'),  // 2% max price drift vs trader
 
+  // ── Heartbeat logging interval ────────────────────────────────────────────
+  // How often to print the "watching" idle line per trader. Time-based so it
+  // stays at the same cadence regardless of DETECTOR_INTERVAL_MS.
+  heartbeatIntervalMs: parseInt(process.env.HEARTBEAT_INTERVAL_MS || '600000'),  // 10m default
+
   // ── Grouped BELOW_AVG scanner ─────────────────────────────────────────────
   // Aggregates skipped sub-orders on the same market within a rolling window.
   // When grouped total >= trader.avgBet, fires one conviction copy trade.
