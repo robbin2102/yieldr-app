@@ -207,8 +207,8 @@ async function run() {
 
     console.log(
       `[ON-CHAIN] ${ts} | #${collectedLags.length}/${MAX_EVENTS === Infinity ? '∞' : MAX_EVENTS} | ` +
-      `${role} $${usdcAmt} | wallet=${wallet.slice(0, 10)}... | lag=${lagStr} | ` +
-      `exchange=${exchange} | tx=${log.transactionHash.slice(0, 14)}`
+      `${role} $${usdcAmt} | wallet=${wallet} | lag=${lagStr} | ` +
+      `exchange=${exchange} | tx=${log.transactionHash}`
     );
 
     if (collectedLags.length >= MAX_EVENTS) {
