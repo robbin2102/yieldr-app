@@ -1,0 +1,321 @@
+/**
+ * OnChainDetector — real-time trade detector via Polygon WebSocket.
+ *
+ * Replaces polling-based MultiDetector for tracked trader wallets.
+ * Subscribes to OrderFilled events on both Polymarket exchange contracts
+ * using wallet-level topic filters (maker + taker), so QuickNode only
+ * pushes events relevant to your traders.
+ *
+ * Emits: 'trade' (DetectedTrade), 'connected', 'reconnecting', 'error'
+ *
+ * No DB writes. Caller decides what to do with each trade event.
+ */
+
+import { EventEmitter } from 'events';
+import WebSocket from 'ws';
+import { ethers } from 'ethers';
+import { MongoClient } from 'mongodb';
+
+// ── Constants ─────────────────────────────────────────────────────────────────
+const CTF_EXCHANGE      = '0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E';
+const NEG_RISK_EXCHANGE = '0xC5d563A36AE78145C45a50134d48A1215220f80a';
+
+const ORDER_FILLED_IFACE = new ethers.utils.Interface([
+  'event OrderFilled(bytes32 indexed orderHash, address indexed maker, address indexed taker, uint256 makerAssetId, uint256 takerAssetId, uint256 makerAmountFilled, uint256 takerAmountFilled, uint256 fee)',
+]);
+const TOPIC0 = ORDER_FILLED_IFACE.getEventTopic('OrderFilled');
+
+// Skip events older than this — handles reconnect backlog replay
+const STALE_THRESHOLD_MS = 5 * 60 * 1000;
+
+// ── Types ─────────────────────────────────────────────────────────────────────
+export interface DetectedTrade {
+  wallet:           string;   // tracked wallet address (lowercase)
+  label:            string;   // trader label from DB
+  role:             'MAKER' | 'TAKER';
+  side:             'BUY' | 'SELL';
+  usdcAmount:       number;   // USDC spent or received (6-decimal adjusted)
+  tokenAmount:      number;   // conditional tokens received or sent
+  impliedPrice:     number;   // usdcAmount / tokenAmount
+  tokenId:          string;   // ERC1155 token ID hex (encodes conditionId + outcome)
+  txHash:           string;
+  blockNumber:      string;   // hex
+  blockTimestampMs: number;   // unix ms from block.timestamp
+  receivedAtMs:     number;   // unix ms when WS event arrived
+  lagMs:            number;   // receivedAtMs - blockTimestampMs (negative = validator forward-dating)
+  exchange:         'CTF' | 'NEG_RISK';
+  isStale:          boolean;  // true if older than STALE_THRESHOLD_MS (backlog replay)
+}
+
+export interface OnChainDetectorConfig {
+  wsUrl:    string;
+  httpUrl:  string;  // same QuickNode endpoint, https:// for block fetches
+  mongoUri: string;
+  dbName:   string;
+}
+
+// ── OnChainDetector ───────────────────────────────────────────────────────────
+export class OnChainDetector extends EventEmitter {
+  private ws:            WebSocket | null = null;
+  private stopped        = false;
+  private reconnectMs    = 50;   // backoff resets to 50ms on successful sub
+  private keepalive:     NodeJS.Timeout | null = null;
+  private walletRefresh: NodeJS.Timeout | null = null;
+
+  // wallet (lowercase) → label
+  private trackedWallets = new Map<string, string>();
+
+  // block timestamp cache (blockHex → unix ms)
+  private blockTsCache = new Map<string, number>();
+
+  constructor(private readonly cfg: OnChainDetectorConfig) {
+    super();
+  }
+
+  // ── Public API ──────────────────────────────────────────────────────────────
+
+  async start(): Promise<void> {
+    await this.loadWallets();
+    this.connect();
+    // Refresh wallet list every 60s — picks up added/removed traders
+    this.walletRefresh = setInterval(() => this.refreshWallets(), 60_000);
+  }
+
+  stop(): void {
+    this.stopped = true;
+    if (this.walletRefresh) { clearInterval(this.walletRefresh); this.walletRefresh = null; }
+    if (this.keepalive)     { clearInterval(this.keepalive);     this.keepalive     = null; }
+    if (this.ws)            { this.ws.removeAllListeners(); this.ws.close(); this.ws = null; }
+  }
+
+  // ── Wallet loading ──────────────────────────────────────────────────────────
+
+  private async loadWallets(): Promise<void> {
+    const client = new MongoClient(this.cfg.mongoUri);
+    try {
+      await client.connect();
+      const traders = await client.db(this.cfg.dbName)
+        .collection('ahf-copyTraders')
+        .find({ active: true })
+        .project({ wallet: 1, label: 1 })
+        .toArray();
+      this.trackedWallets.clear();
+      for (const t of traders) {
+        this.trackedWallets.set((t.wallet as string).toLowerCase(), t.label as string);
+      }
+    } finally {
+      await client.close();
+    }
+  }
+
+  private async refreshWallets(): Promise<void> {
+    const prevSize = this.trackedWallets.size;
+    const prevKeys = new Set(this.trackedWallets.keys());
+    try {
+      await this.loadWallets();
+    } catch (err: any) {
+      this.emit('error', new Error(`Wallet refresh failed: ${err.message}`));
+      return;
+    }
+    const changed = this.trackedWallets.size !== prevSize
+      || [...this.trackedWallets.keys()].some(k => !prevKeys.has(k));
+    if (changed) {
+      console.log(`[OnChainDetector] Wallet list changed (${prevSize} → ${this.trackedWallets.size}), reconnecting to update filters`);
+      if (this.ws) { this.ws.close(); } // triggers reconnect with fresh subscriptions
+    }
+  }
+
+  // ── WebSocket connection ────────────────────────────────────────────────────
+
+  private connect(): void {
+    if (this.stopped) return;
+    if (this.trackedWallets.size === 0) {
+      console.warn('[OnChainDetector] No active traders — waiting for wallet list');
+      setTimeout(() => this.connect(), 5_000);
+      return;
+    }
+
+    const ws = new WebSocket(this.cfg.wsUrl);
+    this.ws  = ws;
+
+    ws.on('open', () => {
+      this.emit('connected');
+      this.subscribeAll(ws);
+      // Keepalive: JSON-RPC request every 10s (WS ping frames not sufficient for QuickNode)
+      this.keepalive = setInterval(() => {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ jsonrpc: '2.0', id: 99, method: 'eth_blockNumber', params: [] }));
+        }
+      }, 10_000);
+    });
+
+    ws.on('message', (raw: Buffer) => this.handleMessage(ws, raw));
+
+    ws.on('error', (err) => {
+      this.emit('error', err);
+      // close event will handle reconnect
+    });
+
+    ws.on('close', (code) => {
+      if (this.keepalive) { clearInterval(this.keepalive); this.keepalive = null; }
+      if (this.stopped) return;
+      this.emit('reconnecting', { code, delayMs: this.reconnectMs });
+      setTimeout(() => this.connect(), this.reconnectMs);
+      // Exponential backoff: 50ms → 100ms → 500ms → 2s → 5s
+      this.reconnectMs = Math.min(this.reconnectMs * 2, 5_000);
+    });
+  }
+
+  // ── Subscriptions ───────────────────────────────────────────────────────────
+
+  private subscribeAll(ws: WebSocket): void {
+    const paddedWallets = [...this.trackedWallets.keys()].map(addr =>
+      '0x' + addr.slice(2).padStart(64, '0')
+    );
+
+    // 4 subscriptions: (CTF + NEG_RISK) × (maker + taker)
+    const subs = [
+      { id: 1, address: CTF_EXCHANGE,      topics: [TOPIC0, null, paddedWallets, null] },
+      { id: 2, address: CTF_EXCHANGE,      topics: [TOPIC0, null, null, paddedWallets] },
+      { id: 3, address: NEG_RISK_EXCHANGE, topics: [TOPIC0, null, paddedWallets, null] },
+      { id: 4, address: NEG_RISK_EXCHANGE, topics: [TOPIC0, null, null, paddedWallets] },
+    ];
+
+    for (const s of subs) {
+      ws.send(JSON.stringify({ jsonrpc: '2.0', id: s.id, method: 'eth_subscribe', params: ['logs', { address: s.address, topics: s.topics }] }));
+    }
+  }
+
+  // ── Message handling ────────────────────────────────────────────────────────
+
+  private subsConfirmed = 0;
+
+  private async handleMessage(ws: WebSocket, raw: Buffer): Promise<void> {
+    let msg: any;
+    try { msg = JSON.parse(raw.toString()); } catch { return; }
+
+    // Keepalive response
+    if (msg.id === 99) return;
+
+    // Subscription confirmations
+    if (msg.id >= 1 && msg.id <= 4) {
+      if (msg.error) {
+        this.emit('error', new Error(`Subscribe error (sub ${msg.id}): ${msg.error.message}`));
+        return;
+      }
+      this.subsConfirmed++;
+      if (this.subsConfirmed >= 4) {
+        this.subsConfirmed = 0;
+        this.reconnectMs = 50; // reset backoff — connection is healthy
+        console.log(`[OnChainDetector] All 4 subscriptions active — watching ${this.trackedWallets.size} traders`);
+      }
+      return;
+    }
+
+    if (msg.method !== 'eth_subscription') return;
+
+    const receivedAtMs = Date.now();
+    const log          = msg.params?.result;
+    if (!log?.topics) return;
+
+    await this.handleFill(log, receivedAtMs);
+  }
+
+  private async handleFill(log: any, receivedAtMs: number): Promise<void> {
+    const maker = ('0x' + log.topics[2].slice(26)).toLowerCase();
+    const taker = ('0x' + log.topics[3].slice(26)).toLowerCase();
+
+    const makerIsTracked = this.trackedWallets.has(maker);
+    const takerIsTracked = this.trackedWallets.has(taker);
+    if (!makerIsTracked && !takerIsTracked) return; // shouldn't happen with topic filters, but guard anyway
+
+    // Decode non-indexed args
+    let parsed: ethers.utils.LogDescription;
+    try {
+      parsed = ORDER_FILLED_IFACE.parseLog({ topics: log.topics, data: log.data });
+    } catch { return; }
+
+    const makerAssetId:      ethers.BigNumber = parsed.args.makerAssetId;
+    const takerAssetId:      ethers.BigNumber = parsed.args.takerAssetId;
+    const makerAmountFilled: ethers.BigNumber = parsed.args.makerAmountFilled;
+    const takerAmountFilled: ethers.BigNumber = parsed.args.takerAmountFilled;
+
+    // Identify tracked wallet and their trade direction
+    const wallet = makerIsTracked ? maker : taker;
+    const label  = this.trackedWallets.get(wallet) ?? wallet.slice(0, 10);
+    const role: 'MAKER' | 'TAKER' = makerIsTracked ? 'MAKER' : 'TAKER';
+
+    let side: 'BUY' | 'SELL';
+    let usdcRaw: ethers.BigNumber;
+    let tokenRaw: ethers.BigNumber;
+    let tokenId: string;
+
+    if (role === 'MAKER') {
+      // maker pays USDC (makerAssetId=0) → BUY; else SELL
+      if (makerAssetId.isZero()) {
+        side     = 'BUY';
+        usdcRaw  = makerAmountFilled;
+        tokenRaw = takerAmountFilled;
+        tokenId  = takerAssetId.toHexString();
+      } else {
+        side     = 'SELL';
+        usdcRaw  = takerAmountFilled;
+        tokenRaw = makerAmountFilled;
+        tokenId  = makerAssetId.toHexString();
+      }
+    } else {
+      // taker pays USDC (takerAssetId=0) → BUY; else SELL
+      if (takerAssetId.isZero()) {
+        side     = 'BUY';
+        usdcRaw  = takerAmountFilled;
+        tokenRaw = makerAmountFilled;
+        tokenId  = makerAssetId.toHexString();
+      } else {
+        side     = 'SELL';
+        usdcRaw  = makerAmountFilled;
+        tokenRaw = takerAmountFilled;
+        tokenId  = takerAssetId.toHexString();
+      }
+    }
+
+    const usdcAmount   = parseFloat(ethers.utils.formatUnits(usdcRaw, 6));
+    const tokenAmount  = parseFloat(ethers.utils.formatUnits(tokenRaw, 6));
+    const impliedPrice = tokenAmount > 0 ? usdcAmount / tokenAmount : 0;
+
+    const blockTimestampMs = await this.fetchBlockTs(log.blockNumber) ?? receivedAtMs;
+    const lagMs            = receivedAtMs - blockTimestampMs;
+    const isStale          = (Date.now() - blockTimestampMs) > STALE_THRESHOLD_MS;
+
+    const trade: DetectedTrade = {
+      wallet, label, role, side,
+      usdcAmount, tokenAmount, impliedPrice, tokenId,
+      txHash:           log.transactionHash,
+      blockNumber:      log.blockNumber,
+      blockTimestampMs,
+      receivedAtMs,
+      lagMs,
+      exchange:         log.address.toLowerCase() === CTF_EXCHANGE.toLowerCase() ? 'CTF' : 'NEG_RISK',
+      isStale,
+    };
+
+    this.emit('trade', trade);
+  }
+
+  // ── Block timestamp (HTTP, cached) ──────────────────────────────────────────
+
+  private async fetchBlockTs(blockHex: string): Promise<number | null> {
+    if (this.blockTsCache.has(blockHex)) return this.blockTsCache.get(blockHex)!;
+    try {
+      const res  = await fetch(this.cfg.httpUrl, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_getBlockByNumber', params: [blockHex, false] }),
+      });
+      const json = await res.json() as any;
+      const ts   = parseInt(json.result.timestamp, 16) * 1000;
+      this.blockTsCache.set(blockHex, ts);
+      if (this.blockTsCache.size > 30) this.blockTsCache.delete(this.blockTsCache.keys().next().value!);
+      return ts;
+    } catch { return null; }
+  }
+}
