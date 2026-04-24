@@ -143,13 +143,13 @@ async function run() {
         ws.send(JSON.stringify({ jsonrpc: '2.0', id, method: 'eth_subscribe', params: ['logs', filterParams] }));
       }
 
-      // JSON-RPC keepalive every 20s — QuickNode needs application-level traffic,
-      // WebSocket ping frames alone are not enough to prevent idle timeout
+      // JSON-RPC keepalive every 10s — QuickNode times out idle connections at ~15s,
+      // 20s was too slow. WebSocket ping frames alone are not enough.
       keepalive = setInterval(() => {
         if (ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({ jsonrpc: '2.0', id: 999, method: 'eth_blockNumber', params: [] }));
         }
-      }, 20_000);
+      }, 10_000);
     });
 
     ws.on('message', async (raw: Buffer) => {
