@@ -81,6 +81,24 @@ async function run() {
   let totalEvents   = 0;
   let trackedEvents = 0;
 
+  // Cache block timestamps to avoid duplicate getBlock RPC calls for fills in the same block
+  const blockTsCache = new Map<number, number>(); // blockNumber → timestamp ms
+
+  async function getBlockTs(blockNumber: number): Promise<number | null> {
+    if (blockTsCache.has(blockNumber)) return blockTsCache.get(blockNumber)!;
+    try {
+      const block = await provider.getBlock(blockNumber);
+      const ts = block.timestamp * 1000;
+      blockTsCache.set(blockNumber, ts);
+      // Keep cache small — only last 20 blocks (~40s of Polygon blocks)
+      if (blockTsCache.size > 20) {
+        const oldest = Math.min(...blockTsCache.keys());
+        blockTsCache.delete(oldest);
+      }
+      return ts;
+    } catch { return null; }
+  }
+
   provider.on(filter, async (log: ethers.providers.Log) => {
     // Record received time immediately — before any async work
     const receivedAt = Date.now();
@@ -108,12 +126,8 @@ async function run() {
       ? (trackedWallets.has(maker) ? (makerPaysUsdc ? 'BUY' : 'SELL') : (makerPaysUsdc ? 'SELL' : 'BUY'))
       : (makerPaysUsdc ? 'BUY' : 'SELL');
 
-    // Fetch block timestamp (async — receivedAt is already captured above)
-    let blockTs: number | null = null;
-    try {
-      const block = await provider.getBlock(log.blockNumber);
-      blockTs = block.timestamp * 1000;
-    } catch { /* non-fatal */ }
+    // Fetch block timestamp (cached — multiple fills in the same block reuse one RPC call)
+    const blockTs = await getBlockTs(log.blockNumber);
 
     const lagMs  = blockTs !== null ? receivedAt - blockTs : null;
     const lagStr = lagMs  !== null ? `${lagMs}ms` : 'lag=?';
