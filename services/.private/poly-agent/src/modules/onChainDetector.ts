@@ -170,12 +170,13 @@ export class OnChainDetector extends EventEmitter {
     ws.on('open', () => {
       this.emit('connected');
       this.subscribeAll(ws);
-      // Dual keepalive: JSON-RPC every 30s + WS ping every 25s.
-      // 30s is sufficient to prevent idle-timeout; lower values waste API credits.
+      // Dual keepalive: JSON-RPC every 20s + WS ping every 25s.
+      // QuickNode idle-timeout is ~30s and only counts JSON-RPC messages (not WS pings).
+      // 20s keeps us safely under that threshold at half the credit burn of 10s.
       this.keepalive = setInterval(() => {
         if (ws.readyState !== WebSocket.OPEN) return;
         ws.send(JSON.stringify({ jsonrpc: '2.0', id: 99, method: 'eth_blockNumber', params: [] }));
-      }, 30_000);
+      }, 20_000);
       // WS-level ping — triggers pong from QuickNode, catches 1006 network-level drops faster
       const wsPing = setInterval(() => {
         if (ws.readyState === WebSocket.OPEN) ws.ping();
