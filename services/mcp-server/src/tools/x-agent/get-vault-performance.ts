@@ -159,12 +159,15 @@ export async function executeGetVaultPerformance(input: GetVaultPerformanceInput
       }));
     }
 
-    // Fallback: polymarket-openPositions (populated by indexer) with correct field names
+    // Fallback: polymarket-openPositions — field is walletAddress (not wallet)
     if (openPositions.length === 0 && traderWallet) {
       const pmPosCol = db.collection('polymarket-openPositions');
       const pmPositions = await pmPosCol
-        .find({ wallet: { $regex: new RegExp(`^${traderWallet}$`, 'i') } })
-        .sort({ updatedAt: -1 })
+        .find({
+          walletAddress: { $regex: new RegExp(`^${traderWallet}$`, 'i') },
+          curPrice: { $gte: 0.001 },
+        })
+        .sort({ currentValue: -1 })
         .limit(20)
         .toArray();
 
@@ -176,6 +179,7 @@ export async function executeGetVaultPerformance(input: GetVaultPerformanceInput
         curPrice: p.curPrice,
         unrealizedPnl: p.cashPnl,
         pnlPercent: p.percentPnl,
+        currentValue: p.currentValue,
         _source: 'polymarket-openPositions',
       }));
     }

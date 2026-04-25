@@ -162,7 +162,8 @@ async function testVaultPerformance(): Promise<DualContent> {
   }
 
   const vault = vaults[Math.floor(Math.random() * vaults.length)];
-  console.log(`  Vault: ${vault.name} | ${vault.openPositions?.length || 0} positions | ROI: ${vault.performance?.roi}%`);
+  const roiStr = vault.performance?.vaultROI != null ? `${vault.performance.vaultROI.toFixed(1)}%` : 'N/A';
+  console.log(`  Vault: ${vault.name} | ${vault.openPositions?.length || 0} positions | ROI: ${roiStr}`);
   if (vault._debug) {
     console.log(`  DEBUG: specialty="${vault._debug.rawSpecialty}" label="${vault._debug.rawLabel}" display="${vault._debug.rawDisplayName}"`);
     console.log(`  DEBUG: edge_hypothesis="${vault._debug.rawEdgeHypothesis}"`);
