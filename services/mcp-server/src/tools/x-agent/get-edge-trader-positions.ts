@@ -96,9 +96,10 @@ export async function executeGetEdgeTraderPositions(input: GetEdgeTraderPosition
       const cash = p.cashPnl ?? 0;
 
       if (pct < minPct) continue;
-      // Only include positions that are profitable and still open (price not resolved)
+      // Only include positions that are profitable and still actively trading
+      // Skip near-resolved positions (>= $0.95 or <= $0.05) — these are essentially done
       if (cash <= 0) continue;
-      if ((p.curPrice ?? 0) >= 0.99 || (p.curPrice ?? 0) <= 0.001) continue;
+      if ((p.curPrice ?? 0) >= 0.95 || (p.curPrice ?? 0) <= 0.05) continue;
 
       const score = pct * Math.abs(cash);
 
