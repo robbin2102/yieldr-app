@@ -53,15 +53,15 @@ const cfg: OrchestratorConfig = {
 
   // Execution
   clobHost:    optional('CLOB_API_BASE', 'https://clob.polymarket.com'),
-  privateKey:  required('PRIVATE_KEY'),
-  apiKey:      required('CLOB_V2_API_KEY'),
-  apiSecret:   required('CLOB_V2_API_SECRET'),
-  passphrase:  required('CLOB_V2_PASSPHRASE'),
+  privateKey:  process.env.BOT_PRIVATE_KEY || process.env.PRIVATE_KEY || required('BOT_PRIVATE_KEY'),
+  apiKey:      process.env.CLOB_V2_API_KEY      || process.env.POLYMARKET_API_KEY      || required('CLOB_V2_API_KEY'),
+  apiSecret:   process.env.CLOB_V2_API_SECRET   || process.env.POLYMARKET_API_SECRET   || required('CLOB_V2_API_SECRET'),
+  passphrase:  process.env.CLOB_V2_PASSPHRASE   || process.env.POLYMARKET_PASSPHRASE   || required('CLOB_V2_PASSPHRASE'),
   polygonRpc:  POLYGON_RPC_HTTP || required('POLYGON_RPC_URL'),
-  botAddress:  required('BOT_ADDRESS'),
+  botAddress:  process.env.BOT_WALLET_ADDRESS   || process.env.BOT_ADDRESS             || required('BOT_WALLET_ADDRESS'),
 
   // WS User Channel
-  wssUserUrl: optional('CLOB_WSS_USER_URL', 'wss://ws-subscriptions-clob.polymarket.com/ws/user'),
+  wssUserUrl: process.env.WSS_USER || optional('CLOB_WSS_USER_URL', 'wss://ws-subscriptions-clob.polymarket.com/ws/user'),
 
   // Safety
   maxDriftPct:  parseFloat(optional('MAX_DRIFT_PCT',  '0.05')),
