@@ -39,7 +39,7 @@ export async function generateContent(
       { role: 'system', content: systemPrompt },
       { role: 'user', content: userPrompt },
     ],
-    max_tokens: options?.maxTokens || 500,
+    max_tokens: options?.maxTokens || 2000,
     temperature: options?.temperature || 0.8,
   });
 

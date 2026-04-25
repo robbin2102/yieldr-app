@@ -91,6 +91,8 @@ async function testHighConviction(): Promise<DualContent> {
     trades = copyData.trades || [];
     if (trades.length > 0) {
       console.log(`  Found ${trades.length} filled copy trades (source: ${copyData.source})`);
+      const t0 = trades[0];
+      console.log(`  Top trade raw: conviction=${t0.convictionRatio}, betSize=$${t0.traderBetUsdc}, avgBet=$${t0.avgBet}, fields=${t0._rawFields?.join(',')}`);
     }
   } catch (e: any) {
     console.log(`  Copy trade fetch failed: ${e.message}`);
@@ -179,7 +181,11 @@ async function testVaultPerformance(): Promise<DualContent> {
   }
 
   const vault = vaults[Math.floor(Math.random() * vaults.length)];
-  console.log(`  Vault: ${vault.name} | ${vault.openPositions?.length || 0} positions`);
+  console.log(`  Vault: ${vault.name} | ${vault.openPositions?.length || 0} positions | ROI: ${vault.performance?.roi}%`);
+  console.log(`  Vault doc keys: ${vault._vaultDocKeys?.join(', ') || 'N/A'}`);
+  if (vault.openPositions?.length > 0) {
+    console.log(`  Sample position: ${JSON.stringify(vault.openPositions[0]).substring(0, 150)}`);
+  }
 
   const prompt = buildVaultPerformancePrompt(vault);
   return generateStructuredContent(YIELDR_AGENT_SYSTEM_PROMPT, prompt, { temperature: 0.85 });
