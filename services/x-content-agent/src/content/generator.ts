@@ -20,6 +20,20 @@ import { buildVaultPerformancePrompt } from './templates/vault-performance';
 import { buildEdgePositionPrompt } from './templates/edge-position';
 import { buildReplyPrompt } from './templates/reply';
 import * as mcp from '../lib/mcp-client';
+import { getDB, COLLECTIONS } from '../lib/db';
+
+async function logContent(post: GeneratedPost, source: 'test' | 'scheduler' = 'scheduler'): Promise<void> {
+  try {
+    const db = await getDB();
+    await db.collection(COLLECTIONS.X_CONTENT_LOG).insertOne({
+      ...post,
+      source,
+      generatedAt: new Date(),
+    });
+  } catch {
+    // Non-critical — never block content generation on logging failure
+  }
+}
 
 export interface GeneratedPost {
   type: 'post' | 'reply' | 'quote';
@@ -38,6 +52,7 @@ export async function generateTraderAlpha(opts?: {
   category?: string;
   rotation?: number;
   totalTraders?: number;
+  source?: 'test' | 'scheduler';
 }): Promise<GeneratedPost> {
   const data = await mcp.getEdgeRankedTraders({
     category: opts?.category,
@@ -60,13 +75,15 @@ export async function generateTraderAlpha(opts?: {
   });
   const result = await generateStructuredContent(YIELDR_AGENT_SYSTEM_PROMPT, prompt, { temperature: 0.85 });
 
-  return {
+  const post: GeneratedPost = {
     type: result.type || 'post',
     tweet: result.tweet || result.content,
     telegram: result.telegram || '',
     category: 'TRADER_PROFILE',
     metadata: { wallet: trader.wallet, label: trader.label, rotation: opts?.rotation },
   };
+  await logContent(post, opts?.source || 'scheduler');
+  return post;
 }
 
 /**
@@ -81,7 +98,7 @@ export async function generateTraderAlpha(opts?: {
  *   2. Copy trade activity
  *   3. Materialized HC trades
  */
-export async function generateHighConvictionAlert(category?: string): Promise<GeneratedPost> {
+export async function generateHighConvictionAlert(category?: string, source: 'test' | 'scheduler' = 'scheduler'): Promise<GeneratedPost> {
   // Primary: edge trader open positions (fresh, category-rotatable, no repetition)
   let positionData = await mcp.getEdgeTraderPositions({
     category,
@@ -109,7 +126,7 @@ export async function generateHighConvictionAlert(category?: string): Promise<Ge
     const prompt = buildEdgePositionPrompt(position);
     const result = await generateStructuredContent(YIELDR_AGENT_SYSTEM_PROMPT, prompt, { temperature: 0.85 });
 
-    return {
+    const post: GeneratedPost = {
       type: result.type || 'post',
       tweet: result.tweet || result.content,
       telegram: result.telegram || '',
@@ -121,6 +138,8 @@ export async function generateHighConvictionAlert(category?: string): Promise<Ge
         positionCategory: category || 'all',
       },
     };
+    await logContent(post, source);
+    return post;
   }
 
   // Fallback 3: copy trade activity (old path)
@@ -153,19 +172,21 @@ export async function generateHighConvictionAlert(category?: string): Promise<Ge
   const prompt = buildHighConvictionPrompt(trade);
   const result = await generateStructuredContent(YIELDR_AGENT_SYSTEM_PROMPT, prompt, { temperature: 0.85 });
 
-  return {
+  const post: GeneratedPost = {
     type: result.type || 'post',
     tweet: result.tweet || result.content,
     telegram: result.telegram || '',
     category: 'HIGH_CONVICTION',
     metadata: { traderWallet: trade.traderWallet, market: trade.market, convictionRatio: trade.convictionRatio },
   };
+  await logContent(post, source);
+  return post;
 }
 
 /**
  * Generate a Vault Performance post with agent analysis
  */
-export async function generateVaultPerformance(vaultName?: string): Promise<GeneratedPost> {
+export async function generateVaultPerformance(vaultName?: string, source: 'test' | 'scheduler' = 'scheduler'): Promise<GeneratedPost> {
   const data = await mcp.getVaultPerformance({
     vaultName,
     period: '30d',
@@ -182,13 +203,15 @@ export async function generateVaultPerformance(vaultName?: string): Promise<Gene
   const prompt = buildVaultPerformancePrompt(vault);
   const result = await generateStructuredContent(YIELDR_AGENT_SYSTEM_PROMPT, prompt, { temperature: 0.85 });
 
-  return {
+  const post: GeneratedPost = {
     type: result.type || 'post',
     tweet: result.tweet || result.content,
     telegram: result.telegram || '',
     category: 'VAULT_PERFORMANCE',
     metadata: { vaultName: vault.name },
   };
+  await logContent(post, source);
+  return post;
 }
 
 /**

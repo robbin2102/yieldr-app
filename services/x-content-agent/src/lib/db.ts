@@ -42,6 +42,7 @@ export const COLLECTIONS = {
   X_MENTIONS: 'x_mentions',
   X_ENGAGEMENT_LOG: 'x_engagement_log',
   X_BASE_ACCOUNTS: 'x_base_accounts',
+  X_CONTENT_LOG: 'x-agent-content-log',   // generated content log (test + prod)
 
   // Data source collections (read-only, from x-agent-data-service)
   EDGE_RANKED_TRADERS: 'ahf-edgeRankedTraders',
