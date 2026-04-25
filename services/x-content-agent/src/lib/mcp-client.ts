@@ -92,6 +92,14 @@ export async function getVaultTrades(opts?: {
   return callMcpTool('get_vault_trades', opts || {});
 }
 
+export async function getEdgeTraderPositions(opts?: {
+  category?: string;
+  limit?: number;
+  minPercentPnl?: number;
+}) {
+  return callMcpTool('get_edge_trader_positions', opts || {});
+}
+
 export async function getPmPositions(wallet: string) {
   return callMcpTool('get_pm_positions', { wallet });
 }

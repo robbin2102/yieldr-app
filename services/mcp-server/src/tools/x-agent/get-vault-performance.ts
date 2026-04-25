@@ -64,6 +64,9 @@ export async function executeGetVaultPerformance(input: GetVaultPerformanceInput
       { label: { $regex: new RegExp(input.vaultName, 'i') } },
       { display_name: { $regex: new RegExp(input.vaultName, 'i') } },
     ];
+  } else {
+    // Only return the 3 known Yieldr vaults — exclude tracker configs with 'Other' specialty
+    vaultFilter.specialty = { $in: ['NBA', 'Soccer', 'Politics', 'Geopolitics'] };
   }
 
   const vaults = await vaultsCol.find(vaultFilter).toArray();

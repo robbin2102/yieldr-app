@@ -24,6 +24,7 @@ import { generateStructuredContent } from './lib/grok-client';
 import { YIELDR_AGENT_SYSTEM_PROMPT } from './content/system-prompt';
 import { buildTraderAlphaPrompt } from './content/templates/trader-alpha';
 import { buildHighConvictionPrompt } from './content/templates/high-conviction';
+import { buildEdgePositionPrompt } from './content/templates/edge-position';
 import { buildVaultPerformancePrompt } from './content/templates/vault-performance';
 import * as mcp from './lib/mcp-client';
 
@@ -81,68 +82,48 @@ async function testTraderProfile(rotation?: number): Promise<DualContent> {
   return generateStructuredContent(YIELDR_AGENT_SYSTEM_PROMPT, prompt, { temperature: 0.85 });
 }
 
-async function testHighConviction(): Promise<DualContent> {
-  console.log('  Fetching copy trade activity...');
+async function testHighConviction(category?: string): Promise<DualContent> {
+  const cat = category || 'NBA';
+  console.log(`  Fetching edge trader positions (category: ${cat})...`);
 
-  // Try live copy trades first
+  // Primary: edge trader open positions
+  let positionData = await mcp.getEdgeTraderPositions({ category: cat, limit: 10, minPercentPnl: 5 });
+  let positions = positionData.positions || [];
+
+  if (positions.length === 0) {
+    console.log(`  No positions for ${cat}, trying without category filter...`);
+    positionData = await mcp.getEdgeTraderPositions({ limit: 10, minPercentPnl: 5 });
+    positions = positionData.positions || [];
+  }
+
+  if (positions.length === 0) {
+    console.log('  Lowering bar — any profitable position...');
+    positionData = await mcp.getEdgeTraderPositions({ category: cat, limit: 10 });
+    positions = positionData.positions || [];
+  }
+
+  if (positions.length > 0) {
+    const position = positions[0];
+    console.log(`  Top position: "${position.title?.substring(0, 50)}" +${position.percentPnl?.toFixed(1)}% (+$${position.cashPnl?.toFixed(0)})`);
+    console.log(`  Trader: rank #${position.traderRank}, WR ${position.traderWinRate?.toFixed(1)}%, PF ${position.traderProfitFactor?.toFixed(2)}x`);
+    const prompt = buildEdgePositionPrompt(position);
+    return generateStructuredContent(YIELDR_AGENT_SYSTEM_PROMPT, prompt, { temperature: 0.85 });
+  }
+
+  // Fallback: copy trade activity
+  console.log('  No edge positions found, falling back to copy trades...');
   let trades: any[] = [];
   try {
     const copyData = await mcp.getCopyTradeActivity({ hours: 168, limit: 5 });
     trades = copyData.trades || [];
     if (trades.length > 0) {
-      console.log(`  Found ${trades.length} filled copy trades (source: ${copyData.source})`);
-      const t0 = trades[0];
-      console.log(`  Top trade raw: conviction=${t0.convictionRatio}, betSize=$${t0.traderBetUsdc}, avgBet=$${t0.avgBet}, fields=${t0._rawFields?.join(',')}`);
+      console.log(`  Found ${trades.length} filled copy trades`);
     }
   } catch (e: any) {
     console.log(`  Copy trade fetch failed: ${e.message}`);
   }
 
-  // Fallback: materialized HC trades
-  if (trades.length === 0) {
-    console.log('  No copy trades, trying materialized HC trades...');
-    const hcData = await mcp.getHighConvictionTrades({ convictionLevel: 'ALL', hours: 168, limit: 5 });
-    trades = (hcData.trades || []).map((t: any) => ({
-      market: t.market,
-      outcome: t.outcome,
-      side: t.side,
-      traderBetUsdc: t.usdcValue,
-      traderPrice: t.price,
-      convictionRatio: t.sizeMultiplier || 0,
-      avgBet: t.traderContext?.avgTradeSize,
-      ourExecutedSize: null,
-      ourPrice: null,
-      traderWinRate: t.traderContext?.winRate,
-      traderProfitFactor: t.traderContext?.profitFactor,
-      traderSpecialty: null,
-    }));
-  }
-
-  // Last fallback: edge-ranked trader's HC trades
-  if (trades.length === 0) {
-    console.log('  No HC trades either, using edge-ranked trader positions...');
-    const traderData = await mcp.getEdgeRankedTraders({ sortBy: 'rank_score', limit: 3 });
-    const topTrader = traderData.traders?.[0];
-    if (topTrader?.highConviction?.recentTrades?.length > 0) {
-      const hcTrade = topTrader.highConviction.recentTrades[0];
-      trades = [{
-        market: hcTrade.market,
-        outcome: hcTrade.outcome,
-        side: hcTrade.side || 'BUY',
-        traderBetUsdc: hcTrade.usdcSize,
-        traderPrice: hcTrade.price,
-        convictionRatio: hcTrade.sizeMultiplier || 0,
-        avgBet: topTrader.metrics?.avgTradeSize,
-        ourExecutedSize: null,
-        ourPrice: null,
-        traderWinRate: topTrader.metrics?.winRate,
-        traderProfitFactor: topTrader.metrics?.profitFactor,
-        traderSpecialty: topTrader.specialty,
-      }];
-    }
-  }
-
-  if (trades.length === 0) throw new Error('No trade data found anywhere');
+  if (trades.length === 0) throw new Error('No edge positions or copy trades found');
 
   const trade = trades.sort((a: any, b: any) => (b.convictionRatio || 0) - (a.convictionRatio || 0))[0];
   console.log(`  Top trade: "${trade.market?.substring(0, 50)}" (${trade.convictionRatio}x conviction)`);
@@ -220,11 +201,12 @@ async function main() {
 
   const typeFilter = process.argv.find(a => a.startsWith('--type='))?.split('=')[1];
   const rotationArg = process.argv.find(a => a.startsWith('--rotation='))?.split('=')[1];
+  const categoryArg = process.argv.find(a => a.startsWith('--category='))?.split('=')[1];
   const rotation = rotationArg ? parseInt(rotationArg) : undefined;
 
   const tests: { name: string; fn: () => Promise<DualContent> }[] = [
     { name: 'TRADER_PROFILE', fn: () => testTraderProfile(rotation) },
-    { name: 'HIGH_CONVICTION', fn: testHighConviction },
+    { name: 'HIGH_CONVICTION', fn: () => testHighConviction(categoryArg) },
     { name: 'VAULT_PERFORMANCE', fn: testVaultPerformance },
   ];
 

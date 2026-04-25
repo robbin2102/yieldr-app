@@ -17,6 +17,7 @@ import { YIELDR_AGENT_SYSTEM_PROMPT } from './system-prompt';
 import { buildTraderAlphaPrompt } from './templates/trader-alpha';
 import { buildHighConvictionPrompt } from './templates/high-conviction';
 import { buildVaultPerformancePrompt } from './templates/vault-performance';
+import { buildEdgePositionPrompt } from './templates/edge-position';
 import { buildReplyPrompt } from './templates/reply';
 import * as mcp from '../lib/mcp-client';
 
@@ -69,26 +70,65 @@ export async function generateTraderAlpha(opts?: {
 }
 
 /**
- * Generate a High Conviction / Copy Trade Alert post
- * Uses live copy trade data from vault agents (FILLED trades)
+ * Generate a High Conviction / Edge Position post
+ *
+ * Primary source: edge-ranked trader open positions (polymarket-traderPositions)
+ * filtered by category. Scores by percentPnl × cashPnl to surface the most
+ * compelling live positions. Rotates through NBA / Soccer / Politics per window.
+ *
+ * Fallback chain (if no positions found for category):
+ *   1. Unfiltered edge positions
+ *   2. Copy trade activity
+ *   3. Materialized HC trades
  */
-export async function generateHighConvictionAlert(): Promise<GeneratedPost> {
-  // Try live copy trade activity first
-  const copyData = await mcp.getCopyTradeActivity({
-    hours: 72,
-    limit: 5,
+export async function generateHighConvictionAlert(category?: string): Promise<GeneratedPost> {
+  // Primary: edge trader open positions (fresh, category-rotatable, no repetition)
+  let positionData = await mcp.getEdgeTraderPositions({
+    category,
+    limit: 10,
+    minPercentPnl: 5,
   });
 
+  let positions = positionData.positions || [];
+
+  // Fallback 1: try without category filter
+  if (positions.length === 0 && category) {
+    positionData = await mcp.getEdgeTraderPositions({ limit: 10, minPercentPnl: 5 });
+    positions = positionData.positions || [];
+  }
+
+  // Fallback 2: lower the bar — any profitable position
+  if (positions.length === 0) {
+    positionData = await mcp.getEdgeTraderPositions({ category, limit: 10 });
+    positions = positionData.positions || [];
+  }
+
+  if (positions.length > 0) {
+    // Pick top-scored position
+    const position = positions[0];
+    const prompt = buildEdgePositionPrompt(position);
+    const result = await generateStructuredContent(YIELDR_AGENT_SYSTEM_PROMPT, prompt, { temperature: 0.85 });
+
+    return {
+      type: result.type || 'post',
+      tweet: result.tweet || result.content,
+      telegram: result.telegram || '',
+      category: 'HIGH_CONVICTION',
+      metadata: {
+        traderWallet: position.traderWallet,
+        market: position.title,
+        percentPnl: position.percentPnl,
+        positionCategory: category || 'all',
+      },
+    };
+  }
+
+  // Fallback 3: copy trade activity (old path)
+  const copyData = await mcp.getCopyTradeActivity({ hours: 72, limit: 5 });
   let trades = copyData.trades || [];
 
-  // Fallback: use materialized HC trades if no copy trades available
   if (trades.length === 0) {
-    const hcData = await mcp.getHighConvictionTrades({
-      convictionLevel: 'ALL',
-      hours: 168,
-      limit: 5,
-    });
-
+    const hcData = await mcp.getHighConvictionTrades({ convictionLevel: 'ALL', hours: 168, limit: 5 });
     trades = (hcData.trades || []).map((t: any) => ({
       market: t.market,
       outcome: t.outcome,
@@ -107,34 +147,8 @@ export async function generateHighConvictionAlert(): Promise<GeneratedPost> {
     }));
   }
 
-  // Last fallback: use edge-ranked trader's HC trades
-  if (trades.length === 0) {
-    const traderData = await mcp.getEdgeRankedTraders({ sortBy: 'rank_score', limit: 3 });
-    const topTrader = traderData.traders?.[0];
-    if (topTrader?.highConviction?.recentTrades?.length > 0) {
-      const hcTrade = topTrader.highConviction.recentTrades[0];
-      trades = [{
-        market: hcTrade.market,
-        outcome: hcTrade.outcome,
-        side: hcTrade.side || 'BUY',
-        traderBetUsdc: hcTrade.usdcSize,
-        traderPrice: hcTrade.price,
-        convictionRatio: hcTrade.sizeMultiplier || 0,
-        avgBet: topTrader.metrics?.avgTradeSize,
-        ourExecutedSize: null,
-        ourPrice: null,
-        traderWinRate: topTrader.metrics?.winRate,
-        traderProfitFactor: topTrader.metrics?.profitFactor,
-        traderSpecialty: topTrader.specialty,
-        traderWallet: topTrader.wallet,
-        traderLabel: topTrader.displayName || topTrader.label,
-      }];
-    }
-  }
+  if (trades.length === 0) throw new Error('No edge positions or copy trades found');
 
-  if (trades.length === 0) throw new Error('No copy trades or high conviction trades found');
-
-  // Pick the highest conviction trade
   const trade = trades.sort((a: any, b: any) => (b.convictionRatio || 0) - (a.convictionRatio || 0))[0];
   const prompt = buildHighConvictionPrompt(trade);
   const result = await generateStructuredContent(YIELDR_AGENT_SYSTEM_PROMPT, prompt, { temperature: 0.85 });

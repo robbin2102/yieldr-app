@@ -23,6 +23,9 @@ import { getDB, COLLECTIONS } from '../lib/db';
 const dailyCounts: Record<string, number> = {};
 let lastResetDate = '';
 let traderRotation = 0;
+// HC category cycles through specialties across windows
+const HC_CATEGORIES = ['NBA', 'Soccer', 'Politics'];
+let hcRotation = 0;
 
 function resetDailyCounts(): void {
   const today = new Date().toISOString().split('T')[0];
@@ -31,8 +34,15 @@ function resetDailyCounts(): void {
       dailyCounts[key] = 0;
     });
     traderRotation = 0;
+    hcRotation = 0;
     lastResetDate = today;
   }
+}
+
+function nextHcCategory(): string {
+  const category = HC_CATEGORIES[hcRotation % HC_CATEGORIES.length];
+  hcRotation++;
+  return category;
 }
 
 function canPost(category: string): boolean {
@@ -82,7 +92,7 @@ async function publishPost(post: GeneratedPost): Promise<void> {
 /**
  * Execute a content window - generate and post scheduled content
  */
-async function executeWindow(contentTypes: string[]): Promise<void> {
+async function executeWindow(contentTypes: string[], windowOpts?: { hcCategory?: string }): Promise<void> {
   for (const type of contentTypes) {
     if (!canPost(type)) {
       console.log(`[Calendar] Daily limit reached for ${type}, skipping`);
@@ -97,9 +107,12 @@ async function executeWindow(contentTypes: string[]): Promise<void> {
           traderRotation++;
           post = await generateTraderAlpha({ rotation: traderRotation, totalTraders: 4 });
           break;
-        case 'HIGH_CONVICTION':
-          post = await generateHighConvictionAlert();
+        case 'HIGH_CONVICTION': {
+          const category = windowOpts?.hcCategory || nextHcCategory();
+          console.log(`[Calendar] HC category: ${category}`);
+          post = await generateHighConvictionAlert(category);
           break;
+        }
         case 'VAULT_PERFORMANCE':
           post = await generateVaultPerformance();
           break;
