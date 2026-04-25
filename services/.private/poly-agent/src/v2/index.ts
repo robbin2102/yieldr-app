@@ -48,7 +48,7 @@ const cfg: OrchestratorConfig = {
   // Detection
   polygonWsUrl:   required('POLYGON_WS_URL'),
   polygonHttpUrl: POLYGON_RPC_HTTP || required('POLYGON_RPC_URL'),
-  mongoUri:       required('MONGO_PUBLIC_URL'),
+  mongoUri:       process.env.MONGODB_URI || process.env.MONGO_PUBLIC_URL || required('MONGODB_URI'),
   dbName:         optional('MONGODB_DB_NAME', 'yieldr'),
 
   // Execution
