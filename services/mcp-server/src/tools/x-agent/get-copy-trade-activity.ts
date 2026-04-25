@@ -16,6 +16,36 @@ export const getCopyTradeActivitySchema = z.object({
 
 export type GetCopyTradeActivityInput = z.infer<typeof getCopyTradeActivitySchema>;
 
+function extractBetSize(doc: any): number {
+  return doc.traderBetUsdc
+    || doc.original?.usdcSize
+    || doc.usdcSize
+    || doc.copy?.executedUsdcSize
+    || doc.size
+    || doc.amount
+    || 0;
+}
+
+function extractTraderWallet(doc: any): string {
+  return (
+    doc.traderWallet
+    || doc.original?.walletAddress
+    || doc.targetWallet
+    || doc.wallet
+    || doc.trader
+    || ''
+  ).toLowerCase();
+}
+
+function extractMarket(doc: any): string {
+  return doc.original?.title
+    || doc.market
+    || doc.title
+    || doc.marketQuestion
+    || doc.conditionId
+    || 'Unknown market';
+}
+
 export async function executeGetCopyTradeActivity(input: GetCopyTradeActivityInput) {
   const db = await getDB();
   const cutoff = new Date(Date.now() - (input.hours || 72) * 60 * 60 * 1000);
@@ -39,6 +69,7 @@ export async function executeGetCopyTradeActivity(input: GetCopyTradeActivityInp
         { confirmedAt: { $gte: cutoff } },
         { executedAt: { $gte: cutoff } },
         { detectedAt: { $gte: cutoff } },
+        { timestamp: { $gte: cutoff } },
       ],
     };
 
@@ -73,42 +104,72 @@ export async function executeGetCopyTradeActivity(input: GetCopyTradeActivityInp
     };
   }
 
-  // Get unique trader wallets to fetch their avg trade size from edge-ranked data
-  const traderWallets = [...new Set(allTrades.map(t =>
-    t.original?.walletAddress || t.targetWallet || t.traderWallet
-  ).filter(Boolean))];
+  // Self-calculate avgBet per trader from their recent trades in the same collection
+  const traderWallets = [...new Set(allTrades.map(extractTraderWallet).filter(Boolean))];
+  const traderAvgBets = new Map<string, number>();
 
-  // Fetch trader profiles for avg trade size
-  const traderProfiles = new Map<string, any>();
-  if (traderWallets.length > 0) {
-    // Try ahf-copyTraders first, then edgeRankedTraders, then traderProfiles
-    for (const profileCol of ['ahf-copyTraders', 'ahf-edgeRankedTraders', 'polymarket-traderProfiles']) {
-      const col = db.collection(profileCol);
-      const profiles = await col.find({
+  if (traderWallets.length > 0 && sourceCollection) {
+    const col = db.collection(sourceCollection);
+    for (const wallet of traderWallets) {
+      const walletFilter: any = {
+        status: 'FILLED',
         $or: [
-          { wallet: { $in: traderWallets } },
-          { wallet: { $in: traderWallets.map(w => w.toLowerCase()) } },
-        ]
-      }).toArray();
+          { 'original.walletAddress': wallet },
+          { 'original.walletAddress': wallet.toLowerCase() },
+          { traderWallet: wallet },
+          { targetWallet: wallet },
+          { wallet: wallet },
+          { trader: wallet },
+        ],
+      };
+      const traderTrades = await col.find(walletFilter)
+        .sort({ createdAt: -1 })
+        .limit(50)
+        .toArray();
 
-      for (const p of profiles) {
-        const wallet = (p.wallet || '').toLowerCase();
-        if (!traderProfiles.has(wallet)) {
-          traderProfiles.set(wallet, p);
+      if (traderTrades.length > 1) {
+        const sizes = traderTrades.map(extractBetSize).filter(s => s > 0);
+        if (sizes.length > 0) {
+          traderAvgBets.set(wallet, sizes.reduce((a, b) => a + b, 0) / sizes.length);
         }
       }
-      if (traderProfiles.size > 0) break;
+    }
+  }
+
+  // Also try to get edge data from profiles for win rate / specialty
+  const traderProfiles = new Map<string, any>();
+  if (traderWallets.length > 0) {
+    for (const profileCol of ['ahf-copyTraders', 'ahf-edgeRankedTraders', 'polymarket-traderProfiles']) {
+      try {
+        const col = db.collection(profileCol);
+        const profiles = await col.find({
+          $or: [
+            { wallet: { $in: traderWallets } },
+            { wallet: { $in: traderWallets.map(w => w.toLowerCase()) } },
+          ]
+        }).toArray();
+
+        for (const p of profiles) {
+          const wallet = (p.wallet || '').toLowerCase();
+          if (!traderProfiles.has(wallet)) {
+            traderProfiles.set(wallet, p);
+          }
+        }
+      } catch { /* collection might not exist */ }
+      if (traderProfiles.size >= traderWallets.length) break;
     }
   }
 
   const enrichedTrades = allTrades.map(t => {
-    const traderWallet = (t.original?.walletAddress || t.targetWallet || t.traderWallet || '').toLowerCase();
+    const traderWallet = extractTraderWallet(t);
     const profile = traderProfiles.get(traderWallet);
+    const traderBetUsdc = extractBetSize(t);
 
-    // Calculate conviction ratio
-    const traderBetUsdc = t.original?.usdcSize || t.traderBetUsdc || t.copy?.executedUsdcSize || 0;
-    const avgBet = profile?.avgBet || profile?.avgTradeSize || profile?.medianTradeSize || 0;
-    const convictionRatio = avgBet > 0 ? traderBetUsdc / avgBet : 0;
+    // Use self-calculated avgBet first, then profile avgBet
+    const selfAvgBet = traderAvgBets.get(traderWallet) || 0;
+    const profileAvgBet = profile?.avgBet || profile?.avgTradeSize || profile?.medianTradeSize || 0;
+    const avgBet = selfAvgBet || profileAvgBet;
+    const convictionRatio = avgBet > 0 ? Math.round((traderBetUsdc / avgBet) * 10) / 10 : null;
 
     return {
       traderWallet,
@@ -117,13 +178,13 @@ export async function executeGetCopyTradeActivity(input: GetCopyTradeActivityInp
       traderProfitFactor: profile?.pf || profile?.profitFactor,
       traderSpecialty: profile?.specialty,
 
-      market: t.original?.title || t.market || t.title,
+      market: extractMarket(t),
       outcome: t.original?.outcome || t.outcome,
       side: t.original?.side || t.side,
       traderBetUsdc,
       traderPrice: t.original?.price || t.price,
-      avgBet,
-      convictionRatio: Math.round(convictionRatio * 10) / 10,
+      avgBet: Math.round(avgBet),
+      convictionRatio,
 
       ourExecutedSize: t.copy?.executedUsdcSize || t.executedUsdcSize,
       ourPrice: t.copy?.executedPrice || t.executedPrice,
@@ -133,16 +194,23 @@ export async function executeGetCopyTradeActivity(input: GetCopyTradeActivityInp
       status: t.status,
       executedAt: t.executedAt || t.confirmedAt,
       conditionId: t.original?.conditionId || t.conditionId,
+
+      _rawFields: Object.keys(t).filter(k => k !== '_id'),
     };
   });
 
   // Filter by minimum conviction ratio if specified
   const filtered = input.minConvictionRatio
-    ? enrichedTrades.filter(t => t.convictionRatio >= input.minConvictionRatio!)
+    ? enrichedTrades.filter(t => t.convictionRatio != null && t.convictionRatio >= input.minConvictionRatio!)
     : enrichedTrades;
 
-  // Sort by conviction ratio descending
-  filtered.sort((a, b) => b.convictionRatio - a.convictionRatio);
+  // Sort by conviction ratio (nulls last) then by bet size
+  filtered.sort((a, b) => {
+    if (a.convictionRatio != null && b.convictionRatio != null) return b.convictionRatio - a.convictionRatio;
+    if (a.convictionRatio != null) return -1;
+    if (b.convictionRatio != null) return 1;
+    return b.traderBetUsdc - a.traderBetUsdc;
+  });
 
   return {
     trades: filtered,
@@ -154,7 +222,7 @@ export async function executeGetCopyTradeActivity(input: GetCopyTradeActivityInp
 
 export const getCopyTradeActivityTool = {
   name: 'get_copy_trade_activity',
-  description: 'Get recent copy trades executed by Yieldr vault agents. Returns FILLED trades with conviction ratio (trader bet size vs their average). Higher conviction ratio = trader is sizing up significantly on this market.',
+  description: 'Get recent copy trades executed by Yieldr vault agents. Returns FILLED trades with conviction ratio (trader bet size vs their average). Higher conviction ratio = trader is sizing up significantly on this market. Self-calculates avgBet from trader history when profile data unavailable.',
   inputSchema: getCopyTradeActivitySchema,
   execute: executeGetCopyTradeActivity,
 };

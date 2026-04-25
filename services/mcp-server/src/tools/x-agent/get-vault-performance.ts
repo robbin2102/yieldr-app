@@ -37,19 +37,20 @@ export async function executeGetVaultPerformance(input: GetVaultPerformanceInput
   const results = [];
 
   for (const vault of vaults) {
-    const vaultId = vault._id?.toString() || vault.id || vault.name;
+    const vaultName = vault.name || vault.vaultName || vault.title || vault.label || `Vault-${vault._id?.toString().slice(0, 6)}`;
+    const vaultId = vault._id?.toString() || vault.id || vaultName;
 
     // --- Snapshots ---
     const snapshotsCol = db.collection('vault_daily_snapshots');
     const latestSnapshot = await snapshotsCol
       .findOne(
-        { $or: [{ vaultId }, { vaultName: vault.name }] },
+        { $or: [{ vaultId }, { vaultName: vaultName }] },
         { sort: { timestamp: -1 } }
       );
 
     const periodSnapshots = await snapshotsCol
       .find({
-        $or: [{ vaultId }, { vaultName: vault.name }],
+        $or: [{ vaultId }, { vaultName: vaultName }],
         timestamp: { $gte: periodStart },
       })
       .sort({ timestamp: 1 })
@@ -59,7 +60,7 @@ export async function executeGetVaultPerformance(input: GetVaultPerformanceInput
     let recentTrades: any[] = [];
     const vaultTradesCol = db.collection('vault_trades');
     recentTrades = await vaultTradesCol
-      .find({ $or: [{ vaultId }, { vaultName: vault.name }] })
+      .find({ $or: [{ vaultId }, { vaultName: vaultName }] })
       .sort({ timestamp: -1 })
       .limit(10)
       .toArray();
@@ -89,7 +90,7 @@ export async function executeGetVaultPerformance(input: GetVaultPerformanceInput
     let openPositions: any[] = [];
     const vaultPosCol = db.collection('vault_openPositions');
     openPositions = await vaultPosCol
-      .find({ $or: [{ vaultId }, { vaultName: vault.name }] })
+      .find({ $or: [{ vaultId }, { vaultName: vaultName }] })
       .toArray();
 
     if (openPositions.length === 0) {
@@ -139,9 +140,10 @@ export async function executeGetVaultPerformance(input: GetVaultPerformanceInput
     );
 
     results.push({
-      name: vault.name,
-      description: vault.description,
+      name: vaultName,
+      description: vault.description || vault.desc,
       status: vault.status || 'active',
+      _vaultDocKeys: Object.keys(vault),
 
       performance: {
         period: input.period,
