@@ -45,6 +45,7 @@ import { searchMarketsByKeywordTool } from './x-agent/search-markets-by-keyword.
 import { getTraderPositionsInMarketTool } from './x-agent/get-trader-positions-in-market.js';
 import { getVaultPerformanceTool } from './x-agent/get-vault-performance.js';
 import { getVaultTradesTool } from './x-agent/get-vault-trades.js';
+import { getCopyTradeActivityTool } from './x-agent/get-copy-trade-activity.js';
 
 // Export individual tools
 export { getTopPMTradersTool } from './top-traders/index.js';
@@ -62,7 +63,7 @@ export {
 } from './live-api/index.js';
 export { getMarketSnapshotTool, fetchLiveIndicatorTool, getCoinPriceTool, getMacroSnapshotTool, getFundingRateHistoryTool, getFundingRateCurrentTool, getDerivativesHistoryTool, getNewsHeadlinesTool } from './market/index.js';
 export { getStrategyTemplateTool, openTradeTool, closeTradeTool, cancelLimitOrderTool } from './trading/index.js';
-export { getEdgeRankedTradersTool, getHighConvictionTradesTool, searchMarketsByKeywordTool, getTraderPositionsInMarketTool, getVaultPerformanceTool, getVaultTradesTool } from './x-agent/index.js';
+export { getEdgeRankedTradersTool, getHighConvictionTradesTool, searchMarketsByKeywordTool, getTraderPositionsInMarketTool, getVaultPerformanceTool, getVaultTradesTool, getCopyTradeActivityTool } from './x-agent/index.js';
 
 // Tool registry for MCP server
 export const tools = [
@@ -109,6 +110,7 @@ export const tools = [
   getTraderPositionsInMarketTool,
   getVaultPerformanceTool,
   getVaultTradesTool,
+  getCopyTradeActivityTool,
 ];
 
 // Tool map for quick lookup
