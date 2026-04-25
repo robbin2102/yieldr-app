@@ -239,37 +239,69 @@ export async function executeGetVaultPerformance(input: GetVaultPerformanceInput
         totalUnrealizedPnl,
       },
 
-      // All additional trader/vault metrics for richer content generation
+      // All trader/vault metrics — full profile for rich content generation
       traderProfile: {
+        // Identity & strategy
+        label: vault.label,
         strategyLabel: vault.strategyLabel,
         volumeLabel: vault.volumeLabel,
         edgeHypothesis: vault.edge_hypothesis,
         edgeType: vault.edge_type,
         sustainability: vault.sustainability,
+
+        // PnL summary
+        totalPnlAllTime: vault.totalPnlAllTime,
+        totalRealizedPnl: vault.totalRealizedPnl,
+        totalUnrealizedPnl: vault.totalUnrealizedPnl,
+
+        // Category & market breakdown
         categoryBreakdown: vault.category_breakdown,
         strengthMarkets: vault.strength_markets,
         weaknessMarkets: vault.weakness_markets,
+
+        // Trade sizing
         avgTradeSize: vault.avgTradeSize || vault.avg_bet_size_usdc,
         medianTradeSize: vault.medianTradeSize,
         maxTradeSize: vault.maxTradeSize,
+
+        // High conviction / asymmetric trades
+        asymmetricTradesCount: vault.asymmetricTradesCount,
+        asymmetricVolume: vault.asymmetricVolume,
+        asymmetricVolumePercent: vault.asymmetricVolumePercent,
+
+        // Streaks & drawdown
         currentStreak: vault.currentStreak,
         currentStreakType: vault.currentStreakType,
         maxDrawdown: vault.maxDrawdown,
         maxDrawdownPercent: vault.maxDrawdownPercent,
-        maxDrawdown30dPct: vault.max_drawdown_30d_pct,
+        // Use baseline_snapshot for accurate 30d drawdown (top-level field is all-time)
+        maxDrawdown30dPct: vault.baseline_snapshot?.max_drawdown_30d_pct ?? vault.max_drawdown_30d_pct,
+
+        // Trends
         capitalTrend: vault.capital_trend,
         drawdownTrend: vault.drawdown_trend,
+        roceTrend: vault.roce_trend,
+
+        // Consistency
         tradingConsistency: vault.tradingConsistency,
-        asymmetricTradesCount: vault.asymmetricTradesCount,
-        asymmetricVolume: vault.asymmetricVolume,
-        asymmetricVolumePercent: vault.asymmetricVolumePercent,
-        insiderProbability: vault.insider_probability,
-        insiderScore: vault.insider_score,
-        accountAgeDays: vault.account_age_days,
-        lastActiveDaysAgo: vault.last_active_days_ago,
         tradesPerDay: vault.tradesPerDay,
         buyRatio: vault.buyRatio,
-        roceTrend: vault.roce_trend,
+
+        // Insider signals
+        insiderProbability: vault.insider_probability,
+        insiderScore: vault.insider_score,
+        insiderSignals: vault.insider_signals_fired,
+
+        // Activity
+        accountAgeDays: vault.account_age_days,
+        lastActiveDaysAgo: vault.last_active_days_ago,
+
+        // Multi-timeframe ROCE
+        roce7d: vault.timeframePnL?.['7d']?.roce ?? null,
+        roce15d: vault.timeframePnL?.['15d']?.roce ?? null,
+        roce30d: vault.timeframePnL?.['30d']?.roce ?? null,
+        pnl7d: vault.timeframePnL?.['7d']?.pnl ?? null,
+        pnl15d: vault.timeframePnL?.['15d']?.pnl ?? null,
       },
 
       activity24h: {
