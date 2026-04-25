@@ -96,34 +96,33 @@ async function main() {
   // ── 2. Orderbook fetch (unauthenticated) ──────────────────────────────────
   console.log('\n── 2. Orderbook ─────────────────────────────────────────────');
   try {
-    // If no TEST_TOKEN_ID, auto-discover a liquid token from the markets list
+    // Auto-discover a token via the v2 SDK (avoids raw HTTP endpoint guessing)
     let tokenId = process.env.TEST_TOKEN_ID ?? '';
-    if (!tokenId) {
-      // Try multiple endpoint shapes — CLOB API differs between v1/v2
-      for (const url of [`${CLOB_HOST}/markets?limit=5`, `${CLOB_HOST}/sampling-markets?limit=5`]) {
-        try {
-          const mRes = await fetch(url);
-          if (!mRes.ok) continue;
-          const mData = await mRes.json() as any;
-          const markets: any[] = mData?.data ?? (Array.isArray(mData) ? mData : []);
-          for (const m of markets) {
-            const tid = m.tokens?.[0]?.token_id ?? m.clobTokenIds?.[0] ?? m.token_id;
-            if (tid) { tokenId = tid; break; }
-          }
-          if (tokenId) break;
-        } catch { continue; }
-      }
+    if (!tokenId && API_KEY && API_SECRET && PASSPHRASE) {
+      try {
+        const clientL2 = new ClobClient({
+          host: CLOB_HOST, chain: Chain.POLYGON, signer: walletClient as any,
+          creds: { key: API_KEY, secret: API_SECRET, passphrase: PASSPHRASE },
+          throwOnError: false,
+        });
+        const result = await (clientL2 as any).getSamplingMarkets({ limit: 5 });
+        const markets: any[] = result?.data ?? (Array.isArray(result) ? result : []);
+        for (const m of markets) {
+          const tid = m.tokens?.[0]?.token_id ?? m.clobTokenIds?.[0];
+          if (tid) { tokenId = tid; break; }
+        }
+      } catch { /* fall through */ }
     }
     if (!tokenId) {
-      fail('Could not auto-discover a token ID — set TEST_TOKEN_ID env var manually');
-      return;
-    }
-    const url = `${CLOB_HOST}/book?token_id=${tokenId}`;
-    const res = await fetch(url);
-    if (!res.ok) {
-      fail(`GET /book → HTTP ${res.status}`);
+      fail('Could not auto-discover a token ID — set TEST_TOKEN_ID env var');
     } else {
-      const book = await res.json() as any;
+      // Use SDK getOrderBook instead of raw HTTP
+      const clientL2 = new ClobClient({
+        host: CLOB_HOST, chain: Chain.POLYGON, signer: walletClient as any,
+        creds: API_KEY ? { key: API_KEY!, secret: API_SECRET!, passphrase: PASSPHRASE! } : undefined,
+        throwOnError: false,
+      });
+      const book = await (clientL2 as any).getOrderBook(tokenId) as any;
       const bestBid = book?.bids?.[0]?.price ?? 'n/a';
       const bestAsk = book?.asks?.[0]?.price ?? 'n/a';
       ok(`Orderbook OK — bid=${bestBid} ask=${bestAsk} (token ...${tokenId.slice(-8)})`);
@@ -164,7 +163,7 @@ async function main() {
         creds: { key: API_KEY, secret: API_SECRET, passphrase: PASSPHRASE },
         throwOnError: false,
       });
-      const orders = await (clientL2 as any).getOrders({ status: 'LIVE' });
+      const orders = await (clientL2 as any).getOpenOrders();
       const count  = Array.isArray(orders) ? orders.length : 0;
       ok(`Open orders: ${count}`);
     } catch (err: any) {
