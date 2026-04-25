@@ -169,20 +169,18 @@ export class OnChainDetector extends EventEmitter {
   // ── Subscriptions ───────────────────────────────────────────────────────────
 
   private subscribeAll(ws: WebSocket): void {
-    const paddedWallets = [...this.trackedWallets.keys()].map(addr =>
-      '0x' + addr.slice(2).padStart(64, '0')
-    );
-
-    // 4 subscriptions: (CTF + NEG_RISK) × (maker + taker)
+    // 2 subscriptions: one per exchange, filtering only on OrderFilled topic0.
+    // Wallet filtering is done client-side in handleFill() — QuickNode does not
+    // reliably support OR-arrays of wallet addresses in topic positions for
+    // eth_subscribe (confirmed by diagnostic: sub IDs returned but no events
+    // delivered, connection drops with code=1006 immediately after sub confirm).
     const subs = [
-      { id: 1, address: CTF_EXCHANGE,      topics: [TOPIC0, null, paddedWallets, null] },
-      { id: 2, address: CTF_EXCHANGE,      topics: [TOPIC0, null, null, paddedWallets] },
-      { id: 3, address: NEG_RISK_EXCHANGE, topics: [TOPIC0, null, paddedWallets, null] },
-      { id: 4, address: NEG_RISK_EXCHANGE, topics: [TOPIC0, null, null, paddedWallets] },
+      { id: 1, address: CTF_EXCHANGE },
+      { id: 2, address: NEG_RISK_EXCHANGE },
     ];
 
     for (const s of subs) {
-      ws.send(JSON.stringify({ jsonrpc: '2.0', id: s.id, method: 'eth_subscribe', params: ['logs', { address: s.address, topics: s.topics }] }));
+      ws.send(JSON.stringify({ jsonrpc: '2.0', id: s.id, method: 'eth_subscribe', params: ['logs', { address: s.address, topics: [TOPIC0] }] }));
     }
   }
 
@@ -197,17 +195,17 @@ export class OnChainDetector extends EventEmitter {
     // Keepalive response
     if (msg.id === 99) return;
 
-    // Subscription confirmations
-    if (msg.id >= 1 && msg.id <= 4) {
+    // Subscription confirmations (id 1 = CTF, id 2 = NEG_RISK)
+    if (msg.id === 1 || msg.id === 2) {
       if (msg.error) {
         this.emit('error', new Error(`Subscribe error (sub ${msg.id}): ${msg.error.message}`));
         return;
       }
       this.subsConfirmed++;
-      if (this.subsConfirmed >= 4) {
+      if (this.subsConfirmed >= 2) {
         this.subsConfirmed = 0;
         this.reconnectMs = 50; // reset backoff — connection is healthy
-        console.log(`[OnChainDetector] All 4 subscriptions active — watching ${this.trackedWallets.size} traders`);
+        console.log(`[OnChainDetector] Both subscriptions active — watching ${this.trackedWallets.size} traders (client-side filter)`);
       }
       return;
     }
@@ -227,7 +225,7 @@ export class OnChainDetector extends EventEmitter {
 
     const makerIsTracked = this.trackedWallets.has(maker);
     const takerIsTracked = this.trackedWallets.has(taker);
-    if (!makerIsTracked && !takerIsTracked) return; // shouldn't happen with topic filters, but guard anyway
+    if (!makerIsTracked && !takerIsTracked) return; // client-side wallet filter (server-side topic arrays unreliable on QuickNode)
 
     // Decode non-indexed args
     let parsed: ethers.utils.LogDescription;
