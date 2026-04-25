@@ -185,16 +185,14 @@ export class OnChainDetector extends EventEmitter {
   // ── Subscriptions ───────────────────────────────────────────────────────────
 
   private subscribeAll(ws: WebSocket): void {
-    // 4 subscriptions: v1 + v2 contracts, filtering only on OrderFilled topic0.
-    // Wallet filtering is done client-side in handleFill() — QuickNode does not
-    // reliably support OR-arrays of wallet addresses in topic positions for
-    // eth_subscribe (confirmed by diagnostic: sub IDs returned but no events
-    // delivered, connection drops with code=1006 immediately after sub confirm).
+    // 2 subscriptions: CTF group + NEG_RISK group, each with v1+v2 address arrays.
+    // Using address arrays in the `address` field is standard EVM WS behavior and
+    // works on QuickNode. The previous 4-subscription approach caused immediate
+    // code=1006 disconnects (QuickNode sub limit).
+    // Wallet filtering remains client-side in handleFill().
     const subs = [
-      { id: 1, address: CTF_EXCHANGE },
-      { id: 2, address: NEG_RISK_EXCHANGE },
-      { id: 3, address: CTF_V2_EXCHANGE },
-      { id: 4, address: NEG_RISK_V2_EXCHANGE },
+      { id: 1, address: [CTF_EXCHANGE,      CTF_V2_EXCHANGE]      },
+      { id: 2, address: [NEG_RISK_EXCHANGE, NEG_RISK_V2_EXCHANGE] },
     ];
 
     for (const s of subs) {
@@ -220,10 +218,10 @@ export class OnChainDetector extends EventEmitter {
         return;
       }
       this.subsConfirmed++;
-      if (this.subsConfirmed >= 4) {
+      if (this.subsConfirmed >= 2) {
         this.subsConfirmed = 0;
         this.reconnectMs = 50; // reset backoff — connection is healthy
-        console.log(`[OnChainDetector] All 4 subscriptions active (v1+v2) — watching ${this.trackedWallets.size} traders`);
+        console.log(`[OnChainDetector] Both subscriptions active (CTF+NEG_RISK, v1+v2) — watching ${this.trackedWallets.size} traders`);
       }
       return;
     }

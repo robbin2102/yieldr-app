@@ -85,11 +85,16 @@ export class MarketMetaResolver {
   // ── Internal ──────────────────────────────────────────────────────────────
 
   private async fetch(tokenId: string, negRisk: boolean): Promise<MarketMeta | null> {
-    // CLOB v2 markets endpoint: GET /markets?token_id=<tokenId>
-    // Falls back to GET /markets/<tokenId> if the first returns nothing
+    // CLOB API expects token IDs as decimal strings, but OnChainDetector gives
+    // hex (e.g. "0xcb0a5f6c..."). Try both forms across multiple endpoints.
+    const tokenIdDec = tokenId.startsWith('0x') ? BigInt(tokenId).toString() : tokenId;
+    const tokenIdHex = tokenId;
+
     for (const url of [
-      `${this.clobApiBase}/markets?token_id=${tokenId}`,
-      `${this.clobApiBase}/markets/${tokenId}`,
+      `${this.clobApiBase}/markets?token_id=${tokenIdDec}`,
+      `${this.clobApiBase}/markets?token_id=${tokenIdHex}`,
+      `${this.clobApiBase}/markets/${tokenIdDec}`,
+      `${this.clobApiBase}/markets/${tokenIdHex}`,
     ]) {
       try {
         const res = await fetch(url, { signal: AbortSignal.timeout(5_000) });
@@ -114,6 +119,7 @@ export class MarketMetaResolver {
         };
       } catch { continue; }
     }
+    console.warn(`[MarketMetaResolver] All endpoints failed for tokenId ${tokenId.slice(0, 18)}... (tried hex+decimal forms)`);
     return null;
   }
 }
