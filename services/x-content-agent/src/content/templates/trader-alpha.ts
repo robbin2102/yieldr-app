@@ -42,10 +42,14 @@ ${topTrade ? `MOST RECENT HIGH CONVICTION TRADE:
 ${winningPositions.length > 0 ? `WINNING OPEN POSITIONS:
 ${winningPositions.map((p: any) => `- "${p.title?.substring(0, 50)}": ${p.outcome} @ $${p.avgPrice?.toFixed(2)} → $${p.curPrice?.toFixed(2)} (currently +${p.percentPnl?.toFixed(0)}%)`).join('\n')}` : ''}
 
-IMPORTANT RULES:
-- Lead with the single most striking stat (ROCE, win rate gap, or a specific position — NOT the wallet or name)
-- Pick max 2 numbers to mention — discard the rest
-- Only mention winning positions
-- The hook should make a reader stop scrolling
-- End with a question that invites engagement`;
+FORMAT (strictly follow — 3 lines with line breaks):
+Line 1 (hook): Single number that stops the scroll. Best candidates: ROCE%, win rate vs expected gap, or the HC trade size. Example structure: "X% ROCE in 30 days."
+Line 2 (signal): What this trader is DOING right now — one specific position or recent trade. Be precise about the bet.
+Line 3 (CTA): Sharp question specific to this trader's specialty. NOT "ask for more alpha" — ask something that makes traders think. E.g. "Are soccer markets the most mis-priced on Polymarket right now?"
+
+CONTENT RULES:
+- Pick max 2 numbers total across the whole tweet — discard the rest
+- Only mention winning positions (positive PnL, curPrice < 0.99)
+- Never use the phrase "turn X into reality" — say the actual win rate gap instead
+- For positions, phrase them clearly: "betting [outcome] won't happen" not "No for X win"`;
 }

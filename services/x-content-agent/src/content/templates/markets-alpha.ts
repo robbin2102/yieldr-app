@@ -42,9 +42,13 @@ ${otherMarkets.length > 0 ? `RELATED MARKETS:\n${otherLines}` : ''}
 ${winningPositions ? `SMART MONEY POSITIONING (edge-ranked traders currently winning in this market):
 ${winningPositions}` : ''}
 
-IMPORTANT RULES:
-- Lead with the most interesting market signal — an odds move, volume spike, or smart money position
-- Connect the real-world event to the market odds in one crisp sentence
-- If smart money is positioned, mention it as a signal — not a recommendation
-- End with a question that makes people think about the outcome`;
+FORMAT (3 lines with line breaks between them):
+Line 1 (hook): The single most interesting market signal — an odds move ("dropped from 45¢ to 13¢"), a volume spike, or smart money size. Make it concrete.
+Line 2 (context): Connect the real-world event to the market. If smart money is positioned, one sentence on what they're backing and at what price.
+Line 3 (CTA): A sharp question about the outcome — make the reader take a side. E.g. "At 13¢, is this priced right or is the market sleeping?"
+
+CONTENT RULES:
+- Don't show raw JSON outcomePrices — interpret them as actual odds in plain language
+- Lead with price MOVEMENT if available (24h change) — movement is more compelling than a static price
+- If no smart money positions, lead purely on the market signal`;
 }

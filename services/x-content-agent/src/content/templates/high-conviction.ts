@@ -22,10 +22,13 @@ ${winRate ? `- Win Rate: ${winRate?.toFixed(1)}%` : ''}
 ${pf ? `- Profit Factor: ${pf?.toFixed(2)}x` : ''}
 - Specialty: ${trade.specialty || 'Unknown'}
 
-IMPORTANT RULES:
-- Lead with the SIZE of the trade and the multiplier — that's the signal
-- One sentence on what the trader is betting ON specifically
-- One sentence on the trader's credentials (win rate or profit factor — pick one)
-- The urgency should be real data, not hype words
-- End with a sharp question — what does this trader know?`;
+FORMAT (3 lines with line breaks between them):
+Line 1 (hook): "$X into [market] — Nx their normal size." Size and multiplier. Nothing else.
+Line 2 (signal): What they're betting on and why this trader's track record makes it signal-worthy. One clean sentence.
+Line 3 (CTA): A sharp question about the market outcome — not generic. E.g. "Does this trader know something the market doesn't?"
+
+CONTENT RULES:
+- Urgency must come from the data (trade size, multiplier, win rate) — not from words like "urgent" or "alert"
+- Clarify the position clearly: "betting [X] will NOT happen" or "backing [X] at $0.XX"
+- Pick ONE trader credential (win rate OR profit factor) — not both`;
 }

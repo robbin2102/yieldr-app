@@ -32,9 +32,13 @@ PERFORMANCE (${perf.period || '30d'}):
 ${tradeLines ? `RECENT AGENT TRADES:\n${tradeLines}` : ''}
 ${positionLines ? `WINNING OPEN POSITIONS:\n${positionLines}` : ''}
 
-IMPORTANT RULES:
-- Lead with the ROI or a specific trade that shows the agent working
-- If there's agent reasoning available, quote one short phrase from it — it's the most compelling signal of transparency
-- Show the vault earning, not just existing
-- End with a question about performance or the agent strategy`;
+FORMAT (3 lines with line breaks between them):
+Line 1 (hook): The ROI number or a single striking trade stat. "+X% in 30 days." or "$X PnL from Y trades."
+Line 2 (signal): Either a specific recent trade with brief reasoning, OR one winning open position. Show the agent WORKING — not just stats.
+Line 3 (CTA): A question about the strategy or vault — invite people to ask how it works. E.g. "How does an AI decide when to go 3x size on a geopolitics market?"
+
+CONTENT RULES:
+- If agent reasoning is available, quote a SHORT phrase in quotes — transparency is Yieldr's biggest differentiator
+- Only show winning trades/positions
+- "Track live" and "Early Access" are strong CTAs for TG posts when vault data is compelling`;
 }
