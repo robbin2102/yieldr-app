@@ -62,7 +62,7 @@ async function processNewMentions(): Promise<void> {
         });
 
         // Post reply
-        await replyToTweet(reply.content, mention.id);
+        await replyToTweet(reply.tweet, mention.id);
 
         // Like the mention
         await likeTweet(mention.id);
@@ -70,7 +70,7 @@ async function processNewMentions(): Promise<void> {
         // Log reply
         await db.collection(COLLECTIONS.X_REPLIES).insertOne({
           parentTweetId: mention.id,
-          content: reply.content,
+          content: reply.tweet,
           category: 'MENTION_REPLY',
           metadata: reply.metadata,
           postedAt: new Date(),

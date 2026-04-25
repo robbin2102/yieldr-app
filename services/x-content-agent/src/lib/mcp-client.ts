@@ -51,6 +51,15 @@ export async function getHighConvictionTrades(opts?: {
   return callMcpTool('get_high_conviction_trades', opts || {});
 }
 
+export async function getCopyTradeActivity(opts?: {
+  vaultName?: string;
+  hours?: number;
+  limit?: number;
+  minConvictionRatio?: number;
+}) {
+  return callMcpTool('get_copy_trade_activity', opts || {});
+}
+
 export async function searchMarketsByKeyword(keywords: string[], opts?: {
   activeOnly?: boolean;
   minVolume?: number;

@@ -39,6 +39,6 @@ Reply rules:
 4. If they show buying intent, mention Early Access details
 5. Keep it concise (2-4 sentences max)
 6. End with an invitation to ask more or check yieldr.org
-7. Max 280 characters
+7. Use 1-2 emojis naturally
 8. Type is "reply" to tweet ID ${incomingTweet.tweetId}`;
 }

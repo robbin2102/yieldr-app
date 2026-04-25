@@ -3,16 +3,17 @@
  *
  * Manages the daily posting schedule optimized for US/EU traffic.
  * IST times mapped to EDT for prime engagement windows.
+ *
+ * Active content types: TRADER_PROFILE, HIGH_CONVICTION, VAULT_PERFORMANCE
+ * Disabled: MARKETS_ALPHA, BASE_POSTING
  */
 
 import * as cron from 'node-cron';
 import { CONFIG } from '../config';
 import {
   generateTraderAlpha,
-  generateMarketsAlpha,
   generateHighConvictionAlert,
   generateVaultPerformance,
-  generateBasePost,
   GeneratedPost,
 } from '../content/generator';
 import { postTweet, quoteTweet } from '../lib/x-client';
@@ -21,6 +22,7 @@ import { getDB, COLLECTIONS } from '../lib/db';
 // Track daily post counts
 const dailyCounts: Record<string, number> = {};
 let lastResetDate = '';
+let traderRotation = 0;
 
 function resetDailyCounts(): void {
   const today = new Date().toISOString().split('T')[0];
@@ -28,6 +30,7 @@ function resetDailyCounts(): void {
     Object.keys(CONFIG.DAILY_LIMITS).forEach(key => {
       dailyCounts[key] = 0;
     });
+    traderRotation = 0;
     lastResetDate = today;
   }
 }
@@ -47,12 +50,13 @@ function randomJitter(): number {
  */
 async function publishPost(post: GeneratedPost): Promise<void> {
   try {
+    const tweetText = post.tweet;
     let tweetData;
 
     if (post.type === 'quote' && post.target_post_id) {
-      tweetData = await quoteTweet(post.content, post.target_post_id);
+      tweetData = await quoteTweet(tweetText, post.target_post_id);
     } else {
-      tweetData = await postTweet(post.content);
+      tweetData = await postTweet(tweetText);
     }
 
     // Log to MongoDB
@@ -60,7 +64,8 @@ async function publishPost(post: GeneratedPost): Promise<void> {
     await db.collection(COLLECTIONS.X_POSTS).insertOne({
       tweetId: tweetData.id,
       type: post.type,
-      content: post.content,
+      tweet: post.tweet,
+      telegram: post.telegram,
       category: post.category,
       metadata: post.metadata,
       postedAt: new Date(),
@@ -68,7 +73,7 @@ async function publishPost(post: GeneratedPost): Promise<void> {
 
     dailyCounts[post.category] = (dailyCounts[post.category] || 0) + 1;
 
-    console.log(`[Calendar] Published ${post.category}: "${post.content.substring(0, 60)}..."`);
+    console.log(`[Calendar] Published ${post.category}: "${tweetText.substring(0, 60)}..."`);
   } catch (error: any) {
     console.error(`[Calendar] Failed to publish ${post.category}:`, error.message);
   }
@@ -89,10 +94,8 @@ async function executeWindow(contentTypes: string[]): Promise<void> {
 
       switch (type) {
         case 'TRADER_PROFILE':
-          post = await generateTraderAlpha();
-          break;
-        case 'MARKETS_ALPHA':
-          post = await generateMarketsAlpha();
+          traderRotation++;
+          post = await generateTraderAlpha({ rotation: traderRotation, totalTraders: 4 });
           break;
         case 'HIGH_CONVICTION':
           post = await generateHighConvictionAlert();
@@ -100,11 +103,8 @@ async function executeWindow(contentTypes: string[]): Promise<void> {
         case 'VAULT_PERFORMANCE':
           post = await generateVaultPerformance();
           break;
-        case 'BASE_POSTING':
-          post = await generateBasePost();
-          break;
         default:
-          console.warn(`[Calendar] Unknown content type: ${type}`);
+          console.warn(`[Calendar] Skipping disabled/unknown content type: ${type}`);
           continue;
       }
 
@@ -127,40 +127,41 @@ async function executeWindow(contentTypes: string[]): Promise<void> {
 export function startScheduler(): void {
   console.log('[Calendar] Starting content scheduler...');
 
-  // Window 1: 7:30 PM IST / 6 AM EDT — HC + Trader Profile
+  // Window 1: 7:30 PM IST / 6 AM EDT — HC + Trader Profile (1/4)
   cron.schedule('30 19 * * *', () => {
     setTimeout(() => executeWindow(['HIGH_CONVICTION', 'TRADER_PROFILE']), randomJitter());
   }, { timezone: 'Asia/Kolkata' });
 
-  // Window 2: 9:30 PM IST / 8 AM EDT — Markets Alpha + Vault Performance
+  // Window 2: 9:30 PM IST / 8 AM EDT — Vault Performance
   cron.schedule('30 21 * * *', () => {
-    setTimeout(() => executeWindow(['MARKETS_ALPHA', 'VAULT_PERFORMANCE']), randomJitter());
+    setTimeout(() => executeWindow(['VAULT_PERFORMANCE']), randomJitter());
   }, { timezone: 'Asia/Kolkata' });
 
-  // Window 3: 11:30 PM IST / 10 AM EDT — Trader Profile + Base Post
+  // Window 3: 11:30 PM IST / 10 AM EDT — Trader Profile (2/4)
   cron.schedule('30 23 * * *', () => {
-    setTimeout(() => executeWindow(['TRADER_PROFILE', 'BASE_POSTING']), randomJitter());
+    setTimeout(() => executeWindow(['TRADER_PROFILE']), randomJitter());
   }, { timezone: 'Asia/Kolkata' });
 
-  // Window 4: 2:00 AM IST / 1 PM EDT — HC + Markets Alpha
+  // Window 4: 2:00 AM IST / 1 PM EDT — HC + Trader Profile (3/4)
   cron.schedule('0 2 * * *', () => {
-    setTimeout(() => executeWindow(['HIGH_CONVICTION', 'MARKETS_ALPHA']), randomJitter());
-  }, { timezone: 'Asia/Kolkata' });
-
-  // Window 5: 5:30 AM IST / 4 PM EDT — HC + Trader Profile
-  cron.schedule('30 5 * * *', () => {
     setTimeout(() => executeWindow(['HIGH_CONVICTION', 'TRADER_PROFILE']), randomJitter());
   }, { timezone: 'Asia/Kolkata' });
 
-  // Window 6: 8:30 AM IST / 7 PM EDT — Vault + Markets Alpha
-  cron.schedule('30 8 * * *', () => {
-    setTimeout(() => executeWindow(['VAULT_PERFORMANCE', 'MARKETS_ALPHA']), randomJitter());
+  // Window 5: 5:30 AM IST / 4 PM EDT — HC + Vault Performance
+  cron.schedule('30 5 * * *', () => {
+    setTimeout(() => executeWindow(['HIGH_CONVICTION', 'VAULT_PERFORMANCE']), randomJitter());
   }, { timezone: 'Asia/Kolkata' });
 
-  // Window 7: 11:00 AM IST / 9:30 PM EDT — Trader + HC + Vault + Base
+  // Window 6: 8:30 AM IST / 7 PM EDT — Vault Performance + Trader Profile (4/4)
+  cron.schedule('30 8 * * *', () => {
+    setTimeout(() => executeWindow(['VAULT_PERFORMANCE', 'TRADER_PROFILE']), randomJitter());
+  }, { timezone: 'Asia/Kolkata' });
+
+  // Window 7: 11:00 AM IST / 9:30 PM EDT — HC + Vault
   cron.schedule('0 11 * * *', () => {
-    setTimeout(() => executeWindow(['TRADER_PROFILE', 'HIGH_CONVICTION', 'VAULT_PERFORMANCE', 'BASE_POSTING']), randomJitter());
+    setTimeout(() => executeWindow(['HIGH_CONVICTION', 'VAULT_PERFORMANCE']), randomJitter());
   }, { timezone: 'Asia/Kolkata' });
 
   console.log('[Calendar] 7 posting windows scheduled (IST timezone)');
+  console.log('[Calendar] Active types: TRADER_PROFILE (4/day rotation), HIGH_CONVICTION, VAULT_PERFORMANCE');
 }
