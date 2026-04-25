@@ -28,7 +28,8 @@ function extractBetSize(doc: any): number {
 
 function extractTraderWallet(doc: any): string {
   return (
-    doc.traderWallet
+    doc.sourceWallet
+    || doc.traderWallet
     || doc.original?.walletAddress
     || doc.targetWallet
     || doc.wallet
@@ -38,9 +39,9 @@ function extractTraderWallet(doc: any): string {
 }
 
 function extractMarket(doc: any): string {
-  return doc.original?.title
+  return doc.title
+    || doc.original?.title
     || doc.market
-    || doc.title
     || doc.marketQuestion
     || doc.conditionId
     || 'Unknown market';
@@ -114,12 +115,12 @@ export async function executeGetCopyTradeActivity(input: GetCopyTradeActivityInp
       const walletFilter: any = {
         status: 'FILLED',
         $or: [
+          { sourceWallet: wallet },
+          { sourceWallet: wallet.toLowerCase() },
           { 'original.walletAddress': wallet },
-          { 'original.walletAddress': wallet.toLowerCase() },
           { traderWallet: wallet },
           { targetWallet: wallet },
           { wallet: wallet },
-          { trader: wallet },
         ],
       };
       const traderTrades = await col.find(walletFilter)
@@ -182,18 +183,21 @@ export async function executeGetCopyTradeActivity(input: GetCopyTradeActivityInp
       outcome: t.original?.outcome || t.outcome,
       side: t.original?.side || t.side,
       traderBetUsdc,
-      traderPrice: t.original?.price || t.price,
+      traderPrice: t.traderPrice || t.original?.price || t.price,
+      traderSize: t.traderSize,
       avgBet: Math.round(avgBet),
       convictionRatio,
 
-      ourExecutedSize: t.copy?.executedUsdcSize || t.executedUsdcSize,
-      ourPrice: t.copy?.executedPrice || t.executedPrice,
-      slippageBps: t.slippage?.slippageBps,
-      latencyMs: t.latencyMs,
+      // ahf-copyTrades native fields
+      filledUsdc: t.filledUsdc || t.copy?.executedUsdcSize,
+      avgFillPrice: t.avgFillPrice || t.copy?.executedPrice,
+      priceDrift: t.priceDrift || t.slippage?.slippageBps,
+      totalLatencyMs: t.totalLatencyMs || t.latencyMs,
+      copyBetUsdc: t.copyBetUsdc,
 
       status: t.status,
-      executedAt: t.executedAt || t.confirmedAt,
-      conditionId: t.original?.conditionId || t.conditionId,
+      executedAt: t.filledAt || t.executedAt || t.confirmedAt,
+      conditionId: t.conditionId || t.original?.conditionId,
 
       _rawFields: Object.keys(t).filter(k => k !== '_id'),
     };
