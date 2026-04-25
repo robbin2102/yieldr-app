@@ -30,6 +30,8 @@ for (const p of envCandidates) {
 
 import { TradeOrchestrator, OrchestratorConfig } from './tradeOrchestrator';
 import { ExecutionStrategy } from './types';
+import { connectDB } from '../db/connection';
+import mongoose from 'mongoose';
 
 function required(name: string): string {
   const v = process.env[name];
@@ -77,13 +79,16 @@ async function main() {
   console.log('[v2] Starting CLOBv2 copy-trading pipeline...');
   console.log(`[v2] Strategy: ${cfg.defaultStrategy} | drift: ${cfg.maxDriftPct * 100}% | spread: ${cfg.maxSpreadPct * 100}%`);
 
+  await connectDB();
+
   const orchestrator = await TradeOrchestrator.create(cfg);
   await orchestrator.start();
 
   // Graceful shutdown
-  const shutdown = () => {
+  const shutdown = async () => {
     console.log('\n[v2] Shutting down...');
     orchestrator.stop();
+    await mongoose.connection.close();
     process.exit(0);
   };
   process.on('SIGINT',  shutdown);
