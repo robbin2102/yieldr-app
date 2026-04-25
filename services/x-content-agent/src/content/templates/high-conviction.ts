@@ -56,7 +56,10 @@ CRITICAL FRAMING RULES:
 - Explain the bet in plain English — not "BUY No" but "betting this won't happen"
 - If SELL side: explain it's an EXIT, not a new position
 
-FORMAT:
-X post: 3-5 lines, PLAIN TEXT (no **bold** markdown — use CAPS or emojis instead). Tell the story concisely. Hook with the market signal, not the dollar amount.
-TG post: Full story with **bold** numbers and bullet points. Real-world context on the market. End with yieldr.org CTA.`;
+FORMAT — ONE post for both X and TG:
+- Hook line with emoji — the market signal, not the dollar amount
+- Use **bold** for 2-4 key numbers (conviction ratio, bet size, win rate)
+- Bullet points for key data points
+- Tell the full story — no character limit
+- End with a question that drives replies and a yieldr.org CTA`;
 }

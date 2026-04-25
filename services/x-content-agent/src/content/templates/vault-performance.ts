@@ -23,26 +23,31 @@ export function buildVaultPerformancePrompt(vault: any): string {
     `- "${t.market?.substring(0, 60)}": ${t.side} ${t.outcome} @ $${t.price?.toFixed(2)}, size $${(t.size || 0).toLocaleString()}`
   ).join('\n');
 
+  // Format vault-specific vs trader-signal metrics clearly
+  const vaultCapital = perf.vaultCapital;
+  const vaultCurrentSize = perf.vaultCurrentSize;
+  const vaultROI = perf.vaultROI;
+  const trader30dPnl = perf.trader30dPnl;
+  const trader30dROCE = perf.trader30dROCE;
+
   return `Generate a Vault Performance post with AGENT ANALYSIS.
 
 VAULT: ${vault.name}
 ${vault.description ? vault.description.substring(0, 150) : ''}
-Specialty: ${vault.specialty || 'Multi-category'}
 Status: ${vault.status || 'Active'}
 
-PERFORMANCE (${perf.period || '30d'}):
-- ROI: ${perf.roi != null ? (perf.roi > 0 ? '+' : '') + perf.roi.toFixed(1) + '%' : 'N/A'}
-- Total PnL: ${perf.totalPnl != null ? '$' + perf.totalPnl.toLocaleString() : 'N/A'}
-- Unrealized PnL: ${perf.unrealizedPnl != null ? '$' + perf.unrealizedPnl.toLocaleString() : 'N/A'}
-- Capital deployed: ${perf.capitalDeployed ? '$' + perf.capitalDeployed.toLocaleString() : 'N/A'}
-- Vault size: ${perf.vaultSize ? '$' + perf.vaultSize.toLocaleString() : 'N/A'}
+VAULT FINANCIALS (our deployed capital):
+- Vault initial capital: ${vaultCapital != null ? '$' + vaultCapital.toLocaleString() : 'N/A'}
+- Vault current size: ${vaultCurrentSize != null ? '$' + vaultCurrentSize.toLocaleString() : 'N/A'}
+- Vault ROI: ${vaultROI != null ? (vaultROI > 0 ? '+' : '') + vaultROI.toFixed(1) + '%' : 'N/A'}
 
-STATS:
+TRACKED TRADER SIGNAL QUALITY (the edge we mirror):
 - Win rate: ${stats.winRate ? stats.winRate.toFixed(1) + '%' : 'N/A'}
 - Profit factor: ${stats.profitFactor ? stats.profitFactor.toFixed(2) + 'x' : 'N/A'}
 - Wins/Losses: ${stats.winsClosed || '?'}W / ${stats.lossesClosed || '?'}L
-- Open positions: ${stats.openPositionCount || 0} (${stats.winningPositionCount || 0} winning, ${stats.losingPositionCount || 0} losing)
-- Unrealized PnL: $${(stats.totalUnrealizedPnl || 0).toLocaleString()}
+- 30d PnL (trader): ${trader30dPnl != null ? '$' + trader30dPnl.toLocaleString() : 'N/A'}
+- 30d ROCE (trader): ${trader30dROCE != null ? trader30dROCE.toFixed(0) + '%' : 'N/A'}
+- Open positions: ${stats.openPositionCount || 0} (${stats.winningPositionCount || 0} winning)
 
 24H ACTIVITY:
 - Trades executed: ${activity.tradesExecuted || 0}
@@ -52,23 +57,21 @@ ${tradeLines ? `RECENT TRADES:\n${tradeLines}` : ''}
 
 ${positionLines ? `WINNING OPEN POSITIONS:\n${positionLines}` : ''}
 
-AGENT ANALYSIS INSTRUCTIONS:
-You are providing a vault performance update. Analyze the data:
-1. How is the vault performing? (ROI, PnL, win rate)
-2. What's the current positioning? (positions breakdown)
-3. What happened recently? (24h activity, latest trades)
-4. What's the edge? (specialty, strategy insight)
+AGENT ANALYSIS INSTRUCTIONS — write ONE post (X + TG):
+1. Lead with the vault ROI or win rate (most compelling number)
+2. Explain the tracked trader's edge (win rate, PF) and what positions the vault holds
+3. What happened in the last 24h?
+4. Professional fund update tone — honest, data-first, never shill
 
 FORMAT:
-X post: 3-5 lines, PLAIN TEXT only — no **bold** markdown (doesn't render on X). Use CAPS or emojis for emphasis. Lead with the most interesting metric or position. Use 📊 or 🤖 emoji.
-TG post: Full performance breakdown with **bold** numbers, bullet points for positions. Professional fund update tone.
-
-CTA: "Track live → yieldr.org" or invite questions about the vault strategy.
+- Use **bold** for 3-4 key numbers
+- Bullet points for positions and activity
+- No character limit — full picture
+- End with "Track live → yieldr.org" CTA
 
 CONTENT RULES:
 - Only show winning positions in detail
-- If there are no positions or trades, acknowledge it honestly ("vault is in scanning mode")
-- This should feel like a professional fund update, not a shill
-- No character limit — give the full picture
+- If no positions/trades: "vault is in scanning mode — agents hunting the next edge"
+- If vault is down: be honest, show win rate/PF context, no spin
 - Use emojis for visual structure (📊 💰 🤖 📈 etc.)`;
 }

@@ -54,24 +54,21 @@ ${topTrade ? `MOST RECENT HIGH CONVICTION TRADE:
 ${winningPositions.length > 0 ? `CURRENTLY WINNING POSITIONS:
 ${winningPositions.map((p: any) => `- "${p.title?.substring(0, 60)}": ${p.outcome} @ $${p.avgPrice?.toFixed(2)} → now $${p.curPrice?.toFixed(2)} (+${p.percentPnl?.toFixed(0)}%)`).join('\n')}` : ''}
 
-NARRATIVE INSTRUCTIONS (this is the most important part):
-Write this like a mini investigative piece. Tell the STORY of this trader's edge:
-- What makes this trader unusual? (the win rate gap, the p-value, the specialty)
-- Where do they find alpha? (which categories, what strategy)
-- What are they doing RIGHT NOW? (current positions, recent HC trades)
-- What can we learn from their approach?
+NARRATIVE INSTRUCTIONS:
+Write ONE compelling post — investigative, story-driven, data-rich. This goes on both X and TG.
+- Hook: lead with the single most striking metric
+- Story: what makes this trader unusual, where they find alpha, what they're doing now
+- Use **bold** for 2-4 key numbers (win rate, PnL, edge gap, conviction size)
+- Bullet points for category strengths and positions
+- Short punchy sentences — tell a story, not a data dump
+- No character limit
 
-FORMAT:
-X post: 3-5 lines with line breaks. PLAIN TEXT only — no **bold** markdown (it doesn't render on X). Use CAPS or emojis for emphasis. Start with the most striking metric. Tell the story concisely.
-TG post: Full narrative — tell the complete story with all the data. Use **bold** for key numbers, bullet points for positions. 2-3 paragraphs.
-
-CTA (critical):
-End with: "Want to know the edge of any Polymarket trader? Drop a wallet address in the comments 👇" or a variation that invites wallet submissions. This is how we drive engagement — people WANT to know if their favorite traders have real edge.
+CTA (critical — always include):
+End with a variation of: "Want to know the edge of any Polymarket trader? Drop a wallet address in the comments 👇"
 
 CONTENT RULES:
 - Only mention winning positions (positive PnL, curPrice < 0.99)
-- Never use the phrase "turn X into reality"
-- For positions, phrase clearly: "betting [outcome] won't happen" not "No for X win"
-- No character limit — let the story breathe
-- Use emojis naturally (📊 🎯 🔥 💰 ⚡ etc.)`;
+- Never use "turn X into reality"
+- Phrase positions clearly: "betting this won't happen" not "No for X win"
+- Use emojis naturally (📊 🎯 🔥 💰 ⚡ 🏀 ⚽ 🌍 etc.)`;
 }

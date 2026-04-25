@@ -75,9 +75,18 @@ export async function generateStructuredContent(
 
   const parsed = JSON.parse(cleaned);
 
-  // Strip **bold** markdown from X tweet — it renders as raw text on X
-  if (parsed.tweet && typeof parsed.tweet === 'string') {
-    parsed.tweet = parsed.tweet.replace(/\*\*(.*?)\*\*/g, '$1');
+  // Single-content format: generate one rich narrative, format per-platform here
+  const rawContent: string = parsed.content || parsed.tweet || parsed.telegram || '';
+  if (rawContent) {
+    // X: strip **bold** (renders as raw text), keep emojis and line breaks
+    parsed.tweet = rawContent.replace(/\*\*(.*?)\*\*/g, '$1');
+    // TG: use original with markdown
+    parsed.telegram = rawContent;
+  } else {
+    // Legacy dual format: just strip ** from tweet
+    if (parsed.tweet) {
+      parsed.tweet = parsed.tweet.replace(/\*\*(.*?)\*\*/g, '$1');
+    }
   }
 
   return parsed;
