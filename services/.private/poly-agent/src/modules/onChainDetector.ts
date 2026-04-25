@@ -153,6 +153,7 @@ export class OnChainDetector extends EventEmitter {
 
     const ws = new WebSocket(this.cfg.wsUrl);
     this.ws  = ws;
+    const connectedAt = Date.now();
 
     ws.on('open', () => {
       this.emit('connected');
@@ -172,9 +173,11 @@ export class OnChainDetector extends EventEmitter {
       // close event will handle reconnect
     });
 
-    ws.on('close', (code) => {
+    ws.on('close', (code, reason) => {
+      const aliveSec = ((Date.now() - connectedAt) / 1000).toFixed(1);
       if (this.keepalive) { clearInterval(this.keepalive); this.keepalive = null; }
       if (this.stopped) return;
+      console.warn(`[OnChainDetector] WS closed code=${code} reason="${reason?.toString() || ''}" alive=${aliveSec}s → retry in ${this.reconnectMs}ms`);
       this.emit('reconnecting', { code, delayMs: this.reconnectMs });
       setTimeout(() => this.connect(), this.reconnectMs);
       // Exponential backoff: 50ms → 100ms → 500ms → 2s → 5s

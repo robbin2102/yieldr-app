@@ -98,12 +98,19 @@ export class MarketMetaResolver {
     ]) {
       try {
         const res = await fetch(url, { signal: AbortSignal.timeout(5_000) });
-        if (!res.ok) continue;
+        if (!res.ok) {
+          console.warn(`[MarketMetaResolver] ${url} → HTTP ${res.status}`);
+          continue;
+        }
 
         const data = await res.json() as any;
-        // Response may be a single object or an array with one element
-        const market = Array.isArray(data) ? data[0] : data;
-        if (!market?.condition_id) continue;
+        // CLOB API wraps results: { data: [...] } or a bare array or bare object
+        const inner = data?.data ?? data;
+        const market = Array.isArray(inner) ? inner[0] : inner;
+        if (!market?.condition_id) {
+          console.warn(`[MarketMetaResolver] ${url} → no condition_id in response:`, JSON.stringify(data).slice(0, 200));
+          continue;
+        }
 
         // Fee rate: geopolitical markets typically 0, others vary
         const feeRateBps = typeof market.fee_rate_bps === 'number'
