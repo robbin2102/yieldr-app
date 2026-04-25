@@ -197,6 +197,8 @@ export class TradeOrchestrator {
     // ── 7. BUY: bet sizing ────────────────────────────────────────────────
     const sizing = calcCopyBet(trade.usdcAmount, trader);
     if (sizing.skip) {
+      const ts = new Date().toISOString().slice(11, 19);
+      console.log(`[${ts}] ⏭  SKIP ${trader.label} ${trade.side} $${trade.usdcAmount.toFixed(0)} "${meta.title.slice(0, 35)}" → ${sizing.skipReason} ${sizing.skipDetail ?? ''}`);
       await recorder.skip(
         { ...trade, meta, strategy, copyBetUsdc: 0 } as RoutedTrade,
         sizing.skipReason!,
@@ -219,6 +221,8 @@ export class TradeOrchestrator {
       const cur = this.positionReserved.get(lockKey) ?? 0;
       const upd = Math.max(0, cur - sizing.betUsdc);
       if (upd === 0) this.positionReserved.delete(lockKey); else this.positionReserved.set(lockKey, upd);
+      const ts2 = new Date().toISOString().slice(11, 19);
+      console.log(`[${ts2}] ⏭  SKIP ${trader.label} ${trade.side} $${trade.usdcAmount.toFixed(0)} "${meta.title.slice(0, 35)}" → POSITION_CAP_FULL`);
       await recorder.skip({ ...trade, meta, strategy, copyBetUsdc: sizing.betUsdc } as RoutedTrade, 'POSITION_CAP_FULL');
       return;
     }
