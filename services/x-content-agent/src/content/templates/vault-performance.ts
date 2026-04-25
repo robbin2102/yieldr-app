@@ -6,43 +6,35 @@
 export function buildVaultPerformancePrompt(vault: any): string {
   const perf = vault.performance || {};
   const stats = vault.stats || {};
-  const trades = (vault.recentTrades || []).slice(0, 3);
-  const positions = (vault.openPositions || []).slice(0, 3);
+  const trades = (vault.recentTrades || []).filter((t: any) => t.market).slice(0, 2);
+  const positions = (vault.openPositions || [])
+    .filter((p: any) => (p.unrealizedPnl || 0) > 0)
+    .slice(0, 2);
 
   const tradeLines = trades.map((t: any) =>
-    `- ${t.market?.substring(0, 40)}: ${t.side} ${t.outcome || ''} @ $${t.price?.toFixed(2)}, PnL: ${t.pnl ? '$' + t.pnl.toLocaleString() : 'open'}${t.reasoning ? ' | Reason: ' + t.reasoning.substring(0, 60) : ''}`
+    `- "${t.market?.substring(0, 45)}": ${t.side} ${t.outcome} @ $${t.price?.toFixed(2)}${t.pnl ? ', PnL $' + t.pnl.toLocaleString() : ''}${t.reasoning ? '\n  Agent reasoning: "' + t.reasoning.substring(0, 80) + '"' : ''}`
   ).join('\n');
 
   const positionLines = positions.map((p: any) =>
-    `- ${p.market?.substring(0, 40)}: ${p.outcome} (unrealized: $${p.unrealizedPnl?.toLocaleString()})`
+    `- "${p.market?.substring(0, 45)}": ${p.outcome}, unrealized +$${p.unrealizedPnl?.toLocaleString()}`
   ).join('\n');
 
-  return `Generate a Vault Performance post for X.
+  return `Generate a Vault Performance post.
 
 VAULT: ${vault.name}
-${vault.description || ''}
+${vault.description ? vault.description.substring(0, 100) : ''}
 
 PERFORMANCE (${perf.period || '30d'}):
-- ROI: ${perf.roi ? (perf.roi > 0 ? '+' : '') + perf.roi.toFixed(1) + '%' : 'N/A'}
-- Total PnL: ${perf.totalPnl ? '$' + perf.totalPnl.toLocaleString() : 'N/A'}
-- NAV: ${perf.latestNav ? '$' + perf.latestNav.toLocaleString() : 'N/A'}
+- ROI: ${perf.roi != null ? (perf.roi > 0 ? '+' : '') + perf.roi.toFixed(1) + '%' : 'N/A'}
+- PnL: ${perf.totalPnl != null ? '$' + perf.totalPnl.toLocaleString() : 'N/A'}
+- Trades: ${stats.totalTrades || 'N/A'} | Win Rate: ${stats.winRate ? stats.winRate.toFixed(1) + '%' : 'N/A'}
 
-STATS:
-- Total Trades: ${stats.totalTrades || 'N/A'}
-- Win Rate: ${stats.winRate ? stats.winRate.toFixed(1) + '%' : 'N/A'}
-- Subscribers: ${stats.subscribers || 'N/A'}
+${tradeLines ? `RECENT AGENT TRADES:\n${tradeLines}` : ''}
+${positionLines ? `WINNING OPEN POSITIONS:\n${positionLines}` : ''}
 
-RECENT TRADES:
-${tradeLines || 'No recent trades'}
-
-OPEN POSITIONS:
-${positionLines || 'No open positions'}
-
-Create a compelling vault performance post that:
-1. Highlights the vault's ROI and key metrics
-2. Mentions a specific recent trade with the agent's reasoning
-3. Shows transparency (real numbers, real trades)
-4. Ends with a question driving engagement
-5. Ends with varied CTA inviting users to ask @yieldrdotorg about this vault's performance
-6. Max 280 characters`;
+IMPORTANT RULES:
+- Lead with the ROI or a specific trade that shows the agent working
+- If there's agent reasoning available, quote one short phrase from it — it's the most compelling signal of transparency
+- Show the vault earning, not just existing
+- End with a question about performance or the agent strategy`;
 }

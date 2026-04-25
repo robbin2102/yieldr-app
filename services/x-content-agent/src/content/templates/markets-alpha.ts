@@ -10,30 +10,41 @@ export function buildMarketsAlphaPrompt(data: {
 }): string {
   const { markets, traderPositions, trendKeyword } = data;
 
-  const marketLines = markets.slice(0, 3).map((m: any) =>
-    `- "${m.question?.substring(0, 60)}" | Volume: $${m.volume?.toLocaleString()} | Odds: ${m.outcomePrices || 'N/A'} | 24h change: ${m.oneDayPriceChange ? (m.oneDayPriceChange > 0 ? '+' : '') + m.oneDayPriceChange.toFixed(1) + '%' : 'N/A'}`
+  const topMarket = markets[0];
+  const otherMarkets = markets.slice(1, 3);
+
+  const marketLine = topMarket
+    ? `- "${topMarket.question?.substring(0, 70)}"
+  Volume: $${topMarket.volume?.toLocaleString()} | Current odds: ${topMarket.outcomePrices} | 24h move: ${topMarket.oneDayPriceChange ? (topMarket.oneDayPriceChange > 0 ? '+' : '') + (topMarket.oneDayPriceChange * 100).toFixed(1) + '%' : 'flat'}`
+    : 'No markets found';
+
+  const otherLines = otherMarkets.map((m: any) =>
+    `- "${m.question?.substring(0, 60)}" | $${m.volume?.toLocaleString()} vol`
   ).join('\n');
 
-  const positionLines = (traderPositions || []).slice(0, 3).map((p: any) =>
-    `- Trader ${p.wallet?.substring(0, 8)}... (${p.traderEdge?.winRate?.toFixed(0)}% WR, ${p.traderEdge?.profitFactor?.toFixed(1)} PF): ${p.outcome} @ $${p.avgPrice?.toFixed(2)}, holding $${p.currentValue?.toLocaleString()}`
-  ).join('\n');
+  // Only winning trader positions
+  const winningPositions = (traderPositions || [])
+    .filter((p: any) => (p.percentPnl || 0) > 0)
+    .slice(0, 2)
+    .map((p: any) =>
+      `- ${p.traderEdge?.winRate?.toFixed(0)}% WR trader: ${p.outcome} @ $${p.avgPrice?.toFixed(2)}, up ${p.percentPnl?.toFixed(0)}%`
+    ).join('\n');
 
-  return `Generate a Markets Alpha post for X.
+  return `Generate a Markets Alpha post.
 
-${trendKeyword ? `TRENDING TOPIC: "${trendKeyword}"` : ''}
+${trendKeyword ? `TRENDING NOW: "${trendKeyword}"` : ''}
 
-MATCHING POLYMARKET MARKETS:
-${marketLines || 'No matching markets found'}
+TOP MATCHING POLYMARKET:
+${marketLine}
 
-TOP EDGE TRADERS POSITIONED IN THESE MARKETS:
-${positionLines || 'No edge trader positions found'}
+${otherMarkets.length > 0 ? `RELATED MARKETS:\n${otherLines}` : ''}
 
-Create a compelling post that:
-1. Connects the trending topic or market to prediction market alpha
-2. Shares specific odds and volumes
-3. If top traders are positioned, highlight their conviction
-4. Frames it as actionable intelligence
-5. Ends with a question or poll driving engagement
-6. Ends with varied CTA inviting users to ask @yieldrdotorg for more market alpha
-7. Max 280 characters`;
+${winningPositions ? `SMART MONEY POSITIONING (edge-ranked traders currently winning in this market):
+${winningPositions}` : ''}
+
+IMPORTANT RULES:
+- Lead with the most interesting market signal — an odds move, volume spike, or smart money position
+- Connect the real-world event to the market odds in one crisp sentence
+- If smart money is positioned, mention it as a signal — not a recommendation
+- End with a question that makes people think about the outcome`;
 }

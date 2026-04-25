@@ -6,36 +6,46 @@
 export function buildTraderAlphaPrompt(traderData: any): string {
   const t = traderData;
   const metrics = t.metrics || {};
-  const positions = (t.topOpenPositions || []).slice(0, 3);
-  const hcTrades = (t.highConviction?.recentTrades || []).slice(0, 2);
-  const strengths = (t.strengths || []).slice(0, 2);
 
-  return `Generate a Trader Profile Alpha post for X.
+  // Only show winning open positions
+  const winningPositions = (t.topOpenPositions || [])
+    .filter((p: any) => (p.percentPnl || p.cashPnl || 0) > 0 && p.curPrice < 0.99)
+    .slice(0, 2);
+
+  // Top HC trade
+  const topTrade = (t.highConviction?.recentTrades || [])[0];
+
+  // Top strength category
+  const topStrength = (t.strengths || [])[0];
+
+  return `Generate a Trader Profile Alpha post.
 
 TRADER DATA:
-- Wallet: ${t.wallet?.substring(0, 8)}...${t.wallet?.substring(t.wallet.length - 4)}
-- Label: ${t.label || 'Anonymous Edge Trader'}
 - Specialty: ${t.specialty || 'Multi-category'}
-- Win Rate: ${metrics.winRate?.toFixed(1)}%
-- Profit Factor: ${metrics.profitFactor?.toFixed(2)}
-- Net PnL: $${metrics.netPnl?.toLocaleString()}
-- Avg Trade Size: $${metrics.avgTradeSize?.toLocaleString()}
-- Total Trades: ${metrics.closedPositionsCount}
+- Win Rate: ${metrics.winRate?.toFixed(1)}% vs expected ${(t.edge?.expectedWinRate * 100)?.toFixed(1)}% (this gap IS the edge)
+- Profit Factor: ${metrics.profitFactor?.toFixed(2)}x
+- 30-day PnL: $${metrics.pnl30d?.toLocaleString() || metrics.netPnl?.toLocaleString()}
+- 30-day ROCE: ${metrics.roce30d?.toFixed(0)}%
+- Sample size: ${metrics.sampleSize} closed trades (statistical confidence: ${t.confidence})
+- Strategy: ${t.strategyLabel || 'Unknown'}
+- Insider signal: ${t.insider || 'none'}
 
-TOP STRENGTHS:
-${strengths.map((s: any) => `- ${s.category}: ${s.winRate?.toFixed(1)}% win rate, $${s.totalPnl?.toLocaleString()} PnL`).join('\n') || 'N/A'}
+${topStrength ? `TOP CATEGORY EDGE:
+- ${topStrength.category}: ${topStrength.winRate?.toFixed(1)}% win rate across ${topStrength.trades} trades, $${topStrength.totalPnl?.toLocaleString()} PnL` : ''}
 
-CURRENT OPEN POSITIONS:
-${positions.map((p: any) => `- ${p.title?.substring(0, 50)}: ${p.outcome} @ $${p.avgPrice?.toFixed(2)} → $${p.curPrice?.toFixed(2)} (${p.percentPnl > 0 ? '+' : ''}${p.percentPnl?.toFixed(1)}%)`).join('\n') || 'No open positions'}
+${topTrade ? `MOST RECENT HIGH CONVICTION TRADE:
+- Market: "${topTrade.market?.substring(0, 60)}"
+- Position: ${topTrade.outcome}
+- Size: $${topTrade.usdcSize?.toLocaleString()} (${topTrade.sizeMultiplier?.toFixed(0)}x their typical trade)
+- Price: $${topTrade.price?.toFixed(2)}` : ''}
 
-RECENT HIGH CONVICTION TRADES:
-${hcTrades.map((h: any) => `- ${h.market?.substring(0, 50)}: ${h.outcome} for $${h.usdcSize?.toLocaleString()} (${h.sizeMultiplier?.toFixed(0)}x avg size)`).join('\n') || 'None recent'}
+${winningPositions.length > 0 ? `WINNING OPEN POSITIONS:
+${winningPositions.map((p: any) => `- "${p.title?.substring(0, 50)}": ${p.outcome} @ $${p.avgPrice?.toFixed(2)} → $${p.curPrice?.toFixed(2)} (currently +${p.percentPnl?.toFixed(0)}%)`).join('\n')}` : ''}
 
-Create a compelling post that:
-1. Highlights this trader's edge and specialty
-2. Shares specific numbers (win rate, PnL, profit factor)
-3. Mentions a current position or recent high conviction trade
-4. Ends with a question driving engagement
-5. Ends with varied CTA inviting users to ask @yieldrdotorg for more trader alpha
-6. Max 280 characters`;
+IMPORTANT RULES:
+- Lead with the single most striking stat (ROCE, win rate gap, or a specific position — NOT the wallet or name)
+- Pick max 2 numbers to mention — discard the rest
+- Only mention winning positions
+- The hook should make a reader stop scrolling
+- End with a question that invites engagement`;
 }

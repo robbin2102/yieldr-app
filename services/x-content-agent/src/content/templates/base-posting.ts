@@ -1,6 +1,6 @@
 /**
  * Base Ecosystem Posting Template
- * Generates posts based on content from top Base accounts
+ * Generates posts connecting Base ecosystem news to Yieldr
  */
 
 export function buildBasePostingPrompt(data: {
@@ -9,27 +9,27 @@ export function buildBasePostingPrompt(data: {
 }): string {
   const { sourcePost, context } = data;
 
-  return `Generate a Base ecosystem post for X from the Yieldr (@yieldrdotorg) perspective.
+  return `Generate a Base ecosystem post${sourcePost ? ' as a quote tweet' : ''}.
 
-${sourcePost ? `BASE COMMUNITY POST (from @${sourcePost.author}):
+${sourcePost ? `SOURCE POST BY @${sourcePost.author}:
 "${sourcePost.text.substring(0, 200)}"
-` : ''}
 
-YIELDR CONTEXT FOR BASE:
-- Yieldr is building Agentic Trading Vaults on Base
-- Winner of Base Batches 002 and Incubase accelerator
-- Everything on-chain on Base, fully verifiable
-- AI agents trade Polymarket, returns compound in on-chain vaults
-- $100K project capital deployed first before public access
+This is a quote tweet — build on their point with Yieldr's angle.` : 'Generate a standalone Base ecosystem post.'}
+
+YIELDR CONTEXT:
+- Yieldr is live on Base — on-chain vaults, public treasury, verifiable trades
+- Winner of Base Batches 002 and Incubase
+- $100K project capital already deployed and earning
+- Early Access: $100 → $50 Base USDC at 4.5% APY + $50 YLDR at $9M FDV
 ${context || ''}
 
-Create a Base ecosystem post that:
-1. ${sourcePost ? 'Builds on the source post topic with Yieldr perspective' : 'Shares genuine Base ecosystem insight'}
-2. Shows Yieldr as an active Base community builder
-3. Adds value with trading/DeFi/AI perspective
-4. Does NOT shill — contribute genuine alpha to the conversation
-5. Ends with a question driving engagement
-6. Ends with varied CTA inviting users to ask @yieldrdotorg for more Base alpha
-7. Max 280 characters
-${sourcePost ? `8. This is type "quote" referencing tweet ID ${sourcePost.tweetId}` : '8. This is type "post"'}`;
+IMPORTANT RULES:
+- Connect the Base ecosystem topic to Yieldr's on-chain execution angle
+- Add alpha — something specific about Base or on-chain trading that the audience gains
+- Don't shill Yieldr directly — position as a builder in the Base community sharing perspective
+- One clean insight, one Yieldr connection, one question
+- If quote tweet: acknowledge their point, then add Yieldr's angle
+- End with a question that connects to prediction markets or on-chain trading
+- Max 280 characters
+${sourcePost ? `- Type: "quote", target_post_id: "${sourcePost.tweetId}"` : '- Type: "post"'}`;
 }

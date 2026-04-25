@@ -35,8 +35,8 @@ const DUAL_OUTPUT_INSTRUCTION = `
 IMPORTANT: Return JSON with BOTH an X tweet and a Telegram channel post:
 {
   "type": "post",
-  "tweet": "X tweet text (max 280 chars, no hashtags, end with question + CTA)",
-  "telegram": "Telegram channel post (can be longer, use markdown bold **text**, bullet points, emojis for visual appeal, include key data points, 3-8 lines, end with CTA to join TG or visit yieldr.org)"
+  "tweet": "X tweet (max 280 chars, no hashtags, narrative arc: hook → context → signal → question)",
+  "telegram": "TG channel post (2-3x longer than tweet, use **bold** for numbers and labels, bullet points for multiple data points, only winning positions, end with CTA linking to yieldr.org — do NOT include raw TG invite links)"
 }`;
 
 interface DualContent {

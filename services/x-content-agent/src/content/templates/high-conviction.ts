@@ -1,30 +1,31 @@
 /**
  * High Conviction Trade Alert Template
- * Generates posts about whale trades from top edge traders
+ * Generates posts about whale trades from top edge-ranked traders
  */
 
 export function buildHighConvictionPrompt(trade: any): string {
-  return `Generate a High Conviction Trade Alert post for X.
+  const winRate = trade.traderContext?.winRate || trade.traderWinRate;
+  const pf = trade.traderContext?.profitFactor || trade.traderProfitFactor;
+  const avgSize = trade.traderContext?.avgTradeSize;
+
+  return `Generate a High Conviction Trade Alert post.
 
 WHALE TRADE DETECTED:
-- Trader: ${trade.traderLabel || trade.wallet?.substring(0, 8) + '...' + trade.wallet?.substring(trade.wallet.length - 4)}
 - Market: "${trade.market}"
 - Position: ${trade.outcome} @ $${trade.price?.toFixed(2)}
-- Size: $${trade.usdcValue?.toLocaleString()}
-- Size vs Average: ${trade.sizeMultiplier?.toFixed(0)}x their normal trade size
+- Size: $${(trade.usdcValue || trade.usdcSize)?.toLocaleString()}
+- vs Their Average: ${trade.sizeMultiplier?.toFixed(0)}x their normal trade${avgSize ? ` (avg $${avgSize?.toFixed(0)})` : ''}
 - Conviction Level: ${trade.convictionLevel}
 
-TRADER EDGE:
-- Win Rate: ${trade.traderContext?.winRate?.toFixed(1)}%
-- Profit Factor: ${trade.traderContext?.profitFactor?.toFixed(2)}
-- Avg Trade Size: $${trade.traderContext?.avgTradeSize?.toLocaleString()}
+TRADER CREDENTIALS:
+${winRate ? `- Win Rate: ${winRate?.toFixed(1)}%` : ''}
+${pf ? `- Profit Factor: ${pf?.toFixed(2)}x` : ''}
+- Specialty: ${trade.specialty || 'Unknown'}
 
-Create an urgent, data-driven alert post that:
-1. Leads with the whale trade signal (size, multiplier)
-2. Shows the trader's edge credentials
-3. Names the specific market and position
-4. Creates urgency without hype
-5. Ends with a question driving engagement
-6. Ends with varied CTA inviting users to ask @yieldrdotorg for more whale alerts
-7. Max 280 characters`;
+IMPORTANT RULES:
+- Lead with the SIZE of the trade and the multiplier — that's the signal
+- One sentence on what the trader is betting ON specifically
+- One sentence on the trader's credentials (win rate or profit factor — pick one)
+- The urgency should be real data, not hype words
+- End with a sharp question — what does this trader know?`;
 }
