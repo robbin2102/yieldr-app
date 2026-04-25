@@ -84,6 +84,10 @@ export class OnChainDetector extends EventEmitter {
   // block timestamp cache (blockHex → unix ms)
   private blockTsCache = new Map<string, number>();
 
+  // Reconnect catch-up: replay fills from the block before disconnect
+  private lastSeenBlockDec: number = 0;  // highest block number seen from live events
+  private catchupFromBlock: number = 0;  // set on close, consumed once after reconnect
+
   constructor(private readonly cfg: OnChainDetectorConfig) {
     super();
   }
@@ -177,6 +181,8 @@ export class OnChainDetector extends EventEmitter {
       const aliveSec = ((Date.now() - connectedAt) / 1000).toFixed(1);
       if (this.keepalive) { clearInterval(this.keepalive); this.keepalive = null; }
       if (this.stopped) return;
+      // Snapshot block for catch-up query after reconnect
+      if (this.lastSeenBlockDec > 0) this.catchupFromBlock = this.lastSeenBlockDec;
       console.warn(`[OnChainDetector] WS closed code=${code} reason="${reason?.toString() || ''}" alive=${aliveSec}s → retry in ${this.reconnectMs}ms`);
       this.emit('reconnecting', { code, delayMs: this.reconnectMs });
       setTimeout(() => this.connect(), this.reconnectMs);
@@ -225,6 +231,8 @@ export class OnChainDetector extends EventEmitter {
         this.subsConfirmed = 0;
         this.reconnectMs = 50; // reset backoff — connection is healthy
         console.log(`[OnChainDetector] Both subscriptions active (CTF+NEG_RISK, v1+v2) — watching ${this.trackedWallets.size} traders`);
+        // Replay any fills that arrived during the reconnect gap
+        this.catchUpMissedBlocks().catch(e => console.warn('[OnChainDetector] Catch-up error:', e.message));
       }
       return;
     }
@@ -239,6 +247,10 @@ export class OnChainDetector extends EventEmitter {
   }
 
   private async handleFill(log: any, receivedAtMs: number): Promise<void> {
+    // Track highest block for reconnect catch-up
+    const blockDec = parseInt(log.blockNumber, 16);
+    if (blockDec > this.lastSeenBlockDec) this.lastSeenBlockDec = blockDec;
+
     const maker = ('0x' + log.topics[2].slice(26)).toLowerCase();
     const taker = ('0x' + log.topics[3].slice(26)).toLowerCase();
 
@@ -316,6 +328,57 @@ export class OnChainDetector extends EventEmitter {
     };
 
     this.emit('trade', trade);
+  }
+
+  // ── Reconnect catch-up ────────────────────────────────────────────────────────
+
+  private async catchUpMissedBlocks(): Promise<void> {
+    const fromBlock = this.catchupFromBlock;
+    this.catchupFromBlock = 0;
+    if (fromBlock === 0) return;
+
+    // Get current tip
+    const tipRes = await fetch(this.cfg.httpUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 97, method: 'eth_blockNumber', params: [] }),
+      signal: AbortSignal.timeout(5_000),
+    });
+    const tipJson = await tipRes.json() as any;
+    const toBlock = parseInt(tipJson.result, 16);
+    if (isNaN(toBlock) || toBlock < fromBlock) return;
+
+    // Cap to 150 blocks (~5min) to avoid oversized queries
+    const cappedFrom = Math.max(fromBlock, toBlock - 150);
+    const blockCount = toBlock - cappedFrom + 1;
+    console.log(`[OnChainDetector] Catch-up: scanning ${blockCount} block(s) (${cappedFrom}→${toBlock}) for missed fills`);
+
+    for (const addresses of [
+      [CTF_EXCHANGE, CTF_V2_EXCHANGE],
+      [NEG_RISK_EXCHANGE, NEG_RISK_V2_EXCHANGE],
+    ]) {
+      try {
+        const logsRes = await fetch(this.cfg.httpUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            jsonrpc: '2.0', id: 98, method: 'eth_getLogs',
+            params: [{ fromBlock: `0x${cappedFrom.toString(16)}`, toBlock: `0x${toBlock.toString(16)}`, address: addresses, topics: [TOPIC0] }],
+          }),
+          signal: AbortSignal.timeout(10_000),
+        });
+        const logsJson = await logsRes.json() as any;
+        const logs: any[] = logsJson.result ?? [];
+        if (logs.length > 0) {
+          console.log(`[OnChainDetector] Catch-up: replaying ${logs.length} fill event(s) — duplicates will be deduped by DB`);
+          for (const log of logs) {
+            await this.handleFill(log, Date.now());
+          }
+        }
+      } catch (e: any) {
+        console.warn('[OnChainDetector] Catch-up eth_getLogs failed:', e.message);
+      }
+    }
   }
 
   // ── Block timestamp (HTTP, cached) ──────────────────────────────────────────
