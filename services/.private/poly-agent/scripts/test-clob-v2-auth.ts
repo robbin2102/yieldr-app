@@ -94,15 +94,26 @@ async function main() {
   // ── 2. Orderbook fetch (unauthenticated) ──────────────────────────────────
   console.log('\n── 2. Orderbook ─────────────────────────────────────────────');
   try {
-    const url = `${CLOB_HOST}/book?token_id=${TEST_TOKEN_ID}`;
+    // If no TEST_TOKEN_ID, auto-discover a liquid token from the markets list
+    let tokenId = TEST_TOKEN_ID;
+    if (!process.env.TEST_TOKEN_ID) {
+      const mRes  = await fetch(`${CLOB_HOST}/markets?limit=5&active=true`);
+      const mData = await mRes.json() as any;
+      const markets = mData?.data ?? mData ?? [];
+      for (const m of markets) {
+        const tid = m.tokens?.[0]?.token_id ?? m.token_id;
+        if (tid) { tokenId = tid; break; }
+      }
+    }
+    const url = `${CLOB_HOST}/book?token_id=${tokenId}`;
     const res = await fetch(url);
     if (!res.ok) {
-      fail(`GET /book?token_id=... → HTTP ${res.status} (token may not exist — set TEST_TOKEN_ID env)`);
+      fail(`GET /book → HTTP ${res.status}`);
     } else {
       const book = await res.json() as any;
       const bestBid = book?.bids?.[0]?.price ?? 'n/a';
       const bestAsk = book?.asks?.[0]?.price ?? 'n/a';
-      ok(`Orderbook OK — bid=${bestBid} ask=${bestAsk} (token ...${TEST_TOKEN_ID.slice(-8)})`);
+      ok(`Orderbook OK — bid=${bestBid} ask=${bestAsk} (token ...${tokenId.slice(-8)})`);
     }
   } catch (err: any) {
     fail(`Orderbook fetch failed: ${err.message}`);
