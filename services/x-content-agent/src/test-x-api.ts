@@ -102,16 +102,7 @@ async function testXApi() {
       console.log(`   ✓ Posted tweet: ${tweet.id}`);
       console.log(`   URL: https://x.com/i/status/${tweet.id}`);
 
-      // Auto-delete test tweet after 5 seconds
-      console.log('   Deleting test tweet in 5s...');
-      await new Promise(r => setTimeout(r, 5000));
-      try {
-        const client = getXClient();
-        await client.v2.deleteTweet(tweet.id);
-        console.log('   ✓ Test tweet deleted');
-      } catch {
-        console.log('   ⚠ Could not delete test tweet (delete manually)');
-      }
+      console.log('   Delete manually when done: https://x.com/yieldrdotorg');
     } catch (error: any) {
       console.error(`   ✗ Posting failed: ${error.message}`);
     }
