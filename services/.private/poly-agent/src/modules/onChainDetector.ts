@@ -33,6 +33,14 @@ const TOPIC0 = ORDER_FILLED_IFACE.getEventTopic('OrderFilled');
 // Skip events older than this — handles reconnect backlog replay
 const STALE_THRESHOLD_MS = 5 * 60 * 1000;
 
+// All 4 exchange contract addresses in one array (used for both subscriptions and catch-up)
+const ALL_EXCHANGE_ADDRESSES = [CTF_EXCHANGE, CTF_V2_EXCHANGE, NEG_RISK_EXCHANGE, NEG_RISK_V2_EXCHANGE];
+
+// Pad a 20-byte address to 32 bytes for use in topic filter arrays
+function padAddress(addr: string): string {
+  return '0x' + '000000000000000000000000' + addr.replace(/^0x/, '').toLowerCase();
+}
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 export interface DetectedTrade {
   wallet:           string;   // tracked wallet address (lowercase)
@@ -162,13 +170,13 @@ export class OnChainDetector extends EventEmitter {
     ws.on('open', () => {
       this.emit('connected');
       this.subscribeAll(ws);
-      // Dual keepalive: JSON-RPC every 10s (QuickNode requires this) + WS ping every 25s
-      // (catches network-level 1006 drops that JSON-RPC alone misses)
+      // Dual keepalive: JSON-RPC every 30s + WS ping every 25s.
+      // 30s is sufficient to prevent idle-timeout; lower values waste API credits.
       this.keepalive = setInterval(() => {
         if (ws.readyState !== WebSocket.OPEN) return;
         ws.send(JSON.stringify({ jsonrpc: '2.0', id: 99, method: 'eth_blockNumber', params: [] }));
-      }, 10_000);
-      // WS-level ping — triggers pong from QuickNode, detected by node's net stack
+      }, 30_000);
+      // WS-level ping — triggers pong from QuickNode, catches 1006 network-level drops faster
       const wsPing = setInterval(() => {
         if (ws.readyState === WebSocket.OPEN) ws.ping();
         else clearInterval(wsPing);
@@ -200,19 +208,23 @@ export class OnChainDetector extends EventEmitter {
   // ── Subscriptions ───────────────────────────────────────────────────────────
 
   private subscribeAll(ws: WebSocket): void {
-    // 2 subscriptions: CTF group + NEG_RISK group, each with v1+v2 address arrays.
-    // Using address arrays in the `address` field is standard EVM WS behavior and
-    // works on QuickNode. The previous 4-subscription approach caused immediate
-    // code=1006 disconnects (QuickNode sub limit).
-    // Wallet filtering remains client-side in handleFill().
-    const subs = [
-      { id: 1, address: [CTF_EXCHANGE,      CTF_V2_EXCHANGE]      },
-      { id: 2, address: [NEG_RISK_EXCHANGE, NEG_RISK_V2_EXCHANGE] },
-    ];
+    // Server-side wallet topic filter: only receive events where maker OR taker is one of
+    // our tracked wallets. maker=topics[2], taker=topics[3] — both are indexed in OrderFilled.
+    // This reduces received events from ALL Polymarket fills to only our wallets' fills,
+    // cutting eth_subscribe API credit consumption by ~99%.
+    const walletTopics = [...this.trackedWallets.keys()].map(padAddress);
 
-    for (const s of subs) {
-      ws.send(JSON.stringify({ jsonrpc: '2.0', id: s.id, method: 'eth_subscribe', params: ['logs', { address: s.address, topics: [TOPIC0] }] }));
-    }
+    // Sub 1: maker is one of our wallets  (topics = [event, any, [wallets]])
+    ws.send(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_subscribe', params: ['logs', {
+      address: ALL_EXCHANGE_ADDRESSES,
+      topics:  [TOPIC0, null, walletTopics],
+    }]}));
+
+    // Sub 2: taker is one of our wallets  (topics = [event, any, any, [wallets]])
+    ws.send(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'eth_subscribe', params: ['logs', {
+      address: ALL_EXCHANGE_ADDRESSES,
+      topics:  [TOPIC0, null, null, walletTopics],
+    }]}));
   }
 
   // ── Message handling ────────────────────────────────────────────────────────
@@ -236,7 +248,7 @@ export class OnChainDetector extends EventEmitter {
       if (this.subsConfirmed >= 2) {
         this.subsConfirmed = 0;
         this.reconnectMs = 50; // reset backoff — connection is healthy
-        console.log(`[OnChainDetector] Both subscriptions active (CTF+NEG_RISK, v1+v2) — watching ${this.trackedWallets.size} traders`);
+        console.log(`[OnChainDetector] Both subscriptions active — server-side filter: ${this.trackedWallets.size} wallet(s), all 4 exchanges`);
         // Replay any fills that arrived during the reconnect gap
         this.catchUpMissedBlocks().catch(e => console.warn('[OnChainDetector] Catch-up error:', e.message));
       }
@@ -359,25 +371,37 @@ export class OnChainDetector extends EventEmitter {
     const blockCount = toBlock - cappedFrom + 1;
     console.log(`[OnChainDetector] Catch-up: scanning ${blockCount} block(s) (${cappedFrom}→${toBlock}) for missed fills`);
 
-    for (const addresses of [
-      [CTF_EXCHANGE, CTF_V2_EXCHANGE],
-      [NEG_RISK_EXCHANGE, NEG_RISK_V2_EXCHANGE],
-    ]) {
+    // Use wallet topic filter on catch-up too — same wallets as live subscriptions
+    const walletTopics = [...this.trackedWallets.keys()].map(padAddress);
+
+    // Two passes: one for maker, one for taker (can't OR across topic positions in a single call)
+    const topicFilters = [
+      [TOPIC0, null, walletTopics],           // maker is our wallet
+      [TOPIC0, null, null, walletTopics],     // taker is our wallet
+    ];
+
+    const fromBlockHex = `0x${cappedFrom.toString(16)}`;
+    const toBlockHex   = `0x${toBlock.toString(16)}`;
+    const seenTxHashes = new Set<string>(); // dedup within catch-up (maker+taker overlap)
+
+    for (const topics of topicFilters) {
       try {
         const logsRes = await fetch(this.cfg.httpUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             jsonrpc: '2.0', id: 98, method: 'eth_getLogs',
-            params: [{ fromBlock: `0x${cappedFrom.toString(16)}`, toBlock: `0x${toBlock.toString(16)}`, address: addresses, topics: [TOPIC0] }],
+            params: [{ fromBlock: fromBlockHex, toBlock: toBlockHex, address: ALL_EXCHANGE_ADDRESSES, topics }],
           }),
           signal: AbortSignal.timeout(10_000),
         });
         const logsJson = await logsRes.json() as any;
         const logs: any[] = logsJson.result ?? [];
-        if (logs.length > 0) {
-          console.log(`[OnChainDetector] Catch-up: replaying ${logs.length} fill event(s) — duplicates will be deduped by DB`);
-          for (const log of logs) {
+        const fresh = logs.filter(l => !seenTxHashes.has(l.transactionHash));
+        if (fresh.length > 0) {
+          console.log(`[OnChainDetector] Catch-up: replaying ${fresh.length} fill event(s) — duplicates deduped by DB`);
+          for (const log of fresh) {
+            seenTxHashes.add(log.transactionHash);
             await this.handleFill(log, Date.now());
           }
         }
