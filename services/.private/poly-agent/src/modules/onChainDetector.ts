@@ -162,12 +162,18 @@ export class OnChainDetector extends EventEmitter {
     ws.on('open', () => {
       this.emit('connected');
       this.subscribeAll(ws);
-      // Keepalive: JSON-RPC request every 10s (WS ping frames not sufficient for QuickNode)
+      // Dual keepalive: JSON-RPC every 10s (QuickNode requires this) + WS ping every 25s
+      // (catches network-level 1006 drops that JSON-RPC alone misses)
       this.keepalive = setInterval(() => {
-        if (ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ jsonrpc: '2.0', id: 99, method: 'eth_blockNumber', params: [] }));
-        }
+        if (ws.readyState !== WebSocket.OPEN) return;
+        ws.send(JSON.stringify({ jsonrpc: '2.0', id: 99, method: 'eth_blockNumber', params: [] }));
       }, 10_000);
+      // WS-level ping — triggers pong from QuickNode, detected by node's net stack
+      const wsPing = setInterval(() => {
+        if (ws.readyState === WebSocket.OPEN) ws.ping();
+        else clearInterval(wsPing);
+      }, 25_000);
+      ws.on('close', () => clearInterval(wsPing));
     });
 
     ws.on('message', (raw: Buffer) => this.handleMessage(ws, raw));
