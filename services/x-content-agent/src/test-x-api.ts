@@ -12,18 +12,21 @@
  * Total estimated cost: ~$0.05-0.10
  */
 
-import * as dotenv from 'dotenv';
-import * as path from 'path';
+// Use require() for dotenv so it runs BEFORE TypeScript import hoisting loads x-client/config
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const dotenv = require('dotenv');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const path = require('path');
 
-dotenv.config({ path: path.resolve(__dirname, '../.env') });
-dotenv.config({ path: path.resolve(__dirname, '../../../.env.local') });
+dotenv.config({ path: path.resolve(process.cwd(), 'services/x-content-agent/.env') });
+dotenv.config({ path: path.resolve(process.cwd(), '.env.local') });
+dotenv.config({ path: path.resolve(process.cwd(), 'services/.private/poly-agent/env.polyagent') });
 
 import {
   verifyCredentials,
   postTweet,
   getMentions,
   getUserByUsername,
-  likeTweet,
   getXClient,
 } from './lib/x-client';
 
@@ -78,7 +81,7 @@ async function testXApi() {
   // Test 3: Look up a user
   console.log('\n3. Testing user lookup...');
   try {
-    const user = await getUserByUsername('base');
+    const user = await getUserByUsername('yieldrdotorg');
     if (user) {
       console.log(`   ✓ Found @${user.username} (ID: ${user.id})`);
     } else {

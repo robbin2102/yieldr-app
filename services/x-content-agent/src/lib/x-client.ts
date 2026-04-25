@@ -27,11 +27,12 @@ let authenticatedUserId: string | null = null;
  */
 export function getXClient(): TwitterApi {
   if (!client) {
+    // Read at call time so dotenv has a chance to load before first use
     client = new TwitterApi({
-      appKey: CONFIG.X_API_KEY,
-      appSecret: CONFIG.X_API_SECRET,
-      accessToken: CONFIG.X_ACCESS_TOKEN,
-      accessSecret: CONFIG.X_ACCESS_SECRET,
+      appKey: process.env.X_API_KEY || CONFIG.X_API_KEY,
+      appSecret: process.env.X_API_SECRET || CONFIG.X_API_SECRET,
+      accessToken: process.env.X_ACCESS_TOKEN || CONFIG.X_ACCESS_TOKEN,
+      accessSecret: process.env.X_ACCESS_SECRET || CONFIG.X_ACCESS_SECRET,
     });
   }
   return client;
@@ -43,7 +44,7 @@ export function getXClient(): TwitterApi {
  */
 export function getReadOnlyClient(): TwitterApi {
   if (!readOnlyClient) {
-    readOnlyClient = new TwitterApi(CONFIG.X_BEARER_TOKEN);
+    readOnlyClient = new TwitterApi(process.env.X_BEARER_TOKEN || CONFIG.X_BEARER_TOKEN);
   }
   return readOnlyClient;
 }
