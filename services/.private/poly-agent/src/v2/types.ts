@@ -39,7 +39,7 @@ export interface RoutedTrade {
   tokenAmount:      number;   // trader's token size
   impliedPrice:     number;   // trader's execution price
   tokenId:          string;
-  exchange:         'CTF' | 'NEG_RISK';
+  exchange:         'CTF' | 'NEG_RISK' | 'CTF_V2' | 'NEG_RISK_V2';
   blockTimestampMs: number;
   receivedAtMs:     number;
   lagMs:            number;

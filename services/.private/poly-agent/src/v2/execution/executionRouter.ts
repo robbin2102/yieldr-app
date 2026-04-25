@@ -28,8 +28,8 @@ export interface IExecutor {
 export class ExecutionRouter {
   // Per-token overrides — highest priority
   private tokenOverrides    = new Map<string, ResolvedStrategy>();
-  // Per-exchange overrides
-  private exchangeOverrides = new Map<'CTF' | 'NEG_RISK', ResolvedStrategy>();
+  // Per-exchange overrides (v1 and v2 variants addressable separately)
+  private exchangeOverrides = new Map<RoutedTrade['exchange'], ResolvedStrategy>();
   // Global default
   private globalStrategy: ExecutionStrategy;
 
@@ -53,7 +53,7 @@ export class ExecutionRouter {
     console.log(`[ExecutionRouter] Token ${tokenId.slice(0, 12)}... → ${strategy}`);
   }
 
-  setExchangeStrategy(exchange: 'CTF' | 'NEG_RISK', strategy: ResolvedStrategy): void {
+  setExchangeStrategy(exchange: RoutedTrade['exchange'], strategy: ResolvedStrategy): void {
     this.exchangeOverrides.set(exchange, strategy);
     console.log(`[ExecutionRouter] ${exchange} exchange → ${strategy}`);
   }
@@ -63,13 +63,13 @@ export class ExecutionRouter {
     console.log(`[ExecutionRouter] Cleared override for ${tokenId.slice(0, 12)}...`);
   }
 
-  clearExchangeOverride(exchange: 'CTF' | 'NEG_RISK'): void {
+  clearExchangeOverride(exchange: RoutedTrade['exchange']): void {
     this.exchangeOverrides.delete(exchange);
   }
 
   // ── Routing ────────────────────────────────────────────────────────────────
 
-  resolve(tokenId: string, exchange: 'CTF' | 'NEG_RISK'): ResolvedStrategy {
+  resolve(tokenId: string, exchange: RoutedTrade['exchange']): ResolvedStrategy {
     // 1. Per-token
     const tokenOverride = this.tokenOverrides.get(tokenId.toLowerCase());
     if (tokenOverride) return tokenOverride;
@@ -82,9 +82,9 @@ export class ExecutionRouter {
     if (this.globalStrategy === 'market') return 'market';
     if (this.globalStrategy === 'gtd')    return 'gtd';
 
-    // 4. Auto: NEG_RISK → market orders (fast fill for geopolitical),
-    //          CTF     → GTD maker (price discovery, spread-proportional aggression)
-    return exchange === 'NEG_RISK' ? 'market' : 'gtd';
+    // 4. Auto: NEG_RISK variants → market (fast fill for geopolitical),
+    //          CTF variants      → GTD maker (price discovery)
+    return (exchange === 'NEG_RISK' || exchange === 'NEG_RISK_V2') ? 'market' : 'gtd';
   }
 
   async route(trade: RoutedTrade): Promise<void> {

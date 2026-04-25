@@ -1,10 +1,11 @@
 /**
  * OnChainDetector — real-time trade detector via Polygon WebSocket.
  *
- * Replaces polling-based MultiDetector for tracked trader wallets.
- * Subscribes to OrderFilled events on both Polymarket exchange contracts
- * using wallet-level topic filters (maker + taker), so QuickNode only
- * pushes events relevant to your traders.
+ * Subscribes to OrderFilled events on all 4 Polymarket exchange contracts
+ * (v1 + v2) using client-side wallet filtering.
+ *
+ * During CLOBv2 transition (April 28 2026) both v1 and v2 contracts are
+ * watched simultaneously. Drop the v1 entries after full cutover.
  *
  * Emits: 'trade' (DetectedTrade), 'connected', 'reconnecting', 'error'
  *
@@ -17,8 +18,12 @@ import { ethers } from 'ethers';
 import { MongoClient } from 'mongodb';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
-const CTF_EXCHANGE      = '0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E';
-const NEG_RISK_EXCHANGE = '0xC5d563A36AE78145C45a50134d48A1215220f80a';
+// v1 contracts (active until CLOBv2 cutover ~April 28 2026)
+const CTF_EXCHANGE         = '0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E';
+const NEG_RISK_EXCHANGE    = '0xC5d563A36AE78145C45a50134d48A1215220f80a';
+// v2 contracts
+const CTF_V2_EXCHANGE      = '0xE111180000d2663C0091e4f400237545B87B996B';
+const NEG_RISK_V2_EXCHANGE = '0xe2222d279d744050d28e00520010520000310F59';
 
 const ORDER_FILLED_IFACE = new ethers.utils.Interface([
   'event OrderFilled(bytes32 indexed orderHash, address indexed maker, address indexed taker, uint256 makerAssetId, uint256 takerAssetId, uint256 makerAmountFilled, uint256 takerAmountFilled, uint256 fee)',
@@ -43,7 +48,7 @@ export interface DetectedTrade {
   blockTimestampMs: number;   // unix ms from block.timestamp
   receivedAtMs:     number;   // unix ms when WS event arrived
   lagMs:            number;   // receivedAtMs - blockTimestampMs (negative = validator forward-dating)
-  exchange:         'CTF' | 'NEG_RISK';
+  exchange:         'CTF' | 'NEG_RISK' | 'CTF_V2' | 'NEG_RISK_V2';
   isStale:          boolean;  // true if older than STALE_THRESHOLD_MS (backlog replay)
 }
 
@@ -52,6 +57,17 @@ export interface OnChainDetectorConfig {
   httpUrl:  string;  // same QuickNode endpoint, https:// for block fetches
   mongoUri: string;
   dbName:   string;
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+const EXCHANGE_MAP: Record<string, DetectedTrade['exchange']> = {
+  [CTF_EXCHANGE.toLowerCase()]:         'CTF',
+  [NEG_RISK_EXCHANGE.toLowerCase()]:    'NEG_RISK',
+  [CTF_V2_EXCHANGE.toLowerCase()]:      'CTF_V2',
+  [NEG_RISK_V2_EXCHANGE.toLowerCase()]: 'NEG_RISK_V2',
+};
+function resolveExchange(addr: string): DetectedTrade['exchange'] {
+  return EXCHANGE_MAP[addr.toLowerCase()] ?? 'CTF';
 }
 
 // ── OnChainDetector ───────────────────────────────────────────────────────────
@@ -169,7 +185,7 @@ export class OnChainDetector extends EventEmitter {
   // ── Subscriptions ───────────────────────────────────────────────────────────
 
   private subscribeAll(ws: WebSocket): void {
-    // 2 subscriptions: one per exchange, filtering only on OrderFilled topic0.
+    // 4 subscriptions: v1 + v2 contracts, filtering only on OrderFilled topic0.
     // Wallet filtering is done client-side in handleFill() — QuickNode does not
     // reliably support OR-arrays of wallet addresses in topic positions for
     // eth_subscribe (confirmed by diagnostic: sub IDs returned but no events
@@ -177,6 +193,8 @@ export class OnChainDetector extends EventEmitter {
     const subs = [
       { id: 1, address: CTF_EXCHANGE },
       { id: 2, address: NEG_RISK_EXCHANGE },
+      { id: 3, address: CTF_V2_EXCHANGE },
+      { id: 4, address: NEG_RISK_V2_EXCHANGE },
     ];
 
     for (const s of subs) {
@@ -195,17 +213,17 @@ export class OnChainDetector extends EventEmitter {
     // Keepalive response
     if (msg.id === 99) return;
 
-    // Subscription confirmations (id 1 = CTF, id 2 = NEG_RISK)
-    if (msg.id === 1 || msg.id === 2) {
+    // Subscription confirmations (id 1-4 = CTF v1, NEG_RISK v1, CTF v2, NEG_RISK v2)
+    if (msg.id === 1 || msg.id === 2 || msg.id === 3 || msg.id === 4) {
       if (msg.error) {
         this.emit('error', new Error(`Subscribe error (sub ${msg.id}): ${msg.error.message}`));
         return;
       }
       this.subsConfirmed++;
-      if (this.subsConfirmed >= 2) {
+      if (this.subsConfirmed >= 4) {
         this.subsConfirmed = 0;
         this.reconnectMs = 50; // reset backoff — connection is healthy
-        console.log(`[OnChainDetector] Both subscriptions active — watching ${this.trackedWallets.size} traders (client-side filter)`);
+        console.log(`[OnChainDetector] All 4 subscriptions active (v1+v2) — watching ${this.trackedWallets.size} traders`);
       }
       return;
     }
@@ -292,7 +310,7 @@ export class OnChainDetector extends EventEmitter {
       blockTimestampMs,
       receivedAtMs,
       lagMs,
-      exchange:         log.address.toLowerCase() === CTF_EXCHANGE.toLowerCase() ? 'CTF' : 'NEG_RISK',
+      exchange:         resolveExchange(log.address),
       isStale,
     };
 
