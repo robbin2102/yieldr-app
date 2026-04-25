@@ -9,3 +9,4 @@ export { getTraderPositionsInMarketTool } from './get-trader-positions-in-market
 export { getVaultPerformanceTool } from './get-vault-performance.js';
 export { getVaultTradesTool } from './get-vault-trades.js';
 export { getCopyTradeActivityTool } from './get-copy-trade-activity.js';
+export { getEdgeTraderPositionsTool } from './get-edge-trader-positions.js';
