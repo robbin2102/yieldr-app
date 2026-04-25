@@ -184,21 +184,21 @@ export async function executeGetVaultPerformance(input: GetVaultPerformanceInput
     });
 
     // --- Performance metrics from vault doc ---
-    const totalPnl = vault.totalPnlAllTime || vault.totalRealizedPnl || 0;
-    const unrealizedPnl = vault.totalUnrealizedPnl || 0;
-    const capitalDeployed = vault.totalCapitalDeployed || vault.initial_capital_usdc || 0;
-    const vaultSize = vault.vault_size_usdc || capitalDeployed;
+    // NOTE: totalCapitalDeployed = trader's LIFETIME trading volume (not vault AUM — can be $26M+)
+    // Use initial_capital_usdc (what we invested) / vault_size_usdc (current value) for ROI
+    const vaultCapital = vault.initial_capital_usdc || 0;
+    const vaultCurrentSize = vault.vault_size_usdc || vaultCapital;
+    const vaultROI = vaultCapital > 0
+      ? ((vaultCurrentSize - vaultCapital) / vaultCapital) * 100
+      : null;
+
     const winRate = vault.win_rate || vault.winRate;
     const profitFactor = vault.profitFactor;
 
-    // Calculate period ROI from vault's timeframePnL if available
-    let periodRoi = 0;
-    if (vault.timeframePnL && capitalDeployed > 0) {
-      const periodPnl = vault.timeframePnL[`${periodDays}d`] || vault.timeframePnL.allTime || 0;
-      periodRoi = (periodPnl / capitalDeployed) * 100;
-    } else if (vault.roce_trend && capitalDeployed > 0) {
-      periodRoi = vault.roce_trend[`${periodDays}d`] || 0;
-    }
+    // Trader's period metrics from timeframePnL (signal quality, not vault AUM)
+    const tf = vault.timeframePnL?.[`${periodDays}d`];
+    const trader30dPnl = tf?.pnl ?? null;
+    const trader30dROCE = tf?.roce ?? null;
 
     // Winning/losing position counts
     const winningPositions = openPositions.filter(p => (p.unrealizedPnl || 0) > 0);
@@ -224,15 +224,15 @@ export async function executeGetVaultPerformance(input: GetVaultPerformanceInput
 
       performance: {
         period: input.period,
-        roi: periodRoi,
-        totalPnl,
-        unrealizedPnl,
-        capitalDeployed,
-        vaultSize,
+        vaultCapital,
+        vaultCurrentSize,
+        vaultROI,
+        trader30dPnl,
+        trader30dROCE,
       },
 
       stats: {
-        totalTrades: vault.totalActivities || vault.buyCount || recentTrades.length,
+        totalTrades: (vault.wins_closed || 0) + (vault.losses_closed || 0) || vault.totalActivities || 0,
         winRate,
         profitFactor,
         winsClosed: vault.wins_closed,
