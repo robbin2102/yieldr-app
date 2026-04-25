@@ -73,11 +73,12 @@ const cfg: OrchestratorConfig = {
   maxMarketAttempts: parseInt(optional('MAX_MARKET_ATTEMPTS', '5')),
   maxGtdAttempts:    parseInt(optional('MAX_GTD_ATTEMPTS',    '3')),
   defaultStrategy:   (optional('EXECUTION_STRATEGY', 'auto')) as ExecutionStrategy,
+  detectionOnly:     process.env.DETECTION_ONLY === 'true',
 };
 
 async function main() {
   console.log('[v2] Starting CLOBv2 copy-trading pipeline...');
-  console.log(`[v2] Strategy: ${cfg.defaultStrategy} | drift: ${cfg.maxDriftPct * 100}% | spread: ${cfg.maxSpreadPct * 100}%`);
+  console.log(`[v2] Mode: ${cfg.detectionOnly ? '🔍 DETECTION_ONLY (no execution)' : '⚡ LIVE'} | strategy: ${cfg.defaultStrategy} | drift: ${cfg.maxDriftPct * 100}% | spread: ${cfg.maxSpreadPct * 100}%`);
 
   await connectDB();
 

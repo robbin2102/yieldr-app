@@ -63,6 +63,17 @@ export interface OrchestratorConfig {
   maxMarketAttempts: number;  // FAK retries (default 5)
   maxGtdAttempts:    number;  // GTD retries (default 3)
   defaultStrategy:   ExecutionStrategy;
+  detectionOnly:     boolean; // log detections but skip all execution (testing mode)
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function fmtLine(trade: import('../modules/onChainDetector').DetectedTrade, suffix: string): string {
+  const now      = new Date().toISOString().slice(11, 19);
+  const blockTs  = new Date(trade.blockTimestampMs).toISOString().slice(11, 19);
+  const lagMs    = trade.receivedAtMs - trade.blockTimestampMs;
+  const lagStr   = lagMs >= 0 ? `+${lagMs}ms` : `${lagMs}ms`;
+  return `[${now}] ${trade.label} ${trade.side} $${trade.usdcAmount.toFixed(0)} "${trade.tokenId.slice(0, 10)}..." block=${blockTs} lag=${lagStr} | ${suffix}`;
 }
 
 // ── Orchestrator ──────────────────────────────────────────────────────────────
@@ -70,9 +81,10 @@ export interface OrchestratorConfig {
 export class TradeOrchestrator {
   readonly router: ExecutionRouter;
 
-  private detector:  OnChainDetector;
-  private books:     OrderbookCacheV2;
-  private fillTracker: FillTrackerV2;
+  private detector:      OnChainDetector;
+  private books:         OrderbookCacheV2;
+  private fillTracker:   FillTrackerV2;
+  private detectionOnly: boolean;
 
   // Concurrent trade guards (synchronous — no await between check and set)
   private positionReserved = new Map<string, number>();  // `wallet:conditionId` → USDC reserved
@@ -83,10 +95,12 @@ export class TradeOrchestrator {
     books:       OrderbookCacheV2,
     fillTracker: FillTrackerV2,
     router:      ExecutionRouter,
+    detectionOnly: boolean,
   ) {
-    this.detector    = detector;
-    this.books       = books;
-    this.fillTracker = fillTracker;
+    this.detector      = detector;
+    this.books         = books;
+    this.fillTracker   = fillTracker;
+    this.detectionOnly = detectionOnly;
     this.router      = router;
   }
 
@@ -120,7 +134,7 @@ export class TradeOrchestrator {
       dbName:   cfg.dbName,
     });
 
-    const orchestrator = new TradeOrchestrator(detector, books, fillTracker, router);
+    const orchestrator = new TradeOrchestrator(detector, books, fillTracker, router, cfg.detectionOnly ?? false);
 
     // Wire detector events
     detector.on('trade',       (t) => orchestrator.handleDetected(t, resolver, recorder));
@@ -197,8 +211,7 @@ export class TradeOrchestrator {
     // ── 7. BUY: bet sizing ────────────────────────────────────────────────
     const sizing = calcCopyBet(trade.usdcAmount, trader);
     if (sizing.skip) {
-      const ts = new Date().toISOString().slice(11, 19);
-      console.log(`[${ts}] ⏭  SKIP ${trader.label} ${trade.side} $${trade.usdcAmount.toFixed(0)} "${meta.title.slice(0, 35)}" → ${sizing.skipReason} ${sizing.skipDetail ?? ''}`);
+      console.log(fmtLine(trade, `⏭  SKIP → ${sizing.skipReason} ${sizing.skipDetail ?? ''}`));
       await recorder.skip(
         { ...trade, meta, strategy, copyBetUsdc: 0 } as RoutedTrade,
         sizing.skipReason!,
@@ -221,8 +234,7 @@ export class TradeOrchestrator {
       const cur = this.positionReserved.get(lockKey) ?? 0;
       const upd = Math.max(0, cur - sizing.betUsdc);
       if (upd === 0) this.positionReserved.delete(lockKey); else this.positionReserved.set(lockKey, upd);
-      const ts2 = new Date().toISOString().slice(11, 19);
-      console.log(`[${ts2}] ⏭  SKIP ${trader.label} ${trade.side} $${trade.usdcAmount.toFixed(0)} "${meta.title.slice(0, 35)}" → POSITION_CAP_FULL`);
+      console.log(fmtLine(trade, `⏭  SKIP → POSITION_CAP_FULL`));
       await recorder.skip({ ...trade, meta, strategy, copyBetUsdc: sizing.betUsdc } as RoutedTrade, 'POSITION_CAP_FULL');
       return;
     }
@@ -239,16 +251,12 @@ export class TradeOrchestrator {
       if (upd === 0) this.positionReserved.delete(lockKey); else this.positionReserved.set(lockKey, upd);
     }
 
-    const ts = new Date().toISOString().slice(11, 19);
-    const lagSec = Math.max(0, trade.lagMs / 1000).toFixed(2);
-    const ratio  = (trade.usdcAmount / trader.avgBet).toFixed(1);
-    console.log(
-      `\n[${ts}] ${trader.label} ${trade.side} $${trade.usdcAmount.toFixed(0)}` +
-      ` "${meta.title.slice(0, 40)}" lag=${lagSec}s | ×${ratio} avg → copy $${copyBetUsdc.toFixed(2)}` +
-      ` [${strategy.toUpperCase()}]`
-    );
+    const ratio = (trade.usdcAmount / trader.avgBet).toFixed(1);
+    const execTag = this.detectionOnly ? '[DETECT_ONLY]' : `[${strategy.toUpperCase()}]`;
+    console.log(fmtLine(trade, `×${ratio} avg → copy $${copyBetUsdc.toFixed(2)} ${execTag}`));
 
     // ── 9. Route to executor ───────────────────────────────────────────────
+    if (this.detectionOnly) return;
     const routed: RoutedTrade = {
       txHash:           trade.txHash,
       wallet:           trade.wallet,
