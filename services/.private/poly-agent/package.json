@@ -18,12 +18,14 @@
   },
   "dependencies": {
     "@polymarket/clob-client": "^5.8.1",
+    "@polymarket/clob-client-v2": "^1.0.2",
     "axios": "^1.15.0",
     "dotenv": "^16.3.1",
     "ethers": "^5.7.2",
     "mongodb": "^6.21.0",
     "mongoose": "^8.0.3",
     "tslib": "^2.8.1",
+    "viem": "^2.48.4",
     "ws": "^8.14.2"
   },
   "devDependencies": {
