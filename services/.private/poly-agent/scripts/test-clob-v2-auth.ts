@@ -29,8 +29,9 @@ const envCandidates = [
   resolve(__dirname, '../.env'),
   resolve(__dirname, '../../../.env.local'),
 ];
+let loadedEnvFile = '(none found)';
 for (const p of envCandidates) {
-  if (existsSync(p)) { dotenvConfig({ path: p }); break; }
+  if (existsSync(p)) { dotenvConfig({ path: p }); loadedEnvFile = p; break; }
 }
 
 const PRIVATE_KEY  = process.env.PRIVATE_KEY || process.env.BOT_PRIVATE_KEY;
@@ -69,7 +70,8 @@ async function main() {
   console.log(`\n[test-clob-v2-auth]`);
   console.log(`  Wallet:   ${wallet}`);
   console.log(`  CLOB:     ${CLOB_HOST}`);
-  console.log(`  API key:  ${API_KEY ? API_KEY.slice(0, 8) + '...' : '(not set)'}\n`);
+  console.log(`  Env file: ${loadedEnvFile}`);
+  console.log(`  API key:  ${API_KEY ? API_KEY.slice(0, 8) + '...' : '(not set — check CLOB_V2_API_KEY in env file)'}\n`);
 
   // ── 1. L2 auth check ──────────────────────────────────────────────────────
   console.log('── 1. L2 Auth ───────────────────────────────────────────────');
@@ -95,15 +97,26 @@ async function main() {
   console.log('\n── 2. Orderbook ─────────────────────────────────────────────');
   try {
     // If no TEST_TOKEN_ID, auto-discover a liquid token from the markets list
-    let tokenId = TEST_TOKEN_ID;
-    if (!process.env.TEST_TOKEN_ID) {
-      const mRes  = await fetch(`${CLOB_HOST}/markets?limit=5&active=true`);
-      const mData = await mRes.json() as any;
-      const markets = mData?.data ?? mData ?? [];
-      for (const m of markets) {
-        const tid = m.tokens?.[0]?.token_id ?? m.token_id;
-        if (tid) { tokenId = tid; break; }
+    let tokenId = process.env.TEST_TOKEN_ID ?? '';
+    if (!tokenId) {
+      // Try multiple endpoint shapes — CLOB API differs between v1/v2
+      for (const url of [`${CLOB_HOST}/markets?limit=5`, `${CLOB_HOST}/sampling-markets?limit=5`]) {
+        try {
+          const mRes = await fetch(url);
+          if (!mRes.ok) continue;
+          const mData = await mRes.json() as any;
+          const markets: any[] = mData?.data ?? (Array.isArray(mData) ? mData : []);
+          for (const m of markets) {
+            const tid = m.tokens?.[0]?.token_id ?? m.clobTokenIds?.[0] ?? m.token_id;
+            if (tid) { tokenId = tid; break; }
+          }
+          if (tokenId) break;
+        } catch { continue; }
       }
+    }
+    if (!tokenId) {
+      fail('Could not auto-discover a token ID — set TEST_TOKEN_ID env var manually');
+      return;
     }
     const url = `${CLOB_HOST}/book?token_id=${tokenId}`;
     const res = await fetch(url);
