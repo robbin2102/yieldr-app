@@ -63,12 +63,26 @@ async function main() {
 
   console.log(`\n[regen-keys] Wallet: ${account.address}`);
   console.log(`[regen-keys] CLOB host: ${CLOB_HOST}`);
-  console.log('[regen-keys] Calling createOrDeriveApiKey...\n');
 
-  const apiCreds = await (client as any).createOrDeriveApiKey();
+  let apiCreds: any = null;
+
+  // Try deriveApiKey first — deterministic from wallet signature, no server-side state needed.
+  // Falls back to createApiKey if derive returns nothing (wallet not yet registered).
+  const methods = ['deriveApiKey', 'createOrDeriveApiKey', 'createApiKey'];
+  for (const method of methods) {
+    console.log(`[regen-keys] Trying ${method}...`);
+    try {
+      apiCreds = await (client as any)[method]();
+      if (apiCreds?.key) break;
+    } catch (err: any) {
+      console.log(`  → ${method} failed: ${err.message}`);
+    }
+  }
 
   if (!apiCreds?.key) {
-    console.error('[regen-keys] Unexpected response:', apiCreds);
+    console.error('[regen-keys] All methods failed. Response:', apiCreds);
+    console.error('\nIf this wallet has never traded on Polymarket, visit https://polymarket.com,');
+    console.error('connect the wallet, accept terms, then re-run this script.');
     process.exit(1);
   }
 
@@ -79,7 +93,9 @@ async function main() {
   console.log(`CLOB_V2_API_SECRET=${apiCreds.secret}`);
   console.log(`CLOB_V2_PASSPHRASE=${apiCreds.passphrase}`);
   console.log('─'.repeat(60));
-  console.log('\nCopy these into .env.polyagent (replace old CLOB_API_KEY / _SECRET / _PASSPHRASE entries).\n');
+  console.log('\nCopy these into .env.polyagent as CLOB_V2_API_KEY / _SECRET / _PASSPHRASE.\n');
+  console.log('Note: if these look identical to your existing v1 keys, that is expected —');
+  console.log('Polymarket derives keys deterministically from the wallet signature.\n');
 }
 
 main().catch(err => {
