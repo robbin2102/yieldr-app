@@ -13,7 +13,7 @@ let grokClient: OpenAI | null = null;
 export function getGrokClient(): OpenAI {
   if (!grokClient) {
     grokClient = new OpenAI({
-      apiKey: CONFIG.XAI_API_KEY,
+      apiKey: process.env.XAI_API_KEY || CONFIG.XAI_API_KEY,
       baseURL: CONFIG.XAI_BASE_URL,
     });
   }

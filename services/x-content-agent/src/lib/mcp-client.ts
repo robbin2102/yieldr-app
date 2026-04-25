@@ -12,9 +12,10 @@ import { CONFIG } from '../config';
  * Call an MCP tool via HTTP
  */
 export async function callMcpTool(toolName: string, params: Record<string, any> = {}): Promise<any> {
+  const baseUrl = process.env.MCP_SERVER_URL || CONFIG.MCP_SERVER_URL;
   try {
     const response = await axios.post(
-      `${CONFIG.MCP_SERVER_URL}/tools/${toolName}`,
+      `${baseUrl}/tools/${toolName}`,
       { params },
       {
         timeout: 30000,
