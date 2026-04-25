@@ -73,5 +73,12 @@ export async function generateStructuredContent(
   if (cleaned.endsWith('```')) cleaned = cleaned.slice(0, -3);
   cleaned = cleaned.trim();
 
-  return JSON.parse(cleaned);
+  const parsed = JSON.parse(cleaned);
+
+  // Strip **bold** markdown from X tweet — it renders as raw text on X
+  if (parsed.tweet && typeof parsed.tweet === 'string') {
+    parsed.tweet = parsed.tweet.replace(/\*\*(.*?)\*\*/g, '$1');
+  }
+
+  return parsed;
 }

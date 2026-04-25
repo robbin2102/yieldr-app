@@ -1,54 +1,62 @@
 /**
  * High Conviction Trade Alert Template
- * Generates posts about live copy trades executed by vault agents
- * Data source: ahf-copyTrades / poly-agent-trades (FILLED status)
+ * Generates posts about significant trader moves detected by our agents
+ * Framed as ALPHA DISCOVERY — never as copy trading
  */
 
 export function buildHighConvictionPrompt(trade: any): string {
   const hasConviction = trade.convictionRatio != null && trade.convictionRatio > 1;
-  const convictionLine = hasConviction
-    ? `- Conviction ratio: ${trade.convictionRatio}x their avg bet${trade.avgBet ? ` (avg $${trade.avgBet.toFixed(0)})` : ''}`
-    : `- Trade size: $${(trade.traderBetUsdc || 0).toLocaleString()}`;
 
-  const hookGuidance = hasConviction
-    ? `"${trade.convictionRatio}x normal size into [market]" — lead with the conviction multiplier`
-    : `"$${(trade.traderBetUsdc || 0).toLocaleString()} into [market]" — lead with the dollar size`;
+  const sizeInfo = hasConviction
+    ? `${trade.convictionRatio}x their normal bet size ($${(trade.traderBetUsdc || 0).toLocaleString()} vs avg $${(trade.avgBet || 0).toFixed(0)})`
+    : `$${(trade.traderBetUsdc || 0).toLocaleString()}`;
 
-  return `Generate a Live Copy Trade Alert post.
+  // Interpret the position clearly
+  const outcomeStr = trade.outcome || '';
+  const sideStr = (trade.side || 'BUY').toUpperCase();
+  let positionInterpretation = '';
+  if (sideStr === 'BUY' && /^yes$/i.test(outcomeStr)) {
+    positionInterpretation = `Betting this WILL happen`;
+  } else if (sideStr === 'BUY' && /^no$/i.test(outcomeStr)) {
+    positionInterpretation = `Betting this will NOT happen`;
+  } else if (sideStr === 'SELL' && /^no$/i.test(outcomeStr)) {
+    positionInterpretation = `Closing their "No" position — taking profits or flipping bullish`;
+  } else if (sideStr === 'SELL' && /^yes$/i.test(outcomeStr)) {
+    positionInterpretation = `Exiting their "Yes" position — taking profits or turning bearish`;
+  } else {
+    positionInterpretation = `${sideStr} ${outcomeStr}`;
+  }
 
-⚡ AGENT JUST COPIED THIS TRADE:
+  return `Generate an Alpha Signal post about a significant trader move our agents detected.
+
+SIGNAL DETECTED:
 - Market: "${trade.market}"
-- Position: ${trade.outcome} @ $${trade.traderPrice?.toFixed(2) || 'N/A'}
-${convictionLine}
-- Side: ${trade.side || 'BUY'}
+- Move: ${sideStr} ${outcomeStr} @ $${trade.traderPrice?.toFixed(2) || 'N/A'}
+- Position interpretation: ${positionInterpretation}
+- Size: ${sizeInfo}
+${trade.traderWinRate ? `- Trader win rate: ${trade.traderWinRate.toFixed(1)}%` : ''}
+${trade.traderProfitFactor ? `- Trader profit factor: ${trade.traderProfitFactor.toFixed(2)}x` : ''}
+- Trader specialty: ${trade.traderSpecialty || 'Multi-category'}
 
-OUR COPY EXECUTION:
-${trade.ourExecutedSize ? `- Executed size: $${trade.ourExecutedSize.toLocaleString()}` : '- Size: vault-optimized allocation'}
-${trade.ourPrice ? `- Our fill price: $${trade.ourPrice.toFixed(2)}` : ''}
-${trade.slippageBps != null ? `- Slippage: ${trade.slippageBps}bps` : ''}
-${trade.latencyMs != null ? `- Latency: ${trade.latencyMs}ms` : ''}
+${trade.filledUsdc ? `EXECUTION DATA:\n- Fill size: $${trade.filledUsdc.toLocaleString()}\n- Fill price: $${trade.avgFillPrice?.toFixed(2) || 'N/A'}\n- Latency: ${trade.totalLatencyMs || 'N/A'}ms` : ''}
 
-TRADER CREDENTIALS:
-${trade.traderWinRate ? `- Win Rate: ${trade.traderWinRate.toFixed(1)}%` : '- Win rate: tracking'}
-${trade.traderProfitFactor ? `- Profit Factor: ${trade.traderProfitFactor.toFixed(2)}x` : ''}
-- Specialty: ${trade.traderSpecialty || 'Multi-category'}
+NARRATIVE INSTRUCTIONS:
+Tell this as an ALPHA DISCOVERY story. Our agents scan 30K+ traders 24/7. They just detected something interesting:
 
-NARRATIVE: This is a LIVE trade our vault agent just executed. Tell it like breaking news:
-1. The agent detected a high-conviction move from a trader it tracks
-2. It executed the copy trade in real-time
-3. Here's why this specific market/bet matters right now
+1. What is the market about? Give 1 sentence of real-world context (what event is being predicted)
+2. What did the trader do? A significant move — explain the bet in plain English
+3. Why does this matter? Connect the trader's track record to why this signal is worth watching
+4. What's your take? End with a question that makes readers think about the outcome
+
+CRITICAL FRAMING RULES:
+- We DISCOVER alpha and SHARE signals — we are NOT a copy trade product
+- Never say "our agent copied" or "we executed" or "vault mirrored"
+- Frame as: "Our agents detected..." or "A top-ranked trader just..." or "Signal from our quant screens..."
+- The trade is the TRADER'S move. We're the intelligence layer that found it.
+- Explain the bet in plain English — not "BUY No" but "betting this won't happen"
+- If SELL side: explain it's an EXIT, not a new position
 
 FORMAT:
-X tweet: 3-4 lines with line breaks. Hook: ${hookGuidance}. Show the agent working in real-time. Use ⚡ emoji.
-TG post: Full breakdown with **bold** numbers. The trade, what the agent did, the market context.
-
-CTA: Frame around the market question itself. Make readers take a side on the outcome.
-
-CONTENT RULES:
-- Emphasize the AGENT copying a trade LIVE — automation and speed
-- Urgency from data only — never words like "urgent" or "alert" or "breaking"
-- Clarify the position: "betting [X] will NOT happen" or "backing [X] at $0.XX"
-- Pick ONE trader credential — not both win rate and profit factor
-- If conviction ratio is available and > 1x, lead with it. Otherwise lead with $ size.
-- Use ⚡ or 🤖 emoji for the automation angle`;
+X post: 3-5 lines, PLAIN TEXT (no **bold** markdown — use CAPS or emojis instead). Tell the story concisely. Hook with the market signal, not the dollar amount.
+TG post: Full story with **bold** numbers and bullet points. Real-world context on the market. End with yieldr.org CTA.`;
 }

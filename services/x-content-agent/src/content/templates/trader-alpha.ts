@@ -62,7 +62,7 @@ Write this like a mini investigative piece. Tell the STORY of this trader's edge
 - What can we learn from their approach?
 
 FORMAT:
-X tweet: 3-5 lines with line breaks. Start with the most striking metric. Tell the story across multiple lines. Use 1-2 emojis for visual appeal.
+X post: 3-5 lines with line breaks. PLAIN TEXT only — no **bold** markdown (it doesn't render on X). Use CAPS or emojis for emphasis. Start with the most striking metric. Tell the story concisely.
 TG post: Full narrative — tell the complete story with all the data. Use **bold** for key numbers, bullet points for positions. 2-3 paragraphs.
 
 CTA (critical):
