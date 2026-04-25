@@ -1,13 +1,12 @@
 /**
  * Vault Performance Template
- * Passes the full vault document to the LLM — no pre-filtering.
+ * Passes full vault doc + full positions doc to the LLM — no pre-filtering.
  * Agent picks the most compelling metrics for the fund update narrative.
  */
 
 export function buildVaultPerformancePrompt(vault: any): string {
   const perf = vault.performance || {};
   const posSummary = vault.positionSummary || {};
-  const activity = vault.activity24h || {};
 
   // Winning positions for highlight
   const winningPositions = (vault.openPositions || [])
@@ -19,7 +18,7 @@ export function buildVaultPerformancePrompt(vault: any): string {
   ).join('\n');
 
   const recentTradeLines = (vault.recentTrades || []).slice(0, 5).map((t: any) =>
-    `- "${t.market?.substring(0, 60)}": ${t.side} ${t.outcome} @ $${t.price?.toFixed(2)}, size $${(t.size || 0).toLocaleString()}`
+    `- "${t.market?.substring(0, 60)}": ${t.outcome}, size $${(t.size || 0).toLocaleString()}, PnL $${t.realizedPnl?.toFixed(0) || '?'} (${t.status})`
   ).join('\n');
 
   return `Generate a Vault Performance post with AGENT ANALYSIS.
@@ -40,31 +39,31 @@ export function buildVaultPerformancePrompt(vault: any): string {
 - Open positions: ${posSummary.openCount || 0} (${posSummary.winningCount || 0} winning, ${posSummary.losingCount || 0} losing)
 - Total unrealized PnL: $${(posSummary.totalUnrealizedPnl || 0).toLocaleString()}
 
-═══ 24H ACTIVITY ═══
-- Trades executed: ${activity.tradesExecuted || 0}
-${activity.trades?.length > 0 ? activity.trades.map((t: any) => `- ${t.side} "${t.market?.substring(0, 50)}" ${t.outcome} @ $${t.price?.toFixed(2)}`).join('\n') : '- No new trades in last 24h'}
-
-${recentTradeLines ? `═══ RECENT TRADES ═══\n${recentTradeLines}` : ''}
-
 ${positionLines ? `═══ WINNING OPEN POSITIONS ═══\n${positionLines}` : ''}
 
-═══ FULL VAULT & TRADER PROFILE (raw data — pick what's compelling) ═══
+${recentTradeLines ? `═══ RECENT CLOSED TRADES ═══\n${recentTradeLines}` : ''}
+
+═══ FULL VAULT PROFILE (raw — pick what's compelling) ═══
 ${JSON.stringify(vault.vaultDoc, null, 2)}
 
+${vault.positionsDoc ? `═══ FULL POSITIONS & TRADE DATA (raw — pick what's compelling) ═══
+${JSON.stringify(vault.positionsDoc, null, 2)}` : ''}
+
 ═══ NARRATIVE INSTRUCTIONS ═══
-You have the COMPLETE vault record above. Write a professional fund update — ONE post for X + TG.
+You have the COMPLETE vault record + positions data above. Write a professional fund update — ONE post for X + TG.
 
 Pick the 3-5 most compelling metrics and tell the vault's story:
 1. How is the vault performing? (ROI, PnL, multi-timeframe ROCE from timeframePnL)
 2. What edge is the tracked trader showing? (win_rate, profitFactor, category_breakdown, strategyLabel, insider signals)
-3. What's happening now? (open positions, recent trades, currentStreak, 24h activity)
-4. Risk context? (maxDrawdown, drawdown_trend, tradingConsistency)
+3. What's happening now? (open positions, recent closed trades, currentStreak, HC trades)
+4. Risk context? (maxDrawdown, drawdown_trend, tradingConsistency, dailyPnLByFrame)
 
 Use **bold** for key numbers. Bullets for data. No character limit.
 End with "Track live → yieldr.org" CTA.
 
 RULES:
 - Only feature winning positions in detail
+- Include recent closed trades — both wins AND losses show transparency
 - If no positions/trades: "vault in scanning mode — agents hunting the next edge"
 - If vault is down (negative period PnL): be honest, show risk context, no spin
 - Professional fund update tone — never shill

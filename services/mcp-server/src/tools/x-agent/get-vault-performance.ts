@@ -2,9 +2,9 @@
  * get_vault_performance Tool
  * Pull live vault performance metrics from MongoDB
  *
- * The `vaults` collection stores tracker configs — each tracked trader IS a vault.
- * Trades come from `ahf-copyTrades` filtered by sourceWallet.
- * Positions come from `polymarket-openPositions` filtered by walletAddress.
+ * Data sources:
+ *   `vaults` — full vault/trader profile (stats, categories, insider signals, etc.)
+ *   `vault_openPositions` — live open positions, recent closed trades, HC trades, strengths/weaknesses
  *
  * The 3 live vaults are identified by traderLabel:
  *   'NBA Edge Vault', 'Soccer Alpha Vault', 'Geopolitics Vault'
@@ -25,135 +25,81 @@ const LIVE_VAULT_LABELS = ['NBA Edge Vault', 'Soccer Alpha Vault', 'Geopolitics 
 export async function executeGetVaultPerformance(input: GetVaultPerformanceInput) {
   const db = await getDB();
 
-  const vaultsCol = db.collection('vaults');
+  // --- Fetch vault profile docs ---
   const vaultFilter: any = {};
-
   if (input.vaultName) {
     vaultFilter.traderLabel = { $regex: new RegExp(input.vaultName, 'i') };
   } else {
     vaultFilter.traderLabel = { $in: LIVE_VAULT_LABELS };
   }
 
-  const vaults = await vaultsCol.find(vaultFilter).toArray();
-
+  const vaults = await db.collection('vaults').find(vaultFilter).toArray();
   if (vaults.length === 0) {
     return { vaults: [], message: 'No vaults found.' };
   }
 
+  // --- Fetch vault_openPositions for all vault wallets in one query ---
+  const wallets = vaults.map(v => (v.wallet || v.sourceWallet || '').toLowerCase()).filter(Boolean);
+  const vaultPosDocs = await db.collection('vault_openPositions')
+    .find({ wallet: { $in: wallets } })
+    .toArray();
+  const posDocMap = new Map(vaultPosDocs.map(d => [d.wallet?.toLowerCase(), d]));
+
   const periodDays = input.period === '1d' ? 1 : input.period === '7d' ? 7 : input.period === '30d' ? 30 : 365;
-  const last24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
 
   const results = [];
 
   for (const vault of vaults) {
     const traderWallet = (vault.wallet || vault.sourceWallet || '').toLowerCase();
+    const posDoc = posDocMap.get(traderWallet);
 
-    // --- Trades from ahf-copyTrades ---
-    let recentTrades: any[] = [];
-    if (traderWallet) {
-      const copyTradesCol = db.collection('ahf-copyTrades');
-      const copyTrades = await copyTradesCol
-        .find({
-          sourceWallet: { $regex: new RegExp(`^${traderWallet}$`, 'i') },
-          status: 'FILLED',
-        })
-        .sort({ filledAt: -1, createdAt: -1 })
-        .limit(10)
-        .toArray();
+    // Open positions from vault_openPositions.topOpenPositions
+    const openPositions = (posDoc?.topOpenPositions || []).map((p: any) => ({
+      market: p.title,
+      outcome: p.outcome,
+      size: p.size,
+      avgPrice: p.avgPrice,
+      curPrice: p.curPrice,
+      currentValue: p.currentValue,
+      unrealizedPnl: p.cashPnl,
+      pnlPercent: p.percentPnl,
+    }));
 
-      recentTrades = copyTrades.map(t => ({
-        market: t.title || t.market,
-        outcome: t.outcome,
-        side: t.side,
-        size: t.filledUsdc || t.copyBetUsdc || t.traderBetUsdc,
-        price: t.avgFillPrice || t.traderPrice,
-        timestamp: t.filledAt || t.createdAt,
-      }));
-    }
+    // Recent closed trades from vault_openPositions.recentClosedPositions
+    const recentTrades = (posDoc?.recentClosedPositions || []).slice(0, 15).map((t: any) => ({
+      market: t.title,
+      outcome: t.outcome,
+      size: t.size,
+      avgPrice: t.avgPrice,
+      realizedPnl: t.realizedPnl,
+      status: t.status,
+      timestamp: t.timestamp,
+    }));
 
-    // --- Open positions from polymarket-openPositions (walletAddress field) ---
-    let openPositions: any[] = [];
-    if (traderWallet) {
-      // Primary: poly-agent-positions (our mirrored positions)
-      const polyPosCol = db.collection('poly-agent-positions');
-      const polyPositions = await polyPosCol
-        .find({
-          targetWallet: { $regex: new RegExp(`^${traderWallet}$`, 'i') },
-          status: { $in: ['SYNCED', 'PENDING', 'PARTIAL', 'UNDERWATER'] },
-        })
-        .sort({ lastSyncedAt: -1 })
-        .limit(20)
-        .toArray();
-
-      if (polyPositions.length > 0) {
-        openPositions = polyPositions.map(p => ({
-          market: p.marketQuestion || p.title,
-          outcome: p.outcome,
-          size: p.ourSize || p.traderSize,
-          avgPrice: p.ourAvgPrice || p.traderAvgPrice,
-          curPrice: p.traderCurrentPrice,
-          unrealizedPnl: p.ourPnL || p.traderPnL,
-          pnlPercent: p.ourPnLPercent || p.traderPnLPercent,
-          status: p.status,
-          _source: 'poly-agent-positions',
-        }));
-      } else {
-        // Fallback: polymarket-openPositions — field is walletAddress (not wallet)
-        const pmPosCol = db.collection('polymarket-openPositions');
-        const pmPositions = await pmPosCol
-          .find({
-            walletAddress: { $regex: new RegExp(`^${traderWallet}$`, 'i') },
-            curPrice: { $gte: 0.001 },
-          })
-          .sort({ currentValue: -1 })
-          .limit(20)
-          .toArray();
-
-        openPositions = pmPositions.map(p => ({
-          market: p.title,
-          outcome: p.outcome,
-          size: p.size,
-          avgPrice: p.avgPrice,
-          curPrice: p.curPrice,
-          unrealizedPnl: p.cashPnl,
-          pnlPercent: p.percentPnl,
-          currentValue: p.currentValue,
-          _source: 'polymarket-openPositions',
-        }));
-      }
-    }
-
-    // --- 24h activity ---
-    const trades24h = recentTrades.filter(t => {
-      const ts = t.timestamp instanceof Date ? t.timestamp : new Date(t.timestamp);
-      return ts >= last24h;
-    });
-
-    // --- Vault ROI from stored capital fields ---
+    // Vault ROI from stored capital fields
     const vaultCapital = vault.initial_capital_usdc || 0;
     const vaultCurrentSize = vault.vault_size_usdc || vaultCapital;
     const vaultROI = vaultCapital > 0
       ? ((vaultCurrentSize - vaultCapital) / vaultCapital) * 100
       : null;
 
-    // --- Period PnL/ROCE from timeframePnL ---
+    // Period PnL/ROCE from timeframePnL
     const tf = vault.timeframePnL?.[`${periodDays}d`];
 
-    // --- Winning/losing position summary ---
-    const winningPositions = openPositions.filter(p => (p.unrealizedPnl || 0) > 0);
-    const losingPositions = openPositions.filter(p => (p.unrealizedPnl || 0) < 0);
-    const totalUnrealizedPnl = openPositions.reduce((sum, p) => sum + (p.unrealizedPnl || 0), 0);
+    // Position summary
+    const winningPositions = openPositions.filter((p: any) => (p.unrealizedPnl || 0) > 0);
+    const losingPositions = openPositions.filter((p: any) => (p.unrealizedPnl || 0) < 0);
+    const totalUnrealizedPnl = openPositions.reduce((sum: number, p: any) => sum + (p.unrealizedPnl || 0), 0);
 
-    // Serialize the full vault document (converts Dates/ObjectIds to JSON-safe values)
+    // Serialize full documents — JSON-safe (converts Dates/ObjectIds)
     const fullVaultDoc = JSON.parse(JSON.stringify(vault));
+    const fullPositionsDoc = posDoc ? JSON.parse(JSON.stringify(posDoc)) : null;
 
     results.push({
-      // Vault identity
       name: vault.traderLabel || vault.label || `Vault-${vault._id?.toString().slice(0, 6)}`,
       specialty: vault.specialty,
       status: vault.status || 'active',
 
-      // Computed performance (not in vault doc)
       performance: {
         period: input.period,
         vaultCapital,
@@ -164,7 +110,6 @@ export async function executeGetVaultPerformance(input: GetVaultPerformanceInput
         periodWinRate: tf?.winRate ?? null,
       },
 
-      // Position summary
       positionSummary: {
         openCount: openPositions.length,
         winningCount: winningPositions.length,
@@ -172,18 +117,12 @@ export async function executeGetVaultPerformance(input: GetVaultPerformanceInput
         totalUnrealizedPnl,
       },
 
-      // Activity
-      activity24h: {
-        tradesExecuted: trades24h.length,
-        trades: trades24h.slice(0, 5),
-      },
-
-      // Raw fetched data
-      recentTrades: recentTrades.slice(0, 10),
       openPositions,
+      recentTrades,
 
-      // Full vault document — every field from MongoDB
+      // Full raw documents — the LLM gets everything
       vaultDoc: fullVaultDoc,
+      positionsDoc: fullPositionsDoc,
     });
   }
 
@@ -196,7 +135,7 @@ export async function executeGetVaultPerformance(input: GetVaultPerformanceInput
 
 export const getVaultPerformanceTool = {
   name: 'get_vault_performance',
-  description: 'Get live performance metrics for the 3 Yieldr trading vaults (NBA Edge, Soccer Alpha, Geopolitics). Returns full vault profile, ROI, open positions from polymarket-openPositions, and 24h activity.',
+  description: 'Get live performance metrics for the 3 Yieldr trading vaults (NBA Edge, Soccer Alpha, Geopolitics). Returns full vault profile, ROI, open positions, recent closed trades, HC trades, strengths/weaknesses from vault_openPositions.',
   inputSchema: getVaultPerformanceSchema,
   execute: executeGetVaultPerformance,
 };
