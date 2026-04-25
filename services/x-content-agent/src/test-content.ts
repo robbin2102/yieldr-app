@@ -182,9 +182,15 @@ async function testVaultPerformance(): Promise<DualContent> {
 
   const vault = vaults[Math.floor(Math.random() * vaults.length)];
   console.log(`  Vault: ${vault.name} | ${vault.openPositions?.length || 0} positions | ROI: ${vault.performance?.roi}%`);
-  console.log(`  Vault doc keys: ${vault._vaultDocKeys?.join(', ') || 'N/A'}`);
+  if (vault._debug) {
+    console.log(`  DEBUG: specialty="${vault._debug.rawSpecialty}" label="${vault._debug.rawLabel}" display="${vault._debug.rawDisplayName}"`);
+    console.log(`  DEBUG: edge_hypothesis="${vault._debug.rawEdgeHypothesis}"`);
+    console.log(`  DEBUG: wallet="${vault._debug.walletUsed}" posSource="${vault._debug.positionSource}" posCount=${vault._debug.positionCount}`);
+    console.log(`  DEBUG: sample pos: ${vault._debug.rawPositionSample}`);
+    console.log(`  DEBUG: vault keys: ${vault._debug.vaultDocKeys}`);
+  }
   if (vault.openPositions?.length > 0) {
-    console.log(`  Sample position: ${JSON.stringify(vault.openPositions[0]).substring(0, 150)}`);
+    console.log(`  Sample position: ${JSON.stringify(vault.openPositions[0]).substring(0, 200)}`);
   }
 
   const prompt = buildVaultPerformancePrompt(vault);

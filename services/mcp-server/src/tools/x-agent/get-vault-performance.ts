@@ -17,27 +17,32 @@ export const getVaultPerformanceSchema = z.object({
 
 export type GetVaultPerformanceInput = z.infer<typeof getVaultPerformanceSchema>;
 
-const VAULT_NAME_MAP: Record<string, string> = {
-  'NBA': 'NBA Edge Vault',
-  'Soccer': 'Soccer Alpha Vault',
-  'Politics': 'Geopolitics Vault',
-  'Geopolitics': 'Geopolitics Vault',
-  'Crypto': 'Crypto Alpha Vault',
-  'Finance': 'Finance Vault',
-};
+const VAULT_NAME_MAP: [RegExp, string][] = [
+  [/\bnba\b|basketball/i, 'NBA Edge Vault'],
+  [/\bsoccer\b|football|⚽|epl|la liga|premier league|champions league/i, 'Soccer Alpha Vault'],
+  [/\bpolitics\b|geopolitics?|election|trump|biden|government|policy/i, 'Geopolitics Vault'],
+  [/\bcrypto\b|bitcoin|btc|eth|defi|blockchain/i, 'Crypto Alpha Vault'],
+  [/\bfinance\b|stocks?|equit/i, 'Finance Vault'],
+  [/\bnfl\b/i, 'NFL Edge Vault'],
+  [/\bnhl\b|hockey/i, 'NHL Edge Vault'],
+  [/\bmlb\b|baseball/i, 'MLB Edge Vault'],
+];
 
 function resolveVaultName(doc: any): string {
-  if (doc.name && !doc.name.includes('|')) return doc.name;
+  if (doc.name && !doc.name.includes('|') && !doc.name.startsWith('0x')) return doc.name;
   if (doc.vaultName) return doc.vaultName;
 
-  const specialty = doc.specialty || '';
-  for (const [key, name] of Object.entries(VAULT_NAME_MAP)) {
-    if (specialty.toLowerCase().includes(key.toLowerCase())) return name;
-  }
+  const searchFields = [
+    doc.specialty,
+    doc.label,
+    doc.traderLabel,
+    doc.edge_hypothesis,
+    doc.description,
+    doc.display_name,
+  ].filter(Boolean).join(' ');
 
-  const label = doc.label || doc.traderLabel || '';
-  for (const [key, name] of Object.entries(VAULT_NAME_MAP)) {
-    if (label.toLowerCase().includes(key.toLowerCase())) return name;
+  for (const [pattern, name] of VAULT_NAME_MAP) {
+    if (pattern.test(searchFields)) return name;
   }
 
   const displayName = doc.display_name || doc.pseudonym;
@@ -132,7 +137,7 @@ export async function executeGetVaultPerformance(input: GetVaultPerformanceInput
       const polyPositions = await polyPosCol
         .find({
           targetWallet: { $regex: new RegExp(`^${traderWallet}$`, 'i') },
-          status: { $in: ['SYNCED', 'PENDING', 'PARTIAL'] },
+          status: { $in: ['SYNCED', 'PENDING', 'PARTIAL', 'UNDERWATER'] },
         })
         .sort({ lastSyncedAt: -1 })
         .limit(20)
@@ -151,18 +156,24 @@ export async function executeGetVaultPerformance(input: GetVaultPerformanceInput
       }));
     }
 
-    // Also try vault_openPositions as fallback
-    if (openPositions.length === 0) {
-      const vaultPosCol = db.collection('vault_openPositions');
-      const vaultPositions = await vaultPosCol.find({}).limit(20).toArray();
-      openPositions = vaultPositions.map(p => ({
-        market: p.market || p.title,
+    // Fallback: polymarket-openPositions (populated by indexer) with correct field names
+    if (openPositions.length === 0 && traderWallet) {
+      const pmPosCol = db.collection('polymarket-openPositions');
+      const pmPositions = await pmPosCol
+        .find({ wallet: { $regex: new RegExp(`^${traderWallet}$`, 'i') } })
+        .sort({ updatedAt: -1 })
+        .limit(20)
+        .toArray();
+
+      openPositions = pmPositions.map(p => ({
+        market: p.title,
         outcome: p.outcome,
         size: p.size,
         avgPrice: p.avgPrice,
         curPrice: p.curPrice,
-        unrealizedPnl: p.cashPnl || p.unrealizedPnl,
+        unrealizedPnl: p.cashPnl,
         pnlPercent: p.percentPnl,
+        _source: 'polymarket-openPositions',
       }));
     }
 
@@ -199,6 +210,17 @@ export async function executeGetVaultPerformance(input: GetVaultPerformanceInput
       description: vault.edge_hypothesis || vault.description,
       specialty: vault.specialty,
       status: vault.status || 'active',
+      _debug: {
+        rawSpecialty: vault.specialty,
+        rawLabel: vault.label,
+        rawDisplayName: vault.display_name,
+        rawEdgeHypothesis: vault.edge_hypothesis?.substring(0, 80),
+        walletUsed: traderWallet?.substring(0, 10),
+        positionSource: openPositions[0]?._source || 'none',
+        positionCount: openPositions.length,
+        rawPositionSample: openPositions[0] ? JSON.stringify(openPositions[0]).substring(0, 200) : 'none',
+        vaultDocKeys: Object.keys(vault).filter(k => !k.startsWith('_')).join(', '),
+      },
 
       performance: {
         period: input.period,
