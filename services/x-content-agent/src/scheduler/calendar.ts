@@ -17,6 +17,7 @@ import {
   GeneratedPost,
 } from '../content/generator';
 import { postTweet, quoteTweet } from '../lib/x-client';
+import { sendChannelMessageWithButton } from '../lib/tg-client';
 import { getDB, COLLECTIONS } from '../lib/db';
 
 // Track daily post counts
@@ -56,9 +57,13 @@ function randomJitter(): number {
 }
 
 /**
- * Publish a generated post to X and log it
+ * Publish a generated post to X + Telegram channel and log it
  */
 async function publishPost(post: GeneratedPost): Promise<void> {
+  let tweetId: string | null = null;
+  let tgMessageId: number | null = null;
+
+  // 1. Post to X
   try {
     const tweetText = post.tweet;
     let tweetData;
@@ -69,10 +74,33 @@ async function publishPost(post: GeneratedPost): Promise<void> {
       tweetData = await postTweet(tweetText);
     }
 
-    // Log to MongoDB
+    tweetId = tweetData.id;
+    console.log(`[Calendar] Published to X: ${post.category} (${tweetId})`);
+  } catch (error: any) {
+    console.error(`[Calendar] X post failed for ${post.category}:`, error.message);
+  }
+
+  // 2. Post to Telegram channel
+  if (post.telegram) {
+    try {
+      const tgResult = await sendChannelMessageWithButton(
+        post.telegram,
+        'Track live →',
+        'https://yieldr.org',
+      );
+      tgMessageId = tgResult.message_id;
+      console.log(`[Calendar] Published to TG: ${post.category} (msg ${tgMessageId})`);
+    } catch (error: any) {
+      console.error(`[Calendar] TG post failed for ${post.category}:`, error.message);
+    }
+  }
+
+  // 3. Log to MongoDB
+  try {
     const db = await getDB();
     await db.collection(COLLECTIONS.X_POSTS).insertOne({
-      tweetId: tweetData.id,
+      tweetId,
+      tgMessageId,
       type: post.type,
       tweet: post.tweet,
       telegram: post.telegram,
@@ -80,13 +108,11 @@ async function publishPost(post: GeneratedPost): Promise<void> {
       metadata: post.metadata,
       postedAt: new Date(),
     });
-
-    dailyCounts[post.category] = (dailyCounts[post.category] || 0) + 1;
-
-    console.log(`[Calendar] Published ${post.category}: "${tweetText.substring(0, 60)}..."`);
   } catch (error: any) {
-    console.error(`[Calendar] Failed to publish ${post.category}:`, error.message);
+    console.error(`[Calendar] DB log failed:`, error.message);
   }
+
+  dailyCounts[post.category] = (dailyCounts[post.category] || 0) + 1;
 }
 
 /**

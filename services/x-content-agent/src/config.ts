@@ -22,6 +22,10 @@ export const CONFIG = {
   X_ACCESS_SECRET: process.env.X_ACCESS_SECRET || '',
   X_BEARER_TOKEN: process.env.X_BEARER_TOKEN || '',
 
+  // Telegram Bot
+  TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN || '',
+  TELEGRAM_CHANNEL_ID: process.env.TELEGRAM_CHANNEL_ID || '',
+
   // MCP Server (for fetching data)
   MCP_SERVER_URL: process.env.MCP_SERVER_URL || 'http://localhost:3001',
 
