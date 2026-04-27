@@ -30,8 +30,12 @@ function getBotClient(): AxiosInstance {
 }
 
 function getChannelId(): string {
-  const id = process.env.TELEGRAM_CHANNEL_ID;
+  let id = process.env.TELEGRAM_CHANNEL_ID;
   if (!id) throw new Error('TELEGRAM_CHANNEL_ID not set');
+  // Auto-prefix @ for username-style IDs (not numeric -100xxx)
+  if (!id.startsWith('@') && !id.startsWith('-')) {
+    id = `@${id}`;
+  }
   return id;
 }
 
