@@ -60,17 +60,19 @@ async function main() {
     return;
   }
 
-  // Step 2: Send test message
-  console.log('\n  📤 Sending test message...');
-  const testMsg = await sendChannelMessageWithButton(
-    '🤖 **Yieldr Agent Test**\n\nTelegram integration is live. Content posts will appear here automatically.\n\n📊 NBA Edge Vault | ⚽ Soccer Alpha Vault | 🌍 Geopolitics Vault',
-    'Visit Yieldr →',
-    'https://yieldr.org',
-  );
-  console.log(`  ✅ Test message sent: message_id=${testMsg.message_id}`);
+  const liveMode = process.argv.includes('--live');
+
+  // Step 2: Send test message (skip in --live mode)
+  if (!liveMode) {
+    console.log('\n  📤 Sending test message...');
+    const testMsg = await sendChannelMessageWithButton(
+      '🤖 **Yieldr Agent Test**\n\nTelegram integration is live. Content posts will appear here automatically.\n\n📊 NBA Edge Vault | ⚽ Soccer Alpha Vault | 🌍 Geopolitics Vault',
+      'Visit Yieldr →',
+      'https://yieldr.org',
+    );
+    console.log(`  ✅ Test message sent: message_id=${testMsg.message_id}`);}
 
   // Step 3: Optionally generate and post real content
-  const liveMode = process.argv.includes('--live');
   if (!liveMode) {
     console.log('\n  💡 Run with --live to generate real content and post to channel');
     console.log('     --live --type=TRADER_PROFILE');

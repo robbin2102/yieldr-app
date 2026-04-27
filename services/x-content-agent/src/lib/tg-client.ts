@@ -15,6 +15,16 @@ import axios, { AxiosInstance } from 'axios';
 
 let botClient: AxiosInstance | null = null;
 
+// Convert **bold** markdown to Telegram HTML — more robust than MarkdownV2
+// which requires escaping dozens of special characters
+function toHtml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/\*\*(.*?)\*\*/g, '<b>$1</b>');
+}
+
 function getBotClient(): AxiosInstance {
   if (!botClient) {
     const token = process.env.TELEGRAM_BOT_TOKEN;
@@ -54,8 +64,8 @@ export async function sendChannelMessage(text: string): Promise<TgMessageResult>
 
   const response = await client.post('/sendMessage', {
     chat_id: channelId,
-    text,
-    parse_mode: 'Markdown',
+    text: toHtml(text),
+    parse_mode: 'HTML',
     disable_web_page_preview: false,
   });
 
@@ -77,8 +87,8 @@ export async function sendChannelMessageWithButton(
 
   const response = await client.post('/sendMessage', {
     chat_id: channelId,
-    text,
-    parse_mode: 'Markdown',
+    text: toHtml(text),
+    parse_mode: 'HTML',
     disable_web_page_preview: false,
     reply_markup: {
       inline_keyboard: [[{ text: buttonText, url: buttonUrl }]],
