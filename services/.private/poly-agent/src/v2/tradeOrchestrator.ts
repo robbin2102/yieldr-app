@@ -68,12 +68,25 @@ export interface OrchestratorConfig {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function fmtLine(trade: import('../modules/onChainDetector').DetectedTrade, suffix: string): string {
-  const now      = new Date().toISOString().slice(11, 19);
-  const blockTs  = new Date(trade.blockTimestampMs).toISOString().slice(11, 19);
-  const lagMs    = trade.receivedAtMs - trade.blockTimestampMs;
-  const lagStr   = lagMs >= 0 ? `+${lagMs}ms` : `${lagMs}ms`;
-  return `[${now}] ${trade.label} ${trade.side} $${trade.usdcAmount.toFixed(0)} "${trade.tokenId.slice(0, 10)}..." block=${blockTs} lag=${lagStr} | ${suffix}`;
+function fmtLine(
+  trade:  import('../modules/onChainDetector').DetectedTrade,
+  suffix: string,
+  meta?:  { title?: string; outcome?: string } | null,
+): string {
+  const now     = new Date().toISOString().slice(11, 19);
+  const blockTs = new Date(trade.blockTimestampMs).toISOString().slice(11, 19);
+  const lagMs   = trade.receivedAtMs - trade.blockTimestampMs;
+  const lagStr  = lagMs >= 0 ? `+${lagMs}ms` : `${lagMs}ms`;
+
+  const price    = `@$${trade.impliedPrice.toFixed(3)}`;
+  const shares   = `${trade.tokenAmount.toFixed(1)}sh`;
+  const outcome  = meta?.outcome ? ` ${meta.outcome}` : '';
+  const title    = meta?.title
+    ? `"${meta.title.slice(0, 40)}${meta.title.length > 40 ? '…' : ''}"`
+    : `"${trade.tokenId.slice(0, 10)}..."`;
+  const catchup  = lagMs > 10_000 ? ' [CATCHUP]' : '';
+
+  return `[${now}] ${trade.label} ${trade.side} $${trade.usdcAmount.toFixed(0)} ${price} (${shares}${outcome}) ${title} block=${blockTs} lag=${lagStr}${catchup} | ${suffix}`;
 }
 
 // ── Orchestrator ──────────────────────────────────────────────────────────────
@@ -167,8 +180,12 @@ export class TradeOrchestrator {
     resolver: MarketMetaResolver,
     recorder: TradeRecorder,
   ): Promise<void> {
-    // ── 0. Skip stale events (backlog replay on reconnect) ─────────────────
-    if (trade.isStale) return;
+    // ── 0. Skip stale events (backlog replay on reconnect, older than 5min) ─
+    if (trade.isStale) {
+      const ageS = Math.round((Date.now() - trade.blockTimestampMs) / 1000);
+      console.log(`[Orchestrator] Stale fill skipped: ${trade.label} ${trade.side} $${trade.usdcAmount.toFixed(0)} age=${ageS}s block=${new Date(trade.blockTimestampMs).toISOString().slice(11, 19)}`);
+      return;
+    }
 
     // ── 1. Prefetch orderbook in parallel with everything below ───────────
     this.books.prefetch(trade.tokenId);
@@ -211,7 +228,7 @@ export class TradeOrchestrator {
     // ── 7. BUY: bet sizing ────────────────────────────────────────────────
     const sizing = calcCopyBet(trade.usdcAmount, trader);
     if (sizing.skip) {
-      console.log(fmtLine(trade, `⏭  SKIP → ${sizing.skipReason} ${sizing.skipDetail ?? ''}`));
+      console.log(fmtLine(trade, `⏭  SKIP → ${sizing.skipReason} ${sizing.skipDetail ?? ''}`, meta));
       await recorder.skip(
         { ...trade, meta, strategy, copyBetUsdc: 0 } as RoutedTrade,
         sizing.skipReason!,
@@ -234,7 +251,7 @@ export class TradeOrchestrator {
       const cur = this.positionReserved.get(lockKey) ?? 0;
       const upd = Math.max(0, cur - sizing.betUsdc);
       if (upd === 0) this.positionReserved.delete(lockKey); else this.positionReserved.set(lockKey, upd);
-      console.log(fmtLine(trade, `⏭  SKIP → POSITION_CAP_FULL`));
+      console.log(fmtLine(trade, `⏭  SKIP → POSITION_CAP_FULL`, meta));
       await recorder.skip({ ...trade, meta, strategy, copyBetUsdc: sizing.betUsdc } as RoutedTrade, 'POSITION_CAP_FULL');
       return;
     }
@@ -253,7 +270,7 @@ export class TradeOrchestrator {
 
     const ratio = (trade.usdcAmount / trader.avgBet).toFixed(1);
     const execTag = this.detectionOnly ? '[DETECT_ONLY]' : `[${strategy.toUpperCase()}]`;
-    console.log(fmtLine(trade, `×${ratio} avg → copy $${copyBetUsdc.toFixed(2)} ${execTag}`));
+    console.log(fmtLine(trade, `×${ratio} avg → copy $${copyBetUsdc.toFixed(2)} ${execTag}`, meta));
 
     // ── 9. Route to executor ───────────────────────────────────────────────
     if (this.detectionOnly) return;

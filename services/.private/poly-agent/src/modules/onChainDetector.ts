@@ -86,6 +86,11 @@ export class OnChainDetector extends EventEmitter {
   private keepalive:     NodeJS.Timeout | null = null;
   private walletRefresh: NodeJS.Timeout | null = null;
 
+  // Stall detection: if no WS message arrives for >30s, force reconnect.
+  // Catches QuickNode silent stalls where the socket stays open but stops
+  // delivering events (seen before some code=1001 rotations).
+  private lastWsMessageMs = 0;
+
   // wallet (lowercase) → label
   private trackedWallets = new Map<string, string>();
 
@@ -177,12 +182,24 @@ export class OnChainDetector extends EventEmitter {
         if (ws.readyState !== WebSocket.OPEN) return;
         ws.send(JSON.stringify({ jsonrpc: '2.0', id: 99, method: 'eth_blockNumber', params: [] }));
       }, 20_000);
+      this.lastWsMessageMs = Date.now(); // connection itself counts as activity
+
       // WS-level ping — triggers pong from QuickNode, catches 1006 network-level drops faster
       const wsPing = setInterval(() => {
         if (ws.readyState === WebSocket.OPEN) ws.ping();
         else clearInterval(wsPing);
       }, 25_000);
-      ws.on('close', () => clearInterval(wsPing));
+
+      // Stall detector: proactively reconnect if no WS activity for 30s.
+      // Catches cases where QuickNode's backend is alive but not delivering events.
+      const stallCheck = setInterval(() => {
+        const silentMs = Date.now() - this.lastWsMessageMs;
+        if (silentMs > 30_000 && ws.readyState === WebSocket.OPEN) {
+          console.warn(`[OnChainDetector] Stall detected: no WS activity for ${Math.round(silentMs / 1000)}s — forcing reconnect`);
+          ws.close(4000, 'stall-timeout');
+        }
+      }, 5_000);
+
     });
 
     ws.on('message', (raw: Buffer) => this.handleMessage(ws, raw));
@@ -198,7 +215,7 @@ export class OnChainDetector extends EventEmitter {
       if (this.stopped) return;
       if (this.lastSeenBlockDec > 0) this.catchupFromBlock = this.lastSeenBlockDec;
       // code=1001 = server rotation (normal), code=1006 = network drop, other = unexpected
-      const codeLabel = code === 1001 ? 'server-rotation' : code === 1006 ? 'network-drop' : 'unexpected';
+      const codeLabel = code === 1001 ? 'server-rotation' : code === 1006 ? 'network-drop' : code === 4000 ? 'stall-close' : 'unexpected';
       console.warn(`[OnChainDetector] WS closed code=${code}(${codeLabel}) reason="${reason?.toString() || ''}" alive=${aliveSec}s subsConfirmed=${this.subsConfirmed}/${this.subsExpected} lastBlock=${this.lastSeenBlockDec} → retry in ${this.reconnectMs}ms`);
       this.emit('reconnecting', { code, delayMs: this.reconnectMs });
       setTimeout(() => this.connect(), this.reconnectMs);
@@ -258,6 +275,8 @@ export class OnChainDetector extends EventEmitter {
   private subsConfirmed = 0;
 
   private async handleMessage(ws: WebSocket, raw: Buffer): Promise<void> {
+    this.lastWsMessageMs = Date.now(); // any WS activity (event, keepalive, pong) resets stall timer
+
     let msg: any;
     try { msg = JSON.parse(raw.toString()); } catch { return; }
 
