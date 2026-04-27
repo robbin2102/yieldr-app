@@ -304,61 +304,6 @@ export default function BotDashboard() {
     } finally { setAdminBusy(null); }
   }
 
-  async function sellAll() {
-    const sellable = positions.filter(p => !p.redeemable && p.tokenId && (p.totalFilledSize ?? 0) > 0);
-    if (sellable.length === 0) return;
-    if (pendingConfirm !== 'sell-all') { setPendingConfirm('sell-all'); return; }
-    setPendingConfirm(null);
-    setAdminBusy('sell-all');
-    const lines: string[] = [`[SELL ALL] closing ${sellable.length} position(s)…`];
-    setAdminLog(lines.join('\n'));
-
-    for (const p of sellable) {
-      lines.push(`\n[SELL] ${p.title.slice(0, 50)}`);
-      setAdminLog(lines.join('\n'));
-      try {
-        const res = await fetch('/api/copy-trading/admin/sell-position', {
-          method:  'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body:    JSON.stringify({ tokenId: p.tokenId, size: p.totalFilledSize }),
-        });
-        if (!res.ok || !res.body) {
-          const data = await res.json().catch(() => ({})) as any;
-          lines.push(`  ✗ ${data.error ?? res.statusText}`);
-          setAdminLog(lines.join('\n'));
-          continue;
-        }
-        const reader  = res.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '';
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-          const chunks = buffer.split('\n\n');
-          buffer = chunks.pop() ?? '';
-          for (const chunk of chunks) {
-            const match = chunk.match(/^data: (.+)$/m);
-            if (!match) continue;
-            try {
-              const ev = JSON.parse(match[1]);
-              if (ev.line) { lines.push(`  ${ev.line}`); setAdminLog(lines.join('\n')); }
-              if (ev.done) { lines.push(`  exit=${ev.exitCode}`); setAdminLog(lines.join('\n')); }
-            } catch { /* ignore */ }
-          }
-        }
-      } catch (e: any) {
-        lines.push(`  ✗ ${e.message}`);
-        setAdminLog(lines.join('\n'));
-      }
-    }
-
-    lines.push('\n[SELL ALL] done');
-    setAdminLog(lines.join('\n'));
-    setAdminBusy(null);
-    fetchAll();
-  }
-
   async function patchTrader(wallet: string, action: 'start' | 'stop' | 'remove') {
     if (action === 'remove' && !confirm('Remove this trader from the detector? They will be hidden from the summary. Open positions will remain — use REDEEM/SELL to exit them.')) return;
     setStopping(wallet);
@@ -648,32 +593,18 @@ export default function BotDashboard() {
         <div className="bg-[#0A0A0A] border border-[#1A1A1A] rounded overflow-hidden">
           <div className="px-4 py-2 border-b border-[#1A1A1A] flex items-center justify-between">
             <span className="text-[10px] text-[#00C805] tracking-widest font-bold">BOT PORTFOLIO</span>
-            <div className="flex items-center gap-2">
-              {positions.some(p => !p.redeemable && p.tokenId && (p.totalFilledSize ?? 0) > 0) && (
-                <button
-                  disabled={!!adminBusy}
-                  onClick={sellAll}
-                  className={`px-2 py-0.5 text-[10px] rounded border transition-colors disabled:opacity-40 font-bold ${
-                    pendingConfirm === 'sell-all'
-                      ? 'border-[#FF4757]/70 text-[#FF4757] bg-[#FF4757]/10'
-                      : 'border-[#FF8C00]/40 text-[#FF8C00] hover:bg-[#FF8C00]/10'
-                  }`}>
-                  {adminBusy === 'sell-all' ? 'SELLING…' : pendingConfirm === 'sell-all' ? 'CONFIRM?' : 'SELL ALL'}
-                </button>
-              )}
-              {positions.some(p => p.redeemable) && (
-                <button
-                  disabled={adminBusy === 'redeem-all'}
-                  onClick={redeemAll}
-                  className={`px-2 py-0.5 text-[10px] rounded border transition-colors disabled:opacity-40 font-bold ${
-                    pendingConfirm === 'redeem-all'
-                      ? 'border-[#FF4757]/70 text-[#FF4757] bg-[#FF4757]/10'
-                      : 'border-[#00C805]/40 text-[#00C805] hover:bg-[#00C805]/10'
-                  }`}>
-                  {adminBusy === 'redeem-all' ? 'REDEEMING…' : pendingConfirm === 'redeem-all' ? 'CONFIRM?' : 'REDEEM ALL'}
-                </button>
-              )}
-            </div>
+            {positions.some(p => p.redeemable) && (
+              <button
+                disabled={adminBusy === 'redeem-all'}
+                onClick={redeemAll}
+                className={`px-2 py-0.5 text-[10px] rounded border transition-colors disabled:opacity-40 font-bold ${
+                  pendingConfirm === 'redeem-all'
+                    ? 'border-[#FF4757]/70 text-[#FF4757] bg-[#FF4757]/10'
+                    : 'border-[#00C805]/40 text-[#00C805] hover:bg-[#00C805]/10'
+                }`}>
+                {adminBusy === 'redeem-all' ? 'REDEEMING…' : pendingConfirm === 'redeem-all' ? 'CONFIRM?' : 'REDEEM ALL'}
+              </button>
+            )}
           </div>
           {/* Summary strip */}
           <div className="grid grid-cols-6 gap-0 border-b border-[#1A1A1A]">
@@ -740,7 +671,7 @@ export default function BotDashboard() {
                         </span>
                       </td>
                       <td className="px-2 py-1.5 whitespace-nowrap">
-                        {!p.traderHolding && !p.redeemable && p.tokenId && (
+                        {!p.redeemable && p.tokenId && (
                           <button
                             disabled={adminBusy === p.tokenId}
                             onClick={() => sellPosition(p)}
