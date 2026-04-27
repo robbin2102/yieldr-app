@@ -27,6 +27,9 @@ let traderRotation = 0;
 // HC category cycles through specialties across windows
 const HC_CATEGORIES = ['NBA', 'Soccer', 'Politics'];
 let hcRotation = 0;
+// Vault rotation — one per vault per day: NBA → Soccer → Geopolitics
+const VAULT_ROTATION = ['NBA Edge Vault', 'Soccer Alpha Vault', 'Geopolitics Vault'];
+let vaultRotation = 0;
 
 function resetDailyCounts(): void {
   const today = new Date().toISOString().split('T')[0];
@@ -36,6 +39,7 @@ function resetDailyCounts(): void {
     });
     traderRotation = 0;
     hcRotation = 0;
+    vaultRotation = 0;
     lastResetDate = today;
   }
 }
@@ -44,6 +48,12 @@ function nextHcCategory(): string {
   const category = HC_CATEGORIES[hcRotation % HC_CATEGORIES.length];
   hcRotation++;
   return category;
+}
+
+function nextVault(): string {
+  const vault = VAULT_ROTATION[vaultRotation % VAULT_ROTATION.length];
+  vaultRotation++;
+  return vault;
 }
 
 function canPost(category: string): boolean {
@@ -140,7 +150,7 @@ async function executeWindow(contentTypes: string[], windowOpts?: { hcCategory?:
           break;
         }
         case 'VAULT_PERFORMANCE':
-          post = await generateVaultPerformance();
+          post = await generateVaultPerformance(nextVault());
           break;
         default:
           console.warn(`[Calendar] Skipping disabled/unknown content type: ${type}`);
@@ -186,9 +196,9 @@ export function startScheduler(): void {
     setTimeout(() => executeWindow(['HIGH_CONVICTION', 'TRADER_PROFILE']), randomJitter());
   }, { timezone: 'Asia/Kolkata' });
 
-  // Window 5: 5:30 AM IST / 4 PM EDT — HC + Vault Performance
+  // Window 5: 5:30 AM IST / 4 PM EDT — HC only
   cron.schedule('30 5 * * *', () => {
-    setTimeout(() => executeWindow(['HIGH_CONVICTION', 'VAULT_PERFORMANCE']), randomJitter());
+    setTimeout(() => executeWindow(['HIGH_CONVICTION']), randomJitter());
   }, { timezone: 'Asia/Kolkata' });
 
   // Window 6: 8:30 AM IST / 7 PM EDT — Vault Performance + Trader Profile (4/4)
