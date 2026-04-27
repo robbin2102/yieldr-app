@@ -109,6 +109,11 @@ function isSpam(text: string): boolean {
 }
 
 export function startReplyMonitor(): void {
+  if (process.env.DISABLE_REPLY_MONITOR === 'true') {
+    console.log('[Replies] Monitor disabled via DISABLE_REPLY_MONITOR env var');
+    return;
+  }
+
   console.log(`[Replies] Starting reply monitor (every ${CONFIG.REPLY_POLL_INTERVAL_MS / 60000}m)`);
 
   // Delay start by 60s
