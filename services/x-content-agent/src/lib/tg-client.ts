@@ -22,7 +22,9 @@ function toHtml(text: string): string {
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
-    .replace(/\*\*(.*?)\*\*/g, '<b>$1</b>');
+    .replace(/\*\*(.*?)\*\*/g, '<b>$1</b>')
+    // Ensure CTA always points to /vaults regardless of what LLM writes
+    .replace(/yieldr\.org(?!\/vaults)(?=\s|$|<)/g, 'yieldr.org/vaults');
 }
 
 function getBotClient(): AxiosInstance {
