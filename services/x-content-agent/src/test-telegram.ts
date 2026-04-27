@@ -68,7 +68,7 @@ async function main() {
     const testMsg = await sendChannelMessageWithButton(
       '🤖 **Yieldr Agent Test**\n\nTelegram integration is live. Content posts will appear here automatically.\n\n📊 NBA Edge Vault | ⚽ Soccer Alpha Vault | 🌍 Geopolitics Vault',
       'Visit Yieldr →',
-      'https://yieldr.org',
+      'https://yieldr.org/vaults',
     );
     console.log(`  ✅ Test message sent: message_id=${testMsg.message_id}`);}
 
@@ -107,7 +107,7 @@ async function main() {
   const result = await sendChannelMessageWithButton(
     post.telegram,
     'Track live →',
-    'https://yieldr.org',
+    'https://yieldr.org/vaults',
   );
   console.log(`  ✅ Posted: message_id=${result.message_id}`);
 

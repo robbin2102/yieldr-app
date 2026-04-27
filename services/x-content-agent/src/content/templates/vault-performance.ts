@@ -59,7 +59,7 @@ Pick the 3-5 most compelling metrics and tell the vault's story:
 4. Risk context? (maxDrawdown, drawdown_trend, tradingConsistency, dailyPnLByFrame)
 
 Use **bold** for key numbers. Bullets for data. No character limit.
-End with "Track live → yieldr.org" CTA.
+End with "Track live → yieldr.org/vaults" CTA.
 
 RULES:
 - Only feature winning positions in detail

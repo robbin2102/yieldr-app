@@ -86,7 +86,7 @@ async function publishPost(post: GeneratedPost): Promise<void> {
       const tgResult = await sendChannelMessageWithButton(
         post.telegram,
         'Track live →',
-        'https://yieldr.org',
+        'https://yieldr.org/vaults',
       );
       tgMessageId = tgResult.message_id;
       console.log(`[Calendar] Published to TG: ${post.category} (msg ${tgMessageId})`);

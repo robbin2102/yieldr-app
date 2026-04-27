@@ -66,5 +66,5 @@ FORMAT — ONE post for both X and TG:
 - Use **bold** for 3-5 key numbers (% gain, win rate, PF, rank)
 - Bullets for key data points
 - Tell the full story — no artificial character limit
-- End with a question that drives engagement, then "Track live → yieldr.org"`;
+- End with a question that drives engagement, then "Track live → yieldr.org/vaults"`;
 }

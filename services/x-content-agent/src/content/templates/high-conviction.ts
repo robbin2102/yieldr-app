@@ -61,5 +61,5 @@ FORMAT — ONE post for both X and TG:
 - Use **bold** for 2-4 key numbers (conviction ratio, bet size, win rate)
 - Bullet points for key data points
 - Tell the full story — no character limit
-- End with a question that drives replies and a yieldr.org CTA`;
+- End with a question that drives replies and a yieldr.org/vaults CTA`;
 }
