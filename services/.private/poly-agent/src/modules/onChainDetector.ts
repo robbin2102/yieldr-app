@@ -196,12 +196,12 @@ export class OnChainDetector extends EventEmitter {
       const aliveSec = ((Date.now() - connectedAt) / 1000).toFixed(1);
       if (this.keepalive) { clearInterval(this.keepalive); this.keepalive = null; }
       if (this.stopped) return;
-      // Snapshot block for catch-up query after reconnect
       if (this.lastSeenBlockDec > 0) this.catchupFromBlock = this.lastSeenBlockDec;
-      console.warn(`[OnChainDetector] WS closed code=${code} reason="${reason?.toString() || ''}" alive=${aliveSec}s → retry in ${this.reconnectMs}ms`);
+      // code=1001 = server rotation (normal), code=1006 = network drop, other = unexpected
+      const codeLabel = code === 1001 ? 'server-rotation' : code === 1006 ? 'network-drop' : 'unexpected';
+      console.warn(`[OnChainDetector] WS closed code=${code}(${codeLabel}) reason="${reason?.toString() || ''}" alive=${aliveSec}s subsConfirmed=${this.subsConfirmed}/${this.subsExpected} lastBlock=${this.lastSeenBlockDec} → retry in ${this.reconnectMs}ms`);
       this.emit('reconnecting', { code, delayMs: this.reconnectMs });
       setTimeout(() => this.connect(), this.reconnectMs);
-      // Exponential backoff: 50ms → 100ms → 500ms → 2s → 5s
       this.reconnectMs = Math.min(this.reconnectMs * 2, 5_000);
     });
   }
@@ -220,28 +220,26 @@ export class OnChainDetector extends EventEmitter {
     const useServerFilter = wallets.length <= OnChainDetector.MAX_SERVER_SIDE_WALLETS;
 
     if (useServerFilter) {
-      // Server-side wallet filter: QuickNode only delivers events for our wallets.
-      // Sub 1: maker is one of our wallets  (topics[2])
-      ws.send(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_subscribe', params: ['logs', {
+      const sub1 = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_subscribe', params: ['logs', {
         address: ALL_EXCHANGE_ADDRESSES,
         topics:  [TOPIC0, null, walletTopics],
-      }]}));
-      // Sub 2: taker is one of our wallets  (topics[3])
-      ws.send(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'eth_subscribe', params: ['logs', {
+      }]});
+      const sub2 = JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'eth_subscribe', params: ['logs', {
         address: ALL_EXCHANGE_ADDRESSES,
         topics:  [TOPIC0, null, null, walletTopics],
-      }]}));
+      }]});
+      console.log(`[OnChainDetector] Subscribing: server-side filter, ${wallets.length} wallet(s), payload=${sub1.length + sub2.length}B`);
+      ws.send(sub1);
+      ws.send(sub2);
       this.subsExpected = 2;
-      console.log(`[OnChainDetector] Server-side filter: ${wallets.length} wallet(s) across 2 subs`);
     } else {
-      // Too many wallets — topic payload would exceed QuickNode's size limit.
-      // Subscribe to all fills on the 4 exchange contracts; filter client-side in handleFill().
-      ws.send(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_subscribe', params: ['logs', {
+      const sub1 = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_subscribe', params: ['logs', {
         address: ALL_EXCHANGE_ADDRESSES,
         topics:  [TOPIC0],
-      }]}));
+      }]});
+      console.log(`[OnChainDetector] Subscribing: client-side filter (${wallets.length} wallets > limit ${OnChainDetector.MAX_SERVER_SIDE_WALLETS}), payload=${sub1.length}B`);
+      ws.send(sub1);
       this.subsExpected = 1;
-      console.log(`[OnChainDetector] Client-side filter: ${wallets.length} wallets (server-side limit is ${OnChainDetector.MAX_SERVER_SIDE_WALLETS})`);
     }
   }
 
@@ -256,20 +254,29 @@ export class OnChainDetector extends EventEmitter {
     // Keepalive response
     if (msg.id === 99) return;
 
-    // Subscription confirmations (id 1-4 = CTF v1, NEG_RISK v1, CTF v2, NEG_RISK v2)
+    // Subscription confirmations
     if (msg.id === 1 || msg.id === 2 || msg.id === 3 || msg.id === 4) {
       if (msg.error) {
-        this.emit('error', new Error(`Subscribe error (sub ${msg.id}): ${msg.error.message}`));
+        // Log the full error object so we know exactly what QuickNode rejected and why
+        console.error(`[OnChainDetector] Sub ${msg.id} rejected by node:`, JSON.stringify(msg.error));
+        console.error(`[OnChainDetector] Sub ${msg.id} context: wallets=${this.trackedWallets.size} subsExpected=${this.subsExpected} useServerFilter=${this.trackedWallets.size <= OnChainDetector.MAX_SERVER_SIDE_WALLETS}`);
+        this.emit('error', new Error(`Subscribe error (sub ${msg.id}): ${msg.error.message ?? JSON.stringify(msg.error)}`));
         return;
       }
+      console.log(`[OnChainDetector] Sub ${msg.id} confirmed (result=${msg.result?.slice(0, 10)}...) [${this.subsConfirmed + 1}/${this.subsExpected}]`);
       this.subsConfirmed++;
       if (this.subsConfirmed >= this.subsExpected) {
         this.subsConfirmed = 0;
         this.reconnectMs = 50; // reset backoff — connection is healthy
-        console.log(`[OnChainDetector] Subscriptions active — watching ${this.trackedWallets.size} wallet(s), all 4 exchanges`);
-        // Replay any fills that arrived during the reconnect gap
+        console.log(`[OnChainDetector] All ${this.subsExpected} subscription(s) active — watching ${this.trackedWallets.size} wallet(s)`);
         this.catchUpMissedBlocks().catch(e => console.warn('[OnChainDetector] Catch-up error:', e.message));
       }
+      return;
+    }
+
+    // Unexpected response ID — log it so we can diagnose unknown messages
+    if (msg.id !== undefined && msg.method === undefined) {
+      console.warn(`[OnChainDetector] Unexpected response id=${msg.id}:`, JSON.stringify(msg).slice(0, 200));
       return;
     }
 
@@ -417,14 +424,16 @@ export class OnChainDetector extends EventEmitter {
           signal: AbortSignal.timeout(10_000),
         });
         const logsJson = await logsRes.json() as any;
+        if (logsJson.error) {
+          console.warn(`[OnChainDetector] Catch-up eth_getLogs node error: code=${logsJson.error.code} msg=${logsJson.error.message}`);
+          continue;
+        }
         const logs: any[] = logsJson.result ?? [];
         const fresh = logs.filter(l => !seenTxHashes.has(l.transactionHash));
-        if (fresh.length > 0) {
-          console.log(`[OnChainDetector] Catch-up: replaying ${fresh.length} fill event(s) — duplicates deduped by DB`);
-          for (const log of fresh) {
-            seenTxHashes.add(log.transactionHash);
-            await this.handleFill(log, Date.now());
-          }
+        console.log(`[OnChainDetector] Catch-up: ${logs.length} raw fill(s), ${fresh.length} new (blocks ${cappedFrom}→${toBlock})`);
+        for (const log of fresh) {
+          seenTxHashes.add(log.transactionHash);
+          await this.handleFill(log, Date.now());
         }
       } catch (e: any) {
         console.warn('[OnChainDetector] Catch-up eth_getLogs failed:', e.message);
