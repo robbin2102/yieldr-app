@@ -208,24 +208,41 @@ export class OnChainDetector extends EventEmitter {
 
   // ── Subscriptions ───────────────────────────────────────────────────────────
 
+  // QuickNode returns HTTP 500 when the topics array payload exceeds ~1KB.
+  // With 66-char padded addresses, that's ~15 wallets per topic position.
+  // Above this limit, fall back to client-side wallet filtering.
+  private static readonly MAX_SERVER_SIDE_WALLETS = 15;
+  private subsExpected = 2;
+
   private subscribeAll(ws: WebSocket): void {
-    // Server-side wallet topic filter: only receive events where maker OR taker is one of
-    // our tracked wallets. maker=topics[2], taker=topics[3] — both are indexed in OrderFilled.
-    // This reduces received events from ALL Polymarket fills to only our wallets' fills,
-    // cutting eth_subscribe API credit consumption by ~99%.
-    const walletTopics = [...this.trackedWallets.keys()].map(padAddress);
+    const wallets = [...this.trackedWallets.keys()];
+    const walletTopics = wallets.map(padAddress);
+    const useServerFilter = wallets.length <= OnChainDetector.MAX_SERVER_SIDE_WALLETS;
 
-    // Sub 1: maker is one of our wallets  (topics = [event, any, [wallets]])
-    ws.send(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_subscribe', params: ['logs', {
-      address: ALL_EXCHANGE_ADDRESSES,
-      topics:  [TOPIC0, null, walletTopics],
-    }]}));
-
-    // Sub 2: taker is one of our wallets  (topics = [event, any, any, [wallets]])
-    ws.send(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'eth_subscribe', params: ['logs', {
-      address: ALL_EXCHANGE_ADDRESSES,
-      topics:  [TOPIC0, null, null, walletTopics],
-    }]}));
+    if (useServerFilter) {
+      // Server-side wallet filter: QuickNode only delivers events for our wallets.
+      // Sub 1: maker is one of our wallets  (topics[2])
+      ws.send(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_subscribe', params: ['logs', {
+        address: ALL_EXCHANGE_ADDRESSES,
+        topics:  [TOPIC0, null, walletTopics],
+      }]}));
+      // Sub 2: taker is one of our wallets  (topics[3])
+      ws.send(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'eth_subscribe', params: ['logs', {
+        address: ALL_EXCHANGE_ADDRESSES,
+        topics:  [TOPIC0, null, null, walletTopics],
+      }]}));
+      this.subsExpected = 2;
+      console.log(`[OnChainDetector] Server-side filter: ${wallets.length} wallet(s) across 2 subs`);
+    } else {
+      // Too many wallets — topic payload would exceed QuickNode's size limit.
+      // Subscribe to all fills on the 4 exchange contracts; filter client-side in handleFill().
+      ws.send(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_subscribe', params: ['logs', {
+        address: ALL_EXCHANGE_ADDRESSES,
+        topics:  [TOPIC0],
+      }]}));
+      this.subsExpected = 1;
+      console.log(`[OnChainDetector] Client-side filter: ${wallets.length} wallets (server-side limit is ${OnChainDetector.MAX_SERVER_SIDE_WALLETS})`);
+    }
   }
 
   // ── Message handling ────────────────────────────────────────────────────────
@@ -246,10 +263,10 @@ export class OnChainDetector extends EventEmitter {
         return;
       }
       this.subsConfirmed++;
-      if (this.subsConfirmed >= 2) {
+      if (this.subsConfirmed >= this.subsExpected) {
         this.subsConfirmed = 0;
         this.reconnectMs = 50; // reset backoff — connection is healthy
-        console.log(`[OnChainDetector] Both subscriptions active — server-side filter: ${this.trackedWallets.size} wallet(s), all 4 exchanges`);
+        console.log(`[OnChainDetector] Subscriptions active — watching ${this.trackedWallets.size} wallet(s), all 4 exchanges`);
         // Replay any fills that arrived during the reconnect gap
         this.catchUpMissedBlocks().catch(e => console.warn('[OnChainDetector] Catch-up error:', e.message));
       }
@@ -372,14 +389,17 @@ export class OnChainDetector extends EventEmitter {
     const blockCount = toBlock - cappedFrom + 1;
     console.log(`[OnChainDetector] Catch-up: scanning ${blockCount} block(s) (${cappedFrom}→${toBlock}) for missed fills`);
 
-    // Use wallet topic filter on catch-up too — same wallets as live subscriptions
-    const walletTopics = [...this.trackedWallets.keys()].map(padAddress);
+    // Mirror the live subscription strategy for catch-up
+    const wallets = [...this.trackedWallets.keys()];
+    const useServerFilter = wallets.length <= OnChainDetector.MAX_SERVER_SIDE_WALLETS;
+    const walletTopics = wallets.map(padAddress);
 
-    // Two passes: one for maker, one for taker (can't OR across topic positions in a single call)
-    const topicFilters = [
-      [TOPIC0, null, walletTopics],           // maker is our wallet
-      [TOPIC0, null, null, walletTopics],     // taker is our wallet
-    ];
+    const topicFilters: (string | null | string[])[][] = useServerFilter
+      ? [
+          [TOPIC0, null, walletTopics],        // maker is our wallet
+          [TOPIC0, null, null, walletTopics],  // taker is our wallet
+        ]
+      : [[TOPIC0]];                            // client-side filter: fetch all, handleFill() filters
 
     const fromBlockHex = `0x${cappedFrom.toString(16)}`;
     const toBlockHex   = `0x${toBlock.toString(16)}`;
