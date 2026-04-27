@@ -208,39 +208,49 @@ export class OnChainDetector extends EventEmitter {
 
   // ── Subscriptions ───────────────────────────────────────────────────────────
 
-  // QuickNode returns HTTP 500 when the topics array payload exceeds ~1KB.
-  // With 66-char padded addresses, that's ~15 wallets per topic position.
-  // Above this limit, fall back to client-side wallet filtering.
-  private static readonly MAX_SERVER_SIDE_WALLETS = 15;
-  private subsExpected = 2;
+  // Split wallets into chunks ≤ CHUNK_SIZE so each chunk fits within QuickNode's
+  // topic OR-array limit. Each chunk gets 2 subs: maker-filter + taker-filter.
+  // 50 wallets → 4 chunks × 2 subs = 8 subscriptions, all server-side filtered.
+  private static readonly CHUNK_SIZE   = 15;
+  private static readonly SUB_ID_BASE  = 10; // subscription IDs start here (1-9 reserved)
+  private subsExpected = 0;
+  private subIdMin = 0;
+  private subIdMax = -1;
 
   private subscribeAll(ws: WebSocket): void {
+    this.subsConfirmed = 0;
     const wallets = [...this.trackedWallets.keys()];
-    const walletTopics = wallets.map(padAddress);
-    const useServerFilter = wallets.length <= OnChainDetector.MAX_SERVER_SIDE_WALLETS;
 
-    if (useServerFilter) {
-      const sub1 = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_subscribe', params: ['logs', {
+    // Split into chunks of ≤ CHUNK_SIZE
+    const chunks: string[][] = [];
+    for (let i = 0; i < wallets.length; i += OnChainDetector.CHUNK_SIZE) {
+      chunks.push(wallets.slice(i, i + OnChainDetector.CHUNK_SIZE));
+    }
+
+    const numSubs = chunks.length * 2; // maker + taker per chunk
+    this.subIdMin    = OnChainDetector.SUB_ID_BASE;
+    this.subIdMax    = OnChainDetector.SUB_ID_BASE + numSubs - 1;
+    this.subsExpected = numSubs;
+
+    let subId      = OnChainDetector.SUB_ID_BASE;
+    let totalBytes = 0;
+
+    for (const chunk of chunks) {
+      const walletTopics = chunk.map(padAddress);
+      const sub1 = JSON.stringify({ jsonrpc: '2.0', id: subId++, method: 'eth_subscribe', params: ['logs', {
         address: ALL_EXCHANGE_ADDRESSES,
-        topics:  [TOPIC0, null, walletTopics],
+        topics:  [TOPIC0, null, walletTopics],       // maker is our wallet
       }]});
-      const sub2 = JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'eth_subscribe', params: ['logs', {
+      const sub2 = JSON.stringify({ jsonrpc: '2.0', id: subId++, method: 'eth_subscribe', params: ['logs', {
         address: ALL_EXCHANGE_ADDRESSES,
-        topics:  [TOPIC0, null, null, walletTopics],
+        topics:  [TOPIC0, null, null, walletTopics], // taker is our wallet
       }]});
-      console.log(`[OnChainDetector] Subscribing: server-side filter, ${wallets.length} wallet(s), payload=${sub1.length + sub2.length}B`);
+      totalBytes += sub1.length + sub2.length;
       ws.send(sub1);
       ws.send(sub2);
-      this.subsExpected = 2;
-    } else {
-      const sub1 = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_subscribe', params: ['logs', {
-        address: ALL_EXCHANGE_ADDRESSES,
-        topics:  [TOPIC0],
-      }]});
-      console.log(`[OnChainDetector] Subscribing: client-side filter (${wallets.length} wallets > limit ${OnChainDetector.MAX_SERVER_SIDE_WALLETS}), payload=${sub1.length}B`);
-      ws.send(sub1);
-      this.subsExpected = 1;
     }
+
+    console.log(`[OnChainDetector] Subscribing: server-side filter, ${chunks.length} chunk(s) × 2 subs = ${numSubs} total, ${wallets.length} wallet(s), sub IDs ${this.subIdMin}–${this.subIdMax}, payload=${totalBytes}B`);
   }
 
   // ── Message handling ────────────────────────────────────────────────────────
@@ -254,19 +264,18 @@ export class OnChainDetector extends EventEmitter {
     // Keepalive response
     if (msg.id === 99) return;
 
-    // Subscription confirmations
-    if (msg.id === 1 || msg.id === 2 || msg.id === 3 || msg.id === 4) {
+    // Subscription confirmations (IDs in [subIdMin..subIdMax])
+    if (msg.id >= this.subIdMin && msg.id <= this.subIdMax) {
       if (msg.error) {
         // Log the full error object so we know exactly what QuickNode rejected and why
         console.error(`[OnChainDetector] Sub ${msg.id} rejected by node:`, JSON.stringify(msg.error));
-        console.error(`[OnChainDetector] Sub ${msg.id} context: wallets=${this.trackedWallets.size} subsExpected=${this.subsExpected} useServerFilter=${this.trackedWallets.size <= OnChainDetector.MAX_SERVER_SIDE_WALLETS}`);
+        console.error(`[OnChainDetector] Sub ${msg.id} context: wallets=${this.trackedWallets.size} subsExpected=${this.subsExpected} subIdRange=${this.subIdMin}–${this.subIdMax}`);
         this.emit('error', new Error(`Subscribe error (sub ${msg.id}): ${msg.error.message ?? JSON.stringify(msg.error)}`));
         return;
       }
-      console.log(`[OnChainDetector] Sub ${msg.id} confirmed (result=${msg.result?.slice(0, 10)}...) [${this.subsConfirmed + 1}/${this.subsExpected}]`);
       this.subsConfirmed++;
+      console.log(`[OnChainDetector] Sub ${msg.id} confirmed (result=${msg.result?.slice(0, 10)}...) [${this.subsConfirmed}/${this.subsExpected}]`);
       if (this.subsConfirmed >= this.subsExpected) {
-        this.subsConfirmed = 0;
         this.reconnectMs = 50; // reset backoff — connection is healthy
         console.log(`[OnChainDetector] All ${this.subsExpected} subscription(s) active — watching ${this.trackedWallets.size} wallet(s)`);
         this.catchUpMissedBlocks().catch(e => console.warn('[OnChainDetector] Catch-up error:', e.message));
@@ -299,7 +308,7 @@ export class OnChainDetector extends EventEmitter {
 
     const makerIsTracked = this.trackedWallets.has(maker);
     const takerIsTracked = this.trackedWallets.has(taker);
-    if (!makerIsTracked && !takerIsTracked) return; // client-side wallet filter (server-side topic arrays unreliable on QuickNode)
+    if (!makerIsTracked && !takerIsTracked) return; // safety guard for stale events or cross-chunk overlap
 
     // Decode non-indexed args
     let parsed: ethers.utils.LogDescription;
@@ -396,17 +405,15 @@ export class OnChainDetector extends EventEmitter {
     const blockCount = toBlock - cappedFrom + 1;
     console.log(`[OnChainDetector] Catch-up: scanning ${blockCount} block(s) (${cappedFrom}→${toBlock}) for missed fills`);
 
-    // Mirror the live subscription strategy for catch-up
+    // Mirror the live subscription strategy: server-side chunked filters
     const wallets = [...this.trackedWallets.keys()];
-    const useServerFilter = wallets.length <= OnChainDetector.MAX_SERVER_SIDE_WALLETS;
-    const walletTopics = wallets.map(padAddress);
-
-    const topicFilters: (string | null | string[])[][] = useServerFilter
-      ? [
-          [TOPIC0, null, walletTopics],        // maker is our wallet
-          [TOPIC0, null, null, walletTopics],  // taker is our wallet
-        ]
-      : [[TOPIC0]];                            // client-side filter: fetch all, handleFill() filters
+    const topicFilters: (string | null | string[])[][] = [];
+    for (let i = 0; i < wallets.length; i += OnChainDetector.CHUNK_SIZE) {
+      const chunk = wallets.slice(i, i + OnChainDetector.CHUNK_SIZE);
+      const walletTopics = chunk.map(padAddress);
+      topicFilters.push([TOPIC0, null, walletTopics]);        // maker is our wallet
+      topicFilters.push([TOPIC0, null, null, walletTopics]);  // taker is our wallet
+    }
 
     const fromBlockHex = `0x${cappedFrom.toString(16)}`;
     const toBlockHex   = `0x${toBlock.toString(16)}`;
