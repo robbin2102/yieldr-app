@@ -75,18 +75,24 @@ export async function generateStructuredContent(
 
   const parsed = JSON.parse(cleaned);
 
-  // Single-content format: generate one rich narrative, format per-platform here
-  const rawContent: string = parsed.content || parsed.tweet || parsed.telegram || '';
-  if (rawContent) {
-    // X: strip **bold** (renders as raw text), keep emojis and line breaks
-    parsed.tweet = rawContent.replace(/\*\*(.*?)\*\*/g, '$1');
-    // TG: use original with markdown
-    parsed.telegram = rawContent;
-  } else {
-    // Legacy dual format: just strip ** from tweet
-    if (parsed.tweet) {
-      parsed.tweet = parsed.tweet.replace(/\*\*(.*?)\*\*/g, '$1');
-    }
+  // New format: LLM writes separate tweet + telegram fields
+  // tweet: strip **bold**, strip any URLs (X penalises external links)
+  // telegram: keep **bold**, keep full content
+  if (parsed.tweet) {
+    parsed.tweet = parsed.tweet
+      .replace(/\*\*(.*?)\*\*/g, '$1')
+      .replace(/https?:\/\/\S+/g, '')
+      .replace(/ +\n/g, '\n')
+      .trim();
+  }
+  // Legacy: single `content` field — split it
+  if (!parsed.tweet && (parsed.content || parsed.telegram)) {
+    const raw: string = parsed.content || parsed.telegram || '';
+    parsed.tweet = raw
+      .replace(/\*\*(.*?)\*\*/g, '$1')
+      .replace(/https?:\/\/\S+/g, '')
+      .trim();
+    parsed.telegram = parsed.telegram || raw;
   }
 
   return parsed;

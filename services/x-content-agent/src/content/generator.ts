@@ -19,6 +19,7 @@ import { buildHighConvictionPrompt } from './templates/high-conviction';
 import { buildVaultPerformancePrompt } from './templates/vault-performance';
 import { buildEdgePositionPrompt } from './templates/edge-position';
 import { buildReplyPrompt } from './templates/reply';
+import { ContentStyle, randomStyle } from './styles';
 import * as mcp from '../lib/mcp-client';
 import { getDB, COLLECTIONS } from '../lib/db';
 
@@ -53,6 +54,7 @@ export async function generateTraderAlpha(opts?: {
   rotation?: number;
   totalTraders?: number;
   source?: 'test' | 'scheduler';
+  style?: ContentStyle;
 }): Promise<GeneratedPost> {
   const data = await mcp.getEdgeRankedTraders({
     category: opts?.category,
@@ -69,11 +71,13 @@ export async function generateTraderAlpha(opts?: {
     : Math.floor(Math.random() * Math.min(3, traders.length));
 
   const trader = traders[traderIndex];
+  const style = opts?.style || randomStyle();
   const prompt = buildTraderAlphaPrompt(trader, {
     rotation: opts?.rotation,
     totalTraders: opts?.totalTraders || Math.min(4, traders.length),
+    style,
   });
-  const result = await generateStructuredContent(YIELDR_AGENT_SYSTEM_PROMPT, prompt, { temperature: 0.85 });
+  const result = await generateStructuredContent(YIELDR_AGENT_SYSTEM_PROMPT, prompt, { temperature: 0.9 });
 
   const post: GeneratedPost = {
     type: result.type || 'post',
@@ -121,10 +125,10 @@ export async function generateHighConvictionAlert(category?: string, source: 'te
   }
 
   if (positions.length > 0) {
-    // Pick top-scored position
     const position = positions[0];
-    const prompt = buildEdgePositionPrompt(position);
-    const result = await generateStructuredContent(YIELDR_AGENT_SYSTEM_PROMPT, prompt, { temperature: 0.85 });
+    const style = randomStyle();
+    const prompt = buildEdgePositionPrompt(position, style);
+    const result = await generateStructuredContent(YIELDR_AGENT_SYSTEM_PROMPT, prompt, { temperature: 0.9 });
 
     const post: GeneratedPost = {
       type: result.type || 'post',
@@ -170,7 +174,7 @@ export async function generateHighConvictionAlert(category?: string, source: 'te
 
   const trade = trades.sort((a: any, b: any) => (b.convictionRatio || 0) - (a.convictionRatio || 0))[0];
   const prompt = buildHighConvictionPrompt(trade);
-  const result = await generateStructuredContent(YIELDR_AGENT_SYSTEM_PROMPT, prompt, { temperature: 0.85 });
+  const result = await generateStructuredContent(YIELDR_AGENT_SYSTEM_PROMPT, prompt, { temperature: 0.9 });
 
   const post: GeneratedPost = {
     type: result.type || 'post',
@@ -200,8 +204,9 @@ export async function generateVaultPerformance(vaultName?: string, source: 'test
     ? vaults[0]
     : vaults[Math.floor(Math.random() * vaults.length)];
 
-  const prompt = buildVaultPerformancePrompt(vault);
-  const result = await generateStructuredContent(YIELDR_AGENT_SYSTEM_PROMPT, prompt, { temperature: 0.85 });
+  const style = randomStyle();
+  const prompt = buildVaultPerformancePrompt(vault, style);
+  const result = await generateStructuredContent(YIELDR_AGENT_SYSTEM_PROMPT, prompt, { temperature: 0.9 });
 
   const post: GeneratedPost = {
     type: result.type || 'post',
