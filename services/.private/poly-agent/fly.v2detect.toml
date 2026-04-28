@@ -6,11 +6,9 @@ app            = "poly-agent-trading"
 primary_region = "arn"
 
 [build]
-  dockerfile = "Dockerfile.fly"
+  dockerfile = "Dockerfile.v2detect"
 
-# Override Dockerfile CMD to run v2 instead of admin-service
-[processes]
-  app = "node dist/src/v2/index.js"
+# tsx runs directly — no separate [processes] override needed
 
 [env]
   NODE_ENV       = "production"
