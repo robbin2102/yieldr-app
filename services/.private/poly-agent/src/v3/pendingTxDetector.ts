@@ -92,9 +92,19 @@ export class PendingTxDetector extends EventEmitter {
       this.lastWsMessageMs = Date.now();
       this.emit('connected');
 
-      // Request full tx objects (not just hashes) — requires QuickNode Growth plan
+      // filteredNewPendingTransactions: server-side filter to Polymarket contracts only.
+      // Delivers full tx objects by default — no need for a separate 'true' param.
+      // Reduces volume from all-Polygon (~5-10K/min) to only Polymarket-bound txs (~10-100/min).
       ws.send(JSON.stringify({ jsonrpc: '2.0', id: 10, method: 'eth_subscribe',
-        params: ['newPendingTransactions', true] }));
+        params: ['filteredNewPendingTransactions', {
+          toAddress: [
+            '0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E',  // CTF v1
+            '0xC5d563A36AE78145C45a50134d48A1215220f80a',  // NEG_RISK v1
+            '0xE111180000d2663C0091e4f400237545B87B996B',  // CTF v2
+            '0xe2222d279d744050d28e00520010520000310F59',  // NEG_RISK v2
+          ],
+        }],
+      }));
 
       // JSON-RPC keepalive every 20s
       this.keepalive = setInterval(() => {
@@ -128,7 +138,7 @@ export class PendingTxDetector extends EventEmitter {
           this.emit('error', new Error(`Subscribe failed: ${msg.error.message}`));
           return;
         }
-        console.log(`[v3-Pending] Subscribed (id=${String(msg.result).slice(0, 10)}...) — watching ${this.trackedWallets.size} wallets`);
+        console.log(`[v3-Pending] Subscribed filteredNewPendingTransactions (id=${String(msg.result).slice(0, 10)}...) — 4 Polymarket contracts, ${this.trackedWallets.size} tracked wallets`);
         return;
       }
 
@@ -137,17 +147,16 @@ export class PendingTxDetector extends EventEmitter {
       const tx = msg.params?.result;
       if (!tx) return;
 
-      // Hash-only mode: QuickNode plan doesn't support full tx objects
+      // filteredNewPendingTransactions always delivers full objects, but guard anyway
       if (typeof tx === 'string') {
         if (!this.warnedHashOnly) {
-          console.warn('[v3-Pending] ⚠  Receiving tx hashes only. Full tx objects require QuickNode Growth plan.');
-          console.warn('[v3-Pending]    Upgrade plan to enable mempool detection. Stats will show 0 pending.');
+          console.warn('[v3-Pending] ⚠  Receiving tx hashes — filteredNewPendingTransactions may not be available on this QuickNode plan. No pending detection possible.');
           this.warnedHashOnly = true;
         }
         return;
       }
 
-      // Full tx object — filter to Polymarket exchange addresses only
+      // Server-side already filtered to Polymarket contracts — keep client-side check as safety net
       if (!tx.to || !EXCHANGE_ADDRS.has(tx.to.toLowerCase())) return;
 
       this.handleTx(tx);
