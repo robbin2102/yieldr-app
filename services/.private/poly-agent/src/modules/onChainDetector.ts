@@ -18,23 +18,22 @@ import { ethers } from 'ethers';
 import { CopyTrader } from '../db/models/CopyTrader';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
-// v1 contracts (active until CLOBv2 cutover ~April 28 2026)
-const CTF_EXCHANGE         = '0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E';
-const NEG_RISK_EXCHANGE    = '0xC5d563A36AE78145C45a50134d48A1215220f80a';
-// v2 contracts
+// v1 contracts deprecated April 28 2026 at CLOBv2 cutover
+// const CTF_EXCHANGE      = '0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E';
+// const NEG_RISK_EXCHANGE = '0xC5d563A36AE78145C45a50134d48A1215220f80a';
 const CTF_V2_EXCHANGE      = '0xE111180000d2663C0091e4f400237545B87B996B';
 const NEG_RISK_V2_EXCHANGE = '0xe2222d279d744050d28e00520010520000310F59';
 
+// v2 event — makerAssetId/takerAssetId replaced by side+tokenId; builder+metadata added
 const ORDER_FILLED_IFACE = new ethers.utils.Interface([
-  'event OrderFilled(bytes32 indexed orderHash, address indexed maker, address indexed taker, uint256 makerAssetId, uint256 takerAssetId, uint256 makerAmountFilled, uint256 takerAmountFilled, uint256 fee)',
+  'event OrderFilled(bytes32 indexed orderHash, address indexed maker, address indexed taker, uint8 side, uint256 tokenId, uint256 makerAmountFilled, uint256 takerAmountFilled, uint256 fee, bytes32 builder, bytes32 metadata)',
 ]);
 const TOPIC0 = ORDER_FILLED_IFACE.getEventTopic('OrderFilled');
 
 // Skip events older than this — handles reconnect backlog replay
 const STALE_THRESHOLD_MS = 5 * 60 * 1000;
 
-// All 4 exchange contract addresses in one array (used for both subscriptions and catch-up)
-const ALL_EXCHANGE_ADDRESSES = [CTF_EXCHANGE, CTF_V2_EXCHANGE, NEG_RISK_EXCHANGE, NEG_RISK_V2_EXCHANGE];
+const ALL_EXCHANGE_ADDRESSES = [CTF_V2_EXCHANGE, NEG_RISK_V2_EXCHANGE];
 
 // Pad a 20-byte address to 32 bytes for use in topic filter arrays
 function padAddress(addr: string): string {
@@ -69,8 +68,6 @@ export interface OnChainDetectorConfig {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 const EXCHANGE_MAP: Record<string, DetectedTrade['exchange']> = {
-  [CTF_EXCHANGE.toLowerCase()]:         'CTF',
-  [NEG_RISK_EXCHANGE.toLowerCase()]:    'NEG_RISK',
   [CTF_V2_EXCHANGE.toLowerCase()]:      'CTF_V2',
   [NEG_RISK_V2_EXCHANGE.toLowerCase()]: 'NEG_RISK_V2',
 };
@@ -326,10 +323,10 @@ export class OnChainDetector extends EventEmitter {
       parsed = ORDER_FILLED_IFACE.parseLog({ topics: log.topics, data: log.data });
     } catch { return; }
 
-    const makerAssetId:      ethers.BigNumber = parsed.args.makerAssetId;
-    const takerAssetId:      ethers.BigNumber = parsed.args.takerAssetId;
     const makerAmountFilled: ethers.BigNumber = parsed.args.makerAmountFilled;
     const takerAmountFilled: ethers.BigNumber = parsed.args.takerAmountFilled;
+    const makerSide:         number           = parsed.args.side; // 0=BUY, 1=SELL (maker's perspective)
+    const tokenId:           string           = parsed.args.tokenId.toHexString();
 
     // Identify tracked wallet and their trade direction
     const wallet = makerIsTracked ? maker : taker;
@@ -339,33 +336,25 @@ export class OnChainDetector extends EventEmitter {
     let side: 'BUY' | 'SELL';
     let usdcRaw: ethers.BigNumber;
     let tokenRaw: ethers.BigNumber;
-    let tokenId: string;
 
     if (role === 'MAKER') {
-      // maker pays USDC (makerAssetId=0) → BUY; else SELL
-      if (makerAssetId.isZero()) {
-        side     = 'BUY';
-        usdcRaw  = makerAmountFilled;
-        tokenRaw = takerAmountFilled;
-        tokenId  = takerAssetId.toHexString();
+      side = makerSide === 0 ? 'BUY' : 'SELL';
+      if (side === 'BUY') {
+        usdcRaw  = makerAmountFilled; // maker pays pUSD
+        tokenRaw = takerAmountFilled; // maker receives tokens
       } else {
-        side     = 'SELL';
-        usdcRaw  = takerAmountFilled;
-        tokenRaw = makerAmountFilled;
-        tokenId  = makerAssetId.toHexString();
+        tokenRaw = makerAmountFilled; // maker pays tokens
+        usdcRaw  = takerAmountFilled; // maker receives pUSD
       }
     } else {
-      // taker pays USDC (takerAssetId=0) → BUY; else SELL
-      if (takerAssetId.isZero()) {
-        side     = 'BUY';
-        usdcRaw  = takerAmountFilled;
-        tokenRaw = makerAmountFilled;
-        tokenId  = makerAssetId.toHexString();
+      // taker direction is opposite of maker
+      side = makerSide === 0 ? 'SELL' : 'BUY';
+      if (side === 'SELL') {
+        tokenRaw = takerAmountFilled; // taker pays tokens
+        usdcRaw  = makerAmountFilled; // taker receives pUSD
       } else {
-        side     = 'SELL';
-        usdcRaw  = makerAmountFilled;
-        tokenRaw = takerAmountFilled;
-        tokenId  = takerAssetId.toHexString();
+        usdcRaw  = takerAmountFilled; // taker pays pUSD
+        tokenRaw = makerAmountFilled; // taker receives tokens
       }
     }
 
