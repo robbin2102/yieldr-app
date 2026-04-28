@@ -27,14 +27,16 @@ export async function waitForConnection(timeoutMs = 60_000): Promise<void> {
 
 const MONGO_OPTIONS = {
   dbName: 'yieldr',
-  // How long to wait for a server selection before failing a single operation.
-  // Generous for Railway proxy latency.
   serverSelectionTimeoutMS: 30_000,
-  // Idle socket timeout — closes sockets that haven't been used.
-  socketTimeoutMS: 45_000,
-  // How often Mongoose heartbeats the server; controls how quickly a drop is detected.
+  // socketTimeoutMS intentionally omitted: Railway's TCP proxy has a ~30s idle-connection
+  // timeout. With socketTimeoutMS set, a heartbeat on a Railway-dropped socket throws an
+  // uncaught MongoNetworkTimeoutError from inside the driver's connection pool timer,
+  // crashing the process. Let MongoDB's server selection handle operation timeouts instead.
+  socketTimeoutMS: 0,
+  // Close idle connections after 25s — just under Railway's ~30s TCP idle timeout.
+  // Prevents Railway from killing connections mid-heartbeat, which causes the crash above.
+  maxIdleTimeMS: 25_000,
   heartbeatFrequencyMS: 10_000,
-  // Force IPv4 to avoid Railway/Atlas IPv6 lookup issues.
   family: 4,
 };
 

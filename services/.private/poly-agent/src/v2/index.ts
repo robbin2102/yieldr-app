@@ -76,6 +76,21 @@ const cfg: OrchestratorConfig = {
   detectionOnly:     process.env.DETECTION_ONLY === 'true',
 };
 
+// MongoDB driver can throw MongoNetworkTimeoutError from internal connection pool timers
+// when Railway's TCP proxy silently closes idle sockets. These bypass mongoose's error
+// events and become uncaught exceptions — catch them here to prevent process crash.
+process.on('uncaughtException', (err: any) => {
+  if (err.name === 'MongoNetworkTimeoutError' || err.name === 'MongoNetworkError' || err.name === 'MongoServerError') {
+    console.error('[v2] MongoDB error (non-fatal, Mongoose will reconnect):', err.message);
+    return;
+  }
+  console.error('[v2] Uncaught exception — exiting:', err);
+  process.exit(1);
+});
+process.on('unhandledRejection', (reason: any) => {
+  console.error('[v2] Unhandled rejection (non-fatal):', reason?.message ?? reason);
+});
+
 async function main() {
   console.log('[v2] Starting CLOBv2 copy-trading pipeline...');
   console.log(`[v2] Mode: ${cfg.detectionOnly ? '🔍 DETECTION_ONLY (no execution)' : '⚡ LIVE'} | strategy: ${cfg.defaultStrategy} | drift: ${cfg.maxDriftPct * 100}% | spread: ${cfg.maxSpreadPct * 100}%`);
