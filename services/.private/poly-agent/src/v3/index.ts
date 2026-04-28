@@ -35,6 +35,7 @@ import { PendingTxDetector } from './pendingTxDetector';
 import { OnChainDetector }   from '../modules/onChainDetector';
 import { ConfirmationTracker } from './confirmationTracker';
 import { StatsAggregator }   from './statsAggregator';
+import { connectDB }         from '../db/connection';
 
 function required(name: string): string {
   const v = process.env[name];
@@ -60,6 +61,8 @@ async function main() {
   console.log('[v3] ════════════════════════════════════════════════════════');
   console.log('[v3] Mempool vs Confirmed detector — compare mode (no execution)');
   console.log('[v3] ════════════════════════════════════════════════════════\n');
+
+  await connectDB();
 
   const stats   = new StatsAggregator();
   const tracker = new ConfirmationTracker();

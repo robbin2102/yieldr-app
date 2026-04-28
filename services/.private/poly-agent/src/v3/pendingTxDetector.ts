@@ -13,9 +13,9 @@
 import { EventEmitter } from 'events';
 import WebSocket from 'ws';
 import { ethers } from 'ethers';
-import { MongoClient } from 'mongodb';
 import { decodeCalldata } from './calldataDecoder';
 import { PendingTrade } from './types';
+import { CopyTrader } from '../../db/models/CopyTrader';
 
 const EXCHANGES: Record<string, PendingTrade['exchange']> = {
   '0x4bfb41d5b3570defd03c39a9a4d8de6bd8b8982e': 'CTF',
@@ -42,7 +42,6 @@ export class PendingTxDetector extends EventEmitter {
 
   private trackedWallets  = new Map<string, string>(); // address → label
   private recentGas:      number[] = [];               // rolling gas prices (gwei) for confidence scoring
-  private mongoClient:    MongoClient | null = null;   // persistent; reconnected on failure
 
   constructor(private readonly cfg: PendingTxDetectorConfig) { super(); }
 
@@ -57,47 +56,16 @@ export class PendingTxDetector extends EventEmitter {
     if (this.walletRefresh) { clearInterval(this.walletRefresh); this.walletRefresh = null; }
     if (this.keepalive)     { clearInterval(this.keepalive);     this.keepalive = null; }
     if (this.ws)            { this.ws.removeAllListeners(); this.ws.close(); this.ws = null; }
-    if (this.mongoClient)   { this.mongoClient.close().catch(() => {}); this.mongoClient = null; }
   }
 
   get walletCount(): number { return this.trackedWallets.size; }
 
   // ── Wallet loading ────────────────────────────────────────────────────────────
 
-  private async getMongoClient(): Promise<MongoClient> {
-    if (this.mongoClient) return this.mongoClient;
-    const client = new MongoClient(this.cfg.mongoUri, {
-      serverSelectionTimeoutMS: 8_000,
-      connectTimeoutMS:         5_000,
-      socketTimeoutMS:          0,
-      maxIdleTimeMS:            25_000,
-      family:                   4,
-    });
-    await client.connect();
-    this.mongoClient = client;
-    return client;
-  }
-
   private async loadWallets(): Promise<void> {
-    let client: MongoClient;
-    try {
-      client = await this.getMongoClient();
-    } catch (err) {
-      this.mongoClient = null;
-      throw err;
-    }
-    try {
-      const rows = await client.db(this.cfg.dbName)
-        .collection('ahf-copyTraders')
-        .find({ active: true })
-        .project({ wallet: 1, label: 1 })
-        .toArray();
-      this.trackedWallets.clear();
-      for (const r of rows) this.trackedWallets.set((r.wallet as string).toLowerCase(), r.label as string);
-    } catch (err) {
-      this.mongoClient = null;
-      throw err;
-    }
+    const rows = await CopyTrader.find({ active: true }, { wallet: 1, label: 1 }).lean();
+    this.trackedWallets.clear();
+    for (const r of rows) this.trackedWallets.set(r.wallet.toLowerCase(), r.label);
   }
 
   // ── WebSocket connection ──────────────────────────────────────────────────────

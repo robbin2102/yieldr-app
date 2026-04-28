@@ -15,7 +15,7 @@
 import { EventEmitter } from 'events';
 import WebSocket from 'ws';
 import { ethers } from 'ethers';
-import { MongoClient } from 'mongodb';
+import { CopyTrader } from '../db/models/CopyTrader';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 // v1 contracts (active until CLOBv2 cutover ~April 28 2026)
@@ -94,10 +94,6 @@ export class OnChainDetector extends EventEmitter {
   // wallet (lowercase) → label
   private trackedWallets = new Map<string, string>();
 
-  // Persistent MongoClient reused across wallet refreshes — avoids opening a new
-  // connection pool every 60s and fails fast (8s) when MongoDB is unreachable.
-  private mongoClient: MongoClient | null = null;
-
   // block timestamp cache (blockHex → unix ms)
   private blockTsCache = new Map<string, number>();
 
@@ -123,46 +119,16 @@ export class OnChainDetector extends EventEmitter {
     if (this.walletRefresh) { clearInterval(this.walletRefresh); this.walletRefresh = null; }
     if (this.keepalive)     { clearInterval(this.keepalive);     this.keepalive     = null; }
     if (this.ws)            { this.ws.removeAllListeners(); this.ws.close(); this.ws = null; }
-    if (this.mongoClient)   { this.mongoClient.close().catch(() => {}); this.mongoClient = null; }
   }
 
   // ── Wallet loading ──────────────────────────────────────────────────────────
 
-  private async getMongoClient(): Promise<MongoClient> {
-    if (this.mongoClient) return this.mongoClient;
-    const client = new MongoClient(this.cfg.mongoUri, {
-      serverSelectionTimeoutMS: 8_000,
-      connectTimeoutMS:         5_000,
-      socketTimeoutMS:          0,
-      maxIdleTimeMS:            25_000,
-      family:                   4,
-    });
-    await client.connect();
-    this.mongoClient = client;
-    return client;
-  }
-
   private async loadWallets(): Promise<void> {
-    let client: MongoClient;
-    try {
-      client = await this.getMongoClient();
-    } catch (err) {
-      this.mongoClient = null; // force fresh connection next time
-      throw err;
-    }
-    try {
-      const traders = await client.db(this.cfg.dbName)
-        .collection('ahf-copyTraders')
-        .find({ active: true })
-        .project({ wallet: 1, label: 1 })
-        .toArray();
-      this.trackedWallets.clear();
-      for (const t of traders) {
-        this.trackedWallets.set((t.wallet as string).toLowerCase(), t.label as string);
-      }
-    } catch (err) {
-      this.mongoClient = null; // connection may be stale; reconnect on next refresh
-      throw err;
+    // Reuse the mongoose connection established at startup — no second connection pool needed.
+    const traders = await CopyTrader.find({ active: true }, { wallet: 1, label: 1 }).lean();
+    this.trackedWallets.clear();
+    for (const t of traders) {
+      this.trackedWallets.set(t.wallet.toLowerCase(), t.label);
     }
   }
 
