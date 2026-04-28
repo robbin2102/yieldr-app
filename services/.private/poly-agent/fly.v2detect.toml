@@ -2,7 +2,7 @@
 # Region: Stockholm (arn) — closest non-geoblocked region to Polymarket CLOB
 # Deploy: fly deploy --config fly.v2detect.toml
 
-app            = "poly-agent-v2"
+app            = "poly-agent-trading"
 primary_region = "arn"
 
 [build]
