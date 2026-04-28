@@ -118,14 +118,19 @@ export class TradeOrchestrator {
   }
 
   static async create(cfg: OrchestratorConfig): Promise<TradeOrchestrator> {
-    const clob = await ClobV2Client.create({
-      host:       cfg.clobHost,
-      privateKey: cfg.privateKey,
-      apiKey:     cfg.apiKey,
-      apiSecret:  cfg.apiSecret,
-      passphrase: cfg.passphrase,
-      polygonRpc: cfg.polygonRpc,
-    });
+    // Skip CLOB client entirely in detection-only mode — getOk() can take 2+ min
+    // to time out when the API is unreachable, blocking the detector from starting.
+    let clob: ClobV2Client | null = null;
+    if (!cfg.detectionOnly) {
+      clob = await ClobV2Client.create({
+        host:       cfg.clobHost,
+        privateKey: cfg.privateKey,
+        apiKey:     cfg.apiKey,
+        apiSecret:  cfg.apiSecret,
+        passphrase: cfg.passphrase,
+        polygonRpc: cfg.polygonRpc,
+      });
+    }
 
     const books      = new OrderbookCacheV2(cfg.clobHost);
     const safety     = new SafetyGuard(cfg.maxDriftPct, cfg.maxSpreadPct);
@@ -135,8 +140,8 @@ export class TradeOrchestrator {
       cfg.wssUserUrl, cfg.apiKey, cfg.apiSecret, cfg.passphrase, cfg.botAddress
     );
 
-    const marketExec = new MarketOrderExecutor(clob, books, safety, recorder, cfg.maxMarketAttempts);
-    const gtdExec    = new GTDExecutorV2(clob, books, safety, recorder, fillTracker, cfg.maxGtdAttempts);
+    const marketExec = new MarketOrderExecutor(clob as ClobV2Client, books, safety, recorder, cfg.maxMarketAttempts);
+    const gtdExec    = new GTDExecutorV2(clob as ClobV2Client, books, safety, recorder, fillTracker, cfg.maxGtdAttempts);
 
     const router = new ExecutionRouter(marketExec, gtdExec, cfg.defaultStrategy);
 
