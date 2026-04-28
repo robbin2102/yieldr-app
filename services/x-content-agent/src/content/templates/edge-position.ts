@@ -1,6 +1,18 @@
 import { ContentStyle, STYLE_DESCRIPTIONS } from '../styles';
 
-export function buildEdgePositionPrompt(position: any, style?: ContentStyle): string {
+const CATEGORY_HOOKS: Record<string, string> = {
+  NBA: `- Frame around the game/series context — who's playing, what's at stake, why the timing matters
+- Use basketball language naturally (matchup, series lead, sweep, upset)
+- Hook: "This trader just loaded up on [team] before Game X..."`,
+  Soccer: `- Reference the competition context (league, cup, qualifying, derby)
+- Use football language (fixture, clean sheet, form, away record)
+- Hook: "A top Polymarket wallet just bet big on [team/outcome]..."`,
+  Politics: `- Frame around the political event or timeline (election, vote, policy decision)
+- Reference the stakes or what changes if the outcome hits
+- Hook: "Someone with a 70%+ win rate just made a bold call on [event]..."`,
+};
+
+export function buildEdgePositionPrompt(position: any, style?: ContentStyle, category?: string): string {
   const s = style || 'signal';
 
   const outcome = (position.outcome || '').toUpperCase();
@@ -9,6 +21,10 @@ export function buildEdgePositionPrompt(position: any, style?: ContentStyle): st
     : outcome === 'NO'
     ? `betting this will NOT happen`
     : `holding "${position.outcome}"`;
+
+  const categoryHook = category && CATEGORY_HOOKS[category]
+    ? `\n━━━ CATEGORY HOOK (${category}) ━━━\n${CATEGORY_HOOKS[category]}\n`
+    : '';
 
   return `Write a post about a live Polymarket position held by a top-ranked trader.
 
@@ -30,7 +46,7 @@ Edge hypothesis: ${position.traderEdgeHypothesis || 'N/A'}
 Avg trade size: $${position.traderAvgTradeSize?.toFixed(0) || 'N/A'}
 ${position.traderPnl30d != null ? `30d PnL: $${position.traderPnl30d.toLocaleString()}` : ''}
 ${position.traderRoce30d != null ? `30d ROCE: ${position.traderRoce30d.toFixed(0)}%` : ''}
-
+${categoryHook}
 ━━━ WRITING NOTES ━━━
 - Explain the market in one plain-English sentence (what is actually being predicted?)
 - This is a SIGNAL post — Yieldr agents detected this position, not the vault copying it

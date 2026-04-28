@@ -10,6 +10,8 @@
  *   --type=HIGH_CONVICTION
  *   --type=VAULT_PERFORMANCE
  *   --rotation=2            Trader profile rotation index (1-4)
+ *   --style=narrative        Force a content style (narrative|signal|punchy)
+ *   --category=NBA           HC category filter
  */
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -21,6 +23,7 @@ dotenv.config({ path: path.resolve(process.cwd(), 'services/x-content-agent/.env
 dotenv.config({ path: path.resolve(process.cwd(), '.env.local') });
 
 import { generateTraderAlpha, generateHighConvictionAlert, generateVaultPerformance, GeneratedPost } from './content/generator';
+import { ContentStyle } from './content/styles';
 
 type DualContent = Pick<GeneratedPost, 'type' | 'tweet' | 'telegram'>;
 
@@ -50,9 +53,9 @@ function printResult(category: string, result: DualContent) {
   console.log('');
 }
 
-async function testTraderProfile(rotation?: number): Promise<DualContent> {
-  console.log('  Generating TRADER_PROFILE via generator...');
-  return generateTraderAlpha({ rotation, totalTraders: 4, source: 'test' });
+async function testTraderProfile(rotation?: number, style?: ContentStyle): Promise<DualContent> {
+  console.log(`  Generating TRADER_PROFILE via generator...${style ? ` (style: ${style})` : ''}`);
+  return generateTraderAlpha({ rotation, totalTraders: 4, source: 'test', style });
 }
 
 async function testHighConviction(category?: string): Promise<DualContent> {
@@ -90,10 +93,18 @@ async function main() {
   const typeFilter = process.argv.find(a => a.startsWith('--type='))?.split('=')[1];
   const rotationArg = process.argv.find(a => a.startsWith('--rotation='))?.split('=')[1];
   const categoryArg = process.argv.find(a => a.startsWith('--category='))?.split('=')[1];
+  const styleArg = process.argv.find(a => a.startsWith('--style='))?.split('=')[1] as ContentStyle | undefined;
   const rotation = rotationArg ? parseInt(rotationArg) : undefined;
 
+  if (styleArg && !['narrative', 'signal', 'punchy'].includes(styleArg)) {
+    console.error(`\n  ❌ Unknown style: ${styleArg}`);
+    console.error('  Available: narrative, signal, punchy');
+    process.exit(1);
+  }
+  if (styleArg) console.log(`  Style override: ${styleArg}`);
+
   const tests: { name: string; fn: () => Promise<DualContent> }[] = [
-    { name: 'TRADER_PROFILE', fn: () => testTraderProfile(rotation) },
+    { name: 'TRADER_PROFILE', fn: () => testTraderProfile(rotation, styleArg) },
     { name: 'HIGH_CONVICTION', fn: () => testHighConviction(categoryArg) },
     { name: 'VAULT_PERFORMANCE', fn: testVaultPerformance },
   ];

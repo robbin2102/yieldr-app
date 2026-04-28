@@ -19,9 +19,27 @@ import { buildHighConvictionPrompt } from './templates/high-conviction';
 import { buildVaultPerformancePrompt } from './templates/vault-performance';
 import { buildEdgePositionPrompt } from './templates/edge-position';
 import { buildReplyPrompt } from './templates/reply';
-import { ContentStyle, randomStyle } from './styles';
+import { ContentStyle, randomStyle, weightedVaultStyle } from './styles';
 import * as mcp from '../lib/mcp-client';
 import { getDB, COLLECTIONS } from '../lib/db';
+
+function normalizeMarket(title: string): string {
+  return (title || '').toLowerCase().replace(/[^a-z0-9]/g, '').substring(0, 60);
+}
+
+async function getRecentMarkets(hours: number): Promise<Set<string>> {
+  try {
+    const db = await getDB();
+    const cutoff = new Date(Date.now() - hours * 60 * 60 * 1000);
+    const docs = await db.collection(COLLECTIONS.X_CONTENT_LOG)
+      .find({ category: 'HIGH_CONVICTION', generatedAt: { $gte: cutoff } })
+      .project({ 'metadata.market': 1 })
+      .toArray();
+    return new Set(docs.map(d => normalizeMarket(d.metadata?.market)).filter(Boolean));
+  } catch {
+    return new Set();
+  }
+}
 
 async function logContent(post: GeneratedPost, source: 'test' | 'scheduler' = 'scheduler'): Promise<void> {
   try {
@@ -84,7 +102,7 @@ export async function generateTraderAlpha(opts?: {
     tweet: result.tweet || result.content,
     telegram: result.telegram || '',
     category: 'TRADER_PROFILE',
-    metadata: { wallet: trader.wallet, label: trader.label, rotation: opts?.rotation },
+    metadata: { wallet: trader.wallet, label: trader.label, rotation: opts?.rotation, style },
   };
   await logContent(post, opts?.source || 'scheduler');
   return post;
@@ -103,10 +121,13 @@ export async function generateTraderAlpha(opts?: {
  *   3. Materialized HC trades
  */
 export async function generateHighConvictionAlert(category?: string, source: 'test' | 'scheduler' = 'scheduler'): Promise<GeneratedPost> {
+  // Recency check: get markets posted in last 24h to avoid repeats
+  const recentMarkets = await getRecentMarkets(24);
+
   // Primary: edge trader open positions (fresh, category-rotatable, no repetition)
   let positionData = await mcp.getEdgeTraderPositions({
     category,
-    limit: 10,
+    limit: 20,
     minPercentPnl: 5,
   });
 
@@ -114,20 +135,26 @@ export async function generateHighConvictionAlert(category?: string, source: 'te
 
   // Fallback 1: try without category filter
   if (positions.length === 0 && category) {
-    positionData = await mcp.getEdgeTraderPositions({ limit: 10, minPercentPnl: 5 });
+    positionData = await mcp.getEdgeTraderPositions({ limit: 20, minPercentPnl: 5 });
     positions = positionData.positions || [];
   }
 
   // Fallback 2: lower the bar — any profitable position
   if (positions.length === 0) {
-    positionData = await mcp.getEdgeTraderPositions({ category, limit: 10 });
+    positionData = await mcp.getEdgeTraderPositions({ category, limit: 20 });
     positions = positionData.positions || [];
+  }
+
+  // Filter out recently posted markets
+  if (recentMarkets.size > 0) {
+    const fresh = positions.filter((p: any) => !recentMarkets.has(normalizeMarket(p.title)));
+    if (fresh.length > 0) positions = fresh;
   }
 
   if (positions.length > 0) {
     const position = positions[0];
     const style = randomStyle();
-    const prompt = buildEdgePositionPrompt(position, style);
+    const prompt = buildEdgePositionPrompt(position, style, category);
     const result = await generateStructuredContent(YIELDR_AGENT_SYSTEM_PROMPT, prompt, { temperature: 0.9 });
 
     const post: GeneratedPost = {
@@ -140,6 +167,7 @@ export async function generateHighConvictionAlert(category?: string, source: 'te
         market: position.title,
         percentPnl: position.percentPnl,
         positionCategory: category || 'all',
+        style,
       },
     };
     await logContent(post, source);
@@ -181,7 +209,7 @@ export async function generateHighConvictionAlert(category?: string, source: 'te
     tweet: result.tweet || result.content,
     telegram: result.telegram || '',
     category: 'HIGH_CONVICTION',
-    metadata: { traderWallet: trade.traderWallet, market: trade.market, convictionRatio: trade.convictionRatio },
+    metadata: { traderWallet: trade.traderWallet, market: trade.market, convictionRatio: trade.convictionRatio, style: 'signal' },
   };
   await logContent(post, source);
   return post;
@@ -204,7 +232,7 @@ export async function generateVaultPerformance(vaultName?: string, source: 'test
     ? vaults[0]
     : vaults[Math.floor(Math.random() * vaults.length)];
 
-  const style = randomStyle();
+  const style = weightedVaultStyle();
   const prompt = buildVaultPerformancePrompt(vault, style);
   const result = await generateStructuredContent(YIELDR_AGENT_SYSTEM_PROMPT, prompt, { temperature: 0.9 });
 
@@ -213,7 +241,7 @@ export async function generateVaultPerformance(vaultName?: string, source: 'test
     tweet: result.tweet || result.content,
     telegram: result.telegram || '',
     category: 'VAULT_PERFORMANCE',
-    metadata: { vaultName: vault.name },
+    metadata: { vaultName: vault.name, style },
   };
   await logContent(post, source);
   return post;

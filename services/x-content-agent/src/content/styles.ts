@@ -10,3 +10,10 @@ export function randomStyle(): ContentStyle {
   const styles: ContentStyle[] = ['narrative', 'signal', 'punchy'];
   return styles[Math.floor(Math.random() * styles.length)];
 }
+
+export function weightedVaultStyle(): ContentStyle {
+  const r = Math.random();
+  if (r < 0.40) return 'punchy';
+  if (r < 0.75) return 'narrative';
+  return 'signal';
+}
