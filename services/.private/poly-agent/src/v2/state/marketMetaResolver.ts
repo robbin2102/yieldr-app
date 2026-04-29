@@ -85,48 +85,109 @@ export class MarketMetaResolver {
   // ── Internal ──────────────────────────────────────────────────────────────
 
   private async fetch(tokenId: string, negRisk: boolean): Promise<MarketMeta | null> {
-    // CLOB API expects token IDs as decimal strings, but OnChainDetector gives
-    // hex (e.g. "0xcb0a5f6c..."). Try both forms across multiple endpoints.
+    // OnChainDetector gives hex (e.g. "0xcb0a5f6c..."), Polymarket APIs use decimal.
     const tokenIdDec = tokenId.startsWith('0x') ? BigInt(tokenId).toString() : tokenId;
-    const tokenIdHex = tokenId;
 
-    for (const url of [
-      `${this.clobApiBase}/markets?token_id=${tokenIdDec}`,
-      `${this.clobApiBase}/markets?token_id=${tokenIdHex}`,
-      `${this.clobApiBase}/markets/${tokenIdDec}`,
-      `${this.clobApiBase}/markets/${tokenIdHex}`,
-    ]) {
-      try {
-        const res = await fetch(url, { signal: AbortSignal.timeout(5_000) });
-        if (!res.ok) {
-          console.warn(`[MarketMetaResolver] ${url} → HTTP ${res.status}`);
-          continue;
-        }
-
-        const data = await res.json() as any;
-        // CLOB API wraps results: { data: [...] } or a bare array or bare object
-        const inner = data?.data ?? data;
-        const market = Array.isArray(inner) ? inner[0] : inner;
-        if (!market?.condition_id) {
-          console.warn(`[MarketMetaResolver] ${url} → no condition_id in response:`, JSON.stringify(data).slice(0, 200));
-          continue;
-        }
-
-        // Fee rate: geopolitical markets typically 0, others vary
-        const feeRateBps = typeof market.fee_rate_bps === 'number'
-          ? market.fee_rate_bps
-          : parseInt(market.fee_rate_bps ?? '0', 10);
-
-        return {
-          conditionId: market.condition_id as string,
-          title:       (market.question ?? market.title ?? '') as string,
-          outcome:     (market.outcome_descriptions?.[0] ?? market.outcome ?? '') as string,
-          negRisk,
-          feeRateBps:  isNaN(feeRateBps) ? 0 : feeRateBps,
-        };
-      } catch { continue; }
+    // 1. Gamma API — native clob_token_ids filter (correct way to look up by tokenId)
+    const gammaMarket = await this.fetchGamma(tokenIdDec);
+    if (gammaMarket) {
+      const meta = this.parseGammaMarket(gammaMarket, tokenIdDec, negRisk);
+      if (meta) return meta;
     }
-    console.warn(`[MarketMetaResolver] All endpoints failed for tokenId ${tokenId.slice(0, 18)}... (tried hex+decimal forms)`);
+
+    // 2. CLOB fallback — only works if we know the conditionId already; left as a probe.
+    const clobMarket = await this.fetchClob(tokenIdDec);
+    if (clobMarket) return this.parseClobMarket(clobMarket, tokenIdDec, negRisk);
+
+    console.warn(`[MarketMetaResolver] Could not resolve tokenId ${tokenId.slice(0, 18)}... via gamma or clob`);
     return null;
+  }
+
+  // ── Gamma API (gamma-api.polymarket.com) ──────────────────────────────────────
+
+  private async fetchGamma(tokenIdDec: string): Promise<any | null> {
+    const url = `https://gamma-api.polymarket.com/markets?clob_token_ids=${tokenIdDec}`;
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(5_000) });
+      if (!res.ok) { console.warn(`[MarketMetaResolver] gamma HTTP ${res.status} for ${tokenIdDec.slice(0, 12)}...`); return null; }
+      const data = await res.json() as any;
+      const arr  = Array.isArray(data) ? data : (data?.data ?? []);
+      if (arr.length === 0) { console.warn(`[MarketMetaResolver] gamma returned 0 markets for ${tokenIdDec.slice(0, 12)}...`); return null; }
+      // Validate: the returned market must actually list our tokenId in clobTokenIds
+      const m = arr.find((mkt: any) => {
+        const ids = this.parseTokenIds(mkt.clobTokenIds ?? mkt.clob_token_ids);
+        return ids.includes(tokenIdDec);
+      });
+      if (!m) { console.warn(`[MarketMetaResolver] gamma returned ${arr.length} market(s) but none list tokenId ${tokenIdDec.slice(0, 12)}...`); return null; }
+      return m;
+    } catch (e: any) { console.warn(`[MarketMetaResolver] gamma fetch failed:`, e.message); return null; }
+  }
+
+  private parseGammaMarket(m: any, tokenIdDec: string, negRisk: boolean): MarketMeta | null {
+    const conditionId = m.conditionId ?? m.condition_id;
+    if (!conditionId) return null;
+
+    // Outcome label: gamma returns outcomes as a JSON-encoded array of strings ["Yes","No"],
+    // and clobTokenIds as a parallel array. Match by index.
+    const outcomes = this.parseOutcomes(m.outcomes);
+    const ids      = this.parseTokenIds(m.clobTokenIds ?? m.clob_token_ids);
+    const idx      = ids.indexOf(tokenIdDec);
+    const outcome  = idx >= 0 && outcomes[idx] ? outcomes[idx] : '';
+
+    return {
+      conditionId,
+      title:       (m.question ?? m.title ?? '') as string,
+      outcome,
+      negRisk,
+      feeRateBps:  0, // gamma does not expose fee_rate_bps; safe default for detection-only
+    };
+  }
+
+  private parseTokenIds(raw: any): string[] {
+    if (Array.isArray(raw)) return raw.map((x: any) => String(x));
+    if (typeof raw === 'string') {
+      try { const j = JSON.parse(raw); return Array.isArray(j) ? j.map(String) : []; } catch { return []; }
+    }
+    return [];
+  }
+  private parseOutcomes(raw: any): string[] {
+    if (Array.isArray(raw)) return raw.map((x: any) => String(x));
+    if (typeof raw === 'string') {
+      try { const j = JSON.parse(raw); return Array.isArray(j) ? j.map(String) : []; } catch { return []; }
+    }
+    return [];
+  }
+
+  // ── CLOB fallback (clob.polymarket.com) ───────────────────────────────────────
+
+  private async fetchClob(tokenIdDec: string): Promise<any | null> {
+    // CLOB only supports lookup by condition_id; trying token_id returns the full paginated
+    // market list (ignored param). We attempt /markets/{tokenId} but expect 404 — kept as a
+    // last-resort probe. Validates response by checking tokens[].token_id.
+    const url = `${this.clobApiBase}/markets/${tokenIdDec}`;
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(5_000) });
+      if (!res.ok) return null;
+      const data = await res.json() as any;
+      const m    = data?.data ?? data;
+      if (!m?.condition_id) return null;
+      const tokens: any[] = m.tokens ?? [];
+      const matches = tokens.some((t: any) => String(t.token_id) === tokenIdDec);
+      if (!matches) return null;
+      return m;
+    } catch { return null; }
+  }
+
+  private parseClobMarket(m: any, tokenIdDec: string, negRisk: boolean): MarketMeta {
+    const tokens: any[] = m.tokens ?? [];
+    const tok           = tokens.find((t: any) => String(t.token_id) === tokenIdDec);
+    const feeRateBps    = typeof m.fee_rate_bps === 'number' ? m.fee_rate_bps : parseInt(m.fee_rate_bps ?? '0', 10);
+    return {
+      conditionId: m.condition_id as string,
+      title:       (m.question ?? m.title ?? '') as string,
+      outcome:     (tok?.outcome ?? '') as string,
+      negRisk,
+      feeRateBps:  isNaN(feeRateBps) ? 0 : feeRateBps,
+    };
   }
 }
