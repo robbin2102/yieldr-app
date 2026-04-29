@@ -12,6 +12,9 @@
  */
 
 import axios, { AxiosInstance } from 'axios';
+import * as fs from 'fs';
+import * as path from 'path';
+import FormData from 'form-data';
 
 let botClient: AxiosInstance | null = null;
 
@@ -99,6 +102,39 @@ export async function sendChannelMessageWithButton(
 
   const result = response.data.result;
   console.log(`[TG] Sent to channel with button: message_id=${result.message_id}`);
+  return result;
+}
+
+/**
+ * Send a photo with caption and inline button to the channel
+ */
+export async function sendPhotoWithButton(
+  imagePath: string,
+  caption: string,
+  buttonText: string,
+  buttonUrl: string,
+): Promise<TgMessageResult> {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  if (!token) throw new Error('TELEGRAM_BOT_TOKEN not set');
+  const channelId = getChannelId();
+
+  const form = new FormData();
+  form.append('chat_id', channelId);
+  form.append('photo', fs.createReadStream(imagePath), path.basename(imagePath));
+  form.append('caption', toHtml(caption));
+  form.append('parse_mode', 'HTML');
+  form.append('reply_markup', JSON.stringify({
+    inline_keyboard: [[{ text: buttonText, url: buttonUrl }]],
+  }));
+
+  const response = await axios.post(
+    `https://api.telegram.org/bot${token}/sendPhoto`,
+    form,
+    { headers: form.getHeaders(), timeout: 30000 },
+  );
+
+  const result = response.data.result;
+  console.log(`[TG] Sent photo to channel: message_id=${result.message_id}`);
   return result;
 }
 

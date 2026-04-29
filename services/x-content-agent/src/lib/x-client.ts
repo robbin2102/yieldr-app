@@ -10,6 +10,7 @@
  */
 
 import { TwitterApi, UserV2 } from 'twitter-api-v2';
+import * as fs from 'fs';
 
 interface TweetResult {
   id: string;
@@ -72,11 +73,35 @@ export function getAuthenticatedUserId(): string | null {
 // ═══════════════════════════════════════════════════════════════
 
 /**
- * Post a tweet
+ * Upload media (image) and return media_id string
  */
-export async function postTweet(content: string): Promise<TweetResult> {
+export async function uploadMedia(filePath: string): Promise<string> {
   const xClient = getXClient();
-  const result = await xClient.v2.tweet(content);
+  const mediaId = await xClient.v1.uploadMedia(filePath);
+  console.log(`[X] Uploaded media: ${mediaId}`);
+  return mediaId;
+}
+
+/**
+ * Post a tweet, optionally with an image
+ */
+export async function postTweet(content: string, imagePath?: string): Promise<TweetResult> {
+  const xClient = getXClient();
+
+  let mediaIds: string[] | undefined;
+  if (imagePath && fs.existsSync(imagePath)) {
+    try {
+      const mediaId = await uploadMedia(imagePath);
+      mediaIds = [mediaId];
+    } catch (error: any) {
+      console.error(`[X] Media upload failed, posting without image:`, error.message);
+    }
+  }
+
+  const params: any = {};
+  if (mediaIds) params.media = { media_ids: mediaIds };
+
+  const result = await xClient.v2.tweet(content, params);
   console.log(`[X] Posted tweet: ${result.data.id}`);
   return result.data;
 }

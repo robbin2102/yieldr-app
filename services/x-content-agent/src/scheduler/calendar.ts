@@ -17,7 +17,8 @@ import {
   GeneratedPost,
 } from '../content/generator';
 import { postTweet, quoteTweet } from '../lib/x-client';
-import { sendChannelMessageWithButton } from '../lib/tg-client';
+import { sendChannelMessageWithButton, sendPhotoWithButton } from '../lib/tg-client';
+import { getCategoryImage } from '../lib/category-images';
 import { getDB, COLLECTIONS } from '../lib/db';
 
 // Track daily post counts
@@ -73,7 +74,12 @@ async function publishPost(post: GeneratedPost): Promise<void> {
   let tweetId: string | null = null;
   let tgMessageId: number | null = null;
 
-  // 1. Post to X
+  // Resolve category image
+  const isVaultLoss = post.category === 'VAULT_PERFORMANCE'
+    && !!post.tweet && /rough|loss|down|smoked|negative|red/i.test(post.tweet);
+  const imagePath = getCategoryImage(post.category, isVaultLoss);
+
+  // 1. Post to X (with image if available)
   try {
     const tweetText = post.tweet;
     let tweetData;
@@ -81,25 +87,35 @@ async function publishPost(post: GeneratedPost): Promise<void> {
     if (post.type === 'quote' && post.target_post_id) {
       tweetData = await quoteTweet(tweetText, post.target_post_id);
     } else {
-      tweetData = await postTweet(tweetText);
+      tweetData = await postTweet(tweetText, imagePath || undefined);
     }
 
     tweetId = tweetData.id;
-    console.log(`[Calendar] Published to X: ${post.category} (${tweetId})`);
+    console.log(`[Calendar] Published to X: ${post.category} (${tweetId})${imagePath ? ' [with image]' : ''}`);
   } catch (error: any) {
     console.error(`[Calendar] X post failed for ${post.category}:`, error.message);
   }
 
-  // 2. Post to Telegram channel
+  // 2. Post to Telegram channel (photo + caption if image available, else text)
   if (post.telegram) {
     try {
-      const tgResult = await sendChannelMessageWithButton(
-        post.telegram,
-        'Track live →',
-        'https://yieldr.org/vaults',
-      );
+      let tgResult;
+      if (imagePath) {
+        tgResult = await sendPhotoWithButton(
+          imagePath,
+          post.telegram,
+          'Track live →',
+          'https://yieldr.org/vaults',
+        );
+      } else {
+        tgResult = await sendChannelMessageWithButton(
+          post.telegram,
+          'Track live →',
+          'https://yieldr.org/vaults',
+        );
+      }
       tgMessageId = tgResult.message_id;
-      console.log(`[Calendar] Published to TG: ${post.category} (msg ${tgMessageId})`);
+      console.log(`[Calendar] Published to TG: ${post.category} (msg ${tgMessageId})${imagePath ? ' [with photo]' : ''}`);
     } catch (error: any) {
       console.error(`[Calendar] TG post failed for ${post.category}:`, error.message);
     }
