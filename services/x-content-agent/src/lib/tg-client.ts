@@ -106,7 +106,9 @@ export async function sendChannelMessageWithButton(
 }
 
 /**
- * Send a photo with caption and inline button to the channel
+ * Send a photo with caption and inline button to the channel.
+ * TG photo captions max at 1024 chars — if longer, sends photo first
+ * then text as a reply.
  */
 export async function sendPhotoWithButton(
   imagePath: string,
@@ -117,25 +119,58 @@ export async function sendPhotoWithButton(
   const token = process.env.TELEGRAM_BOT_TOKEN;
   if (!token) throw new Error('TELEGRAM_BOT_TOKEN not set');
   const channelId = getChannelId();
+  const htmlCaption = toHtml(caption);
 
-  const form = new FormData();
-  form.append('chat_id', channelId);
-  form.append('photo', fs.createReadStream(imagePath), path.basename(imagePath));
-  form.append('caption', toHtml(caption));
-  form.append('parse_mode', 'HTML');
-  form.append('reply_markup', JSON.stringify({
+  const replyMarkup = JSON.stringify({
     inline_keyboard: [[{ text: buttonText, url: buttonUrl }]],
-  }));
+  });
 
-  const response = await axios.post(
+  // Caption fits in photo message (1024 char limit)
+  if (htmlCaption.length <= 1024) {
+    const form = new FormData();
+    form.append('chat_id', channelId);
+    form.append('photo', fs.createReadStream(imagePath), path.basename(imagePath));
+    form.append('caption', htmlCaption);
+    form.append('parse_mode', 'HTML');
+    form.append('reply_markup', replyMarkup);
+
+    const response = await axios.post(
+      `https://api.telegram.org/bot${token}/sendPhoto`,
+      form,
+      { headers: form.getHeaders(), timeout: 30000 },
+    );
+
+    const result = response.data.result;
+    console.log(`[TG] Sent photo to channel: message_id=${result.message_id}`);
+    return result;
+  }
+
+  // Caption too long — send photo first, then text as reply
+  const photoForm = new FormData();
+  photoForm.append('chat_id', channelId);
+  photoForm.append('photo', fs.createReadStream(imagePath), path.basename(imagePath));
+
+  const photoResponse = await axios.post(
     `https://api.telegram.org/bot${token}/sendPhoto`,
-    form,
-    { headers: form.getHeaders(), timeout: 30000 },
+    photoForm,
+    { headers: photoForm.getHeaders(), timeout: 30000 },
   );
 
-  const result = response.data.result;
-  console.log(`[TG] Sent photo to channel: message_id=${result.message_id}`);
-  return result;
+  const photoResult = photoResponse.data.result;
+  console.log(`[TG] Sent photo to channel: message_id=${photoResult.message_id}`);
+
+  const client = getBotClient();
+  const textResponse = await client.post('/sendMessage', {
+    chat_id: channelId,
+    text: htmlCaption,
+    parse_mode: 'HTML',
+    reply_to_message_id: photoResult.message_id,
+    reply_markup: { inline_keyboard: [[{ text: buttonText, url: buttonUrl }]] },
+  });
+
+  const textResult = textResponse.data.result;
+  console.log(`[TG] Sent caption reply: message_id=${textResult.message_id}`);
+  return textResult;
 }
 
 /**
