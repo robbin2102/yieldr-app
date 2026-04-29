@@ -69,6 +69,10 @@ export interface OrchestratorConfig {
   maxGtdAttempts:    number;  // GTD retries (default 3)
   defaultStrategy:   ExecutionStrategy;
   detectionOnly:     boolean; // log detections but skip all execution (testing mode)
+
+  // Bot-level base bet: if set, minimum copy bet = baseShares × impliedPrice.
+  // Overrides per-trader baseBetUsdc floor. Unset = use per-trader baseBetUsdc.
+  baseShares?: number;  // e.g. 5
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -104,6 +108,7 @@ export class TradeOrchestrator {
   private fillTracker:   FillTrackerV2;
   private detectionOnly:  boolean;
   private execExchanges?: string[];
+  private baseShares?:    number;
 
   // Concurrent trade guards (synchronous — no await between check and set)
   private positionReserved = new Map<string, number>();  // `wallet:conditionId` → USDC reserved
@@ -116,12 +121,14 @@ export class TradeOrchestrator {
     router:        ExecutionRouter,
     detectionOnly: boolean,
     execExchanges?: string[],
+    baseShares?:    number,
   ) {
     this.detector      = detector;
     this.books         = books;
     this.fillTracker   = fillTracker;
     this.detectionOnly = detectionOnly;
     this.execExchanges = execExchanges;
+    this.baseShares    = baseShares;
     this.router        = router;
   }
 
@@ -160,7 +167,7 @@ export class TradeOrchestrator {
       dbName:   cfg.dbName,
     });
 
-    const orchestrator = new TradeOrchestrator(detector, books, fillTracker, router, cfg.detectionOnly ?? false, cfg.execExchanges);
+    const orchestrator = new TradeOrchestrator(detector, books, fillTracker, router, cfg.detectionOnly ?? false, cfg.execExchanges, cfg.baseShares);
 
     // Wire detector events
     detector.on('trade',       (t) => orchestrator.handleDetected(t, resolver, recorder));
@@ -250,10 +257,9 @@ export class TradeOrchestrator {
     }
 
     // ── 7. BUY: bet sizing ────────────────────────────────────────────────
-    // If trader.baseShares is set, convert to a USDC floor at the trader's implied
-    // price so BetSizer scales correctly while position caps stay in USDC terms.
-    const effectiveBaseBet = trader.baseShares
-      ? trader.baseShares * trade.impliedPrice
+    // Bot-level baseShares overrides per-trader baseBetUsdc: floor = baseShares × impliedPrice.
+    const effectiveBaseBet = this.baseShares
+      ? this.baseShares * trade.impliedPrice
       : trader.baseBetUsdc;
     const sizing = calcCopyBet(trade.usdcAmount, { ...trader, baseBetUsdc: effectiveBaseBet });
     if (sizing.skip) {
