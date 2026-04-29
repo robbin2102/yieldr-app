@@ -225,8 +225,19 @@ export class TradeOrchestrator {
         label:       trader.label,
       } as RoutedTrade);
     } catch (err: any) {
-      if (err.code === 11000) return; // already processed
-      throw err;
+      if (err.code === 11000) {
+        // Duplicate key: another process (e.g. detection-only Fly service) wrote this
+        // txHash first. If it's DETECT_ONLY we can re-use the record and execute.
+        // Any other status (EXECUTING, FILLED, SKIPPED, FAILED) means it's already handled.
+        const existing = await CopyTrade.findOne({ txHash: trade.txHash }, { _id: 1, status: 1 }).lean();
+        if (existing?.status === 'DETECT_ONLY') {
+          tradeDocId = (existing._id as any).toString();
+        } else {
+          return;
+        }
+      } else {
+        throw err;
+      }
     }
 
     // ── 5. Resolve execution strategy ─────────────────────────────────────
@@ -239,7 +250,12 @@ export class TradeOrchestrator {
     }
 
     // ── 7. BUY: bet sizing ────────────────────────────────────────────────
-    const sizing = calcCopyBet(trade.usdcAmount, trader);
+    // If trader.baseShares is set, convert to a USDC floor at the trader's implied
+    // price so BetSizer scales correctly while position caps stay in USDC terms.
+    const effectiveBaseBet = trader.baseShares
+      ? trader.baseShares * trade.impliedPrice
+      : trader.baseBetUsdc;
+    const sizing = calcCopyBet(trade.usdcAmount, { ...trader, baseBetUsdc: effectiveBaseBet });
     if (sizing.skip) {
       console.log(fmtLine(trade, `⏭  SKIP → ${sizing.skipReason} ${sizing.skipDetail ?? ''}`, meta));
       await recorder.skip(

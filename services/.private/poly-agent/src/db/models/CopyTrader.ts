@@ -17,7 +17,8 @@ export interface ICopyTrader extends Document {
 
   // Bet sizing
   avgBet:      number;   // skip trader bets below this; conviction anchor
-  baseBetUsdc: number;   // $5 — minimum copy bet (floor)
+  baseBetUsdc: number;   // $5 — minimum copy bet (floor) in USDC terms
+  baseShares?: number;   // if set, min copy bet = baseShares × impliedPrice (overrides baseBetUsdc)
   maxBetUsdc:  number;   // $20 — maximum copy bet (cap)
 
   // Allocation
@@ -58,6 +59,7 @@ const copyTraderSchema = new mongoose.Schema<ICopyTrader>({
 
   avgBet:      { type: Number, required: true },
   baseBetUsdc: { type: Number, default: 5 },
+  baseShares:  { type: Number },   // optional — if set, min bet = baseShares × impliedPrice
   maxBetUsdc:  { type: Number, default: 20 },
 
   allocationUsdc: { type: Number, required: true },
