@@ -263,22 +263,29 @@ export class TradeOrchestrator {
 
     const copyBetUsdc = Math.min(sizing.betUsdc, positionAvail);
 
+    const ratio   = (trade.usdcAmount / trader.avgBet).toFixed(1);
+    const execTag = this.detectionOnly ? '[DETECT_ONLY]' : `[${strategy.toUpperCase()}]`;
+    console.log(fmtLine(trade, `×${ratio} avg → copy $${copyBetUsdc.toFixed(2)} ${execTag}`, meta));
+
+    // ── 9. Route to executor ───────────────────────────────────────────────
+    if (this.detectionOnly) {
+      // In detection-only mode mark as DETECT_ONLY so it doesn't count against
+      // position caps on the next run (EXECUTING records would permanently block sizing).
+      await CopyTrade.updateOne({ txHash: trade.txHash }, { $set: { copyBetUsdc, status: 'DETECT_ONLY' } });
+      const cur = this.positionReserved.get(lockKey) ?? 0;
+      const upd = Math.max(0, cur - sizing.betUsdc);
+      if (upd === 0) this.positionReserved.delete(lockKey); else this.positionReserved.set(lockKey, upd);
+      return;
+    }
+
     // Release reservation after DB write (reservation was worst-case)
     try {
-      // Update doc with resolved bet size
       await CopyTrade.updateOne({ txHash: trade.txHash }, { $set: { copyBetUsdc, status: 'EXECUTING' } });
     } finally {
       const cur = this.positionReserved.get(lockKey) ?? 0;
       const upd = Math.max(0, cur - sizing.betUsdc);
       if (upd === 0) this.positionReserved.delete(lockKey); else this.positionReserved.set(lockKey, upd);
     }
-
-    const ratio = (trade.usdcAmount / trader.avgBet).toFixed(1);
-    const execTag = this.detectionOnly ? '[DETECT_ONLY]' : `[${strategy.toUpperCase()}]`;
-    console.log(fmtLine(trade, `×${ratio} avg → copy $${copyBetUsdc.toFixed(2)} ${execTag}`, meta));
-
-    // ── 9. Route to executor ───────────────────────────────────────────────
-    if (this.detectionOnly) return;
     const routed: RoutedTrade = {
       txHash:           trade.txHash,
       wallet:           trade.wallet,
