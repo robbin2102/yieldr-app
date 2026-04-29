@@ -302,8 +302,15 @@ export class OnChainDetector extends EventEmitter {
     let msg: any;
     try { msg = JSON.parse(raw.toString()); } catch { return; }
 
-    // Keepalive response
-    if (msg.id === 99) return;
+    // Keepalive response — also advance lastSeenBlockDec so catch-up window stays tight
+    // even during quiet periods when no tracked-wallet fills arrive.
+    if (msg.id === 99) {
+      if (msg.result) {
+        const bn = parseInt(msg.result, 16);
+        if (!isNaN(bn) && bn > this.lastSeenBlockDec) this.lastSeenBlockDec = bn;
+      }
+      return;
+    }
 
     // Subscription confirmations (IDs in [subIdMin..subIdMax])
     if (msg.id >= this.subIdMin && msg.id <= this.subIdMax) {
@@ -438,46 +445,45 @@ export class OnChainDetector extends EventEmitter {
     const blockCount = toBlock - cappedFrom + 1;
     console.log(`[OnChainDetector] Catch-up: scanning ${blockCount} block(s) (${cappedFrom}→${toBlock}) for missed fills`);
 
-    // Mirror the live subscription strategy for catch-up — always server-side wallet filter
-    const wallets = [...this.trackedWallets.keys()];
-    const walletTopics = wallets.map(padAddress);
+    // eth_getLogs does not honour array topics (QuickNode returns ALL fills regardless of wallet filter).
+    // Use TOPIC0-only server filter and rely on client-side wallet guard in handleFill().
+    // Batched into 20-block chunks to keep each HTTP response small and avoid timeout.
+    const BATCH_SIZE   = 20;
+    const seenTxHashes = new Set<string>();
+    let   totalRaw     = 0;
 
-    const topicFilters: (string | null | string[])[][] = [
-      [TOPIC0, null, walletTopics],        // maker is our wallet
-      [TOPIC0, null, null, walletTopics],  // taker is our wallet
-    ];
-
-    const fromBlockHex = `0x${cappedFrom.toString(16)}`;
-    const toBlockHex   = `0x${toBlock.toString(16)}`;
-    const seenTxHashes = new Set<string>(); // dedup within catch-up (maker+taker overlap)
-
-    for (const topics of topicFilters) {
+    for (let bStart = cappedFrom; bStart <= toBlock; bStart += BATCH_SIZE) {
+      const bEnd    = Math.min(bStart + BATCH_SIZE - 1, toBlock);
+      const fromHex = `0x${bStart.toString(16)}`;
+      const toHex   = `0x${bEnd.toString(16)}`;
       try {
         const logsRes = await fetch(this.cfg.httpUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             jsonrpc: '2.0', id: 98, method: 'eth_getLogs',
-            params: [{ fromBlock: fromBlockHex, toBlock: toBlockHex, address: ALL_EXCHANGE_ADDRESSES, topics }],
+            params: [{ fromBlock: fromHex, toBlock: toHex, address: ALL_EXCHANGE_ADDRESSES, topics: [TOPIC0] }],
           }),
-          signal: AbortSignal.timeout(10_000),
+          signal: AbortSignal.timeout(15_000),
         });
         const logsJson = await logsRes.json() as any;
         if (logsJson.error) {
-          console.warn(`[OnChainDetector] Catch-up eth_getLogs node error: code=${logsJson.error.code} msg=${logsJson.error.message}`);
+          console.warn(`[OnChainDetector] Catch-up batch ${bStart}-${bEnd} node error: ${logsJson.error.message}`);
           continue;
         }
         const logs: any[] = logsJson.result ?? [];
-        const fresh = logs.filter(l => !seenTxHashes.has(l.transactionHash));
-        console.log(`[OnChainDetector] Catch-up: ${logs.length} raw fill(s), ${fresh.length} new (blocks ${cappedFrom}→${toBlock})`);
-        for (const log of fresh) {
+        totalRaw += logs.length;
+        for (const log of logs) {
+          if (seenTxHashes.has(log.transactionHash)) continue;
           seenTxHashes.add(log.transactionHash);
+          // handleFill() discards events where neither maker nor taker is a tracked wallet
           await this.handleFill(log, Date.now());
         }
       } catch (e: any) {
-        console.warn('[OnChainDetector] Catch-up eth_getLogs failed:', e.message);
+        console.warn(`[OnChainDetector] Catch-up batch ${bStart}-${bEnd} failed:`, e.message);
       }
     }
+    console.log(`[OnChainDetector] Catch-up complete: ${totalRaw} raw logs in ${blockCount} blocks, ${seenTxHashes.size} unique txs (blocks ${cappedFrom}→${toBlock})`);
   }
 
   // ── Block timestamp (HTTP, cached) ──────────────────────────────────────────
