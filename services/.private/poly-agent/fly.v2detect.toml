@@ -14,7 +14,7 @@ primary_region = "arn"
   NODE_ENV       = "production"
   DETECTION_ONLY = "true"
 
-# shared-cpu-1x (256 MB) is sufficient for a WS listener + MongoDB client
+# 1GB: tsx transpiles viem+ethers+mongoose on cold start — 256MB causes 3-min startup delay
 [[vm]]
   size   = "shared-cpu-1x"
-  memory = "256mb"
+  memory = "1gb"
