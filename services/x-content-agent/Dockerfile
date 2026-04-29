@@ -19,8 +19,8 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm install --omit=dev
 
-COPY --from=builder /app/dist ./dist
 COPY assets ./assets
+COPY --from=builder /app/dist ./dist
 
 EXPOSE 8080
 
