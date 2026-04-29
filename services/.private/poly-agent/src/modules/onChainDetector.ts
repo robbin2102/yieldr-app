@@ -116,7 +116,7 @@ export class OnChainDetector extends EventEmitter {
     this.stopped = true;
     if (this.walletRefresh) { clearInterval(this.walletRefresh); this.walletRefresh = null; }
     if (this.keepalive)     { clearInterval(this.keepalive);     this.keepalive     = null; }
-    if (this.ws)            { this.ws.removeAllListeners(); this.ws.close(); this.ws = null; }
+    if (this.ws)            { this.ws.removeAllListeners(); try { this.ws.close(); } catch {} this.ws = null; }
   }
 
   // ── Startup probe ───────────────────────────────────────────────────────────
