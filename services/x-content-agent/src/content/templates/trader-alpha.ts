@@ -31,7 +31,7 @@ ${STYLE_DESCRIPTIONS[style]}
 
 ━━━ TRADER DATA ━━━
 Rank: #${t.rank || '?'} by statistical edge
-Wallet: ${t.wallet ? t.wallet.slice(0, 10) + '...' : 'N/A'}${t.xUsername ? ` | X: @${t.xUsername}` : ''}
+Wallet: ${t.wallet || 'N/A'}${t.xUsername ? ` | X: @${t.xUsername}` : ''}
 Specialty: ${t.specialty || 'Multi-category'}
 Strategy: ${t.strategyLabel || 'N/A'} | Volume: ${t.volumeLabel || 'N/A'}
 Account age: ${t.accountAgeDays ? t.accountAgeDays + ' days' : 'N/A'}
@@ -58,7 +58,7 @@ ${hcTrades.length ? `Recent big trades:\n${hcTrades.map((h: any) => `"${h.market
 ${winningPositions.length ? `Current winning positions:\n${winningPositions.map((p: any) => `"${p.title?.substring(0, 60)}": ${p.outcome} — entered $${p.avgPrice?.toFixed(2)}, now $${p.curPrice?.toFixed(2)} (+${p.percentPnl?.toFixed(0)}%)`).join('\n')}` : ''}
 
 ━━━ WRITING NOTES ━━━
-- Use the wallet short ID (first 6-8 chars) as the trader's "name" — makes it feel real
+- Use the full wallet address as the trader's identifier — it lets readers search it on Polymarket
 - Pick the 2-3 most striking data points, ignore the rest
 - If they have a weird or specific edge (insider signals, late entries, a niche category), build the story around that
 - Don't mention @yieldrdotorg or the vault in the tweet — this is pure alpha signal content
