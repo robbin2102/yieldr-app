@@ -215,8 +215,10 @@ export class OnChainDetector extends EventEmitter {
 
   // QuickNode silently stops delivering events when too many log-filter subscriptions
   // are open on a single connection. Confirmed working threshold: ≤2 subs (1 maker + 1 taker).
-  // Above this wallet count, fall back to a single TOPIC0 subscription and filter client-side.
-  private static readonly MAX_SERVER_SIDE_WALLETS = 15;
+  // Topic arrays (OR filter) can hold many wallet addresses in a single sub — no per-wallet limit.
+  // Set high so we always use the 2-sub server-side approach instead of TOPIC0-only fallback.
+  // TOPIC0-only delivers ALL Polymarket trades (~thousands/min) and spikes QuickNode RPC counts.
+  private static readonly MAX_SERVER_SIDE_WALLETS = 500;
   private static readonly SUB_ID_BASE = 10; // subscription IDs start here (1-9 reserved)
   private subsExpected = 0;
   private subIdMin = 0;
