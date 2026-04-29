@@ -44,13 +44,18 @@ export interface OrchestratorConfig {
   dbName:        string;
 
   // Execution
-  clobHost:      string;    // 'https://clob.polymarket.com' (or v2 test endpoint)
+  clobHost:      string;
   privateKey:    string;
   apiKey:        string;
   apiSecret:     string;
   passphrase:    string;
   polygonRpc:    string;
   botAddress:    string;
+
+  // Optional exchange filter — if set, only execute on these exchanges (comma-separated).
+  // Detection always runs on all exchanges. Example: 'NEG_RISK_V2' to only execute
+  // on politics/geopolitical markets while staying in detect-only mode for sports etc.
+  execExchanges?: string[];  // e.g. ['NEG_RISK_V2'] or ['CTF_V2','NEG_RISK_V2']
 
   // WS User Channel
   wssUserUrl:    string;
@@ -97,24 +102,27 @@ export class TradeOrchestrator {
   private detector:      OnChainDetector;
   private books:         OrderbookCacheV2;
   private fillTracker:   FillTrackerV2;
-  private detectionOnly: boolean;
+  private detectionOnly:  boolean;
+  private execExchanges?: string[];
 
   // Concurrent trade guards (synchronous — no await between check and set)
   private positionReserved = new Map<string, number>();  // `wallet:conditionId` → USDC reserved
   private sellInProgress   = new Set<string>();          // tokenId
 
   private constructor(
-    detector:    OnChainDetector,
-    books:       OrderbookCacheV2,
-    fillTracker: FillTrackerV2,
-    router:      ExecutionRouter,
+    detector:      OnChainDetector,
+    books:         OrderbookCacheV2,
+    fillTracker:   FillTrackerV2,
+    router:        ExecutionRouter,
     detectionOnly: boolean,
+    execExchanges?: string[],
   ) {
     this.detector      = detector;
     this.books         = books;
     this.fillTracker   = fillTracker;
     this.detectionOnly = detectionOnly;
-    this.router      = router;
+    this.execExchanges = execExchanges;
+    this.router        = router;
   }
 
   static async create(cfg: OrchestratorConfig): Promise<TradeOrchestrator> {
@@ -152,7 +160,7 @@ export class TradeOrchestrator {
       dbName:   cfg.dbName,
     });
 
-    const orchestrator = new TradeOrchestrator(detector, books, fillTracker, router, cfg.detectionOnly ?? false);
+    const orchestrator = new TradeOrchestrator(detector, books, fillTracker, router, cfg.detectionOnly ?? false, cfg.execExchanges);
 
     // Wire detector events
     detector.on('trade',       (t) => orchestrator.handleDetected(t, resolver, recorder));
@@ -272,6 +280,17 @@ export class TradeOrchestrator {
       // In detection-only mode mark as DETECT_ONLY so it doesn't count against
       // position caps on the next run (EXECUTING records would permanently block sizing).
       await CopyTrade.updateOne({ txHash: trade.txHash }, { $set: { copyBetUsdc, status: 'DETECT_ONLY' } });
+      const cur = this.positionReserved.get(lockKey) ?? 0;
+      const upd = Math.max(0, cur - sizing.betUsdc);
+      if (upd === 0) this.positionReserved.delete(lockKey); else this.positionReserved.set(lockKey, upd);
+      return;
+    }
+
+    // Exchange filter — skip execution (mark DETECT_ONLY) if trade's exchange not in EXEC_EXCHANGES.
+    // Detection always runs on all exchanges regardless of this filter.
+    if (this.execExchanges && this.execExchanges.length > 0 && !this.execExchanges.includes(trade.exchange)) {
+      console.log(fmtLine(trade, `⏭  DETECT_ONLY → EXEC_FILTER (${trade.exchange})`, meta));
+      await CopyTrade.updateOne({ txHash: trade.txHash }, { $set: { copyBetUsdc, status: 'DETECT_ONLY', skipDetail: `exec_filter:${trade.exchange}` } });
       const cur = this.positionReserved.get(lockKey) ?? 0;
       const upd = Math.max(0, cur - sizing.betUsdc);
       if (upd === 0) this.positionReserved.delete(lockKey); else this.positionReserved.set(lockKey, upd);

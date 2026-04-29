@@ -74,6 +74,9 @@ const cfg: OrchestratorConfig = {
   maxGtdAttempts:    parseInt(optional('MAX_GTD_ATTEMPTS',    '3')),
   defaultStrategy:   (optional('EXECUTION_STRATEGY', 'auto')) as ExecutionStrategy,
   detectionOnly:     process.env.DETECTION_ONLY === 'true',
+  execExchanges:     process.env.EXEC_EXCHANGES
+    ? process.env.EXEC_EXCHANGES.split(',').map(s => s.trim()).filter(Boolean)
+    : undefined,
 };
 
 // MongoDB driver can throw MongoNetworkTimeoutError from internal connection pool timers
@@ -93,7 +96,8 @@ process.on('unhandledRejection', (reason: any) => {
 
 async function main() {
   console.log('[v2] Starting CLOBv2 copy-trading pipeline...');
-  console.log(`[v2] Mode: ${cfg.detectionOnly ? '🔍 DETECTION_ONLY (no execution)' : '⚡ LIVE'} | strategy: ${cfg.defaultStrategy} | drift: ${cfg.maxDriftPct * 100}% | spread: ${cfg.maxSpreadPct * 100}%`);
+  const execFilter = cfg.execExchanges?.length ? ` | exec_filter: ${cfg.execExchanges.join(',')}` : '';
+  console.log(`[v2] Mode: ${cfg.detectionOnly ? 'DETECTION_ONLY (no execution)' : 'LIVE'} | strategy: ${cfg.defaultStrategy} | drift: ${cfg.maxDriftPct * 100}% | spread: ${cfg.maxSpreadPct * 100}%${execFilter}`);
 
   await connectDB();
 
