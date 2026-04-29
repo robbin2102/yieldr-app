@@ -107,8 +107,9 @@ export class OnChainDetector extends EventEmitter {
   async start(): Promise<void> {
     await this.loadWallets();
     this.connect();
-    // Refresh wallet list every 60s — picks up added/removed traders
     this.walletRefresh = setInterval(() => this.refreshWallets(), 60_000);
+    // Non-blocking startup probe — confirms topic filter works before first live trade
+    this.probeRecentActivity().catch(() => {});
   }
 
   stop(): void {
@@ -116,6 +117,53 @@ export class OnChainDetector extends EventEmitter {
     if (this.walletRefresh) { clearInterval(this.walletRefresh); this.walletRefresh = null; }
     if (this.keepalive)     { clearInterval(this.keepalive);     this.keepalive     = null; }
     if (this.ws)            { this.ws.removeAllListeners(); this.ws.close(); this.ws = null; }
+  }
+
+  // ── Startup probe ───────────────────────────────────────────────────────────
+
+  private async probeRecentActivity(): Promise<void> {
+    const PROBE_BLOCKS = 500; // ~16 min of Polygon blocks
+    try {
+      const tipRes  = await fetch(this.cfg.httpUrl, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body:   JSON.stringify({ jsonrpc: '2.0', id: 95, method: 'eth_blockNumber', params: [] }),
+        signal: AbortSignal.timeout(5_000),
+      });
+      const tipJson = await tipRes.json() as any;
+      const tip     = parseInt(tipJson.result, 16);
+      if (isNaN(tip)) { console.warn('[OnChainDetector] Probe: could not fetch tip block'); return; }
+
+      const from        = `0x${(tip - PROBE_BLOCKS).toString(16)}`;
+      const wallets     = [...this.trackedWallets.keys()];
+      const wTopics     = wallets.map(padAddress);
+
+      // Run both topic filters (maker + taker) and union results by txHash
+      const queries = [
+        { jsonrpc: '2.0', id: 95, method: 'eth_getLogs', params: [{ fromBlock: from, toBlock: 'latest', address: ALL_EXCHANGE_ADDRESSES, topics: [TOPIC0, null, wTopics] }] },
+        { jsonrpc: '2.0', id: 95, method: 'eth_getLogs', params: [{ fromBlock: from, toBlock: 'latest', address: ALL_EXCHANGE_ADDRESSES, topics: [TOPIC0, null, null, wTopics] }] },
+      ];
+
+      const seen = new Set<string>();
+      let   hits = 0;
+      for (const q of queries) {
+        const r = await fetch(this.cfg.httpUrl, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body:   JSON.stringify(q), signal: AbortSignal.timeout(10_000),
+        });
+        const j = await r.json() as any;
+        for (const log of (j.result ?? [])) {
+          if (!seen.has(log.transactionHash)) { seen.add(log.transactionHash); hits++; }
+        }
+      }
+
+      if (hits > 0) {
+        console.log(`[OnChainDetector] ✅ Probe: ${hits} fill(s) for tracked wallets in last ${PROBE_BLOCKS} blocks — subscription filter confirmed working`);
+      } else {
+        console.log(`[OnChainDetector] ℹ️  Probe: 0 fills for tracked wallets in last ${PROBE_BLOCKS} blocks — wallets inactive in this window (filter is correct)`);
+      }
+    } catch (e: any) {
+      console.warn('[OnChainDetector] Probe failed (non-fatal):', e.message);
+    }
   }
 
   // ── Wallet loading ──────────────────────────────────────────────────────────
