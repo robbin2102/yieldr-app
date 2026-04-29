@@ -74,7 +74,9 @@ export class OrderbookCacheV2 {
   }
 
   private async doFetch(tokenId: string): Promise<OrderBook | null> {
-    const url = `${this.clobApiBase}/book?token_id=${tokenId}`;
+    // CLOB API expects decimal token ID; on-chain events give hex (0x...)
+    const tokenIdDec = tokenId.startsWith('0x') ? BigInt(tokenId).toString() : tokenId;
+    const url = `${this.clobApiBase}/book?token_id=${tokenIdDec}`;
     const res  = await fetch(url, { signal: AbortSignal.timeout(4_000) });
     if (!res.ok) return null;
 
