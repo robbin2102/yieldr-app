@@ -73,6 +73,11 @@ export interface OrchestratorConfig {
   // Bot-level base bet: if set, minimum copy bet = baseShares × impliedPrice.
   // Overrides per-trader baseBetUsdc floor. Unset = use per-trader baseBetUsdc.
   baseShares?: number;  // e.g. 5
+
+  // Test mode: pin every BUY to exactly baseShares × impliedPrice regardless of conviction.
+  // Keeps test bets tiny so you don't risk large amounts during local execution tests.
+  // Requires baseShares to be set; ignored if baseShares is unset.
+  testMode?: boolean;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -109,6 +114,7 @@ export class TradeOrchestrator {
   private detectionOnly:  boolean;
   private execExchanges?: string[];
   private baseShares?:    number;
+  private testMode?:      boolean;
 
   // Concurrent trade guards (synchronous — no await between check and set)
   private positionReserved = new Map<string, number>();  // `wallet:conditionId` → USDC reserved
@@ -122,6 +128,7 @@ export class TradeOrchestrator {
     detectionOnly: boolean,
     execExchanges?: string[],
     baseShares?:    number,
+    testMode?:      boolean,
   ) {
     this.detector      = detector;
     this.books         = books;
@@ -129,6 +136,7 @@ export class TradeOrchestrator {
     this.detectionOnly = detectionOnly;
     this.execExchanges = execExchanges;
     this.baseShares    = baseShares;
+    this.testMode      = testMode;
     this.router        = router;
   }
 
@@ -167,7 +175,7 @@ export class TradeOrchestrator {
       dbName:   cfg.dbName,
     });
 
-    const orchestrator = new TradeOrchestrator(detector, books, fillTracker, router, cfg.detectionOnly ?? false, cfg.execExchanges, cfg.baseShares);
+    const orchestrator = new TradeOrchestrator(detector, books, fillTracker, router, cfg.detectionOnly ?? false, cfg.execExchanges, cfg.baseShares, cfg.testMode);
 
     // Wire detector events
     detector.on('trade',       (t) => orchestrator.handleDetected(t, resolver, recorder));
@@ -291,33 +299,40 @@ export class TradeOrchestrator {
       return;
     }
 
-    const copyBetUsdc = Math.min(sizing.betUsdc, positionAvail);
+    // ── 9. Pre-execution filters (run before sizing log so log tag is always accurate) ──
+
+    // Detection-only mode: mark DETECT_ONLY so record doesn't block position caps on restart.
+    if (this.detectionOnly) {
+      const copyBetUsdc0 = Math.min(sizing.betUsdc, positionAvail);
+      const ratio0 = (trade.usdcAmount / trader.avgBet).toFixed(1);
+      console.log(fmtLine(trade, `×${ratio0} avg → copy $${copyBetUsdc0.toFixed(2)} [DETECT_ONLY]`, meta));
+      await CopyTrade.updateOne({ txHash: trade.txHash }, { $set: { copyBetUsdc: copyBetUsdc0, status: 'DETECT_ONLY' } });
+      const cur = this.positionReserved.get(lockKey) ?? 0;
+      const upd = Math.max(0, cur - sizing.betUsdc);
+      if (upd === 0) this.positionReserved.delete(lockKey); else this.positionReserved.set(lockKey, upd);
+      return;
+    }
+
+    // Exchange filter: skip execution for non-whitelisted exchanges.
+    if (this.execExchanges && this.execExchanges.length > 0 && !this.execExchanges.includes(trade.exchange)) {
+      const copyBetUsdc0 = Math.min(sizing.betUsdc, positionAvail);
+      console.log(fmtLine(trade, `⏭  DETECT_ONLY → EXEC_FILTER (${trade.exchange})`, meta));
+      await CopyTrade.updateOne({ txHash: trade.txHash }, { $set: { copyBetUsdc: copyBetUsdc0, status: 'DETECT_ONLY', skipDetail: `exec_filter:${trade.exchange}` } });
+      const cur = this.positionReserved.get(lockKey) ?? 0;
+      const upd = Math.max(0, cur - sizing.betUsdc);
+      if (upd === 0) this.positionReserved.delete(lockKey); else this.positionReserved.set(lockKey, upd);
+      return;
+    }
+
+    // Test mode: pin bet to baseShares × impliedPrice — no conviction scaling.
+    const rawBet = (this.testMode && this.baseShares)
+      ? this.baseShares * trade.impliedPrice
+      : sizing.betUsdc;
+    const copyBetUsdc = Math.min(rawBet, positionAvail);
 
     const ratio   = (trade.usdcAmount / trader.avgBet).toFixed(1);
-    const execTag = this.detectionOnly ? '[DETECT_ONLY]' : `[${strategy.toUpperCase()}]`;
-    console.log(fmtLine(trade, `×${ratio} avg → copy $${copyBetUsdc.toFixed(2)} ${execTag}`, meta));
-
-    // ── 9. Route to executor ───────────────────────────────────────────────
-    if (this.detectionOnly) {
-      // In detection-only mode mark as DETECT_ONLY so it doesn't count against
-      // position caps on the next run (EXECUTING records would permanently block sizing).
-      await CopyTrade.updateOne({ txHash: trade.txHash }, { $set: { copyBetUsdc, status: 'DETECT_ONLY' } });
-      const cur = this.positionReserved.get(lockKey) ?? 0;
-      const upd = Math.max(0, cur - sizing.betUsdc);
-      if (upd === 0) this.positionReserved.delete(lockKey); else this.positionReserved.set(lockKey, upd);
-      return;
-    }
-
-    // Exchange filter — skip execution (mark DETECT_ONLY) if trade's exchange not in EXEC_EXCHANGES.
-    // Detection always runs on all exchanges regardless of this filter.
-    if (this.execExchanges && this.execExchanges.length > 0 && !this.execExchanges.includes(trade.exchange)) {
-      console.log(fmtLine(trade, `⏭  DETECT_ONLY → EXEC_FILTER (${trade.exchange})`, meta));
-      await CopyTrade.updateOne({ txHash: trade.txHash }, { $set: { copyBetUsdc, status: 'DETECT_ONLY', skipDetail: `exec_filter:${trade.exchange}` } });
-      const cur = this.positionReserved.get(lockKey) ?? 0;
-      const upd = Math.max(0, cur - sizing.betUsdc);
-      if (upd === 0) this.positionReserved.delete(lockKey); else this.positionReserved.set(lockKey, upd);
-      return;
-    }
+    const testTag = this.testMode ? '/TEST' : '';
+    console.log(fmtLine(trade, `×${ratio} avg → copy $${copyBetUsdc.toFixed(2)} [${strategy.toUpperCase()}${testTag}]`, meta));
 
     // Release reservation after DB write (reservation was worst-case)
     try {

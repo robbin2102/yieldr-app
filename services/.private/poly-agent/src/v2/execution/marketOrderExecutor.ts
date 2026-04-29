@@ -45,6 +45,9 @@ export class MarketOrderExecutor implements IExecutor {
     const startMs = Date.now();
     const { side, tokenId, exchange, impliedPrice, meta } = trade;
     const negRisk = exchange === 'NEG_RISK' || exchange === 'NEG_RISK_V2';
+    const fmtTs = () => new Date().toISOString().slice(11, 19);
+
+    console.log(`[${fmtTs()}] [MarketExec] START ${trade.label} ${side} $${trade.copyBetUsdc.toFixed(2)} tokenId=${tokenId.slice(0, 14)}... negRisk=${negRisk}`);
 
     let remainingUsdc   = trade.copyBetUsdc;
     let remainingShares = trade.copyShares ?? 0;
@@ -54,40 +57,47 @@ export class MarketOrderExecutor implements IExecutor {
 
     for (let attempt = 1; attempt <= this.maxAttempts; attempt++) {
       // ── 1. Fresh orderbook (pre-fetched in background, likely cached) ──────
+      console.log(`[${fmtTs()}] [MarketExec] attempt ${attempt}/${this.maxAttempts}: fetching orderbook...`);
       const book = await this.books.get(tokenId);
       if (!book) {
+        console.log(`[${fmtTs()}] [MarketExec] NO_ORDERBOOK — aborting`);
         await this.recorder.fail(trade, 'NO_ORDERBOOK', `attempt ${attempt}: orderbook unavailable`, attempts, startMs);
         return;
       }
+      console.log(`[${fmtTs()}] [MarketExec] book: bid=${book.bestBid} ask=${book.bestAsk} spread=${((book.bestAsk - book.bestBid) / book.bestAsk * 100).toFixed(1)}%`);
 
       // ── 2. Safety checks (run on every attempt) ───────────────────────────
       const spread = this.safety.checkSpread(book);
       if (!spread.pass) {
+        console.log(`[${fmtTs()}] [MarketExec] WIDE_SPREAD: ${spread.reason} — aborting`);
         await this.recorder.fail(trade, 'WIDE_SPREAD', spread.reason!, attempts, startMs);
         return;
       }
 
       const drift = this.safety.checkDrift(impliedPrice, book, side);
       if (!drift.pass) {
+        console.log(`[${fmtTs()}] [MarketExec] PRICEDRIFT_FAILED: ${drift.reason}`);
         if (attempt === 1) {
           await this.recorder.fail(trade, 'PRICEDRIFT_FAILED', drift.reason!, attempts, startMs);
           return;
         }
-        // On retries: partial fill already happened — record what we got and stop
         break;
       }
+      console.log(`[${fmtTs()}] [MarketExec] safety OK`);
 
       // ── 3. Determine order amount for this attempt ────────────────────────
       let amount: number;
       if (side === 'BUY') {
         amount = remainingUsdc;
-        if (amount < MIN_REMAINING_USDC) break;
+        if (amount < MIN_REMAINING_USDC) { console.log(`[${fmtTs()}] [MarketExec] remaining USDC too small (${amount.toFixed(4)}) — done`); break; }
       } else {
         amount = remainingShares;
-        if (amount < MIN_REMAINING_SHARES) break;
+        if (amount < MIN_REMAINING_SHARES) { console.log(`[${fmtTs()}] [MarketExec] remaining shares too small (${amount.toFixed(4)}) — done`); break; }
       }
 
       // ── 4. Submit FAK order ───────────────────────────────────────────────
+      const slippage = side === 'BUY' ? book.bestAsk + 0.001 : book.bestBid - 0.001;
+      console.log(`[${fmtTs()}] [MarketExec] submitting FAK ${side} amount=${amount.toFixed(4)} slippage=${slippage.toFixed(4)}`);
       const submittedAtMs = Date.now();
       let response: Awaited<ReturnType<ClobV2Client['postMarketOrder']>>;
       try {
@@ -95,18 +105,18 @@ export class MarketOrderExecutor implements IExecutor {
           tokenId,
           side,
           amount,
-          // Slippage guard: don't pay more than bestAsk+1tick (BUY) or
-          // accept less than bestBid-1tick (SELL)
-          price: side === 'BUY' ? book.bestAsk + 0.001 : book.bestBid - 0.001,
+          price: slippage,
           negRisk,
           orderType: 'FAK',
         });
       } catch (err: any) {
+        console.log(`[${fmtTs()}] [MarketExec] CLOB call threw: ${err.message}`);
         await this.recorder.fail(trade, 'ORDER_FAILED', `attempt ${attempt}: ${err.message}`, attempts, startMs);
         return;
       }
 
       if (!response.success || !response.orderID) {
+        console.log(`[${fmtTs()}] [MarketExec] ORDER_FAILED: ${response.errorMsg}`);
         await this.recorder.fail(trade, 'ORDER_FAILED', `attempt ${attempt}: ${response.errorMsg}`, attempts, startMs);
         return;
       }
@@ -147,9 +157,8 @@ export class MarketOrderExecutor implements IExecutor {
         remainingShares = Math.max(0, remainingShares - filledShares);
       }
 
-      const ts = new Date().toISOString().slice(11, 19);
       console.log(
-        `[${ts}] [MarketExec] ${trade.label} ${side} attempt ${attempt}/${this.maxAttempts}` +
+        `[${fmtTs()}] [MarketExec] ${trade.label} ${side} attempt ${attempt}/${this.maxAttempts}` +
         ` filled ${filledShares.toFixed(4)} shares @ $${avgFillPrice.toFixed(4)}` +
         ` ($${filledUsdc.toFixed(2)}) | status=${response.status}` +
         (side === 'BUY' ? ` | remaining $${remainingUsdc.toFixed(2)}` : ` | remaining ${remainingShares.toFixed(4)} shares`)

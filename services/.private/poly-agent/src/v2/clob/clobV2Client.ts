@@ -101,18 +101,25 @@ export class ClobV2Client {
   async postMarketOrder(params: MarketOrderParams): Promise<OrderResponse> {
     const { tokenId, side, amount, price, negRisk, orderType } = params;
 
-    const tickSize = await this.resolveTickSize(tokenId);
+    console.log(`[ClobV2] postMarketOrder: ${side} tokenId=${tokenId.slice(0, 14)}... amount=${amount} price=${price} negRisk=${negRisk} type=${orderType}`);
 
-    const response = await this.client.createAndPostMarketOrder(
+    const tickSize = await this.resolveTickSize(tokenId);
+    console.log(`[ClobV2] tickSize=${tickSize}`);
+
+    const orderPromise = this.client.createAndPostMarketOrder(
       {
         tokenID:   tokenId,
         side:      side === 'BUY' ? Side.BUY : Side.SELL,
         amount,
-        price,          // optional slippage guard
-        orderType:  orderType === 'FAK' ? OrderType.FAK : OrderType.FOK,
+        price,
+        orderType: orderType === 'FAK' ? OrderType.FAK : OrderType.FOK,
       },
       { tickSize, negRisk },
     );
+
+    console.log(`[ClobV2] awaiting createAndPostMarketOrder...`);
+    const response = await withTimeout(orderPromise, 20_000, 'createAndPostMarketOrder');
+    console.log(`[ClobV2] response: success=${(response as any).success} orderId=${(response as any).orderID?.slice(0, 10)}... status=${(response as any).status} errorMsg=${(response as any).errorMsg ?? '-'}`);
 
     return response as OrderResponse;
   }
@@ -122,9 +129,12 @@ export class ClobV2Client {
   async postGTDOrder(params: LimitOrderParams): Promise<OrderResponse> {
     const { tokenId, side, price, size, negRisk, expiresAt } = params;
 
-    const tickSize = await this.resolveTickSize(tokenId);
+    console.log(`[ClobV2] postGTDOrder: ${side} tokenId=${tokenId.slice(0, 14)}... price=${price} size=${size} negRisk=${negRisk}`);
 
-    const response = await this.client.createAndPostOrder(
+    const tickSize = await this.resolveTickSize(tokenId);
+    console.log(`[ClobV2] tickSize=${tickSize}`);
+
+    const orderPromise = this.client.createAndPostOrder(
       {
         tokenID:    tokenId,
         side:       side === 'BUY' ? Side.BUY : Side.SELL,
@@ -135,6 +145,10 @@ export class ClobV2Client {
       { tickSize, negRisk },
       OrderType.GTD,
     );
+
+    console.log(`[ClobV2] awaiting createAndPostOrder...`);
+    const response = await withTimeout(orderPromise, 20_000, 'createAndPostOrder');
+    console.log(`[ClobV2] response: success=${(response as any).success} orderId=${(response as any).orderID?.slice(0, 10)}... status=${(response as any).status} errorMsg=${(response as any).errorMsg ?? '-'}`);
 
     return response as OrderResponse;
   }
@@ -152,11 +166,23 @@ export class ClobV2Client {
 
   private async resolveTickSize(tokenId: string): Promise<TickSize> {
     try {
-      const sizes = await this.client.tickSizes;
-      const ts = (sizes as Record<string, TickSize>)[tokenId];
-      return ts ?? '0.001';
+      const sizes = await withTimeout(
+        Promise.resolve(this.client.tickSizes),
+        5_000,
+        'tickSizes',
+      ) as Record<string, TickSize>;
+      return sizes[tokenId] ?? '0.001';
     } catch {
       return '0.001';
     }
   }
+}
+
+// Wraps a Promise with a hard timeout that rejects if the call doesn't complete in time.
+function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`[ClobV2] ${label} timed out after ${ms}ms`)), ms);
+    p.then(v  => { clearTimeout(timer); resolve(v); },
+           e  => { clearTimeout(timer); reject(e);  });
+  });
 }

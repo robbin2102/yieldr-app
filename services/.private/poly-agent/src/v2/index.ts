@@ -78,6 +78,7 @@ const cfg: OrchestratorConfig = {
     ? process.env.EXEC_EXCHANGES.split(',').map(s => s.trim()).filter(Boolean)
     : undefined,
   baseShares:        process.env.BASE_SHARES ? parseFloat(process.env.BASE_SHARES) : undefined,
+  testMode:          process.env.TEST_MODE === 'true',
 };
 
 // MongoDB driver can throw MongoNetworkTimeoutError from internal connection pool timers
@@ -98,8 +99,10 @@ process.on('unhandledRejection', (reason: any) => {
 async function main() {
   console.log('[v2] Starting CLOBv2 copy-trading pipeline...');
   const execFilter  = cfg.execExchanges?.length ? ` | exec_filter: ${cfg.execExchanges.join(',')}` : '';
-  const baseBetDesc = cfg.baseShares ? `${cfg.baseShares} shares` : `$${cfg.maxMarketAttempts} usdc (per-trader)`;
-  console.log(`[v2] Mode: ${cfg.detectionOnly ? 'DETECTION_ONLY (no execution)' : 'LIVE'} | strategy: ${cfg.defaultStrategy} | base_bet: ${baseBetDesc} | drift: ${cfg.maxDriftPct * 100}% | spread: ${cfg.maxSpreadPct * 100}%${execFilter}`);
+  const baseBetDesc = cfg.baseShares
+    ? `${cfg.baseShares} shares${cfg.testMode ? ' (TEST_MODE=flat)' : ''}`
+    : 'per-trader usdc';
+  console.log(`[v2] Mode: ${cfg.detectionOnly ? 'DETECTION_ONLY' : 'LIVE'} | strategy: ${cfg.defaultStrategy} | base_bet: ${baseBetDesc} | drift: ${cfg.maxDriftPct * 100}% | spread: ${cfg.maxSpreadPct * 100}%${execFilter}`);
 
   await connectDB();
 
