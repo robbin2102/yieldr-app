@@ -105,9 +105,9 @@ export class GTDExecutorV2 implements IExecutor {
     const trade = {
       tokenId:      pending.tokenId,
       side:         pending.side,
-      exchange:     pending.conditionId ? 'CTF' : 'NEG_RISK',  // best guess from conditionId presence
+      exchange:     pending.exchange,
       impliedPrice: pending.impliedPrice,
-      meta:         { conditionId: pending.conditionId, negRisk: false, feeRateBps: 0, title: '', outcome: '' },
+      meta:         { conditionId: pending.conditionId, negRisk: pending.exchange === 'NEG_RISK' || pending.exchange === 'NEG_RISK_V2', feeRateBps: 0, title: '', outcome: '' },
       copyBetUsdc:  pending.targetUsdc - pending.filledUsdc,
       copyShares:   pending.targetShares ? pending.targetShares - pending.filledShares : undefined,
     } as any;
@@ -126,7 +126,7 @@ export class GTDExecutorV2 implements IExecutor {
     tradeDocId?:  string,
   ): Promise<void> {
     const { side, tokenId } = trade;
-    const negRisk = trade.exchange === 'NEG_RISK' || trade.meta?.negRisk;
+    const negRisk = trade.exchange === 'NEG_RISK' || trade.exchange === 'NEG_RISK_V2' || trade.meta?.negRisk;
 
     const spread    = book.bestAsk - book.bestBid;
     const fraction  = AGGRESSION_FRACTIONS[Math.min(attempt - 1, AGGRESSION_FRACTIONS.length - 1)];
@@ -183,11 +183,12 @@ export class GTDExecutorV2 implements IExecutor {
     const pending: PendingOrderV2 = {
       orderId:       response.orderID,
       transactionId: response.transactionsHashes?.[0],
-      tradeDocId:    tradeDocId ?? '',   // set by recorder if not a retry
+      tradeDocId:    tradeDocId ?? trade.tradeDocId ?? '',
       traderWallet:  trade.wallet ?? '',
       side,
       tokenId,
       conditionId:   trade.meta?.conditionId ?? '',
+      exchange:      trade.exchange ?? 'CTF_V2',
       limitPrice,
       targetUsdc:    (trade.copyBetUsdc ?? 0) + accUsdc,
       targetShares:  targetShares + accFilled,

@@ -28,7 +28,7 @@ export type SkipReason =
   | 'PRICEDRIFT_FAILED'
   | 'GROUPED_BELOW_AVG';
 
-export type TradeStatus = 'DETECTED' | 'SKIPPED' | 'EXECUTING' | 'FILLED' | 'PARTIAL' | 'FAILED';
+export type TradeStatus = 'DETECTED' | 'SKIPPED' | 'EXECUTING' | 'FILLED' | 'PARTIAL' | 'FAILED' | 'DETECT_ONLY';
 
 export interface ICopyTrade extends Document {
   sourceWallet: string;
@@ -109,7 +109,7 @@ const copyTradeSchema = new mongoose.Schema<ICopyTrade>({
   priceDrift:    { type: Number },
   attempts:      { type: Number },
 
-  status:     { type: String, enum: ['DETECTED','SKIPPED','EXECUTING','FILLED','PARTIAL','FAILED'], default: 'DETECTED', index: true },
+  status:     { type: String, enum: ['DETECTED','SKIPPED','EXECUTING','FILLED','PARTIAL','FAILED','DETECT_ONLY'], default: 'DETECTED', index: true },
   failReason: { type: String },
 
 }, { timestamps: true, collection: 'ahf-copyTrades' });

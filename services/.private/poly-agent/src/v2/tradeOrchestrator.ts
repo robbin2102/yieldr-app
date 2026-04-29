@@ -196,7 +196,7 @@ export class TradeOrchestrator {
     this.books.prefetch(trade.tokenId);
 
     // ── 2. Resolve market metadata ────────────────────────────────────────
-    const meta = await resolver.resolve(trade.tokenId, trade.exchange === 'NEG_RISK');
+    const meta = await resolver.resolve(trade.tokenId, trade.exchange === 'NEG_RISK' || trade.exchange === 'NEG_RISK_V2');
     if (!meta) {
       console.warn(`[Orchestrator] Could not resolve market meta for ${trade.tokenId.slice(0, 14)}... — skipping`);
       return;
@@ -302,6 +302,7 @@ export class TradeOrchestrator {
       meta,
       strategy,
       copyBetUsdc,
+      tradeDocId,
     };
 
     await this.router.route(routed);

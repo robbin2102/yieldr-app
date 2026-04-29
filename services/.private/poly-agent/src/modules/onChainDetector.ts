@@ -438,17 +438,14 @@ export class OnChainDetector extends EventEmitter {
     const blockCount = toBlock - cappedFrom + 1;
     console.log(`[OnChainDetector] Catch-up: scanning ${blockCount} block(s) (${cappedFrom}→${toBlock}) for missed fills`);
 
-    // Mirror the live subscription strategy for catch-up
+    // Mirror the live subscription strategy for catch-up — always server-side wallet filter
     const wallets = [...this.trackedWallets.keys()];
-    const useServerFilter = wallets.length <= OnChainDetector.MAX_SERVER_SIDE_WALLETS;
     const walletTopics = wallets.map(padAddress);
 
-    const topicFilters: (string | null | string[])[][] = useServerFilter
-      ? [
-          [TOPIC0, null, walletTopics],        // maker is our wallet
-          [TOPIC0, null, null, walletTopics],  // taker is our wallet
-        ]
-      : [[TOPIC0]];                            // client-side filter: handleFill() filters
+    const topicFilters: (string | null | string[])[][] = [
+      [TOPIC0, null, walletTopics],        // maker is our wallet
+      [TOPIC0, null, null, walletTopics],  // taker is our wallet
+    ];
 
     const fromBlockHex = `0x${cappedFrom.toString(16)}`;
     const toBlockHex   = `0x${toBlock.toString(16)}`;

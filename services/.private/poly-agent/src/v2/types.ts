@@ -53,6 +53,9 @@ export interface RoutedTrade {
   // Set by BetSizer
   copyBetUsdc:   number;
   copyShares?:   number;   // SELL only (proportional exit)
+
+  // Set by orchestrator after recorder.createDetected() — passed to GTD executor for retry tracking
+  tradeDocId?:   string;
 }
 
 // ── Order result ─────────────────────────────────────────────────────────────
@@ -113,6 +116,7 @@ export interface PendingOrderV2 {
   side:           'BUY' | 'SELL';
   tokenId:        string;
   conditionId:    string;
+  exchange:       'CTF' | 'NEG_RISK' | 'CTF_V2' | 'NEG_RISK_V2';
   limitPrice:     number;
   targetUsdc:     number;
   targetShares?:  number;

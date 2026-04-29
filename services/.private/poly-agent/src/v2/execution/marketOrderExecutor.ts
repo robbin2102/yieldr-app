@@ -44,7 +44,7 @@ export class MarketOrderExecutor implements IExecutor {
   async execute(trade: RoutedTrade): Promise<void> {
     const startMs = Date.now();
     const { side, tokenId, exchange, impliedPrice, meta } = trade;
-    const negRisk = exchange === 'NEG_RISK';
+    const negRisk = exchange === 'NEG_RISK' || exchange === 'NEG_RISK_V2';
 
     let remainingUsdc   = trade.copyBetUsdc;
     let remainingShares = trade.copyShares ?? 0;
