@@ -213,51 +213,35 @@ export class OnChainDetector extends EventEmitter {
 
   // ── Subscriptions ───────────────────────────────────────────────────────────
 
-  // QuickNode silently stops delivering events when too many log-filter subscriptions
-  // are open on a single connection. Confirmed working threshold: ≤2 subs (1 maker + 1 taker).
-  // Topic arrays (OR filter) can hold many wallet addresses in a single sub — no per-wallet limit.
-  // Set high so we always use the 2-sub server-side approach instead of TOPIC0-only fallback.
-  // TOPIC0-only delivers ALL Polymarket trades (~thousands/min) and spikes QuickNode RPC counts.
-  private static readonly MAX_SERVER_SIDE_WALLETS = 500;
-  private static readonly SUB_ID_BASE = 10; // subscription IDs start here (1-9 reserved)
+  // Always use exactly 2 server-side subscriptions: one for maker, one for taker.
+  // QuickNode silently drops events above ~2 log-filter subs per connection.
+  // Topic arrays support unlimited wallet addresses (OR filter) — no per-wallet limit.
+  private static readonly SUB_ID_BASE = 10;
   private subsExpected = 0;
   private subIdMin = 0;
   private subIdMax = -1;
 
   private subscribeAll(ws: WebSocket): void {
     this.subsConfirmed = 0;
-    const wallets = [...this.trackedWallets.keys()];
+    const wallets      = [...this.trackedWallets.keys()];
     const walletTopics = wallets.map(padAddress);
-    const useServerFilter = wallets.length <= OnChainDetector.MAX_SERVER_SIDE_WALLETS;
 
-    let subId = OnChainDetector.SUB_ID_BASE;
+    const sub1 = JSON.stringify({ jsonrpc: '2.0', id: OnChainDetector.SUB_ID_BASE,     method: 'eth_subscribe', params: ['logs', {
+      address: ALL_EXCHANGE_ADDRESSES,
+      topics:  [TOPIC0, null, walletTopics],       // maker is our wallet
+    }]});
+    const sub2 = JSON.stringify({ jsonrpc: '2.0', id: OnChainDetector.SUB_ID_BASE + 1, method: 'eth_subscribe', params: ['logs', {
+      address: ALL_EXCHANGE_ADDRESSES,
+      topics:  [TOPIC0, null, null, walletTopics], // taker is our wallet
+    }]});
 
-    if (useServerFilter) {
-      const sub1 = JSON.stringify({ jsonrpc: '2.0', id: subId++, method: 'eth_subscribe', params: ['logs', {
-        address: ALL_EXCHANGE_ADDRESSES,
-        topics:  [TOPIC0, null, walletTopics],       // maker is our wallet
-      }]});
-      const sub2 = JSON.stringify({ jsonrpc: '2.0', id: subId++, method: 'eth_subscribe', params: ['logs', {
-        address: ALL_EXCHANGE_ADDRESSES,
-        topics:  [TOPIC0, null, null, walletTopics], // taker is our wallet
-      }]});
-      this.subIdMin     = OnChainDetector.SUB_ID_BASE;
-      this.subIdMax     = OnChainDetector.SUB_ID_BASE + 1;
-      this.subsExpected = 2;
-      console.log(`[OnChainDetector] Subscribing: server-side filter, ${wallets.length} wallet(s), payload=${sub1.length + sub2.length}B`);
-      ws.send(sub1);
-      ws.send(sub2);
-    } else {
-      const sub1 = JSON.stringify({ jsonrpc: '2.0', id: subId++, method: 'eth_subscribe', params: ['logs', {
-        address: ALL_EXCHANGE_ADDRESSES,
-        topics:  [TOPIC0],                           // client-side wallet filter in handleFill()
-      }]});
-      this.subIdMin     = OnChainDetector.SUB_ID_BASE;
-      this.subIdMax     = OnChainDetector.SUB_ID_BASE;
-      this.subsExpected = 1;
-      console.log(`[OnChainDetector] Subscribing: client-side filter (${wallets.length} wallets > limit ${OnChainDetector.MAX_SERVER_SIDE_WALLETS}), payload=${sub1.length}B`);
-      ws.send(sub1);
-    }
+    this.subIdMin     = OnChainDetector.SUB_ID_BASE;
+    this.subIdMax     = OnChainDetector.SUB_ID_BASE + 1;
+    this.subsExpected = 2;
+
+    console.log(`[OnChainDetector] Subscribing: 2 server-side subs, ${wallets.length} wallet(s), payload=${sub1.length + sub2.length}B`);
+    ws.send(sub1);
+    ws.send(sub2);
   }
 
   // ── Message handling ────────────────────────────────────────────────────────
@@ -317,7 +301,7 @@ export class OnChainDetector extends EventEmitter {
 
     const makerIsTracked = this.trackedWallets.has(maker);
     const takerIsTracked = this.trackedWallets.has(taker);
-    if (!makerIsTracked && !takerIsTracked) return; // safety guard for stale events or cross-chunk overlap
+    if (!makerIsTracked && !takerIsTracked) return; // safety guard for catch-up replay overlap
 
     // Decode non-indexed args
     let parsed: ethers.utils.LogDescription;
