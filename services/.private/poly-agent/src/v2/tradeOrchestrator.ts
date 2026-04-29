@@ -167,7 +167,7 @@ export class TradeOrchestrator {
   }
 
   async start(): Promise<void> {
-    this.fillTracker.connect();
+    if (!this.detectionOnly) this.fillTracker.connect();
     await this.detector.start();
     console.log('[Orchestrator] v2 pipeline started');
   }

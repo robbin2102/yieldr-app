@@ -8,4 +8,4 @@ RUN npm ci
 COPY tsconfig.json ./
 COPY src ./src
 
-CMD ["npx", "tsx", "src/v2/index.ts"]
+CMD ["node_modules/.bin/tsx", "src/v2/index.ts"]
