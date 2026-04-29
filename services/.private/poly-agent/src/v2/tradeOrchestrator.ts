@@ -190,9 +190,26 @@ export class TradeOrchestrator {
   }
 
   async start(): Promise<void> {
-    if (!this.detectionOnly) this.fillTracker.connect();
+    if (!this.detectionOnly) {
+      this.fillTracker.connect();
+      await this.cleanupStaleExecuting();
+    }
     await this.detector.start();
     console.log('[Orchestrator] v2 pipeline started');
+  }
+
+  // On startup, mark any EXECUTING records older than 2 minutes as FAILED.
+  // These are left-over from a previous run that was stopped mid-execution
+  // and would otherwise permanently block the 20% per-position cap.
+  private async cleanupStaleExecuting(): Promise<void> {
+    const cutoff = new Date(Date.now() - 2 * 60 * 1000);
+    const result = await CopyTrade.updateMany(
+      { status: 'EXECUTING', updatedAt: { $lt: cutoff } },
+      { $set: { status: 'FAILED', failReason: 'stale EXECUTING — bot restarted before fill confirmed' } },
+    );
+    if (result.modifiedCount > 0) {
+      console.log(`[Orchestrator] Cleaned up ${result.modifiedCount} stale EXECUTING record(s)`);
+    }
   }
 
   stop(): void {
