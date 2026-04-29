@@ -47,23 +47,33 @@ export class GTDExecutorV2 implements IExecutor {
   }
 
   async execute(trade: RoutedTrade): Promise<void> {
+    const fmtTs = () => new Date().toISOString().slice(11, 19);
+    const startMs = Date.now();
+    console.log(`[${fmtTs()}] [GTDExec] START ${trade.label} ${trade.side} $${trade.copyBetUsdc.toFixed(2)} tokenId=${trade.tokenId.slice(0, 14)}... exchange=${trade.exchange}`);
+
+    console.log(`[${fmtTs()}] [GTDExec] fetching orderbook...`);
     const book = await this.books.get(trade.tokenId);
     if (!book) {
-      await this.recorder.fail(trade, 'NO_ORDERBOOK', 'orderbook unavailable', [], Date.now());
+      console.log(`[${fmtTs()}] [GTDExec] NO_ORDERBOOK — aborting`);
+      await this.recorder.fail(trade, 'NO_ORDERBOOK', 'orderbook unavailable', [], startMs);
       return;
     }
+    console.log(`[${fmtTs()}] [GTDExec] book: bid=${book.bestBid} ask=${book.bestAsk} spread=${((book.bestAsk - book.bestBid) / book.bestAsk * 100).toFixed(1)}%`);
 
     const spread = this.safety.checkSpread(book);
     if (!spread.pass) {
-      await this.recorder.fail(trade, 'WIDE_SPREAD', spread.reason!, [], Date.now());
+      console.log(`[${fmtTs()}] [GTDExec] WIDE_SPREAD: ${spread.reason} — aborting`);
+      await this.recorder.fail(trade, 'WIDE_SPREAD', spread.reason!, [], startMs);
       return;
     }
 
     const drift = this.safety.checkDrift(trade.impliedPrice, book, trade.side);
     if (!drift.pass) {
-      await this.recorder.fail(trade, 'PRICEDRIFT_FAILED', drift.reason!, [], Date.now());
+      console.log(`[${fmtTs()}] [GTDExec] PRICEDRIFT_FAILED: ${drift.reason} — aborting`);
+      await this.recorder.fail(trade, 'PRICEDRIFT_FAILED', drift.reason!, [], startMs);
       return;
     }
+    console.log(`[${fmtTs()}] [GTDExec] safety OK`);
 
     await this.placeOrder(trade, book, 1, 0, 0);
   }
@@ -71,7 +81,11 @@ export class GTDExecutorV2 implements IExecutor {
   // ── Retry on GTD expiry ───────────────────────────────────────────────────
 
   private async handleExpired(pending: PendingOrderV2): Promise<void> {
+    const fmtTs = () => new Date().toISOString().slice(11, 19);
+    console.log(`[${fmtTs()}] [GTDExec] order:expired orderId=${pending.orderId} attempt=${pending.attempt}/${this.maxAttempts} filled=${pending.filledShares.toFixed(4)}sh`);
+
     if (pending.attempt >= this.maxAttempts) {
+      console.log(`[${fmtTs()}] [GTDExec] max attempts reached — failing`);
       await this.recorder.failById(
         pending.tradeDocId,
         'ORDER_FAILED',
@@ -82,8 +96,10 @@ export class GTDExecutorV2 implements IExecutor {
       return;
     }
 
+    console.log(`[${fmtTs()}] [GTDExec] retrying — fetching orderbook...`);
     const book = await this.books.get(pending.tokenId);
     if (!book) {
+      console.log(`[${fmtTs()}] [GTDExec] NO_ORDERBOOK on retry — failing`);
       await this.recorder.failById(pending.tradeDocId, 'NO_ORDERBOOK', 'orderbook unavailable on retry', pending.filledShares, pending.filledUsdc);
       return;
     }
@@ -91,12 +107,14 @@ export class GTDExecutorV2 implements IExecutor {
     // Re-check safety before retry
     const spread = this.safety.checkSpread(book);
     if (!spread.pass) {
+      console.log(`[${fmtTs()}] [GTDExec] WIDE_SPREAD on retry: ${spread.reason} — failing`);
       await this.recorder.failById(pending.tradeDocId, 'WIDE_SPREAD', spread.reason!, pending.filledShares, pending.filledUsdc);
       return;
     }
 
     const drift = this.safety.checkDrift(pending.impliedPrice, book, pending.side);
     if (!drift.pass) {
+      console.log(`[${fmtTs()}] [GTDExec] PRICEDRIFT_FAILED on retry: ${drift.reason} — failing`);
       await this.recorder.failById(pending.tradeDocId, 'PRICEDRIFT_FAILED', drift.reason!, pending.filledShares, pending.filledUsdc);
       return;
     }
@@ -152,11 +170,11 @@ export class GTDExecutorV2 implements IExecutor {
     const expiresAt       = Math.floor(Date.now() / 1000) + GTD_EXPIRY_SECONDS;
     const submittedAtMs   = Date.now();
 
-    const ts = new Date().toISOString().slice(11, 19);
+    const fmtTs = () => new Date().toISOString().slice(11, 19);
+    const aggrLabel = fraction === 0 ? 'passive' : fraction === 0.5 ? 'midpoint' : 'cross';
     console.log(
-      `[${ts}] [GTDExec] ${(trade.label || '')} ${side} attempt ${attempt}/${this.maxAttempts}` +
-      ` @ $${limitPrice.toFixed(4)} (${fraction === 0 ? 'passive' : fraction === 0.5 ? 'midpoint' : 'cross'})` +
-      ` ${targetShares.toFixed(4)} shares`
+      `[${fmtTs()}] [GTDExec] ${(trade.label || '')} ${side} attempt ${attempt}/${this.maxAttempts}` +
+      ` @ $${limitPrice.toFixed(4)} (${aggrLabel}) ${targetShares.toFixed(4)} shares negRisk=${negRisk} expiresIn=${GTD_EXPIRY_SECONDS}s`
     );
 
     let response: Awaited<ReturnType<ClobV2Client['postGTDOrder']>>;
@@ -170,11 +188,15 @@ export class GTDExecutorV2 implements IExecutor {
         expiresAt,
       });
     } catch (err: any) {
+      console.log(`[${fmtTs()}] [GTDExec] CLOB call threw: ${err.message}`);
       await this.recorder.fail(trade, 'ORDER_FAILED', `GTD submit failed attempt ${attempt}: ${err.message}`, [], submittedAtMs);
       return;
     }
 
+    console.log(`[${fmtTs()}] [GTDExec] response: success=${response.success} orderId=${response.orderID} status=${response.status} errorMsg=${response.errorMsg ?? 'none'}`);
+
     if (!response.success || !response.orderID) {
+      console.log(`[${fmtTs()}] [GTDExec] ORDER_FAILED: ${response.errorMsg} — aborting`);
       await this.recorder.fail(trade, 'ORDER_FAILED', `GTD rejected attempt ${attempt}: ${response.errorMsg}`, [], submittedAtMs);
       return;
     }
@@ -200,9 +222,11 @@ export class GTDExecutorV2 implements IExecutor {
     };
 
     this.tracker.emit('order:submitted', pending);
+    console.log(`[${fmtTs()}] [GTDExec] order registered with FillTracker — waiting for fill or expiry (${GTD_EXPIRY_SECONDS}s)`);
 
     // If matched immediately (status = "matched"), handle as immediate fill
     if (response.status === 'matched') {
+      console.log(`[${fmtTs()}] [GTDExec] MATCHED immediately — recording fill`);
       const filledShares = parseFloat(response.takingAmount ?? '0');
       const filledUsdc   = parseFloat(response.makingAmount ?? '0');
       const attempt_rec: OrderAttempt = {

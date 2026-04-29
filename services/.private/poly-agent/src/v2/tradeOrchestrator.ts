@@ -349,7 +349,7 @@ export class TradeOrchestrator {
 
     const ratio   = (trade.usdcAmount / trader.avgBet).toFixed(1);
     const testTag = this.testMode ? '/TEST' : '';
-    console.log(fmtLine(trade, `×${ratio} avg → copy $${copyBetUsdc.toFixed(2)} [${strategy.toUpperCase()}${testTag}]`, meta));
+    console.log(fmtLine(trade, `×${ratio} avg → copy $${copyBetUsdc.toFixed(2)} [${strategy.toUpperCase()}${testTag}] exchange=${trade.exchange}`, meta));
 
     // Release reservation after DB write (reservation was worst-case)
     try {

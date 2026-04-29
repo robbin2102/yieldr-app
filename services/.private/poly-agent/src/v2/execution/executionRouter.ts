@@ -82,9 +82,9 @@ export class ExecutionRouter {
     if (this.globalStrategy === 'market') return 'market';
     if (this.globalStrategy === 'gtd')    return 'gtd';
 
-    // 4. Auto: NEG_RISK variants → market (fast fill for geopolitical),
-    //          CTF variants      → GTD maker (price discovery)
-    return (exchange === 'NEG_RISK' || exchange === 'NEG_RISK_V2') ? 'market' : 'gtd';
+    // 4. Auto: default to market (FAK) for all — instant fill, no fill-tracker dependency.
+    //    Override to 'gtd' per-token or per-exchange if price improvement needed.
+    return 'market';
   }
 
   async route(trade: RoutedTrade): Promise<void> {
