@@ -100,15 +100,17 @@ export class ClobV2Client {
 
   async postMarketOrder(params: MarketOrderParams): Promise<OrderResponse> {
     const { tokenId, side, amount, price, negRisk, orderType } = params;
+    // CLOB SDK calls /markets-by-token/{tokenId} internally — must be decimal, not hex
+    const tokenIdDec = tokenId.startsWith('0x') ? BigInt(tokenId).toString() : tokenId;
 
     console.log(`[ClobV2] postMarketOrder: ${side} tokenId=${tokenId.slice(0, 14)}... amount=${amount} price=${price} negRisk=${negRisk} type=${orderType}`);
 
-    const tickSize = await this.resolveTickSize(tokenId);
+    const tickSize = await this.resolveTickSize(tokenIdDec);
     console.log(`[ClobV2] tickSize=${tickSize}`);
 
     const orderPromise = this.client.createAndPostMarketOrder(
       {
-        tokenID:   tokenId,
+        tokenID:   tokenIdDec,
         side:      side === 'BUY' ? Side.BUY : Side.SELL,
         amount,
         price,
@@ -128,15 +130,17 @@ export class ClobV2Client {
 
   async postGTDOrder(params: LimitOrderParams): Promise<OrderResponse> {
     const { tokenId, side, price, size, negRisk, expiresAt } = params;
+    // CLOB SDK calls /markets-by-token/{tokenId} internally — must be decimal, not hex
+    const tokenIdDec = tokenId.startsWith('0x') ? BigInt(tokenId).toString() : tokenId;
 
     console.log(`[ClobV2] postGTDOrder: ${side} tokenId=${tokenId.slice(0, 14)}... price=${price} size=${size} negRisk=${negRisk}`);
 
-    const tickSize = await this.resolveTickSize(tokenId);
+    const tickSize = await this.resolveTickSize(tokenIdDec);
     console.log(`[ClobV2] tickSize=${tickSize}`);
 
     const orderPromise = this.client.createAndPostOrder(
       {
-        tokenID:    tokenId,
+        tokenID:    tokenIdDec,
         side:       side === 'BUY' ? Side.BUY : Side.SELL,
         price,
         size,
