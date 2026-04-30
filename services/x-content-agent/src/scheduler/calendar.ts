@@ -93,7 +93,11 @@ async function publishPost(post: GeneratedPost): Promise<void> {
     tweetId = tweetData.id;
     console.log(`[Calendar] Published to X: ${post.category} (${tweetId})${imagePath ? ' [with image]' : ''}`);
   } catch (error: any) {
-    console.error(`[Calendar] X post failed for ${post.category}:`, error.message);
+    const detail = error.data?.detail || error.data?.errors?.[0]?.message || '';
+    console.error(`[Calendar] X post failed for ${post.category}: ${error.message}${detail ? ' — ' + detail : ''}`);
+    if (error.code === 403 || error.message?.includes('403')) {
+      console.error(`[Calendar] 403 likely cause: duplicate content or tweet too long (${post.tweet?.length} chars)`);
+    }
   }
 
   // 2. Post to Telegram channel (photo + caption if image available, else text)

@@ -21,11 +21,7 @@ export function buildTraderAlphaPrompt(
   const catBreakdown = (t.categoryBreakdown || []).slice(0, 5);
   const strengths = (t.strengths || []).slice(0, 3);
 
-  const rotationNote = opts?.rotation
-    ? `(Trader ${opts.rotation}/${opts.totalTraders || 4} in today's series — mention naturally, don't force it)`
-    : '';
-
-  return `Write a post about this Polymarket trader. ${rotationNote}
+  return `Write a post about this Polymarket trader.
 
 ${STYLE_DESCRIPTIONS[style]}
 
