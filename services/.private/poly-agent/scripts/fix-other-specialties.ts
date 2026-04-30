@@ -218,7 +218,7 @@ async function main() {
     const profile: any = profileByWallet.get(wallet);
 
     if (!profile) {
-      noData.push(wallet);
+      noData.push(`${wallet} (profile missing)`);
       continue;
     }
 
@@ -233,20 +233,17 @@ async function main() {
       continue;
     }
 
-    // Collect raw 'Other' market titles for LLM
-    const titles: string[] = (profile.market_titles_summary ?? [])
-      .filter((m: any) => m.category === 'Other')
-      .map((m: any) => m.title as string);
-
-    // Also include titles from non-'Other' categories that are in breakdown but below threshold
-    // — the mix of titles gives LLM more context
+    // For LLM: include all market titles to give the model maximum context
     const allTitles: string[] = (profile.market_titles_summary ?? [])
-      .map((m: any) => m.title as string);
+      .map((m: any) => m.title as string)
+      .filter(Boolean);
 
     if (allTitles.length > 0) {
       needsLLM.push({ wallet, titles: allTitles });
+    } else if (breakdown.length > 0) {
+      noData.push(`${wallet} (breakdown only 'Other', no titles)`);
     } else {
-      noData.push(wallet);
+      noData.push(`${wallet} (profile has no breakdown or titles)`);
     }
   }
 
