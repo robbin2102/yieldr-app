@@ -92,15 +92,40 @@ export class MarketMetaResolver {
     const gammaMarket = await this.fetchGamma(tokenIdDec);
     if (gammaMarket) {
       const meta = this.parseGammaMarket(gammaMarket, tokenIdDec, negRisk);
-      if (meta) return meta;
+      if (meta) {
+        // 2. CLOB lookup by conditionId — authoritative fee_rate_bps.
+        //    Geopolitical/political markets are fee-free (0 bps) → FAK execution.
+        //    Sports/other markets have fees (e.g. 200 bps = 2%) → GTD execution.
+        meta.feeRateBps = await this.fetchFeeRate(meta.conditionId);
+        return meta;
+      }
     }
 
-    // 2. CLOB fallback — only works if we know the conditionId already; left as a probe.
+    // 3. CLOB fallback (Gamma unavailable) — lookup by conditionId not possible without
+    //    Gamma, so this path returns feeRateBps=0 (defaults to FAK, safer than GTD hang).
     const clobMarket = await this.fetchClob(tokenIdDec);
     if (clobMarket) return this.parseClobMarket(clobMarket, tokenIdDec, negRisk);
 
     console.warn(`[MarketMetaResolver] Could not resolve tokenId ${tokenId.slice(0, 18)}... via gamma or clob`);
     return null;
+  }
+
+  // Fetch authoritative fee_rate_bps from CLOB using conditionId.
+  // conditionId lookup (not tokenId) is the correct CLOB markets endpoint usage.
+  private async fetchFeeRate(conditionId: string): Promise<number> {
+    try {
+      const url = `${this.clobApiBase}/markets/${conditionId}`;
+      const res  = await fetch(url, { signal: AbortSignal.timeout(5_000) });
+      if (!res.ok) return 0;
+      const data = await res.json() as any;
+      const m    = data?.data ?? data;
+      const raw  = m?.fee_rate_bps;
+      const bps  = typeof raw === 'number' ? raw : parseInt(raw ?? '0', 10);
+      console.log(`[MarketMetaResolver] fee_rate_bps=${isNaN(bps) ? 0 : bps} for conditionId=${conditionId.slice(0, 14)}...`);
+      return isNaN(bps) ? 0 : bps;
+    } catch {
+      return 0;
+    }
   }
 
   // ── Gamma API (gamma-api.polymarket.com) ──────────────────────────────────────
@@ -159,11 +184,10 @@ export class MarketMetaResolver {
   }
 
   // ── CLOB fallback (clob.polymarket.com) ───────────────────────────────────────
+  // Only reached when Gamma is unavailable. CLOB /markets/{tokenId} is a long-shot —
+  // CLOB indexes by conditionId, not tokenId, but some markets resolve via this path.
 
   private async fetchClob(tokenIdDec: string): Promise<any | null> {
-    // CLOB only supports lookup by condition_id; trying token_id returns the full paginated
-    // market list (ignored param). We attempt /markets/{tokenId} but expect 404 — kept as a
-    // last-resort probe. Validates response by checking tokens[].token_id.
     const url = `${this.clobApiBase}/markets/${tokenIdDec}`;
     try {
       const res = await fetch(url, { signal: AbortSignal.timeout(5_000) });

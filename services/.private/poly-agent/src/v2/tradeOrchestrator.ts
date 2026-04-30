@@ -273,7 +273,7 @@ export class TradeOrchestrator {
     }
 
     // ── 5. Resolve execution strategy ─────────────────────────────────────
-    const strategy = this.router.resolve(trade.tokenId, trade.exchange);
+    const strategy = this.router.resolve(trade.tokenId, trade.exchange, meta);
 
     // ── 6. SELL path ───────────────────────────────────────────────────────
     if (trade.side === 'SELL') {

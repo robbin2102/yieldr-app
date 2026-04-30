@@ -36,7 +36,7 @@ export class GTDExecutorV2 implements IExecutor {
     private readonly safety:    SafetyGuard,
     private readonly recorder:  TradeRecorder,
     private readonly tracker:   EventEmitter,   // FillTrackerV2 events
-    private readonly maxAttempts: number = 3,
+    private readonly maxAttempts: number = 4,
   ) {
     // FillTrackerV2 emits 'order:expired' when a GTD order cancels without filling
     this.tracker.on('order:expired', (pending: PendingOrderV2) => {

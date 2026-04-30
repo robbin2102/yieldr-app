@@ -17,7 +17,7 @@
  * or replaced independently without touching the router.
  */
 
-import { RoutedTrade, ExecutionStrategy } from '../types';
+import { RoutedTrade, ExecutionStrategy, MarketMeta } from '../types';
 
 export type ResolvedStrategy = 'market' | 'gtd';
 
@@ -69,7 +69,7 @@ export class ExecutionRouter {
 
   // ── Routing ────────────────────────────────────────────────────────────────
 
-  resolve(tokenId: string, exchange: RoutedTrade['exchange']): ResolvedStrategy {
+  resolve(tokenId: string, exchange: RoutedTrade['exchange'], meta: MarketMeta): ResolvedStrategy {
     // 1. Per-token
     const tokenOverride = this.tokenOverrides.get(tokenId.toLowerCase());
     if (tokenOverride) return tokenOverride;
@@ -82,9 +82,11 @@ export class ExecutionRouter {
     if (this.globalStrategy === 'market') return 'market';
     if (this.globalStrategy === 'gtd')    return 'gtd';
 
-    // 4. Auto: default to market (FAK) for all — instant fill, no fill-tracker dependency.
-    //    Override to 'gtd' per-token or per-exchange if price improvement needed.
-    return 'market';
+    // 4. Auto: fee-based routing per Polymarket's fee schedule.
+    //    Geopolitical/political markets are fee-free (feeRateBps === 0) → FAK market order
+    //    for instant fill. Sports/other markets carry fees (e.g. 200 bps = 2%) → GTD maker
+    //    for price improvement via passive → midpoint → cross aggression.
+    return meta.feeRateBps === 0 ? 'market' : 'gtd';
   }
 
   async route(trade: RoutedTrade): Promise<void> {

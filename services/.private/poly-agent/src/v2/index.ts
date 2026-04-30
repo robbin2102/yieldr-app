@@ -71,7 +71,7 @@ const cfg: OrchestratorConfig = {
 
   // Execution
   maxMarketAttempts: parseInt(optional('MAX_MARKET_ATTEMPTS', '5')),
-  maxGtdAttempts:    parseInt(optional('MAX_GTD_ATTEMPTS',    '3')),
+  maxGtdAttempts:    parseInt(optional('MAX_GTD_ATTEMPTS',    '4')),
   defaultStrategy:   (optional('EXECUTION_STRATEGY', 'auto')) as ExecutionStrategy,
   detectionOnly:     process.env.DETECTION_ONLY === 'true',
   execExchanges:     process.env.EXEC_EXCHANGES
