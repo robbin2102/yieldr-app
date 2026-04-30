@@ -53,14 +53,14 @@ interface Filters {
   minSortino: string;
   minActPerDay: string;
   maxActPerDay: string;
-  minAgeDays: string;
+  minAgeMonths: string;
 }
 
 const defaultFilters: Filters = {
   qual: 'qualified', conf: 'all', copyOnly: false, specialty: '',
   minWinRate: '', minN: '', minEdge: '', minRoce: '', minPnl: '',
   minPf: '', minDaysWon: '', minSortino: '', minActPerDay: '', maxActPerDay: '',
-  minAgeDays: '',
+  minAgeMonths: '',
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -76,19 +76,17 @@ function fmtLast(days: number | null): string {
   return `${Math.round(days)}d`;
 }
 
-function ageDays(firstActivityAt: string | null): number | null {
+function ageMonths(firstActivityAt: string | null): number | null {
   if (!firstActivityAt) return null;
   const t = new Date(firstActivityAt).getTime();
   if (isNaN(t)) return null;
-  return (Date.now() - t) / 86_400_000;
+  return (Date.now() - t) / (86_400_000 * 30.44);  // avg month length
 }
 
 function fmtAge(firstActivityAt: string | null): string {
-  const d = ageDays(firstActivityAt);
-  if (d == null) return '—';
-  if (d < 30)  return `${Math.round(d)}d`;
-  if (d < 365) return `${Math.round(d)}d`;
-  return `${(d / 365).toFixed(1)}y`;
+  const m = ageMonths(firstActivityAt);
+  if (m == null) return '—';
+  return `${m.toFixed(1)}m`;
 }
 
 function fmtPct(n: number | null, decimals = 1): string {
@@ -142,9 +140,9 @@ function applyFilters(traders: EdgeTrader[], f: Filters): EdgeTrader[] {
     const minS  = num(f.minSortino);   if (minS     != null && (t.sortino   ?? 0) < minS)    return false;
     const minAc = num(f.minActPerDay); if (minAc    != null && (t.actPerDay ?? 0) < minAc)   return false;
     const maxAc = num(f.maxActPerDay); if (maxAc    != null && (t.actPerDay ?? 0) > maxAc)   return false;
-    const minAg = num(f.minAgeDays);
+    const minAg = num(f.minAgeMonths);
     if (minAg != null) {
-      const a = ageDays(t.firstActivityAt);
+      const a = ageMonths(t.firstActivityAt);
       if (a == null || a < minAg) return false;
     }
     return true;
@@ -352,7 +350,7 @@ export default function EdgeTradersPage() {
             <NumInput label="MIN SORTINO" value={filters.minSortino} onChange={v => setFilter('minSortino', v)} placeholder="1.0" />
             <NumInput label="MIN ACT/D" value={filters.minActPerDay} onChange={v => setFilter('minActPerDay', v)} placeholder="5" />
             <NumInput label="MAX ACT/D" value={filters.maxActPerDay} onChange={v => setFilter('maxActPerDay', v)} placeholder="500" />
-            <NumInput label="MIN AGE D" value={filters.minAgeDays}   onChange={v => setFilter('minAgeDays', v)}   placeholder="90" />
+            <NumInput label="MIN AGE M" value={filters.minAgeMonths} onChange={v => setFilter('minAgeMonths', v)} placeholder="3" />
           </div>
         </div>
       )}
