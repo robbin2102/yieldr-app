@@ -25,8 +25,8 @@ function isBotRunning(): boolean {
 
 function startBot(): { success: boolean; message: string } {
   if (isBotRunning()) return { success: false, message: 'Bot is already running' };
-  console.log('[Admin] Starting trading bot...');
-  botProcess = spawn('node', ['src/index.js'], {
+  console.log('[Admin] Starting v2 trading bot...');
+  botProcess = spawn('node', ['dist/src/v2/index.js'], {
     cwd: POLY_AGENT_DIR,
     env: process.env,
     stdio: 'inherit',
@@ -175,6 +175,15 @@ const server = http.createServer(async (req, res) => {
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`[Admin] Service running on port ${PORT}`);
   console.log(`[Admin] Endpoints: /health, /admin/bot-status, /admin/start-bot, /admin/stop-bot, /admin/sell-position, /admin/redeem-all`);
+
+  // Auto-start the v2 bot on container startup unless explicitly disabled.
+  // Set BOT_AUTOSTART=false in env to skip (e.g. for debugging admin endpoints).
+  if (process.env.BOT_AUTOSTART !== 'false') {
+    const result = startBot();
+    console.log(`[Admin] BOT_AUTOSTART: ${result.message}`);
+  } else {
+    console.log('[Admin] BOT_AUTOSTART=false — bot not started automatically');
+  }
 });
 
 process.on('SIGTERM', () => { if (isBotRunning()) botProcess!.kill('SIGTERM'); server.close(); process.exit(0); });
