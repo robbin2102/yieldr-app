@@ -246,6 +246,13 @@ export class TradeOrchestrator {
     const trader = await TraderLoader.get(trade.wallet);
     if (!trader) return;
 
+    // ── 3b. Action gate — only copy CONTINUE / SCALE_UP / SCALE_UP_L2 ─────
+    const COPY_ACTIONS = new Set(['CONTINUE', 'SCALE_UP', 'SCALE_UP_L2']);
+    if (trader.allocAction && !COPY_ACTIONS.has(trader.allocAction)) {
+      console.log(`[Orchestrator] ${trader.label} SKIPPED — action=${trader.allocAction} (not in copy list)`);
+      return;
+    }
+
     // ── 4. Deduplication — MongoDB unique index on txHash ─────────────────
     let tradeDocId: string;
     try {
