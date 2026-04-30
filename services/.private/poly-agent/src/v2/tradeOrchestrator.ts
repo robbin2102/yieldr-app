@@ -225,7 +225,7 @@ export class TradeOrchestrator {
     resolver: MarketMetaResolver,
     recorder: TradeRecorder,
   ): Promise<void> {
-    // ── 0. Skip stale events (backlog replay on reconnect, older than 5min) ─
+    // ── 0. Skip stale events (backlog replay on reconnect, older than 45s) ──
     if (trade.isStale) {
       const ageS = Math.round((Date.now() - trade.blockTimestampMs) / 1000);
       console.log(`[Orchestrator] Stale fill skipped: ${trade.label} ${trade.side} $${trade.usdcAmount.toFixed(0)} age=${ageS}s block=${new Date(trade.blockTimestampMs).toISOString().slice(11, 19)}`);

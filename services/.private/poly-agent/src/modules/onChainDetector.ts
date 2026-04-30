@@ -31,7 +31,7 @@ const ORDER_FILLED_IFACE = new ethers.utils.Interface([
 const TOPIC0 = ORDER_FILLED_IFACE.getEventTopic('OrderFilled');
 
 // Skip events older than this — handles reconnect backlog replay
-const STALE_THRESHOLD_MS = 5 * 60 * 1000;
+const STALE_THRESHOLD_MS = 45 * 1000;
 
 const ALL_EXCHANGE_ADDRESSES = [CTF_V2_EXCHANGE, NEG_RISK_V2_EXCHANGE];
 
