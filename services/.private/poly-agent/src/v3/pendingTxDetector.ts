@@ -15,7 +15,7 @@ import WebSocket from 'ws';
 import { ethers } from 'ethers';
 import { decodeCalldata } from './calldataDecoder';
 import { PendingTrade } from './types';
-import { CopyTrader } from '../../db/models/CopyTrader';
+import { CopyTrader } from '../db/models/CopyTrader';
 
 const EXCHANGES: Record<string, PendingTrade['exchange']> = {
   '0x4bfb41d5b3570defd03c39a9a4d8de6bd8b8982e': 'CTF',
