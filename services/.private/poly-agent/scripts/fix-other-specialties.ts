@@ -51,8 +51,10 @@ for (const e of envLocations) {
 const DRY_RUN  = process.argv.includes('--dry-run');
 const SKIP_LLM = process.argv.includes('--skip-llm');
 
-// Category breakdown: minimum closed positions to trust a non-Other category
-const MIN_TRADES_FOR_BREAKDOWN_SPECIALTY = 5;
+// "Excels at" = highest PnL among profitable non-'Other' categories.
+// We do not impose a min-trade threshold: traders are already pre-filtered
+// at the edge-ranked level (n >= 10), so even a 2-trade category showing
+// strong PnL is signal, not noise.
 
 // LLM provider: 'xai' (Grok) or 'anthropic' (Claude Haiku)
 const LLM_PROVIDER: 'xai' | 'anthropic' = process.env.XAI_API_KEY ? 'xai' : 'anthropic';
@@ -222,10 +224,10 @@ async function main() {
       continue;
     }
 
-    // Find dominant non-'Other' category by total_pnl with enough trades
+    // Pick the most profitable non-'Other' category as their specialty
     const breakdown: any[] = profile.category_breakdown ?? [];
     const nonOther = breakdown
-      .filter(c => c.category !== 'Other' && c.total_pnl > 0 && (c.closed_positions ?? 0) >= MIN_TRADES_FOR_BREAKDOWN_SPECIALTY)
+      .filter(c => c.category !== 'Other' && c.total_pnl > 0)
       .sort((a, b) => b.total_pnl - a.total_pnl);
 
     if (nonOther.length > 0) {
