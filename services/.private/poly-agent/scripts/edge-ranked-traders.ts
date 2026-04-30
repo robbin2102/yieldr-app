@@ -110,6 +110,7 @@ interface Profile {
   insider_score?: number;
   totalActivities?: number;
   periodDays?: number;
+  first_ever_activity_at?: Date | string | null;
   category_breakdown?: Array<{
     category: string;
     win_rate: number;
@@ -199,6 +200,7 @@ async function main() {
     insider: string;
     insider_score: number;
     spc_wr: number | null;
+    first_activity_at: Date | null;
   };
 
   const scored: Scored[] = [];
@@ -277,6 +279,7 @@ async function main() {
       insider:      p.insider_probability ?? 'none',
       insider_score: p.insider_score ?? 0,
       spc_wr:       specialtyWinRate(p),
+      first_activity_at: p.first_ever_activity_at ? new Date(p.first_ever_activity_at) : null,
     });
   }
 

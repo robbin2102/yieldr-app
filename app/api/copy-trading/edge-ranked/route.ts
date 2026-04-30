@@ -53,6 +53,7 @@ export async function GET() {
         insider:       t.insider      ?? 'none',
         insiderScore:  t.insider_score ?? 0,
         spcWr:         t.spc_wr       ?? null,
+        firstActivityAt: t.first_activity_at ?? null,
         updatedAt:     t.updatedAt,
         isNewInRun:         !!isNew,
         qualificationStatus: (t.qualification_status ?? 'qualified') as 'qualified' | 'fallen',

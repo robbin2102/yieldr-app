@@ -26,6 +26,7 @@ interface EdgeTrader {
   insider: string;
   insiderScore: number;
   spcWr: number | null;
+  firstActivityAt: string | null;
   updatedAt: string;
   isNewInRun: boolean;
   qualificationStatus: 'qualified' | 'fallen';
@@ -52,12 +53,14 @@ interface Filters {
   minSortino: string;
   minActPerDay: string;
   maxActPerDay: string;
+  minAgeDays: string;
 }
 
 const defaultFilters: Filters = {
   qual: 'qualified', conf: 'all', copyOnly: false, specialty: '',
   minWinRate: '', minN: '', minEdge: '', minRoce: '', minPnl: '',
   minPf: '', minDaysWon: '', minSortino: '', minActPerDay: '', maxActPerDay: '',
+  minAgeDays: '',
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -71,6 +74,21 @@ function fmtLast(days: number | null): string {
   if (days == null) return '—';
   if (days < 1) return `${Math.max(1, Math.round(days * 24))}h`;
   return `${Math.round(days)}d`;
+}
+
+function ageDays(firstActivityAt: string | null): number | null {
+  if (!firstActivityAt) return null;
+  const t = new Date(firstActivityAt).getTime();
+  if (isNaN(t)) return null;
+  return (Date.now() - t) / 86_400_000;
+}
+
+function fmtAge(firstActivityAt: string | null): string {
+  const d = ageDays(firstActivityAt);
+  if (d == null) return '—';
+  if (d < 30)  return `${Math.round(d)}d`;
+  if (d < 365) return `${Math.round(d)}d`;
+  return `${(d / 365).toFixed(1)}y`;
 }
 
 function fmtPct(n: number | null, decimals = 1): string {
@@ -124,6 +142,11 @@ function applyFilters(traders: EdgeTrader[], f: Filters): EdgeTrader[] {
     const minS  = num(f.minSortino);   if (minS     != null && (t.sortino   ?? 0) < minS)    return false;
     const minAc = num(f.minActPerDay); if (minAc    != null && (t.actPerDay ?? 0) < minAc)   return false;
     const maxAc = num(f.maxActPerDay); if (maxAc    != null && (t.actPerDay ?? 0) > maxAc)   return false;
+    const minAg = num(f.minAgeDays);
+    if (minAg != null) {
+      const a = ageDays(t.firstActivityAt);
+      if (a == null || a < minAg) return false;
+    }
     return true;
   });
 }
@@ -329,6 +352,7 @@ export default function EdgeTradersPage() {
             <NumInput label="MIN SORTINO" value={filters.minSortino} onChange={v => setFilter('minSortino', v)} placeholder="1.0" />
             <NumInput label="MIN ACT/D" value={filters.minActPerDay} onChange={v => setFilter('minActPerDay', v)} placeholder="5" />
             <NumInput label="MAX ACT/D" value={filters.maxActPerDay} onChange={v => setFilter('maxActPerDay', v)} placeholder="500" />
+            <NumInput label="MIN AGE D" value={filters.minAgeDays}   onChange={v => setFilter('minAgeDays', v)}   placeholder="90" />
           </div>
         </div>
       )}
@@ -342,7 +366,7 @@ export default function EdgeTradersPage() {
                 {[
                   'Rank','Wallet','WinRate','ExpWR','n','Edge','P-val','Conf',
                   'ROCE30','PnL30','PF','DaysW%','Sortino','SpcWR%',
-                  'Act/d','Last','Insider','Specialty','Copy','Alloc','Action',
+                  'Act/d','Age','Last','Insider','Specialty','Copy','Alloc','Action',
                 ].map(h => (
                   <th key={h}
                     className="px-2 py-2 text-left text-[10px] text-[#6E6E6E] tracking-wider whitespace-nowrap font-normal">
@@ -354,7 +378,7 @@ export default function EdgeTradersPage() {
             <tbody>
               {displayed.length === 0 && (
                 <tr>
-                  <td colSpan={21} className="px-4 py-6 text-center text-[#6E6E6E] text-xs">
+                  <td colSpan={22} className="px-4 py-6 text-center text-[#6E6E6E] text-xs">
                     No traders match the current filters.
                   </td>
                 </tr>
@@ -445,6 +469,9 @@ export default function EdgeTradersPage() {
                     <td className="px-2 py-1.5 text-[#9E9E9E]">
                       {t.actPerDay != null ? t.actPerDay.toFixed(1) : '—'}
                     </td>
+
+                    {/* Age */}
+                    <td className="px-2 py-1.5 text-[#9E9E9E]">{fmtAge(t.firstActivityAt)}</td>
 
                     {/* Last */}
                     <td className="px-2 py-1.5 text-[#9E9E9E]">{fmtLast(t.lastActive)}</td>
