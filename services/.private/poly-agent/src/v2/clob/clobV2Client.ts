@@ -64,9 +64,11 @@ export { type OrderResponse };
 
 export class ClobV2Client {
   private client: ClobClient;
+  private host:   string;
 
-  private constructor(client: ClobClient) {
+  private constructor(client: ClobClient, host: string) {
     this.client = client;
+    this.host   = host;
   }
 
   static async create(cfg: ClobV2Config): Promise<ClobV2Client> {
@@ -89,11 +91,9 @@ export class ClobV2Client {
       throwOnError: false,
     });
 
-    // Warm up tick sizes — SDK needs them to round order params correctly.
-    // This call fetches from API once; SDK caches internally.
     await client.getOk().catch(() => {});
 
-    return new ClobV2Client(client);
+    return new ClobV2Client(client, cfg.host);
   }
 
   // ── Market orders (FAK / FOK) ─────────────────────────────────────────────
@@ -108,15 +108,16 @@ export class ClobV2Client {
     const tickSize = await this.resolveTickSize(tokenIdDec);
     console.log(`[ClobV2] tickSize=${tickSize}`);
 
+    // orderType is the 3rd param to createAndPostMarketOrder, NOT inside the order object
     const orderPromise = this.client.createAndPostMarketOrder(
       {
-        tokenID:   tokenIdDec,
-        side:      side === 'BUY' ? Side.BUY : Side.SELL,
+        tokenID: tokenIdDec,
+        side:    side === 'BUY' ? Side.BUY : Side.SELL,
         amount,
         price,
-        orderType: orderType === 'FAK' ? OrderType.FAK : OrderType.FOK,
       },
       { tickSize, negRisk },
+      orderType === 'FAK' ? OrderType.FAK : OrderType.FOK,
     );
 
     console.log(`[ClobV2] awaiting createAndPostMarketOrder...`);
@@ -168,17 +169,31 @@ export class ClobV2Client {
 
   // ── Internal ──────────────────────────────────────────────────────────────
 
-  private async resolveTickSize(tokenId: string): Promise<TickSize> {
+  private async resolveTickSize(tokenIdDec: string): Promise<TickSize> {
+    // 1. Try SDK's cached tick size map (keyed by decimal tokenId)
     try {
       const sizes = await withTimeout(
         Promise.resolve(this.client.tickSizes),
-        5_000,
-        'tickSizes',
+        3_000,
+        'tickSizes-cache',
       ) as Record<string, TickSize>;
-      return sizes[tokenId] ?? '0.001';
-    } catch {
-      return '0.001';
-    }
+      if (sizes[tokenIdDec]) return sizes[tokenIdDec];
+    } catch {}
+
+    // 2. Direct lookup via /markets-by-token (same endpoint SDK uses internally)
+    try {
+      const res = await fetch(`${this.host}/markets-by-token/${tokenIdDec}`, {
+        signal: AbortSignal.timeout(5_000),
+      });
+      if (res.ok) {
+        const data = await res.json() as any;
+        const minTick = data?.minimum_tick_size ?? data?.min_tick_size;
+        if (minTick) return String(minTick) as TickSize;
+      }
+    } catch {}
+
+    // 3. Safe fallback — 0.01 is the more common minimum; 0.001 is only for high-volume markets
+    return '0.01';
   }
 }
 
