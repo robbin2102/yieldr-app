@@ -504,12 +504,39 @@ export default function BotDashboard() {
               </td>
               <td className="px-2 py-1.5 whitespace-nowrap">
                 <div className="flex items-center gap-1">
-                  {t.tier !== 'stopped' && (
+                  {t.tier === 'active' && (
                     <button
                       disabled={stopping === t.wallet}
                       onClick={() => patchTrader(t.wallet, 'stop')}
-                      className="px-2 py-0.5 text-[10px] rounded border border-[#FF4757]/30 text-[#FF4757] hover:bg-[#FF4757]/10 transition-colors disabled:opacity-40">
-                      {stopping === t.wallet ? '…' : 'STOP'}
+                      title="Pause copying — keeps trader in list, can be resumed"
+                      className="px-2 py-0.5 text-[10px] rounded border border-[#FFD000]/40 text-[#FFD000] hover:bg-[#FFD000]/10 transition-colors disabled:opacity-40">
+                      {stopping === t.wallet ? '…' : 'PAUSE'}
+                    </button>
+                  )}
+                  {t.tier === 'paused' && (
+                    <button
+                      disabled={stopping === t.wallet}
+                      onClick={() => patchTrader(t.wallet, 'start')}
+                      title="Resume copying"
+                      className="px-2 py-0.5 text-[10px] rounded border border-[#00C805]/40 text-[#00C805] hover:bg-[#00C805]/10 transition-colors disabled:opacity-40">
+                      {stopping === t.wallet ? '…' : 'RESUME'}
+                    </button>
+                  )}
+                  {t.tier !== 'stopped' && (
+                    <button
+                      disabled={stopping === t.wallet}
+                      onClick={() => {
+                        if (confirm(`Remove ${t.label} from copy list? They can be re-added from the Edge Traders page.`)) {
+                          patchTrader(t.wallet, 'remove');
+                        }
+                      }}
+                      title="Remove from copy list"
+                      className="px-1.5 py-0.5 text-[10px] rounded border border-[#FF4757]/30 text-[#FF4757] hover:bg-[#FF4757]/10 transition-colors disabled:opacity-40 flex items-center"
+                      aria-label="Remove">
+                      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="3 6 5 6 21 6"></polyline>
+                        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                      </svg>
                     </button>
                   )}
                   {t.tier === 'stopped' && (
