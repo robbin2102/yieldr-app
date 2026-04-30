@@ -48,9 +48,10 @@ for (const e of envLocations) {
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
-const DRY_RUN  = process.argv.includes('--dry-run');
-const SKIP_LLM = process.argv.includes('--skip-llm');
-const RESET    = process.argv.includes('--reset');
+const DRY_RUN     = process.argv.includes('--dry-run');
+const SKIP_LLM    = process.argv.includes('--skip-llm');
+const RESET       = process.argv.includes('--reset');
+const RE_EVALUATE = process.argv.includes('--re-evaluate');
 
 // "Excels at" = highest PnL among profitable non-'Other' categories.
 // We do not impose a min-trade threshold: traders are already pre-filtered
@@ -188,6 +189,87 @@ async function main() {
 
   const edgeCol    = db.collection('ahf-edgeRankedTraders');
   const profileCol = db.collection('polymarket-traderProfiles');
+
+  // ── Re-evaluate mode: re-check our prior updates against the current rule ───
+  // and write only the diffs. Identifies our prior writes via the strengths
+  // heuristic: original pipeline sets specialty=strengths[0].category, so any
+  // trader where strengths[0].category==='Other' but specialty!=='Other' was
+  // updated by us.
+  if (RE_EVALUATE) {
+    const candidates = await profileCol.find(
+      { 'strengths.0.category': 'Other', specialty: { $ne: 'Other' } },
+      { projection: { wallet: 1, specialty: 1, category_breakdown: 1 } }
+    ).toArray();
+
+    console.log(`Found ${candidates.length} previously-updated traders to re-evaluate\n`);
+
+    const diffs:    Array<{ wallet: string; oldSpecialty: string; newSpecialty: string }> = [];
+    const same:     Array<{ wallet: string; specialty: string }> = [];
+    const dropped:  Array<{ wallet: string; oldSpecialty: string }> = [];
+
+    for (const t of candidates) {
+      const wallet = (t.wallet as string).toLowerCase();
+      const breakdown: any[] = t.category_breakdown ?? [];
+      const nonOther = breakdown
+        .filter(c => c.category !== 'Other' && c.total_pnl > 0)
+        .sort((a, b) => b.total_pnl - a.total_pnl);
+
+      if (nonOther.length === 0) {
+        // Edge case: the new rule produces nothing — would revert to 'Other'
+        dropped.push({ wallet, oldSpecialty: t.specialty });
+        continue;
+      }
+
+      const newSpecialty = nonOther[0].category;
+      if (newSpecialty === t.specialty) same.push({ wallet, specialty: t.specialty });
+      else                              diffs.push({ wallet, oldSpecialty: t.specialty, newSpecialty });
+    }
+
+    console.log(`  Unchanged (rules agree):  ${same.length}`);
+    console.log(`  Diff (new rule changes):  ${diffs.length}`);
+    console.log(`  Drop to 'Other':          ${dropped.length}\n`);
+
+    if (diffs.length > 0) {
+      console.log('Diffs:');
+      for (const d of diffs)
+        console.log(`  ${d.wallet.slice(0, 10)}...  ${d.oldSpecialty.padEnd(15)} → ${d.newSpecialty}`);
+    }
+    if (dropped.length > 0) {
+      console.log('\nDropped to Other (no profitable non-Other category):');
+      for (const d of dropped)
+        console.log(`  ${d.wallet.slice(0, 10)}...  was: ${d.oldSpecialty}`);
+    }
+
+    if (DRY_RUN) {
+      console.log('\nDRY RUN — no writes.');
+    } else {
+      const ops = [
+        ...diffs.map(d => ({
+          updateOne: { filter: { wallet: d.wallet }, update: { $set: { specialty: d.newSpecialty } } },
+        })),
+        ...dropped.map(d => ({
+          updateOne: { filter: { wallet: d.wallet }, update: { $set: { specialty: 'Other' } } },
+        })),
+      ];
+
+      if (ops.length === 0) {
+        console.log('\nNo writes needed — all 337 already match the new rule.');
+      } else {
+        process.stdout.write(`\nWriting ${ops.length} updates... `);
+        const tw = Date.now();
+        const [er, pr] = await Promise.all([
+          edgeCol.bulkWrite(ops, { ordered: false }),
+          profileCol.bulkWrite(ops, { ordered: false }),
+        ]);
+        console.log(`done in ${((Date.now()-tw)/1000).toFixed(1)}s`);
+        console.log(`  ahf-edgeRankedTraders:        ${er.modifiedCount} modified`);
+        console.log(`  polymarket-traderProfiles:    ${pr.modifiedCount} modified`);
+      }
+    }
+
+    await mongoClient.close();
+    return;
+  }
 
   // ── Reset mode: undo our prior updates so we can re-run with new rule ───────
   // Heuristic: original pipeline sets specialty = strengths[0].category.
