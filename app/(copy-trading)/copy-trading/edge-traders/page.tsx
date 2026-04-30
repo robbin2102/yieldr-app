@@ -28,6 +28,7 @@ interface EdgeTrader {
   spcWr: number | null;
   updatedAt: string;
   isNewInRun: boolean;
+  qualificationStatus: 'qualified' | 'fallen';
 
   isCopying: boolean;
   allocationUsdc: number;
@@ -35,6 +36,29 @@ interface EdgeTrader {
   allocAction: string;
   allocReason: string;
 }
+
+interface Filters {
+  qual: 'qualified' | 'all' | 'fallen';
+  conf: 'all' | 'confirmed' | 'likely';
+  copyOnly: boolean;
+  specialty: string;
+  minWinRate: string;
+  minN: string;
+  minEdge: string;
+  minRoce: string;
+  minPnl: string;
+  minPf: string;
+  minDaysWon: string;
+  minSortino: string;
+  minActPerDay: string;
+  maxActPerDay: string;
+}
+
+const defaultFilters: Filters = {
+  qual: 'qualified', conf: 'all', copyOnly: false, specialty: '',
+  minWinRate: '', minN: '', minEdge: '', minRoce: '', minPnl: '',
+  minPf: '', minDaysWon: '', minSortino: '', minActPerDay: '', maxActPerDay: '',
+};
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -76,15 +100,62 @@ function fmt$(n: number): string {
   return `$${n.toFixed(0)}`;
 }
 
+function num(s: string): number | null {
+  const v = parseFloat(s);
+  return isNaN(v) ? null : v;
+}
+
+function applyFilters(traders: EdgeTrader[], f: Filters): EdgeTrader[] {
+  return traders.filter(t => {
+    if (f.qual !== 'all' && t.qualificationStatus !== f.qual) return false;
+    if (f.copyOnly && !t.isCopying) return false;
+    if (f.conf !== 'all') {
+      if (f.conf === 'confirmed' && t.confidence !== 'confirmed') return false;
+      if (f.conf === 'likely'    && t.confidence !== 'likely')    return false;
+    }
+    if (f.specialty && t.specialty !== f.specialty) return false;
+    const minWR = num(f.minWinRate);   if (minWR    != null && t.winRate    < minWR)    return false;
+    const minN  = num(f.minN);         if (minN     != null && t.n          < minN)     return false;
+    const minE  = num(f.minEdge);      if (minE     != null && t.edge       < minE)     return false;
+    const minR  = num(f.minRoce);      if (minR     != null && t.roce30d    < minR)     return false;
+    const minP  = num(f.minPnl);       if (minP     != null && t.pnl30d     < minP)     return false;
+    const minPf = num(f.minPf);        if (minPf    != null && t.pf         < minPf)    return false;
+    const minDW = num(f.minDaysWon);   if (minDW    != null && (t.daysWonRate ?? 0) < minDW) return false;
+    const minS  = num(f.minSortino);   if (minS     != null && (t.sortino   ?? 0) < minS)    return false;
+    const minAc = num(f.minActPerDay); if (minAc    != null && (t.actPerDay ?? 0) < minAc)   return false;
+    const maxAc = num(f.maxActPerDay); if (maxAc    != null && (t.actPerDay ?? 0) > maxAc)   return false;
+    return true;
+  });
+}
+
+// ── NumInput helper ───────────────────────────────────────────────────────────
+
+function NumInput({ label, value, onChange, placeholder }: {
+  label: string; value: string; onChange: (v: string) => void; placeholder?: string;
+}) {
+  return (
+    <label className="flex flex-col gap-0.5">
+      <span className="text-[9px] text-[#6E6E6E] tracking-wider">{label}</span>
+      <input
+        type="number"
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        placeholder={placeholder ?? '—'}
+        className="w-16 px-1.5 py-0.5 text-[10px] bg-[#111] border border-[#1A1A1A] rounded text-[#9E9E9E] placeholder-[#333] focus:outline-none focus:border-[#333]"
+      />
+    </label>
+  );
+}
+
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export default function EdgeTradersPage() {
-  const [traders, setTraders] = useState<EdgeTrader[]>([]);
+  const [traders, setTraders]         = useState<EdgeTrader[]>([]);
   const [pipelineRunAt, setPipelineRunAt] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [toggling, setToggling] = useState<string | null>(null);
-  const [filter, setFilter] = useState<'all' | 'confirmed' | 'likely'>('all');
-  const [showCopyOnly, setShowCopyOnly] = useState(false);
+  const [loading, setLoading]         = useState(true);
+  const [toggling, setToggling]       = useState<string | null>(null);
+  const [filters, setFilters]         = useState<Filters>(defaultFilters);
+  const [showFilters, setShowFilters] = useState(false);
 
   async function fetchTraders() {
     try {
@@ -94,11 +165,8 @@ export default function EdgeTradersPage() {
         setTraders(data.traders);
         setPipelineRunAt(data.pipelineRunAt);
       }
-    } catch (e) {
-      console.error('fetch error', e);
-    } finally {
-      setLoading(false);
-    }
+    } catch (e) { console.error('fetch error', e); }
+    finally { setLoading(false); }
   }
 
   useEffect(() => {
@@ -110,10 +178,11 @@ export default function EdgeTradersPage() {
   async function toggleCopy(wallet: string, currentlyActive: boolean) {
     setToggling(wallet);
     try {
+      const action = currentlyActive ? 'remove' : 'start';
       const res = await fetch('/api/copy-trading/edge-ranked', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ wallet, action: currentlyActive ? 'stop' : 'start' }),
+        body: JSON.stringify({ wallet, action }),
       });
       const data = await res.json();
       if (data.success) {
@@ -121,21 +190,23 @@ export default function EdgeTradersPage() {
           t.wallet === wallet ? { ...t, isCopying: !currentlyActive } : t
         ));
       }
-    } catch (e) {
-      console.error('toggle error', e);
-    } finally {
-      setToggling(null);
-    }
+    } catch (e) { console.error('toggle error', e); }
+    finally { setToggling(null); }
   }
 
-  const newCount = traders.filter(t => t.isNewInRun).length;
+  function setFilter<K extends keyof Filters>(k: K, v: Filters[K]) {
+    setFilters(prev => ({ ...prev, [k]: v }));
+  }
 
-  const displayed = traders.filter(t => {
-    if (showCopyOnly && !t.isCopying) return false;
-    if (filter === 'confirmed' && t.confidence !== 'confirmed') return false;
-    if (filter === 'likely' && t.confidence !== 'likely') return false;
-    return true;
-  });
+  const specialties = [...new Set(traders.map(t => t.specialty))].filter(Boolean).sort();
+  const newCount    = traders.filter(t => t.isNewInRun).length;
+  const qualCount   = traders.filter(t => t.qualificationStatus === 'qualified').length;
+  const fallenCount = traders.filter(t => t.qualificationStatus === 'fallen').length;
+  const displayed   = applyFilters(traders, filters);
+
+  const hasActiveFilters = Object.entries(filters).some(([k, v]) =>
+    k !== 'qual' && k !== 'conf' && k !== 'copyOnly' && v !== '' && v !== defaultFilters[k as keyof Filters]
+  );
 
   if (loading) {
     return (
@@ -146,7 +217,7 @@ export default function EdgeTradersPage() {
   }
 
   return (
-    <div className="space-y-4 font-mono">
+    <div className="space-y-3 font-mono">
 
       {/* ── Pipeline banner ── */}
       {newCount > 0 && (
@@ -161,34 +232,106 @@ export default function EdgeTradersPage() {
         </div>
       )}
 
-      {/* ── Controls ── */}
-      <div className="flex items-center gap-3">
-        <span className="text-[10px] text-[#6E6E6E] tracking-widest">FILTER</span>
-        {(['all', 'confirmed', 'likely'] as const).map(f => (
-          <button
-            key={f}
-            onClick={() => setFilter(f)}
-            className={`px-3 py-1 text-xs rounded transition-colors ${
-              filter === f
-                ? 'bg-[#00C805]/10 text-[#00C805] border border-[#00C805]/30'
-                : 'text-[#6E6E6E] border border-[#1A1A1A] hover:text-[#9E9E9E]'
-            }`}>
-            {f.toUpperCase()}
-          </button>
-        ))}
-        <button
-          onClick={() => setShowCopyOnly(v => !v)}
-          className={`px-3 py-1 text-xs rounded transition-colors ${
-            showCopyOnly
-              ? 'bg-[#00C805]/10 text-[#00C805] border border-[#00C805]/30'
-              : 'text-[#6E6E6E] border border-[#1A1A1A] hover:text-[#9E9E9E]'
+      {/* ── Controls row ── */}
+      <div className="flex flex-wrap items-center gap-2">
+
+        {/* Qualification toggle */}
+        <div className="flex items-center gap-1 border border-[#1A1A1A] rounded p-0.5">
+          {([
+            ['qualified', `QUALIFIED (${qualCount})`],
+            ['all',       `ALL (${traders.length})`],
+            ['fallen',    `FALLEN (${fallenCount})`],
+          ] as const).map(([k, label]) => (
+            <button key={k} onClick={() => setFilter('qual', k)}
+              className={`px-2 py-0.5 text-[10px] rounded transition-colors ${
+                filters.qual === k
+                  ? k === 'fallen'
+                    ? 'bg-[#FF4757]/15 text-[#FF4757]'
+                    : 'bg-[#00C805]/10 text-[#00C805]'
+                  : 'text-[#6E6E6E] hover:text-[#9E9E9E]'
+              }`}>
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {/* Confidence toggle */}
+        <div className="flex items-center gap-1 border border-[#1A1A1A] rounded p-0.5">
+          {(['all', 'confirmed', 'likely'] as const).map(f => (
+            <button key={f} onClick={() => setFilter('conf', f)}
+              className={`px-2 py-0.5 text-[10px] rounded transition-colors ${
+                filters.conf === f
+                  ? 'bg-[#00C805]/10 text-[#00C805]'
+                  : 'text-[#6E6E6E] hover:text-[#9E9E9E]'
+              }`}>
+              {f === 'all' ? 'ALL' : f === 'confirmed' ? 'CONF' : 'LIKE'}
+            </button>
+          ))}
+        </div>
+
+        {/* Copying only */}
+        <button onClick={() => setFilter('copyOnly', !filters.copyOnly)}
+          className={`px-2 py-1 text-[10px] rounded border transition-colors ${
+            filters.copyOnly
+              ? 'bg-[#00C805]/10 text-[#00C805] border-[#00C805]/30'
+              : 'text-[#6E6E6E] border-[#1A1A1A] hover:text-[#9E9E9E]'
           }`}>
           COPYING ONLY
         </button>
+
+        {/* Filter expand */}
+        <button onClick={() => setShowFilters(v => !v)}
+          className={`px-2 py-1 text-[10px] rounded border transition-colors ${
+            showFilters || hasActiveFilters
+              ? 'bg-[#FFD000]/10 text-[#FFD000] border-[#FFD000]/30'
+              : 'text-[#6E6E6E] border-[#1A1A1A] hover:text-[#9E9E9E]'
+          }`}>
+          FILTERS {showFilters ? '▲' : '▼'}
+        </button>
+
+        {hasActiveFilters && (
+          <button onClick={() => setFilters(prev => ({
+            ...defaultFilters, qual: prev.qual, conf: prev.conf, copyOnly: prev.copyOnly,
+          }))}
+            className="px-2 py-1 text-[10px] text-[#6E6E6E] hover:text-[#FF4757] transition-colors">
+            RESET
+          </button>
+        )}
+
         <span className="ml-auto text-[10px] text-[#6E6E6E]">
           {displayed.length}/{traders.length} traders
         </span>
       </div>
+
+      {/* ── Expanded numeric filters ── */}
+      {showFilters && (
+        <div className="bg-[#0A0A0A] border border-[#1A1A1A] rounded px-4 py-3">
+          <div className="flex flex-wrap gap-4 items-end">
+            {/* Specialty */}
+            <label className="flex flex-col gap-0.5">
+              <span className="text-[9px] text-[#6E6E6E] tracking-wider">SPECIALTY</span>
+              <select
+                value={filters.specialty}
+                onChange={e => setFilter('specialty', e.target.value)}
+                className="px-1.5 py-0.5 text-[10px] bg-[#111] border border-[#1A1A1A] rounded text-[#9E9E9E] focus:outline-none focus:border-[#333]">
+                <option value="">All</option>
+                {specialties.map(s => <option key={s} value={s}>{s}</option>)}
+              </select>
+            </label>
+
+            <NumInput label="MIN WIN%" value={filters.minWinRate} onChange={v => setFilter('minWinRate', v)} placeholder="50" />
+            <NumInput label="MIN N"    value={filters.minN}       onChange={v => setFilter('minN', v)}       placeholder="20" />
+            <NumInput label="MIN EDGE" value={filters.minEdge}    onChange={v => setFilter('minEdge', v)}    placeholder="0.15" />
+            <NumInput label="MIN ROCE30%" value={filters.minRoce} onChange={v => setFilter('minRoce', v)}    placeholder="50" />
+            <NumInput label="MIN PNL30$"  value={filters.minPnl}  onChange={v => setFilter('minPnl', v)}     placeholder="1000" />
+            <NumInput label="MIN PF"   value={filters.minPf}      onChange={v => setFilter('minPf', v)}      placeholder="1.05" />
+            <NumInput label="MIN DAYSW%" value={filters.minDaysWon} onChange={v => setFilter('minDaysWon', v)} placeholder="60" />
+            <NumInput label="MIN SORTINO" value={filters.minSortino} onChange={v => setFilter('minSortino', v)} placeholder="1.0" />
+            <NumInput label="MIN ACT/D" value={filters.minActPerDay} onChange={v => setFilter('minActPerDay', v)} placeholder="5" />
+            <NumInput label="MAX ACT/D" value={filters.maxActPerDay} onChange={v => setFilter('maxActPerDay', v)} placeholder="500" />
+          </div>
+        </div>
+      )}
 
       {/* ── Table ── */}
       <div className="bg-[#0A0A0A] border border-[#1A1A1A] rounded overflow-hidden">
@@ -212,17 +355,18 @@ export default function EdgeTradersPage() {
               {displayed.length === 0 && (
                 <tr>
                   <td colSpan={21} className="px-4 py-6 text-center text-[#6E6E6E] text-xs">
-                    No edge-ranked traders found. Run the pipeline to populate data.
+                    No traders match the current filters.
                   </td>
                 </tr>
               )}
               {displayed.map(t => {
-                const conf = confidenceBadge(t.confidence);
+                const conf  = confidenceBadge(t.confidence);
                 const isBusy = toggling === t.wallet;
+                const isFallen = t.qualificationStatus === 'fallen';
                 return (
                   <tr key={t.wallet}
                     className={`border-b border-[#0F0F0F] hover:bg-[#111] transition-colors ${
-                      t.isNewInRun ? 'bg-[#00C805]/5' : ''
+                      t.isNewInRun ? 'bg-[#00C805]/5' : isFallen ? 'opacity-60' : ''
                     }`}>
 
                     {/* Rank */}
@@ -233,6 +377,9 @@ export default function EdgeTradersPage() {
                       <div className="flex items-center gap-1">
                         {t.isNewInRun && (
                           <span className="text-[8px] text-[#00C805] font-bold">NEW</span>
+                        )}
+                        {isFallen && (
+                          <span className="text-[8px] text-[#FF4757] font-bold">▼</span>
                         )}
                         <span className="text-[#9E9E9E] font-mono text-[10px]">
                           {t.displayName
@@ -246,9 +393,7 @@ export default function EdgeTradersPage() {
                     <td className="px-2 py-1.5 text-[#00C805]">{fmtPct(t.winRate)}</td>
 
                     {/* ExpWR */}
-                    <td className="px-2 py-1.5 text-[#6E6E6E]">
-                      {fmtPct(t.expectedWR * 100)}
-                    </td>
+                    <td className="px-2 py-1.5 text-[#6E6E6E]">{fmtPct(t.expectedWR * 100)}</td>
 
                     {/* n */}
                     <td className="px-2 py-1.5 text-[#9E9E9E]">{t.n}</td>
@@ -339,11 +484,10 @@ export default function EdgeTradersPage() {
 
                     {/* Action */}
                     <td className="px-2 py-1.5">
-                      {t.allocAction ? (
-                        <span className="text-[10px] text-[#9E9E9E]">{t.allocAction}</span>
-                      ) : '—'}
+                      {t.allocAction
+                        ? <span className="text-[10px] text-[#9E9E9E]">{t.allocAction}</span>
+                        : '—'}
                     </td>
-
                   </tr>
                 );
               })}

@@ -54,7 +54,8 @@ export async function GET() {
         insiderScore:  t.insider_score ?? 0,
         spcWr:         t.spc_wr       ?? null,
         updatedAt:     t.updatedAt,
-        isNewInRun:    !!isNew,
+        isNewInRun:         !!isNew,
+        qualificationStatus: (t.qualification_status ?? 'qualified') as 'qualified' | 'fallen',
 
         // Copy state
         isCopying:      !!ct?.active,

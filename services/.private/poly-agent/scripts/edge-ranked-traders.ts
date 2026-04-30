@@ -403,7 +403,7 @@ async function main() {
   const ops  = displayPool.map((t, i) => ({
     updateOne: {
       filter: { wallet: t.wallet },
-      update: { $set: { ...t, overall_rank: i + 1, updatedAt: now } },
+      update: { $set: { ...t, overall_rank: i + 1, updatedAt: now, qualification_status: (t.pnl_30d > 0 && t.roce_30d > 0) ? 'qualified' : 'fallen' } },
       upsert: true,
     },
   }));
