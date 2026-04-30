@@ -199,12 +199,23 @@ async function main() {
   // 2. Step 1: infer from category_breakdown
   process.stdout.write('Step 1: inferring from category_breakdown...\n');
 
+  // Batch-fetch all profiles in one round trip (was 428 sequential findOnes)
+  const wallets = others.map(t => (t.wallet as string).toLowerCase());
+  process.stdout.write(`  Fetching ${wallets.length} profiles in one query... `);
+  const t0 = Date.now();
+  const profiles = await profileCol.find(
+    { wallet: { $in: wallets } },
+    { projection: { wallet: 1, category_breakdown: 1, market_titles_summary: 1 } }
+  ).toArray();
+  console.log(`${profiles.length} found in ${((Date.now()-t0)/1000).toFixed(1)}s`);
+
+  const profileByWallet = new Map<string, any>(
+    profiles.map((p: any) => [(p.wallet as string).toLowerCase(), p])
+  );
+
   for (const trader of others) {
     const wallet = (trader.wallet as string).toLowerCase();
-    const profile: any = await profileCol.findOne(
-      { wallet },
-      { projection: { category_breakdown: 1, market_titles_summary: 1 } }
-    );
+    const profile: any = profileByWallet.get(wallet);
 
     if (!profile) {
       noData.push(wallet);
@@ -299,19 +310,21 @@ async function main() {
   console.log(`\nSources: ${bySource.breakdown} from breakdown, ${bySource.llm ?? 0} from LLM`);
 
   if (!DRY_RUN) {
-    let written = 0;
-    for (const u of resolved) {
-      await edgeCol.updateOne(
-        { wallet: u.wallet },
-        { $set: { specialty: u.specialty } }
-      );
-      await profileCol.updateOne(
-        { wallet: u.wallet },
-        { $set: { specialty: u.specialty } }
-      );
-      written++;
-    }
-    console.log(`\nWrote ${written} updates to ahf-edgeRankedTraders + polymarket-traderProfiles.`);
+    process.stdout.write('\nWriting updates via bulkWrite... ');
+    const tw = Date.now();
+    const ops = resolved.map(u => ({
+      updateOne: {
+        filter: { wallet: u.wallet },
+        update: { $set: { specialty: u.specialty } },
+      },
+    }));
+    const [edgeRes, profileRes] = await Promise.all([
+      edgeCol.bulkWrite(ops, { ordered: false }),
+      profileCol.bulkWrite(ops, { ordered: false }),
+    ]);
+    console.log(`done in ${((Date.now()-tw)/1000).toFixed(1)}s`);
+    console.log(`  ahf-edgeRankedTraders:        ${edgeRes.modifiedCount} modified`);
+    console.log(`  polymarket-traderProfiles:    ${profileRes.modifiedCount} modified`);
   }
 
   if (noData.length > 0) {
