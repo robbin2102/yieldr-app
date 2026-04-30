@@ -122,7 +122,13 @@ export class ClobV2Client {
 
     console.log(`[ClobV2] awaiting createAndPostMarketOrder...`);
     const response = await withTimeout(orderPromise, 20_000, 'createAndPostMarketOrder');
-    console.log(`[ClobV2] response: success=${(response as any).success} orderId=${(response as any).orderID?.slice(0, 10)}... status=${(response as any).status} errorMsg=${(response as any).errorMsg ?? '-'}`);
+
+    // SDK with throwOnError:false returns the raw Axios error on 400 — pull the
+    // CLOB error message out of response.data.error so callers can read it.
+    const errDetail = (response as any).data?.error ?? (response as any).error ?? response.errorMsg;
+    if (errDetail) (response as any).errorMsg = errDetail;
+
+    console.log(`[ClobV2] response: success=${(response as any).success} orderId=${(response as any).orderID?.slice(0, 10)}... status=${(response as any).status ?? (response as any).data?.status} errorMsg=${errDetail ?? 'none'}`);
 
     return response as OrderResponse;
   }
@@ -153,7 +159,11 @@ export class ClobV2Client {
 
     console.log(`[ClobV2] awaiting createAndPostOrder...`);
     const response = await withTimeout(orderPromise, 20_000, 'createAndPostOrder');
-    console.log(`[ClobV2] response: success=${(response as any).success} orderId=${(response as any).orderID?.slice(0, 10)}... status=${(response as any).status} errorMsg=${(response as any).errorMsg ?? '-'}`);
+
+    const errDetail = (response as any).data?.error ?? (response as any).error ?? response.errorMsg;
+    if (errDetail) (response as any).errorMsg = errDetail;
+
+    console.log(`[ClobV2] response: success=${(response as any).success} orderId=${(response as any).orderID?.slice(0, 10)}... status=${(response as any).status ?? (response as any).data?.status} errorMsg=${errDetail ?? 'none'}`);
 
     return response as OrderResponse;
   }

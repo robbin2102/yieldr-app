@@ -66,7 +66,7 @@ const cfg: OrchestratorConfig = {
   wssUserUrl: process.env.WSS_USER || optional('CLOB_WSS_USER_URL', 'wss://ws-subscriptions-clob.polymarket.com/ws/user'),
 
   // Safety
-  maxDriftPct:  parseFloat(optional('MAX_DRIFT_PCT',  '0.05')),
+  maxDriftPct:  parseFloat(optional('MAX_DRIFT_PCT',  '0.03')),
   maxSpreadPct: parseFloat(optional('MAX_SPREAD_PCT', '0.10')),
 
   // Execution

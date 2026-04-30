@@ -116,8 +116,24 @@ export class MarketOrderExecutor implements IExecutor {
       }
 
       if (!response.success || !response.orderID) {
-        console.log(`[${fmtTs()}] [MarketExec] ORDER_FAILED: ${response.errorMsg}`);
-        await this.recorder.fail(trade, 'ORDER_FAILED', `attempt ${attempt}: ${response.errorMsg}`, attempts, startMs);
+        const errMsg = response.errorMsg ?? 'unknown';
+
+        // "no orders found" = FAK matched nothing (thin book) — 0 fill, retry
+        if (errMsg.includes('no orders found')) {
+          console.log(`[${fmtTs()}] [MarketExec] attempt ${attempt}: NO_MATCH (thin book) — will retry`);
+          if (attempt < this.maxAttempts) { await sleep(RETRY_DELAY_MS); }
+          continue;
+        }
+
+        // Insufficient balance — no point retrying
+        if (errMsg.includes('not enough balance') || errMsg.includes('allowance')) {
+          console.log(`[${fmtTs()}] [MarketExec] INSUFFICIENT_BALANCE: ${errMsg}`);
+          await this.recorder.fail(trade, 'ORDER_FAILED', `INSUFFICIENT_BALANCE: ${errMsg}`, attempts, startMs);
+          return;
+        }
+
+        console.log(`[${fmtTs()}] [MarketExec] ORDER_FAILED: ${errMsg}`);
+        await this.recorder.fail(trade, 'ORDER_FAILED', `attempt ${attempt}: ${errMsg}`, attempts, startMs);
         return;
       }
 
