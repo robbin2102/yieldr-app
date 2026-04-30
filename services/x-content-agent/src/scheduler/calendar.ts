@@ -74,12 +74,13 @@ async function publishPost(post: GeneratedPost): Promise<void> {
   let tweetId: string | null = null;
   let tgMessageId: number | null = null;
 
-  // Resolve category image
+  // Resolve category image — used for all TG posts, but X only gets images on vault posts
   const isVaultLoss = post.category === 'VAULT_PERFORMANCE'
     && !!post.tweet && /rough|loss|down|smoked|negative|red/i.test(post.tweet);
   const imagePath = getCategoryImage(post.category, isVaultLoss);
+  const useImageOnX = imagePath && post.category === 'VAULT_PERFORMANCE';
 
-  // 1. Post to X (with image if available)
+  // 1. Post to X (image only on vault posts)
   try {
     const tweetText = post.tweet;
     let tweetData;
@@ -87,11 +88,11 @@ async function publishPost(post: GeneratedPost): Promise<void> {
     if (post.type === 'quote' && post.target_post_id) {
       tweetData = await quoteTweet(tweetText, post.target_post_id);
     } else {
-      tweetData = await postTweet(tweetText, imagePath || undefined);
+      tweetData = await postTweet(tweetText, useImageOnX ? imagePath : undefined);
     }
 
     tweetId = tweetData.id;
-    console.log(`[Calendar] Published to X: ${post.category} (${tweetId})${imagePath ? ' [with image]' : ''}`);
+    console.log(`[Calendar] Published to X: ${post.category} (${tweetId})${useImageOnX ? ' [with image]' : ''}`);
   } catch (error: any) {
     const detail = error.data?.detail || error.data?.errors?.[0]?.message || '';
     console.error(`[Calendar] X post failed for ${post.category}: ${error.message}${detail ? ' — ' + detail : ''}`);
