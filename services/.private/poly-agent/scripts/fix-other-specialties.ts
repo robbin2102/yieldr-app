@@ -50,6 +50,7 @@ for (const e of envLocations) {
 
 const DRY_RUN  = process.argv.includes('--dry-run');
 const SKIP_LLM = process.argv.includes('--skip-llm');
+const RESET    = process.argv.includes('--reset');
 
 // "Excels at" = highest PnL among profitable non-'Other' categories.
 // We do not impose a min-trade threshold: traders are already pre-filtered
@@ -187,6 +188,42 @@ async function main() {
 
   const edgeCol    = db.collection('ahf-edgeRankedTraders');
   const profileCol = db.collection('polymarket-traderProfiles');
+
+  // ── Reset mode: undo our prior updates so we can re-run with new rule ───────
+  // Heuristic: original pipeline sets specialty = strengths[0].category.
+  // The traders we updated had strengths[0].category === 'Other' but we changed
+  // their specialty to a non-'Other' value. We didn't touch strengths.
+  if (RESET) {
+    const mistagged = await profileCol.find(
+      { 'strengths.0.category': 'Other', specialty: { $ne: 'Other' } },
+      { projection: { wallet: 1, specialty: 1 } }
+    ).toArray();
+
+    console.log(`Found ${mistagged.length} traders to reset to 'Other':`);
+    for (const t of mistagged.slice(0, 20))
+      console.log(`  ${t.wallet}  (was: ${t.specialty})`);
+    if (mistagged.length > 20) console.log(`  … and ${mistagged.length - 20} more`);
+
+    if (DRY_RUN) {
+      console.log('\nDRY RUN — no writes.');
+    } else if (mistagged.length > 0) {
+      const resetWallets = mistagged.map(t => (t.wallet as string).toLowerCase());
+      const ops = resetWallets.map(w => ({
+        updateOne: { filter: { wallet: w }, update: { $set: { specialty: 'Other' } } },
+      }));
+      const [er, pr] = await Promise.all([
+        edgeCol.bulkWrite(ops, { ordered: false }),
+        profileCol.bulkWrite(ops, { ordered: false }),
+      ]);
+      console.log(`\nReset complete:`);
+      console.log(`  ahf-edgeRankedTraders:        ${er.modifiedCount} → 'Other'`);
+      console.log(`  polymarket-traderProfiles:    ${pr.modifiedCount} → 'Other'`);
+      console.log(`\nNow re-run:  npx tsx scripts/fix-other-specialties.ts --skip-llm`);
+    }
+
+    await mongoClient.close();
+    return;
+  }
 
   // 1. Fetch all edge traders with specialty='Other'
   const others = await edgeCol.find({ specialty: 'Other' }).toArray();
