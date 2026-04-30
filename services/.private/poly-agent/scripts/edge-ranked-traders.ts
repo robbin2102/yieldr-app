@@ -26,6 +26,12 @@ import { MongoClient } from 'mongodb';
 
 // ── Env ───────────────────────────────────────────────────────────────────────
 const envLocations = [
+  // __dirname-based: works from any cwd (script lives at <root>/scripts/)
+  path.resolve(__dirname, '../env.polyagent'),
+  path.resolve(__dirname, '../.env.polyagent'),
+  path.resolve(__dirname, '../.env.local'),
+  path.resolve(__dirname, '../.env'),
+  // cwd-based fallbacks (run from repo root)
   path.resolve(process.cwd(), '.env.local'),
   path.resolve(process.cwd(), '.env'),
   path.resolve(process.cwd(), 'services/.private/poly-agent/env.polyagent'),
