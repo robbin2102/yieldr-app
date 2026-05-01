@@ -26,7 +26,7 @@ function isBotRunning(): boolean {
 function startBot(): { success: boolean; message: string } {
   if (isBotRunning()) return { success: false, message: 'Bot is already running' };
   console.log('[Admin] Starting v2 trading bot...');
-  botProcess = spawn('node', ['dist/src/v2/index.js'], {
+  botProcess = spawn('node', ['src/v2/index.js'], {
     cwd: POLY_AGENT_DIR,
     env: process.env,
     stdio: 'inherit',
