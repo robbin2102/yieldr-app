@@ -3,7 +3,11 @@ from pydantic import Field
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=(".env", "../../.env.local"),  # falls back to root .env.local if present
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
     # MongoDB
     mongo_uri: str = Field(default="mongodb://localhost:27017", alias="MONGO_URI")
