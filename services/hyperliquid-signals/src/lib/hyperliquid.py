@@ -8,7 +8,7 @@ LEADERBOARD_URL = "https://stats-data.hyperliquid.xyz/Mainnet/leaderboard"
 INFO_URL = "https://api.hyperliquid.xyz/info"
 
 # The leaderboard payload is ~2MB — give it plenty of time
-_LEADERBOARD_TIMEOUT = aiohttp.ClientTimeout(total=120, connect=15)
+_LEADERBOARD_TIMEOUT = aiohttp.ClientTimeout(total=300, connect=15, sock_read=300)
 _POSITION_TIMEOUT = aiohttp.ClientTimeout(total=20, connect=10)
 
 
