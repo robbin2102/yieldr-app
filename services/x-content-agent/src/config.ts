@@ -42,14 +42,14 @@ export const CONFIG = {
 
   // Daily post limits
   DAILY_LIMITS: {
-    TRADER_PROFILE: 4,
-    MARKETS_ALPHA: 3,
-    HIGH_CONVICTION: 4,
+    TRADER_PROFILE: 3,
+    MARKETS_ALPHA: 0,
+    HIGH_CONVICTION: 3,
     VAULT_PERFORMANCE: 3,
-    BASE_POSTING: 2,
+    BASE_POSTING: 0,
     BASE_REPLIES: 12,
     PM_REPLIES: 8,
-    TOTAL: 18,
+    TOTAL: 9,
   },
 
   // Reply monitoring
