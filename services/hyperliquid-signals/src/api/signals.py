@@ -65,6 +65,7 @@ async def get_alerts(
     filt: dict = {"acknowledged": acknowledged}
     if severity is not None:
         filt["severity"] = severity
-    cursor = db.hl_signals_alerts.find(filt, {"_id": 0}).sort("created_at", -1).limit(limit)
-    alerts = await cursor.to_list(limit)
+    cursor = db.hl_signals_alerts.find(filt).sort("created_at", -1).limit(limit)
+    raw = await cursor.to_list(limit)
+    alerts = [{**{k: v for k, v in doc.items() if k != "_id"}, "id": str(doc["_id"])} for doc in raw]
     return {"data": alerts, "total": len(alerts)}

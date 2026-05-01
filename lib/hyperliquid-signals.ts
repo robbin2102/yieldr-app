@@ -53,7 +53,7 @@ export interface ConvergenceSignal {
 }
 
 export interface Alert {
-  _id?: string;
+  id: string;
   coin: string;
   side: "LONG" | "SHORT";
   severity: 1 | 2 | 3;

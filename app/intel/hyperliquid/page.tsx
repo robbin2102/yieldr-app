@@ -181,9 +181,9 @@ export default function HyperliquidDashboard() {
               <span className="text-yellow-300">{(alert.conviction * 100).toFixed(0)}% conv</span>
               <span className="text-gray-400">{alert.n_traders} traders</span>
               <span className="text-gray-400">{fmtUsd(alert.total_usd)}</span>
-              {alert._id && (
+              {alert.id && (
                 <button
-                  onClick={() => acknowledgeAlert(alert._id!)}
+                  onClick={() => acknowledgeAlert(alert.id)}
                   className="text-gray-500 hover:text-gray-300 text-xs"
                 >
                   ✕
