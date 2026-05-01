@@ -180,9 +180,7 @@ async function showApiDocNote() {
 
 async function main() {
   await showApiDocNote();
-  await diagnose('0x6a72f61820b26b1fe4d956e17b6dc2a1ea3033ee', 'kch123');
-  console.log('\n');
-  await diagnose('0x1af1dfc2c523af1d7551597c985277cd11b30f7b', 'Pimping');
+  await diagnose('0x2a2c53bd278c04da9962fcf96490e17f3dfb9bc1', 'test-wallet');
 }
 
 main().catch(console.error);
