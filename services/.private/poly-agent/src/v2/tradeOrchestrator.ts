@@ -232,24 +232,19 @@ export class TradeOrchestrator {
       return;
     }
 
-    // ── 1. Prefetch orderbook in parallel with everything below ───────────
+    // ── 1. Load trader config + action gate (before any I/O) ─────────────
+    const trader = await TraderLoader.get(trade.wallet);
+    if (!trader) return;
+    const COPY_ACTIONS = new Set(['CONTINUE', 'SCALE_UP', 'SCALE_UP_L2']);
+    if (trader.allocAction && !COPY_ACTIONS.has(trader.allocAction)) return;
+
+    // ── 2. Prefetch orderbook in parallel with everything below ──────────
     this.books.prefetch(trade.tokenId);
 
-    // ── 2. Resolve market metadata ────────────────────────────────────────
+    // ── 3. Resolve market metadata ────────────────────────────────────────
     const meta = await resolver.resolve(trade.tokenId, trade.exchange === 'NEG_RISK' || trade.exchange === 'NEG_RISK_V2');
     if (!meta) {
       console.warn(`[Orchestrator] Could not resolve market meta for ${trade.tokenId.slice(0, 14)}... — skipping`);
-      return;
-    }
-
-    // ── 3. Load trader config (fresh — picks up allocation changes) ───────
-    const trader = await TraderLoader.get(trade.wallet);
-    if (!trader) return;
-
-    // ── 3b. Action gate — only copy CONTINUE / SCALE_UP / SCALE_UP_L2 ─────
-    const COPY_ACTIONS = new Set(['CONTINUE', 'SCALE_UP', 'SCALE_UP_L2']);
-    if (trader.allocAction && !COPY_ACTIONS.has(trader.allocAction)) {
-      console.log(`[Orchestrator] ${trader.label} SKIPPED — action=${trader.allocAction} (not in copy list)`);
       return;
     }
 
