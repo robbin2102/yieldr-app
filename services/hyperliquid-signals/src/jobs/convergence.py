@@ -83,11 +83,14 @@ async def run_convergence(snapshot_ts: datetime) -> None:
         }
         convergence_docs.append(doc)
 
-        # Tier classification
+        # Tier classification — only the dominant side (higher USD) earns conviction-based tiers
+        dominant_side = "LONG" if coin_long_usd[coin] >= coin_short_usd[coin] else "SHORT"
+        is_dominant = side == dominant_side
+
         tier = None
-        if conviction >= settings.tier1_conviction and n >= settings.tier1_min_traders and total_usd >= settings.tier1_min_usd:
+        if is_dominant and conviction >= settings.tier1_conviction and n >= settings.tier1_min_traders and total_usd >= settings.tier1_min_usd:
             tier = 1
-        elif conviction >= settings.tier2_conviction and n >= settings.tier2_min_traders:
+        elif is_dominant and conviction >= settings.tier2_conviction and n >= settings.tier2_min_traders:
             tier = 2
         elif n >= settings.tier3_min_traders:
             tier = 3
