@@ -1,16 +1,28 @@
+import os
+from pathlib import Path
+from dotenv import dotenv_values
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field
+
+# Pre-load .env.local manually so we can skip unparseable lines without crashing.
+# pydantic-settings dotenv loader aborts on bad lines; this is more resilient.
+def _load_env_local() -> None:
+    for candidate in [Path(".env"), Path("../../.env.local")]:
+        if candidate.exists():
+            for key, val in dotenv_values(candidate).items():
+                if key and val is not None and key not in os.environ:
+                    os.environ[key] = val
+
+_load_env_local()
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=(".env", "../../.env.local"),  # falls back to root .env.local if present
-        env_file_encoding="utf-8",
-        extra="ignore",
+        extra="ignore",  # env vars already loaded above via _load_env_local
     )
 
-    # MongoDB
-    mongo_uri: str = Field(default="mongodb://localhost:27017", alias="MONGO_URI")
+    # MongoDB — alias matches MONGODB_URI used across all existing yieldr services
+    mongo_uri: str = Field(default="mongodb://localhost:27017", alias="MONGODB_URI")
     mongo_db_name: str = Field(default="yieldr", alias="MONGO_DB_NAME")
 
     # Server
