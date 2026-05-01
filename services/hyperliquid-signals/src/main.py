@@ -73,3 +73,19 @@ async def health():
         "db": "connected" if db_ok else "unreachable",
         "ts": datetime.now(timezone.utc).isoformat(),
     }
+
+
+@app.post("/dev/trigger-discovery")
+async def trigger_discovery():
+    from .jobs.discovery import run_discovery
+    import asyncio
+    asyncio.create_task(run_discovery())
+    return {"ok": True, "msg": "Discovery started in background — watch logs"}
+
+
+@app.post("/dev/trigger-snapshot")
+async def trigger_snapshot():
+    from .jobs.snapshotter import run_snapshot
+    import asyncio
+    asyncio.create_task(run_snapshot())
+    return {"ok": True, "msg": "Snapshot started in background — watch logs"}
