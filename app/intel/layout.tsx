@@ -1,5 +1,13 @@
-import { Providers } from "@/components/RainbowKitProvider";
+"use client";
+
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { useState } from "react";
 
 export default function IntelLayout({ children }: { children: React.ReactNode }) {
-  return <Providers>{children}</Providers>;
+  const [queryClient] = useState(() => new QueryClient());
+  return (
+    <QueryClientProvider client={queryClient}>
+      {children}
+    </QueryClientProvider>
+  );
 }
