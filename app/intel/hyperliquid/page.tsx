@@ -5,6 +5,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { hlSignals, type ConvergenceSignal, type Alert } from "@/lib/hyperliquid-signals";
 import { SignalCard } from "@/components/hyperliquid/SignalCard";
 import { TraderRow } from "@/components/hyperliquid/TraderRow";
+import { TraderModal } from "@/components/hyperliquid/TraderModal";
 import { PositionChange } from "@/components/hyperliquid/PositionChange";
 import { Heatmap } from "@/components/hyperliquid/Heatmap";
 import { FilterPanel } from "@/components/hyperliquid/FilterPanel";
@@ -23,21 +24,37 @@ function fmtTs(iso: string | null | undefined) {
   return new Date(iso).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
 }
 
-function signalTier(s: ConvergenceSignal, thresholds: { t1c: number; t1n: number; t1usd: number; t2c: number; t2n: number; t3n: number }): 1 | 2 | 3 | undefined {
-  const { conviction, n_traders, total_usd } = s;
-  if (conviction >= thresholds.t1c && n_traders >= thresholds.t1n && total_usd >= thresholds.t1usd) return 1;
-  if (conviction >= thresholds.t2c && n_traders >= thresholds.t2n) return 2;
-  if (n_traders >= thresholds.t3n) return 3;
-  return undefined;
+// Build a map of coin → dominant side (higher total_usd wins)
+function buildDominanceMap(signals: ConvergenceSignal[]): Record<string, "LONG" | "SHORT"> {
+  const map: Record<string, { long: number; short: number }> = {};
+  for (const s of signals) {
+    if (!map[s.coin]) map[s.coin] = { long: 0, short: 0 };
+    if (s.side === "LONG") map[s.coin].long += s.total_usd;
+    else map[s.coin].short += s.total_usd;
+  }
+  const result: Record<string, "LONG" | "SHORT"> = {};
+  for (const [coin, { long, short }] of Object.entries(map)) {
+    result[coin] = long >= short ? "LONG" : "SHORT";
+  }
+  return result;
 }
 
-// Default tier thresholds (matches Python service defaults)
-const DEFAULT_TIERS = { t1c: 0.9, t1n: 5, t1usd: 1_000_000, t2c: 0.7, t2n: 10, t3n: 5 };
+function signalTier(
+  s: ConvergenceSignal,
+  isDominant: boolean
+): 1 | 2 | 3 | undefined {
+  const { conviction, n_traders, total_usd } = s;
+  if (isDominant && conviction >= 0.9 && n_traders >= 5 && total_usd >= 1_000_000) return 1;
+  if (isDominant && conviction >= 0.7 && n_traders >= 10) return 2;
+  if (n_traders >= 5) return 3;
+  return undefined;
+}
 
 export default function HyperliquidDashboard() {
   const qc = useQueryClient();
   const [cohortOpen, setCohortOpen] = useState(false);
   const [changeTypeFilter, setChangeTypeFilter] = useState<string>("ALL");
+  const [selectedTrader, setSelectedTrader] = useState<string | null>(null);
 
   const { data: convergenceData } = useQuery({
     queryKey: ["hl-convergence"],
@@ -105,16 +122,18 @@ export default function HyperliquidDashboard() {
   const droppedToday = todayChanges.filter((c) => c.change_type === "DROPPED").length;
 
   const totalPortfolioUsd = signals.reduce((acc, s) => acc + s.total_usd, 0);
+  const dominanceMap = buildDominanceMap(signals);
 
-  // Sort signals: tier 1 first, then by total_usd
+  // Sort: T1 dominant first, then T2, then T3, then by USD
   const sortedSignals = [...signals].sort((a, b) => {
-    const ta = signalTier(a, DEFAULT_TIERS) ?? 99;
-    const tb = signalTier(b, DEFAULT_TIERS) ?? 99;
+    const domA = dominanceMap[a.coin] === a.side;
+    const domB = dominanceMap[b.coin] === b.side;
+    const ta = signalTier(a, domA) ?? 99;
+    const tb = signalTier(b, domB) ?? 99;
     if (ta !== tb) return ta - tb;
     return b.total_usd - a.total_usd;
   });
 
-  // Build sparkline data per coin (conviction over last N snapshots — stubbed from current data)
   const sparkMap: Record<string, number[]> = {};
   signals.forEach((s) => {
     const k = `${s.coin}_${s.side}`;
@@ -146,17 +165,9 @@ export default function HyperliquidDashboard() {
           HL SIGNALS <span className="text-green-500">▶</span>
         </h1>
         <div className="flex gap-6 text-xs text-gray-400">
-          <span>
-            COHORT <span className="text-white font-bold">{totalTraders}</span>
-          </span>
-          <span>
-            PORTFOLIO{" "}
-            <span className="text-green-400 font-bold">{fmtUsd(totalPortfolioUsd)}</span>
-          </span>
-          <span>
-            SNAPSHOT{" "}
-            <span className="text-gray-300">{fmtTs(snapshotTs)}</span>
-          </span>
+          <span>COHORT <span className="text-white font-bold">{totalTraders}</span></span>
+          <span>PORTFOLIO <span className="text-green-400 font-bold">{fmtUsd(totalPortfolioUsd)}</span></span>
+          <span>SNAPSHOT <span className="text-gray-300">{fmtTs(snapshotTs)}</span></span>
           <span>
             NEW <span className="text-green-400 font-bold">+{newToday}</span> / DROP{" "}
             <span className="text-red-400 font-bold">-{droppedToday}</span>
@@ -178,17 +189,15 @@ export default function HyperliquidDashboard() {
               <span className={alert.side === "LONG" ? "text-green-400" : "text-red-400"}>
                 {alert.side}
               </span>
-              <span className="text-yellow-300">{(alert.conviction * 100).toFixed(0)}% conv</span>
+              <span className="text-yellow-300">{(alert.conviction * 100).toFixed(0)}% bias</span>
               <span className="text-gray-400">{alert.n_traders} traders</span>
               <span className="text-gray-400">{fmtUsd(alert.total_usd)}</span>
-              {alert.id && (
-                <button
-                  onClick={() => acknowledgeAlert(alert.id)}
-                  className="text-gray-500 hover:text-gray-300 text-xs"
-                >
-                  ✕
-                </button>
-              )}
+              <button
+                onClick={() => acknowledgeAlert(alert.id)}
+                className="text-gray-500 hover:text-gray-300 text-xs"
+              >
+                ✕
+              </button>
             </div>
           ))}
         </div>
@@ -205,14 +214,15 @@ export default function HyperliquidDashboard() {
           ) : (
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2">
               {sortedSignals.map((s) => {
-                const tier = signalTier(s, DEFAULT_TIERS);
-                const sparkKey = `${s.coin}_${s.side}`;
+                const isDominant = dominanceMap[s.coin] === s.side;
+                const tier = signalTier(s, isDominant);
                 return (
                   <SignalCard
                     key={`${s.coin}-${s.side}`}
                     signal={s}
-                    sparkData={sparkMap[sparkKey]}
+                    sparkData={sparkMap[`${s.coin}_${s.side}`]}
                     tier={tier}
+                    isDominant={isDominant}
                   />
                 );
               })}
@@ -281,7 +291,13 @@ export default function HyperliquidDashboard() {
                     <span>Ratio</span>
                   </div>
                   {traders.map((t, i) => (
-                    <TraderRow key={t.address} trader={t} rank={i + 1} />
+                    <div
+                      key={t.address}
+                      onClick={() => setSelectedTrader(t.address)}
+                      className="cursor-pointer hover:bg-gray-800 rounded"
+                    >
+                      <TraderRow trader={t} rank={i + 1} />
+                    </div>
                   ))}
                 </div>
               )}
@@ -310,6 +326,14 @@ export default function HyperliquidDashboard() {
 
       {/* Filter Settings Panel */}
       <FilterPanel initialConfig={filterSettings} />
+
+      {/* Trader Profile Modal */}
+      {selectedTrader && (
+        <TraderModal
+          address={selectedTrader}
+          onClose={() => setSelectedTrader(null)}
+        />
+      )}
     </div>
   );
 }

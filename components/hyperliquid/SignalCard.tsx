@@ -1,17 +1,18 @@
 "use client";
 
-import { useState } from "react";
 import type { ConvergenceSignal } from "@/lib/hyperliquid-signals";
 import { Sparkline } from "./Sparkline";
+import { useState } from "react";
 
 interface SignalCardProps {
   signal: ConvergenceSignal;
   sparkData?: number[];
   tier?: 1 | 2 | 3;
-  onExpand?: () => void;
+  isDominant: boolean;
 }
 
 function fmtUsd(n: number) {
+  if (n >= 1_000_000_000) return `$${(n / 1_000_000_000).toFixed(2)}B`;
   if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000) return `$${(n / 1_000).toFixed(0)}K`;
   return `$${n.toFixed(0)}`;
@@ -23,22 +24,22 @@ const TIER_BADGE: Record<number, string> = {
   3: "bg-gray-600 text-gray-200",
 };
 
-export function SignalCard({ signal, sparkData, tier, onExpand }: SignalCardProps) {
+export function SignalCard({ signal, sparkData, tier, isDominant }: SignalCardProps) {
   const [expanded, setExpanded] = useState(false);
   const isLong = signal.side === "LONG";
   const borderColor = isLong ? "border-green-500" : "border-red-500";
   const sideColor = isLong ? "text-green-400" : "text-red-400";
-  const conviction = (signal.conviction * 100).toFixed(1);
 
-  function toggle() {
-    setExpanded((e) => !e);
-    onExpand?.();
-  }
+  // Dominant side shows conviction (how one-sided the coin is overall)
+  // Minority side shows pct_of_coin (their actual share of exposure)
+  const primaryPct = isDominant
+    ? (signal.conviction * 100).toFixed(1) + "% bias"
+    : signal.pct_of_coin.toFixed(1) + "% of coin";
 
   return (
     <div
       className={`border ${borderColor} bg-gray-900 rounded p-3 cursor-pointer hover:bg-gray-800 transition-colors`}
-      onClick={toggle}
+      onClick={() => setExpanded((e) => !e)}
     >
       <div className="flex items-start justify-between">
         <div>
@@ -55,12 +56,10 @@ export function SignalCard({ signal, sparkData, tier, onExpand }: SignalCardProp
       </div>
 
       <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 font-mono text-xs text-gray-300">
-        <span>
-          Conv: <span className={sideColor}>{conviction}%</span>
-        </span>
+        <span className={sideColor}>{primaryPct}</span>
         <span>Traders: {signal.n_traders}</span>
-        <span>Exposure: {fmtUsd(signal.total_usd)}</span>
-        <span>Avg ROI: {(signal.avg_mo_roi * 100).toFixed(1)}%</span>
+        <span>{fmtUsd(signal.total_usd)}</span>
+        <span>ROI: {(signal.avg_mo_roi * 100).toFixed(1)}%</span>
       </div>
 
       {sparkData && (
