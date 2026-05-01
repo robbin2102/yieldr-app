@@ -30,11 +30,8 @@ export function SignalCard({ signal, sparkData, tier, isDominant }: SignalCardPr
   const borderColor = isLong ? "border-green-500" : "border-red-500";
   const sideColor = isLong ? "text-green-400" : "text-red-400";
 
-  // Dominant side shows conviction (how one-sided the coin is overall)
-  // Minority side shows pct_of_coin (their actual share of exposure)
-  const primaryPct = isDominant
-    ? (signal.conviction * 100).toFixed(1) + "% bias"
-    : signal.pct_of_coin.toFixed(1) + "% of coin";
+  // Show what % of this coin's total cohort exposure is on this side
+  const pctLabel = `${signal.pct_of_coin.toFixed(1)}% of ${signal.coin} exposure`;
 
   return (
     <div
@@ -56,7 +53,7 @@ export function SignalCard({ signal, sparkData, tier, isDominant }: SignalCardPr
       </div>
 
       <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 font-mono text-xs text-gray-300">
-        <span className={sideColor}>{primaryPct}</span>
+        <span className={sideColor}>{pctLabel}</span>
         <span>Traders: {signal.n_traders}</span>
         <span>{fmtUsd(signal.total_usd)}</span>
         <span>ROI: {(signal.avg_mo_roi * 100).toFixed(1)}%</span>
