@@ -1,7 +1,12 @@
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from fastapi import APIRouter, Query
 from bson import ObjectId
 from ..db import get_db
+
+
+def _utcnow() -> datetime:
+    """Naive UTC datetime for consistent MongoDB comparisons (Motor stores naive UTC)."""
+    return datetime.utcnow()
 
 router = APIRouter(tags=["signals"])
 
@@ -106,7 +111,7 @@ async def get_signals_v2(
 ):
     """Active signals detected in the last N hours, optionally filtered by type."""
     db = get_db()
-    since = datetime.now(timezone.utc) - timedelta(hours=hours)
+    since = _utcnow() - timedelta(hours=hours)
     filt: dict = {"snapshot_ts": {"$gte": since}}
     if signal_type:
         filt["signal_type"] = signal_type
@@ -123,7 +128,7 @@ async def get_signals_v2(
 async def get_dashboard(hours: int = Query(24, ge=1, le=72)):
     """Returns signals grouped into the 4 dashboard columns."""
     db = get_db()
-    since = datetime.now(timezone.utc) - timedelta(hours=hours)
+    since = _utcnow() - timedelta(hours=hours)
 
     cursor = db.hl_signals_signals.find(
         {"snapshot_ts": {"$gte": since}}, {"_id": 0}
@@ -190,7 +195,7 @@ async def get_whale_events(
     limit: int = Query(50, ge=1, le=200),
 ):
     db = get_db()
-    since = datetime.now(timezone.utc) - timedelta(hours=hours)
+    since = _utcnow() - timedelta(hours=hours)
     filt: dict = {"ts": {"$gte": since}}
     if coin:
         filt["coin"] = coin.upper()

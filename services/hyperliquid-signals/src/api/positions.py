@@ -5,6 +5,14 @@ from ..db import get_db
 router = APIRouter(tags=["positions"])
 
 
+def _clean(doc: dict) -> dict:
+    doc.pop("_id", None)
+    for key in ("previous_state", "new_state"):
+        if isinstance(doc.get(key), dict):
+            doc[key].pop("_id", None)
+    return doc
+
+
 @router.get("/positions/changes")
 async def get_position_changes(
     since: float | None = Query(None, description="Unix timestamp"),
@@ -24,6 +32,6 @@ async def get_position_changes(
     if change_type:
         filt["change_type"] = change_type.upper()
 
-    cursor = db.hl_signals_position_changes.find(filt, {"_id": 0}).sort("ts", -1).limit(limit)
-    changes = await cursor.to_list(limit)
+    cursor = db.hl_signals_position_changes.find(filt).sort("ts", -1).limit(limit)
+    changes = [_clean(doc) async for doc in cursor]
     return {"data": changes, "total": len(changes)}

@@ -278,7 +278,8 @@ async def _detect_whale_events(
 async def run_snapshot() -> None:
     logger.info('"Starting position snapshot"')
     db = get_db()
-    now = datetime.now(timezone.utc)
+    # Use naive UTC throughout — Motor stores/returns naive datetimes
+    now = datetime.utcnow()
 
     # Load active cohort with skill quartile
     cursor = db.hl_signals_traders.find(

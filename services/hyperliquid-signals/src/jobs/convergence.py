@@ -15,10 +15,15 @@ ACCEL_WINDOWS = [1, 4, 12, 24, 72, 168]
 
 
 def _find_closest_before(history: list[dict], cutoff: datetime) -> dict | None:
-    """Return the most recent doc with snapshot_ts <= cutoff."""
+    """Return the most recent doc with snapshot_ts <= cutoff.
+    Motor returns naive datetimes; cutoff may be tz-aware — strip tz for comparison.
+    """
+    cutoff_naive = cutoff.replace(tzinfo=None)
     result = None
     for doc in history:  # assumes sorted ascending by snapshot_ts
-        if doc["snapshot_ts"] <= cutoff:
+        ts = doc["snapshot_ts"]
+        ts_naive = ts.replace(tzinfo=None) if ts.tzinfo else ts
+        if ts_naive <= cutoff_naive:
             result = doc
         else:
             break
@@ -26,6 +31,9 @@ def _find_closest_before(history: list[dict], cutoff: datetime) -> dict | None:
 
 
 async def run_convergence(snapshot_ts: datetime) -> None:
+    # Ensure naive UTC throughout — Motor stores naive datetimes, comparisons must match
+    if snapshot_ts.tzinfo is not None:
+        snapshot_ts = snapshot_ts.replace(tzinfo=None)
     logger.info('"Starting convergence v2", "snapshot_ts": "%s"', snapshot_ts.isoformat())
     db = get_db()
 
@@ -497,7 +505,7 @@ async def run_convergence(snapshot_ts: datetime) -> None:
         await db.hl_signals_signals.insert_many(signals)
 
     # ── 8. Legacy tier alerts ────────────────────────────────────────────────
-    now = datetime.now(timezone.utc)
+    now = snapshot_ts  # already naive UTC
     for coin, cm in coin_metrics.items():
         conviction = cm["dollar_conviction"]
         n = cm["long_count"] if cm["dominant_side"] == "LONG" else cm["short_count"]

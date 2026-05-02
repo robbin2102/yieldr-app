@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 async def run_discovery() -> None:
     logger.info('"Starting trader discovery"')
     db = get_db()
-    now = datetime.now(timezone.utc)
+    now = datetime.utcnow()  # naive UTC — consistent with Motor's return format
 
     # Load live config overrides from DB
     db_config = await db.hl_signals_config.find_one({"_id": "main"})
