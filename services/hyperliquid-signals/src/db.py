@@ -41,6 +41,20 @@ async def ensure_indexes() -> None:
     await db.hl_signals_cohort_changes.create_index("ts")
     await db.hl_signals_cohort_changes.create_index("address")
 
+    # v2 — coin_metrics
+    await db.hl_signals_coin_metrics.create_index([("coin", 1), ("snapshot_ts", -1)])
+    await db.hl_signals_coin_metrics.create_index("snapshot_ts")
+
+    # v2 — whale events
+    await db.hl_signals_whale_events.create_index([("ts", -1)])
+    await db.hl_signals_whale_events.create_index([("coin", 1), ("ts", -1)])
+    await db.hl_signals_whale_events.create_index("event_type")
+
+    # v2 — signals
+    await db.hl_signals_signals.create_index([("snapshot_ts", -1)])
+    await db.hl_signals_signals.create_index([("signal_type", 1), ("snapshot_ts", -1)])
+    await db.hl_signals_signals.create_index([("coin", 1), ("snapshot_ts", -1)])
+
     logger.info("MongoDB indexes ensured")
 
 

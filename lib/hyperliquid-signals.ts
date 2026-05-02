@@ -29,6 +29,8 @@ export interface Trader {
   month_vlm: number;
   month_eff: number;
   roi_ratio: number;
+  skill_score?: number;
+  skill_quartile?: 1 | 2 | 3 | 4;
   cohort_status: "active" | "dropped";
   in_cohort_since: string;
   last_seen: string;
@@ -39,6 +41,7 @@ export interface TopTrader {
   size_usd: number;
 }
 
+/** Legacy convergence signal (still used by existing dashboard) */
 export interface ConvergenceSignal {
   snapshot_ts: string;
   coin: string;
@@ -50,6 +53,77 @@ export interface ConvergenceSignal {
   avg_mo_roi: number;
   conviction: number;
   top_traders: TopTrader[];
+}
+
+/** v2 — per-coin snapshot metrics */
+export interface CoinMetrics {
+  snapshot_ts: string;
+  coin: string;
+  long_usd: number;
+  short_usd: number;
+  long_count: number;
+  short_count: number;
+  total_count: number;
+  total_usd: number;
+  count_conviction: number;
+  dollar_conviction: number;
+  cohort_participation: number;
+  dominant_side: "LONG" | "SHORT";
+  avg_leverage: number;
+  portfolio_share: number;
+  avg_mo_roi: number;
+  q1_long: number;
+  q1_short: number;
+  q4_long: number;
+  q4_short: number;
+  top_long: TopTrader[];
+  top_short: TopTrader[];
+}
+
+/** v2 — one of the 9 named signals */
+export interface SignalV2 {
+  signal_type:
+    | "CONVERGENCE_ACCELERATION"
+    | "WHALE_ACTIVITY"
+    | "COHORT_DIRECTION_FLIP"
+    | "SMART_EXIT"
+    | "LEVERAGE_SPIKE"
+    | "ASYMMETRIC_POSITIONING"
+    | "CAPITAL_ROTATION"
+    | "FUNDING_DIVERGENCE"
+    | "STALE_POSITION_DECAY";
+  coin: string;
+  side: "LONG" | "SHORT";
+  severity: "HIGH" | "MEDIUM" | "LOW";
+  snapshot_ts: string;
+  created_at: string;
+  metadata: Record<string, unknown>;
+  // enriched fields from dashboard endpoint
+  count_conviction?: number;
+  dollar_conviction?: number;
+  cohort_participation?: number;
+  total_usd?: number;
+  total_count?: number;
+}
+
+/** v2 — whale event for Q1 trader */
+export interface WhaleEvent {
+  address: string;
+  coin: string;
+  event_type: "WAKEUP" | "SCALEUP" | "FLIP" | "EXIT" | "LEVERAGE_PUSH";
+  side: "LONG" | "SHORT";
+  size_usd: number;
+  ts: string;
+  metadata: Record<string, unknown>;
+}
+
+/** v2 dashboard response */
+export interface DashboardData {
+  accelerating: SignalV2[];
+  whale_moves: WhaleEvent[];
+  direction_flips: SignalV2[];
+  exits: SignalV2[];
+  snapshot_ts: string | null;
 }
 
 export interface Alert {
@@ -96,8 +170,7 @@ export const hlSignals = {
       `/api/signals/convergence?limit=${limit}`
     ),
 
-  getDivergence: () =>
-    get<{ data: unknown[] }>("/api/signals/divergence"),
+  getDivergence: () => get<{ data: unknown[] }>("/api/signals/divergence"),
 
   getAlerts: (severity?: number, acknowledged = false) => {
     const params = new URLSearchParams({ acknowledged: String(acknowledged) });
@@ -139,4 +212,26 @@ export const hlSignals = {
     post<{ ok: boolean }>("/api/config", body),
 
   health: () => get<{ status: string; db: string; ts: string }>("/health"),
+
+  // v2 endpoints
+  getDashboard: (hours = 24) =>
+    get<DashboardData>(`/api/signals/v2/dashboard?hours=${hours}`),
+
+  getCoinMetrics: (limit = 50) =>
+    get<{ data: CoinMetrics[]; snapshot_ts: string | null }>(
+      `/api/signals/v2/coin-metrics?limit=${limit}`
+    ),
+
+  getSignalsV2: (signalType?: string, hours = 24) => {
+    const params = new URLSearchParams({ hours: String(hours) });
+    if (signalType) params.set("signal_type", signalType);
+    return get<{ data: SignalV2[]; total: number }>(`/api/signals/v2/signals?${params}`);
+  },
+
+  getWhaleEvents: (coin?: string, eventType?: string, hours = 24) => {
+    const params = new URLSearchParams({ hours: String(hours) });
+    if (coin) params.set("coin", coin);
+    if (eventType) params.set("event_type", eventType);
+    return get<{ data: WhaleEvent[]; total: number }>(`/api/signals/v2/whale-events?${params}`);
+  },
 };

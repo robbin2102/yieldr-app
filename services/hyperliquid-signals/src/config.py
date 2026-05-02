@@ -48,7 +48,7 @@ class Settings(BaseSettings):
     position_change_threshold_pct: float = Field(default=10.0, alias="POSITION_CHANGE_THRESHOLD_PCT")
     leverage_change_threshold: float = Field(default=5.0, alias="LEVERAGE_CHANGE_THRESHOLD")
 
-    # --- Signal thresholds ---
+    # --- Legacy signal thresholds (kept for backward compat) ---
     tier1_conviction: float = Field(default=0.9, alias="TIER1_CONVICTION")
     tier1_min_traders: int = Field(default=5, alias="TIER1_MIN_TRADERS")
     tier1_min_usd: float = Field(default=1_000_000, alias="TIER1_MIN_USD")
@@ -56,6 +56,28 @@ class Settings(BaseSettings):
     tier2_min_traders: int = Field(default=10, alias="TIER2_MIN_TRADERS")
     tier3_min_traders: int = Field(default=5, alias="TIER3_MIN_TRADERS")
     momentum_threshold_pct: float = Field(default=50.0, alias="MOMENTUM_THRESHOLD_PCT")
+
+    # --- Signal v2 thresholds ---
+    # CONVERGENCE_ACCELERATION: % increase in a sub-metric to count as accelerating
+    accel_metric_threshold: float = Field(default=0.10, alias="ACCEL_METRIC_THRESHOLD")
+    # WHALE_ACTIVITY: min USD position to consider a Q1 trader a "whale"
+    whale_min_usd: float = Field(default=100_000, alias="WHALE_MIN_USD")
+    # WHALE_ACTIVITY: dormant if last activity older than N days
+    whale_dormant_days: int = Field(default=7, alias="WHALE_DORMANT_DAYS")
+    # WHALE_ACTIVITY: SCALEUP threshold (fraction increase)
+    whale_scaleup_threshold: float = Field(default=0.5, alias="WHALE_SCALEUP_THRESHOLD")
+    # ASYMMETRIC_POSITIONING: threshold pp gap between count_conviction and dollar_conviction
+    asymmetric_threshold: float = Field(default=0.20, alias="ASYMMETRIC_THRESHOLD")
+    # CAPITAL_ROTATION: portfolio share delta threshold (fraction)
+    rotation_threshold: float = Field(default=0.015, alias="ROTATION_THRESHOLD")
+    # FUNDING_DIVERGENCE: funding rate magnitude that matters
+    funding_threshold: float = Field(default=0.00005, alias="FUNDING_THRESHOLD")
+    # STALE_POSITION_DECAY: avg position age in days to flag as stale
+    stale_age_days: float = Field(default=14.0, alias="STALE_AGE_DAYS")
+    # STALE_POSITION_DECAY: max new entries in 7d to flag as stale
+    stale_max_new_entries: int = Field(default=1, alias="STALE_MAX_NEW_ENTRIES")
+    # LEVERAGE_SPIKE: leverage ratio vs previous snapshot to trigger signal
+    leverage_spike_ratio: float = Field(default=1.5, alias="LEVERAGE_SPIKE_RATIO")
 
     # --- Concurrency ---
     snapshot_concurrency: int = Field(default=15, alias="SNAPSHOT_CONCURRENCY")

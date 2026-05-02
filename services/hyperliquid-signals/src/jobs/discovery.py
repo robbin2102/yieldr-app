@@ -7,6 +7,7 @@ from ..db import get_db
 from ..config import settings
 from ..lib.hyperliquid import fetch_leaderboard
 from ..lib.filters import apply_filters, load_config_overrides
+from ..lib.skills import compute_skill_scores
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +30,10 @@ async def run_discovery() -> None:
     passing_addresses = {t["address"] for t in passing}
 
     logger.info('"Filter applied", "passing": %d', len(passing))
+
+    # Compute skill scores and quartiles across entire filtered cohort
+    compute_skill_scores(passing)
+    logger.info('"Skill scores computed"')
 
     # Fetch current active cohort from DB
     existing_cursor = db.hl_signals_traders.find({"cohort_status": "active"}, {"address": 1})

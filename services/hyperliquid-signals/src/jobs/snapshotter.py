@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import aiohttp
 
@@ -50,7 +50,6 @@ async def _detect_changes(
     prev_docs = await prev_cursor.to_list(1)
 
     if not prev_docs:
-        # No prior snapshot — all are "new"
         for pos in current_positions:
             changes.append(
                 {
@@ -71,7 +70,6 @@ async def _detect_changes(
     prev_positions = {doc["coin"]: doc async for doc in prev_cursor}
     current_map = {p["coin"]: p for p in current_positions}
 
-    # New or changed positions
     for coin, cur in current_map.items():
         if coin not in prev_positions:
             changes.append(
@@ -128,7 +126,6 @@ async def _detect_changes(
                 }
             )
 
-    # Closed positions
     for coin in prev_positions:
         if coin not in current_map:
             changes.append(
@@ -145,14 +142,152 @@ async def _detect_changes(
     return changes
 
 
+async def _detect_whale_events(
+    db,
+    address: str,
+    current_positions: list[dict],
+    snapshot_ts: datetime,
+    skill_quartile: int,
+) -> list[dict]:
+    """Detect whale events for Q1 traders only."""
+    if skill_quartile != 1:
+        return []
+
+    events = []
+    dormant_cutoff = snapshot_ts - timedelta(days=settings.whale_dormant_days)
+
+    current_map = {p["coin"]: p for p in current_positions}
+
+    # Get most recent prior snapshot for this trader
+    prev_pos_doc = await db.hl_signals_positions.find_one(
+        {"address": address, "snapshot_ts": {"$lt": snapshot_ts}},
+        sort=[("snapshot_ts", -1)],
+    )
+    prev_map: dict[str, dict] = {}
+    if prev_pos_doc:
+        prev_ts = prev_pos_doc["snapshot_ts"]
+        cursor = db.hl_signals_positions.find(
+            {"address": address, "snapshot_ts": prev_ts}
+        )
+        prev_map = {doc["coin"]: doc async for doc in cursor}
+
+    for coin, cur in current_map.items():
+        if cur["size_usd"] < settings.whale_min_usd:
+            continue
+
+        if coin not in prev_map:
+            # Check if dormant — no position in past N days
+            had_recent = await db.hl_signals_positions.find_one(
+                {
+                    "address": address,
+                    "coin": coin,
+                    "snapshot_ts": {"$gte": dormant_cutoff, "$lt": snapshot_ts},
+                }
+            )
+            event_type = "WAKEUP" if not had_recent else "WAKEUP"
+            events.append(
+                {
+                    "address": address,
+                    "coin": coin,
+                    "event_type": event_type,
+                    "side": cur["side"],
+                    "size_usd": cur["size_usd"],
+                    "ts": snapshot_ts,
+                    "metadata": {"prev_size_usd": 0, "new_size_usd": cur["size_usd"]},
+                }
+            )
+            continue
+
+        prev = prev_map[coin]
+
+        # FLIP — side change
+        if cur["side"] != prev["side"]:
+            events.append(
+                {
+                    "address": address,
+                    "coin": coin,
+                    "event_type": "FLIP",
+                    "side": cur["side"],
+                    "size_usd": cur["size_usd"],
+                    "ts": snapshot_ts,
+                    "metadata": {
+                        "prev_side": prev["side"],
+                        "prev_size_usd": prev["size_usd"],
+                        "new_size_usd": cur["size_usd"],
+                    },
+                }
+            )
+            continue
+
+        # SCALEUP — significant size increase
+        if prev["size_usd"] > 0:
+            ratio = (cur["size_usd"] - prev["size_usd"]) / prev["size_usd"]
+            if ratio >= settings.whale_scaleup_threshold:
+                events.append(
+                    {
+                        "address": address,
+                        "coin": coin,
+                        "event_type": "SCALEUP",
+                        "side": cur["side"],
+                        "size_usd": cur["size_usd"],
+                        "ts": snapshot_ts,
+                        "metadata": {
+                            "prev_size_usd": prev["size_usd"],
+                            "new_size_usd": cur["size_usd"],
+                            "ratio": ratio,
+                        },
+                    }
+                )
+
+        # LEVERAGE_PUSH
+        lev_diff = cur["leverage"] - prev.get("leverage", 0)
+        if lev_diff >= settings.leverage_change_threshold:
+            events.append(
+                {
+                    "address": address,
+                    "coin": coin,
+                    "event_type": "LEVERAGE_PUSH",
+                    "side": cur["side"],
+                    "size_usd": cur["size_usd"],
+                    "ts": snapshot_ts,
+                    "metadata": {
+                        "prev_leverage": prev.get("leverage", 0),
+                        "new_leverage": cur["leverage"],
+                    },
+                }
+            )
+
+    # EXIT events — positions in prev but not in current
+    for coin, prev in prev_map.items():
+        if coin not in current_map and prev["size_usd"] >= settings.whale_min_usd:
+            events.append(
+                {
+                    "address": address,
+                    "coin": coin,
+                    "event_type": "EXIT",
+                    "side": prev["side"],
+                    "size_usd": prev["size_usd"],
+                    "ts": snapshot_ts,
+                    "metadata": {"prev_size_usd": prev["size_usd"], "new_size_usd": 0},
+                }
+            )
+
+    return events
+
+
 async def run_snapshot() -> None:
     logger.info('"Starting position snapshot"')
     db = get_db()
     now = datetime.now(timezone.utc)
 
-    # Load active cohort
-    cursor = db.hl_signals_traders.find({"cohort_status": "active"}, {"address": 1})
-    addresses = [doc["address"] async for doc in cursor]
+    # Load active cohort with skill quartile
+    cursor = db.hl_signals_traders.find(
+        {"cohort_status": "active"},
+        {"address": 1, "skill_quartile": 1},
+    )
+    traders = [doc async for doc in cursor]
+    addresses = [doc["address"] for doc in traders]
+    skill_map = {doc["address"]: doc.get("skill_quartile", 4) for doc in traders}
 
     if not addresses:
         logger.warning('"No active traders in cohort, skipping snapshot"')
@@ -179,7 +314,7 @@ async def run_snapshot() -> None:
     if all_positions:
         await db.hl_signals_positions.insert_many(all_positions)
 
-    # Detect changes per address
+    # Detect position changes per address
     all_changes: list[dict] = []
     addr_positions: dict[str, list[dict]] = {}
     for pos in all_positions:
@@ -203,10 +338,31 @@ async def run_snapshot() -> None:
     if all_changes:
         await db.hl_signals_position_changes.insert_many(all_changes)
 
+    # Detect whale events for Q1 traders
+    whale_tasks = [
+        _detect_whale_events(
+            db,
+            addr,
+            addr_positions.get(addr, []),
+            now,
+            skill_map.get(addr, 4),
+        )
+        for addr in addresses
+    ]
+    whale_results = await asyncio.gather(*whale_tasks)
+    all_whale_events: list[dict] = []
+    for events in whale_results:
+        all_whale_events.extend(events)
+
+    if all_whale_events:
+        await db.hl_signals_whale_events.insert_many(all_whale_events)
+        logger.info('"Whale events detected", "count": %d', len(all_whale_events))
+
     logger.info(
-        '"Snapshot complete", "positions": %d, "changes": %d, "errors": %d',
+        '"Snapshot complete", "positions": %d, "changes": %d, "whale_events": %d, "errors": %d',
         len(all_positions),
         len(all_changes),
+        len(all_whale_events),
         errors,
     )
 

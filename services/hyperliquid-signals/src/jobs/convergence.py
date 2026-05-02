@@ -2,165 +2,551 @@ import logging
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
+import aiohttp
+
 from ..db import get_db
 from ..config import settings
+from ..lib.hyperliquid import fetch_funding_rates
 
 logger = logging.getLogger(__name__)
 
+# Time windows in hours for acceleration analysis
+ACCEL_WINDOWS = [1, 4, 12, 24, 72, 168]
+
+
+def _find_closest_before(history: list[dict], cutoff: datetime) -> dict | None:
+    """Return the most recent doc with snapshot_ts <= cutoff."""
+    result = None
+    for doc in history:  # assumes sorted ascending by snapshot_ts
+        if doc["snapshot_ts"] <= cutoff:
+            result = doc
+        else:
+            break
+    return result
+
 
 async def run_convergence(snapshot_ts: datetime) -> None:
-    logger.info('"Starting convergence engine", "snapshot_ts": "%s"', snapshot_ts.isoformat())
+    logger.info('"Starting convergence v2", "snapshot_ts": "%s"', snapshot_ts.isoformat())
     db = get_db()
 
-    # Load all positions from this snapshot
+    # ── 1. Load current positions ────────────────────────────────────────────
     positions = await db.hl_signals_positions.find(
         {"snapshot_ts": snapshot_ts}
     ).to_list(None)
 
     if not positions:
-        logger.warning('"No positions found for snapshot, skipping convergence"')
+        logger.warning('"No positions for snapshot, skipping convergence"')
         return
 
-    # Load trader month_roi map for weighted avg
-    trader_cursor = db.hl_signals_traders.find(
-        {"cohort_status": "active"}, {"address": 1, "month_roi": 1}
+    # ── 2. Load trader info ──────────────────────────────────────────────────
+    traders_cursor = db.hl_signals_traders.find(
+        {"cohort_status": "active"},
+        {"address": 1, "skill_quartile": 1, "month_roi": 1, "account_value": 1},
     )
-    trader_roi: dict[str, float] = {doc["address"]: doc["month_roi"] async for doc in trader_cursor}
+    traders: dict[str, dict] = {doc["address"]: doc async for doc in traders_cursor}
+    total_cohort = len(traders)
 
-    # Aggregate by (coin, side)
-    total_all_usd = sum(p["size_usd"] for p in positions)
-    coin_total: dict[str, float] = defaultdict(float)
+    # ── 3. Aggregate per-coin ────────────────────────────────────────────────
+    coin_buckets: dict[str, dict] = {}
+    total_portfolio_usd = sum(p["size_usd"] for p in positions)
+
     for p in positions:
-        coin_total[p["coin"]] += p["size_usd"]
+        coin = p["coin"]
+        if coin not in coin_buckets:
+            coin_buckets[coin] = {
+                "long_usd": 0.0,
+                "short_usd": 0.0,
+                "long_count": 0,
+                "short_count": 0,
+                "leverages": [],
+                "q1_long": 0,
+                "q1_short": 0,
+                "q4_long": 0,
+                "q4_short": 0,
+                "roi_sum_long": 0.0,
+                "roi_sum_short": 0.0,
+                "top_long": [],
+                "top_short": [],
+            }
+        t = traders.get(p["address"], {})
+        q = t.get("skill_quartile", 4)
+        roi = t.get("month_roi", 0.0)
+        cd = coin_buckets[coin]
 
-    # (coin, side) → {traders, total_usd, roi_sum}
-    buckets: dict[tuple, dict] = defaultdict(lambda: {"traders": [], "total_usd": 0.0, "roi_sum": 0.0})
-    for p in positions:
-        key = (p["coin"], p["side"])
-        buckets[key]["traders"].append(p)
-        buckets[key]["total_usd"] += p["size_usd"]
-        buckets[key]["roi_sum"] += trader_roi.get(p["address"], 0.0)
-
-    # Compute conviction per coin
-    coin_long_usd: dict[str, float] = defaultdict(float)
-    coin_short_usd: dict[str, float] = defaultdict(float)
-    for (coin, side), data in buckets.items():
-        if side == "LONG":
-            coin_long_usd[coin] += data["total_usd"]
+        if p["side"] == "LONG":
+            cd["long_usd"] += p["size_usd"]
+            cd["long_count"] += 1
+            cd["roi_sum_long"] += roi
+            cd["top_long"].append({"address": p["address"], "size_usd": p["size_usd"]})
+            if q == 1:
+                cd["q1_long"] += 1
+            if q == 4:
+                cd["q4_long"] += 1
         else:
-            coin_short_usd[coin] += data["total_usd"]
+            cd["short_usd"] += p["size_usd"]
+            cd["short_count"] += 1
+            cd["roi_sum_short"] += roi
+            cd["top_short"].append({"address": p["address"], "size_usd": p["size_usd"]})
+            if q == 1:
+                cd["q1_short"] += 1
+            if q == 4:
+                cd["q4_short"] += 1
 
-    convergence_docs = []
-    alert_candidates = []
+        cd["leverages"].append(p["leverage"])
 
-    for (coin, side), data in buckets.items():
-        n = len(data["traders"])
-        total_usd = data["total_usd"]
-        avg_mo_roi = data["roi_sum"] / n if n > 0 else 0.0
-        c_total = coin_total[coin]
-        pct_of_coin = (total_usd / c_total * 100) if c_total > 0 else 0.0
-        pct_of_all = (total_usd / total_all_usd * 100) if total_all_usd > 0 else 0.0
+    # ── 4. Compute coin_metrics and save ────────────────────────────────────
+    coin_metrics: dict[str, dict] = {}
+    coin_metrics_docs = []
 
-        long_usd = coin_long_usd[coin]
-        short_usd = coin_short_usd[coin]
-        denom = long_usd + short_usd
-        conviction = abs(long_usd - short_usd) / denom if denom > 0 else 0.0
+    for coin, cd in coin_buckets.items():
+        total_count = cd["long_count"] + cd["short_count"]
+        total_usd = cd["long_usd"] + cd["short_usd"]
 
-        top5 = sorted(data["traders"], key=lambda x: x["size_usd"], reverse=True)[:5]
-        top_traders = [{"address": t["address"], "size_usd": t["size_usd"]} for t in top5]
+        count_conviction = (
+            abs(cd["long_count"] - cd["short_count"]) / total_count if total_count > 0 else 0.0
+        )
+        dollar_conviction = (
+            abs(cd["long_usd"] - cd["short_usd"]) / total_usd if total_usd > 0 else 0.0
+        )
+        cohort_participation = total_count / total_cohort if total_cohort > 0 else 0.0
+        dominant_side = "LONG" if cd["long_usd"] >= cd["short_usd"] else "SHORT"
+        avg_leverage = sum(cd["leverages"]) / len(cd["leverages"]) if cd["leverages"] else 0.0
+        portfolio_share = total_usd / total_portfolio_usd if total_portfolio_usd > 0 else 0.0
+
+        dom_count = cd["long_count"] if dominant_side == "LONG" else cd["short_count"]
+        dom_roi_sum = cd["roi_sum_long"] if dominant_side == "LONG" else cd["roi_sum_short"]
+        avg_mo_roi = dom_roi_sum / dom_count if dom_count > 0 else 0.0
+
+        top_long = sorted(cd["top_long"], key=lambda x: x["size_usd"], reverse=True)[:5]
+        top_short = sorted(cd["top_short"], key=lambda x: x["size_usd"], reverse=True)[:5]
 
         doc = {
             "snapshot_ts": snapshot_ts,
             "coin": coin,
-            "side": side,
-            "n_traders": n,
+            "long_usd": cd["long_usd"],
+            "short_usd": cd["short_usd"],
+            "long_count": cd["long_count"],
+            "short_count": cd["short_count"],
+            "total_count": total_count,
             "total_usd": total_usd,
-            "pct_of_coin": pct_of_coin,
-            "pct_of_all_portfolio": pct_of_all,
+            "count_conviction": count_conviction,
+            "dollar_conviction": dollar_conviction,
+            "cohort_participation": cohort_participation,
+            "dominant_side": dominant_side,
+            "avg_leverage": avg_leverage,
+            "portfolio_share": portfolio_share,
             "avg_mo_roi": avg_mo_roi,
-            "conviction": conviction,
-            "top_traders": top_traders,
+            "q1_long": cd["q1_long"],
+            "q1_short": cd["q1_short"],
+            "q4_long": cd["q4_long"],
+            "q4_short": cd["q4_short"],
+            "top_long": top_long,
+            "top_short": top_short,
         }
-        convergence_docs.append(doc)
+        coin_metrics[coin] = doc
+        coin_metrics_docs.append(doc)
 
-        # Tier classification — only the dominant side (higher USD) earns conviction-based tiers
-        dominant_side = "LONG" if coin_long_usd[coin] >= coin_short_usd[coin] else "SHORT"
-        is_dominant = side == dominant_side
+    if coin_metrics_docs:
+        await db.hl_signals_coin_metrics.insert_many(coin_metrics_docs)
+
+    # Also write legacy convergence docs for backward compat
+    convergence_docs = []
+    for coin, cm in coin_metrics.items():
+        cd = coin_buckets[coin]
+        for side in ("LONG", "SHORT"):
+            n = cm["long_count"] if side == "LONG" else cm["short_count"]
+            if n == 0:
+                continue
+            total_usd = cm["long_usd"] if side == "LONG" else cm["short_usd"]
+            top_traders = cm["top_long"] if side == "LONG" else cm["top_short"]
+            c_total = cm["total_usd"]
+            pct_of_coin = (total_usd / c_total * 100) if c_total > 0 else 0.0
+            pct_of_all = (total_usd / total_portfolio_usd * 100) if total_portfolio_usd > 0 else 0.0
+            roi_sum = cd["roi_sum_long"] if side == "LONG" else cd["roi_sum_short"]
+            avg_mo_roi = roi_sum / n if n > 0 else 0.0
+            convergence_docs.append(
+                {
+                    "snapshot_ts": snapshot_ts,
+                    "coin": coin,
+                    "side": side,
+                    "n_traders": n,
+                    "total_usd": total_usd,
+                    "pct_of_coin": pct_of_coin,
+                    "pct_of_all_portfolio": pct_of_all,
+                    "avg_mo_roi": avg_mo_roi,
+                    "conviction": cm["dollar_conviction"],
+                    "top_traders": top_traders,
+                }
+            )
+    if convergence_docs:
+        await db.hl_signals_convergence.insert_many(convergence_docs)
+
+    # ── 5. Load historical coin_metrics for time-window analysis ─────────────
+    history_since = snapshot_ts - timedelta(days=7)
+    history_cursor = db.hl_signals_coin_metrics.find(
+        {
+            "coin": {"$in": list(coin_metrics.keys())},
+            "snapshot_ts": {"$gte": history_since, "$lt": snapshot_ts},
+        }
+    )
+    history_docs = await history_cursor.to_list(None)
+
+    history_by_coin: dict[str, list[dict]] = {}
+    for doc in history_docs:
+        history_by_coin.setdefault(doc["coin"], []).append(doc)
+    for coin in history_by_coin:
+        history_by_coin[coin].sort(key=lambda d: d["snapshot_ts"])
+
+    def find_hist(coin: str, hours_ago: int) -> dict | None:
+        cutoff = snapshot_ts - timedelta(hours=hours_ago)
+        return _find_closest_before(history_by_coin.get(coin, []), cutoff)
+
+    # ── 6. Detect signals ────────────────────────────────────────────────────
+    signals: list[dict] = []
+
+    def emit(signal_type: str, coin: str, side: str, severity: str, meta: dict) -> None:
+        signals.append(
+            {
+                "signal_type": signal_type,
+                "coin": coin,
+                "side": side,
+                "severity": severity,
+                "snapshot_ts": snapshot_ts,
+                "created_at": snapshot_ts,
+                "metadata": meta,
+            }
+        )
+
+    # ── Signal 1: CONVERGENCE_ACCELERATION ───────────────────────────────────
+    SUB_METRICS = ["count_conviction", "dollar_conviction", "cohort_participation"]
+    THRESHOLD = settings.accel_metric_threshold
+
+    for coin, cm in coin_metrics.items():
+        metric_window_hits: dict[str, int] = {m: 0 for m in SUB_METRICS}
+        window_details = []
+
+        for w in ACCEL_WINDOWS:
+            hist = find_hist(coin, w)
+            if not hist:
+                continue
+            accel_in_window = []
+            for m in SUB_METRICS:
+                cur_v = cm.get(m, 0.0)
+                hist_v = hist.get(m, 0.0)
+                if hist_v > 0 and (cur_v - hist_v) / hist_v >= THRESHOLD:
+                    accel_in_window.append(m)
+                    metric_window_hits[m] += 1
+            if accel_in_window:
+                window_details.append({"window_h": w, "metrics": accel_in_window})
+
+        strong_metrics = [m for m, cnt in metric_window_hits.items() if cnt >= 2]
+        any_very_consistent = any(cnt >= 3 for cnt in metric_window_hits.values())
+
+        if len(strong_metrics) >= 2:
+            severity = "HIGH"
+        elif len(strong_metrics) >= 1 or any_very_consistent:
+            severity = "MEDIUM"
+        else:
+            continue
+
+        emit(
+            "CONVERGENCE_ACCELERATION",
+            coin,
+            cm["dominant_side"],
+            severity,
+            {
+                "count_conviction": cm["count_conviction"],
+                "dollar_conviction": cm["dollar_conviction"],
+                "cohort_participation": cm["cohort_participation"],
+                "window_details": window_details,
+            },
+        )
+
+    # ── Signal 3: COHORT_DIRECTION_FLIP ──────────────────────────────────────
+    for coin, cm in coin_metrics.items():
+        hist_48h = find_hist(coin, 48)
+        if not hist_48h:
+            continue
+        if hist_48h["dominant_side"] != cm["dominant_side"]:
+            emit(
+                "COHORT_DIRECTION_FLIP",
+                coin,
+                cm["dominant_side"],
+                "HIGH",
+                {
+                    "prev_dominant": hist_48h["dominant_side"],
+                    "new_dominant": cm["dominant_side"],
+                    "count_conviction": cm["count_conviction"],
+                    "dollar_conviction": cm["dollar_conviction"],
+                    "cohort_participation": cm["cohort_participation"],
+                },
+            )
+
+    # ── Signal 4: SMART_EXIT ─────────────────────────────────────────────────
+    # Q1 closing at higher rate than Q4 in past 24h
+    recent_changes_cursor = db.hl_signals_position_changes.find(
+        {
+            "ts": {"$gte": snapshot_ts - timedelta(hours=24)},
+            "change_type": "CLOSED",
+        },
+        {"address": 1, "coin": 1},
+    )
+    recent_closes = await recent_changes_cursor.to_list(None)
+
+    closes_by_coin: dict[str, dict[str, int]] = {}
+    for rc in recent_closes:
+        coin = rc["coin"]
+        addr = rc["address"]
+        q = traders.get(addr, {}).get("skill_quartile", 4)
+        if coin not in closes_by_coin:
+            closes_by_coin[coin] = {"q1": 0, "q4": 0}
+        if q == 1:
+            closes_by_coin[coin]["q1"] += 1
+        elif q == 4:
+            closes_by_coin[coin]["q4"] += 1
+
+    for coin, close_counts in closes_by_coin.items():
+        cm = coin_metrics.get(coin)
+        if not cm:
+            continue
+        q1_closes = close_counts["q1"]
+        q4_closes = close_counts["q4"]
+        if q1_closes < 2:
+            continue
+        # Normalise by quartile size in current holders
+        q1_holders = cm["q1_long"] + cm["q1_short"]
+        q4_holders = cm["q4_long"] + cm["q4_short"]
+        q1_rate = q1_closes / q1_holders if q1_holders > 0 else 0.0
+        q4_rate = q4_closes / q4_holders if q4_holders > 0 else 0.0
+        if q1_rate > q4_rate * 1.5:
+            # Smart money exiting faster than dumb money
+            emit(
+                "SMART_EXIT",
+                coin,
+                cm["dominant_side"],
+                "HIGH" if q1_rate > q4_rate * 2.5 else "MEDIUM",
+                {
+                    "q1_closes": q1_closes,
+                    "q4_closes": q4_closes,
+                    "q1_rate": q1_rate,
+                    "q4_rate": q4_rate,
+                    "count_conviction": cm["count_conviction"],
+                    "dollar_conviction": cm["dollar_conviction"],
+                    "cohort_participation": cm["cohort_participation"],
+                },
+            )
+
+    # ── Signal 5: LEVERAGE_SPIKE ─────────────────────────────────────────────
+    for coin, cm in coin_metrics.items():
+        hist_4h = find_hist(coin, 4)
+        if not hist_4h or hist_4h["avg_leverage"] <= 0:
+            continue
+        ratio = cm["avg_leverage"] / hist_4h["avg_leverage"]
+        if ratio >= settings.leverage_spike_ratio:
+            emit(
+                "LEVERAGE_SPIKE",
+                coin,
+                cm["dominant_side"],
+                "HIGH" if ratio >= settings.leverage_spike_ratio * 1.5 else "MEDIUM",
+                {
+                    "avg_leverage_now": cm["avg_leverage"],
+                    "avg_leverage_4h_ago": hist_4h["avg_leverage"],
+                    "ratio": ratio,
+                    "count_conviction": cm["count_conviction"],
+                    "dollar_conviction": cm["dollar_conviction"],
+                    "cohort_participation": cm["cohort_participation"],
+                },
+            )
+
+    # ── Signal 6: ASYMMETRIC_POSITIONING ─────────────────────────────────────
+    for coin, cm in coin_metrics.items():
+        gap = abs(cm["count_conviction"] - cm["dollar_conviction"])
+        if gap >= settings.asymmetric_threshold and cm["total_count"] >= 5:
+            # Determine which direction: count > dollar means small traders leading; dollar > count means whales leading
+            if cm["dollar_conviction"] > cm["count_conviction"]:
+                side = cm["dominant_side"]
+                detail = "whales_leading"
+            else:
+                side = cm["dominant_side"]
+                detail = "crowd_leading"
+            emit(
+                "ASYMMETRIC_POSITIONING",
+                coin,
+                side,
+                "HIGH" if gap >= settings.asymmetric_threshold * 2 else "MEDIUM",
+                {
+                    "count_conviction": cm["count_conviction"],
+                    "dollar_conviction": cm["dollar_conviction"],
+                    "cohort_participation": cm["cohort_participation"],
+                    "gap_pp": gap,
+                    "detail": detail,
+                },
+            )
+
+    # ── Signal 7: CAPITAL_ROTATION ───────────────────────────────────────────
+    ROTATION_WINDOWS = [4, 12, 24, 72]
+    for coin, cm in coin_metrics.items():
+        for w in ROTATION_WINDOWS:
+            hist = find_hist(coin, w)
+            if not hist:
+                continue
+            delta = cm["portfolio_share"] - hist["portfolio_share"]
+            if abs(delta) >= settings.rotation_threshold:
+                direction = "INFLOW" if delta > 0 else "OUTFLOW"
+                emit(
+                    "CAPITAL_ROTATION",
+                    coin,
+                    cm["dominant_side"],
+                    "HIGH" if abs(delta) >= settings.rotation_threshold * 2 else "MEDIUM",
+                    {
+                        "portfolio_share_now": cm["portfolio_share"],
+                        "portfolio_share_prev": hist["portfolio_share"],
+                        "delta": delta,
+                        "window_h": w,
+                        "direction": direction,
+                        "count_conviction": cm["count_conviction"],
+                        "dollar_conviction": cm["dollar_conviction"],
+                        "cohort_participation": cm["cohort_participation"],
+                    },
+                )
+                break  # only emit once per coin (shortest window that fires)
+
+    # ── Signal 8: FUNDING_DIVERGENCE ─────────────────────────────────────────
+    try:
+        async with aiohttp.ClientSession() as session:
+            funding_rates = await fetch_funding_rates(session)
+
+        for coin, cm in coin_metrics.items():
+            rate = funding_rates.get(coin)
+            if rate is None or abs(rate) < settings.funding_threshold:
+                continue
+            # Positive funding = market leans long; negative = market leans short
+            market_side = "LONG" if rate > 0 else "SHORT"
+            if market_side != cm["dominant_side"]:
+                emit(
+                    "FUNDING_DIVERGENCE",
+                    coin,
+                    cm["dominant_side"],
+                    "HIGH" if abs(rate) >= settings.funding_threshold * 3 else "MEDIUM",
+                    {
+                        "funding_rate": rate,
+                        "market_side": market_side,
+                        "cohort_side": cm["dominant_side"],
+                        "count_conviction": cm["count_conviction"],
+                        "dollar_conviction": cm["dollar_conviction"],
+                        "cohort_participation": cm["cohort_participation"],
+                    },
+                )
+    except Exception as e:
+        logger.warning('"Funding divergence check failed", "error": "%s"', e)
+
+    # ── Signal 9: STALE_POSITION_DECAY ───────────────────────────────────────
+    stale_cutoff = snapshot_ts - timedelta(days=settings.stale_age_days)
+    week_cutoff = snapshot_ts - timedelta(days=7)
+
+    for coin, cm in coin_metrics.items():
+        # Count positions older than stale_age_days by checking when they first appeared
+        # Use hl_signals_position_changes with NEW_POSITION type
+        old_entries_cursor = db.hl_signals_position_changes.find(
+            {
+                "coin": coin,
+                "change_type": "NEW_POSITION",
+                "ts": {"$lte": stale_cutoff},
+            },
+            {"address": 1},
+        )
+        old_entry_addrs = {doc["address"] async for doc in old_entries_cursor}
+
+        # Count new entries in past 7 days
+        new_entries_cursor = db.hl_signals_position_changes.find(
+            {
+                "coin": coin,
+                "change_type": "NEW_POSITION",
+                "ts": {"$gte": week_cutoff},
+            },
+            {"address": 1},
+        )
+        new_entry_count = len(await new_entries_cursor.to_list(None))
+
+        # Only fire if majority of holders have old entries and few new entries
+        if (
+            len(old_entry_addrs) >= 3
+            and new_entry_count <= settings.stale_max_new_entries
+            and cm["total_count"] >= 3
+        ):
+            stale_ratio = len(old_entry_addrs) / cm["total_count"]
+            if stale_ratio >= 0.5:
+                emit(
+                    "STALE_POSITION_DECAY",
+                    coin,
+                    cm["dominant_side"],
+                    "MEDIUM",
+                    {
+                        "stale_holders": len(old_entry_addrs),
+                        "total_holders": cm["total_count"],
+                        "stale_ratio": stale_ratio,
+                        "new_entries_7d": new_entry_count,
+                        "count_conviction": cm["count_conviction"],
+                        "dollar_conviction": cm["dollar_conviction"],
+                        "cohort_participation": cm["cohort_participation"],
+                    },
+                )
+
+    # ── 7. Persist signals ───────────────────────────────────────────────────
+    if signals:
+        await db.hl_signals_signals.insert_many(signals)
+
+    # ── 8. Legacy tier alerts ────────────────────────────────────────────────
+    now = datetime.now(timezone.utc)
+    for coin, cm in coin_metrics.items():
+        conviction = cm["dollar_conviction"]
+        n = cm["long_count"] if cm["dominant_side"] == "LONG" else cm["short_count"]
+        total_usd = cm["long_usd"] if cm["dominant_side"] == "LONG" else cm["short_usd"]
 
         tier = None
-        if is_dominant and conviction >= settings.tier1_conviction and n >= settings.tier1_min_traders and total_usd >= settings.tier1_min_usd:
+        if (
+            conviction >= settings.tier1_conviction
+            and n >= settings.tier1_min_traders
+            and total_usd >= settings.tier1_min_usd
+        ):
             tier = 1
-        elif is_dominant and conviction >= settings.tier2_conviction and n >= settings.tier2_min_traders:
+        elif conviction >= settings.tier2_conviction and n >= settings.tier2_min_traders:
             tier = 2
         elif n >= settings.tier3_min_traders:
             tier = 3
 
         if tier:
-            alert_candidates.append((coin, side, tier, doc))
-
-    if convergence_docs:
-        await db.hl_signals_convergence.insert_many(convergence_docs)
-
-    # Write tier alerts — deduplicate by (coin, side, severity) to avoid spam
-    now = datetime.now(timezone.utc)
-    for coin, side, tier, doc in alert_candidates:
-        existing = await db.hl_signals_alerts.find_one(
-            {"coin": coin, "side": side, "severity": tier, "acknowledged": False}
-        )
-        if not existing:
-            await db.hl_signals_alerts.insert_one(
+            existing = await db.hl_signals_alerts.find_one(
                 {
                     "coin": coin,
-                    "side": side,
+                    "side": cm["dominant_side"],
                     "severity": tier,
-                    "alert_type": "TIER_SIGNAL",
-                    "n_traders": doc["n_traders"],
-                    "total_usd": doc["total_usd"],
-                    "conviction": doc["conviction"],
                     "acknowledged": False,
-                    "created_at": now,
-                    "snapshot_ts": snapshot_ts,
                 }
-            )
-
-    # Momentum alerts — compare to 24h ago
-    cutoff_24h = snapshot_ts - timedelta(hours=24)
-    for (coin, side), data in buckets.items():
-        prev = await db.hl_signals_convergence.find_one(
-            {"coin": coin, "side": side, "snapshot_ts": {"$lte": cutoff_24h}},
-            sort=[("snapshot_ts", -1)],
-        )
-        if not prev:
-            continue
-        n_now = len(data["traders"])
-        usd_now = data["total_usd"]
-        threshold = settings.momentum_threshold_pct / 100
-
-        n_grew = prev["n_traders"] > 0 and (n_now - prev["n_traders"]) / prev["n_traders"] >= threshold
-        usd_grew = prev["total_usd"] > 0 and (usd_now - prev["total_usd"]) / prev["total_usd"] >= threshold
-
-        if n_grew or usd_grew:
-            existing = await db.hl_signals_alerts.find_one(
-                {"coin": coin, "side": side, "alert_type": "MOMENTUM_ALERT", "acknowledged": False}
             )
             if not existing:
                 await db.hl_signals_alerts.insert_one(
                     {
                         "coin": coin,
-                        "side": side,
-                        "severity": 2,
-                        "alert_type": "MOMENTUM_ALERT",
-                        "n_traders": n_now,
-                        "total_usd": usd_now,
-                        "conviction": buckets[(coin, side)]["total_usd"],
+                        "side": cm["dominant_side"],
+                        "severity": tier,
+                        "alert_type": "TIER_SIGNAL",
+                        "n_traders": n,
+                        "total_usd": total_usd,
+                        "conviction": conviction,
                         "acknowledged": False,
                         "created_at": now,
                         "snapshot_ts": snapshot_ts,
                     }
                 )
 
+    by_type = defaultdict(int)
+    for s in signals:
+        by_type[s["signal_type"]] += 1
+
     logger.info(
-        '"Convergence complete", "buckets": %d, "alerts": %d',
-        len(convergence_docs),
-        len(alert_candidates),
+        '"Convergence v2 complete", "coin_metrics": %d, "signals": %d, "breakdown": %s',
+        len(coin_metrics),
+        len(signals),
+        dict(by_type),
     )

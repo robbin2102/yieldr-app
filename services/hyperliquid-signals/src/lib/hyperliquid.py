@@ -49,3 +49,27 @@ async def fetch_positions(
         except Exception as e:
             logger.warning('"fetch_positions error", "address": "%s", "error": "%s"', address, e)
             return []
+
+
+async def fetch_funding_rates(session: aiohttp.ClientSession) -> dict[str, float]:
+    """Return coin → current funding rate from Hyperliquid metaAndAssetCtxs."""
+    try:
+        async with session.post(
+            INFO_URL,
+            json={"type": "metaAndAssetCtxs"},
+            timeout=_POSITION_TIMEOUT,
+        ) as resp:
+            resp.raise_for_status()
+            data = await resp.json(content_type=None)
+        meta, asset_ctxs = data[0], data[1]
+        universe = meta.get("universe", [])
+        result: dict[str, float] = {}
+        for asset, ctx in zip(universe, asset_ctxs):
+            try:
+                result[asset["name"]] = float(ctx.get("funding", 0))
+            except (KeyError, TypeError, ValueError):
+                pass
+        return result
+    except Exception as e:
+        logger.warning('"fetch_funding_rates error", "error": "%s"', e)
+        return {}
