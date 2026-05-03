@@ -43,7 +43,7 @@ const CLOB_HOST  = process.env.CLOB_API_BASE || 'https://clob.polymarket.com';
 const WSS_USER   = process.env.WSS_USER || 'wss://ws-subscriptions-clob.polymarket.com/ws/user';
 
 const MAX_ATTEMPTS = 4;
-const GTD_SECONDS  = 30;
+const GTD_SECONDS  = 90;  // Polymarket enforces min expiry of now+60s; 90s gives 30s execution window
 
 // ── CLI args ──────────────────────────────────────────────────────────────────
 function arg(name: string): string | undefined {

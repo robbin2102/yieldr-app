@@ -78,6 +78,25 @@ function parseBody(req: http.IncomingMessage): Promise<any> {
   });
 }
 
+const REDACT_PATTERNS: Array<[RegExp, string]> = [
+  [/"POLY_API_KEY"\s*:\s*"[^"]*"/g,    '"POLY_API_KEY":"[REDACTED]"'],
+  [/"POLY_PASSPHRASE"\s*:\s*"[^"]*"/g, '"POLY_PASSPHRASE":"[REDACTED]"'],
+  [/"POLY_SIGNATURE"\s*:\s*"[^"]*"/g,  '"POLY_SIGNATURE":"[REDACTED]"'],
+  [/"POLY_ADDRESS"\s*:\s*"[^"]*"/g,    '"POLY_ADDRESS":"[REDACTED]"'],
+  [/"POLY_TIMESTAMP"\s*:\s*"[^"]*"/g,  '"POLY_TIMESTAMP":"[REDACTED]"'],
+  [/"Authorization"\s*:\s*"[^"]*"/gi,  '"Authorization":"[REDACTED]"'],
+  [/"passphrase"\s*:\s*"[^"]*"/g,      '"passphrase":"[REDACTED]"'],
+  [/"apiKey"\s*:\s*"[^"]*"/g,          '"apiKey":"[REDACTED]"'],
+  [/"secret"\s*:\s*"[^"]*"/g,          '"secret":"[REDACTED]"'],
+  [/"privateKey"\s*:\s*"[^"]*"/g,      '"privateKey":"[REDACTED]"'],
+];
+
+function redactLine(line: string): string {
+  let s = line;
+  for (const [re, replacement] of REDACT_PATTERNS) s = s.replace(re, replacement);
+  return s;
+}
+
 function cors(res: http.ServerResponse): void {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -151,10 +170,10 @@ const server = http.createServer(async (req, res) => {
     });
     const emit = (obj: object) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
     proc.stdout.on('data', (d: Buffer) => {
-      d.toString().split('\n').forEach(line => { if (line.trim()) emit({ line }); });
+      d.toString().split('\n').forEach(line => { if (line.trim()) emit({ line: redactLine(line) }); });
     });
     proc.stderr.on('data', (d: Buffer) => {
-      d.toString().split('\n').forEach(line => { if (line.trim()) emit({ line }); });
+      d.toString().split('\n').forEach(line => { if (line.trim()) emit({ line: redactLine(line) }); });
     });
     proc.on('close', (code: number | null) => { emit({ done: true, exitCode: code ?? -1 }); res.end(); });
     proc.on('error', (err: Error) => { emit({ done: true, exitCode: -1, error: err.message }); res.end(); });
