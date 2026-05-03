@@ -97,6 +97,7 @@ export class OnChainDetector extends EventEmitter {
   // Reconnect catch-up: replay fills from the block before disconnect
   private lastSeenBlockDec: number = 0;  // highest block number seen from live events
   private catchupFromBlock: number = 0;  // set on close, consumed once after reconnect
+  private isCatchingUp:     boolean = false; // prevents concurrent eth_getLogs calls
 
   constructor(private readonly cfg: OnChainDetectorConfig) {
     super();
@@ -425,9 +426,12 @@ export class OnChainDetector extends EventEmitter {
   // ── Reconnect catch-up ────────────────────────────────────────────────────────
 
   private async catchUpMissedBlocks(): Promise<void> {
+    if (this.isCatchingUp) return; // concurrent rotation: ongoing catch-up already fetches latest tip
+    this.isCatchingUp = true;
     const fromBlock = this.catchupFromBlock;
     this.catchupFromBlock = 0;
-    if (fromBlock === 0) return;
+    if (fromBlock === 0) { this.isCatchingUp = false; return; }
+    try {
 
     // Get current tip
     const tipRes = await fetch(this.cfg.httpUrl, {
@@ -484,6 +488,9 @@ export class OnChainDetector extends EventEmitter {
       }
     }
     console.log(`[OnChainDetector] Catch-up complete: ${totalRaw} raw logs in ${blockCount} blocks, ${seenTxHashes.size} unique txs (blocks ${cappedFrom}→${toBlock})`);
+    } finally {
+      this.isCatchingUp = false;
+    }
   }
 
   // ── Block timestamp (HTTP, cached) ──────────────────────────────────────────
