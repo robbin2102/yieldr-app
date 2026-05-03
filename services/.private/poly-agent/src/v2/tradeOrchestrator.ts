@@ -120,6 +120,13 @@ export class TradeOrchestrator {
   private positionReserved = new Map<string, number>();  // `wallet:conditionId` → USDC reserved
   private sellInProgress   = new Set<string>();          // tokenId
 
+  // Activity counters — emitted as a 60s heartbeat for visibility into the
+  // silent action-gate (non-COPY_ACTIONS traders return without logging).
+  private statsCopied = 0;
+  private statsSkippedByAction: Record<string, number> = {};
+  private statsStale  = 0;
+  private statsHeartbeat: NodeJS.Timeout | null = null;
+
   private constructor(
     detector:      OnChainDetector,
     books:         OrderbookCacheV2,
@@ -195,7 +202,20 @@ export class TradeOrchestrator {
       await this.cleanupStaleExecuting();
     }
     await this.detector.start();
+    this.statsHeartbeat = setInterval(() => this.emitStatsHeartbeat(), 60_000);
     console.log('[Orchestrator] v2 pipeline started');
+  }
+
+  private emitStatsHeartbeat(): void {
+    const totalSkipped = Object.values(this.statsSkippedByAction).reduce((a, b) => a + b, 0);
+    if (this.statsCopied === 0 && totalSkipped === 0 && this.statsStale === 0) return; // no activity → no log
+    const skipBreakdown = Object.entries(this.statsSkippedByAction)
+      .map(([k, v]) => `${k}=${v}`)
+      .join(',') || 'none';
+    console.log(`[Orchestrator] Stats(60s): copied=${this.statsCopied} stale=${this.statsStale} skipped=${totalSkipped} (${skipBreakdown})`);
+    this.statsCopied = 0;
+    this.statsStale = 0;
+    this.statsSkippedByAction = {};
   }
 
   // On startup, mark any EXECUTING records older than 2 minutes as FAILED.
@@ -213,6 +233,7 @@ export class TradeOrchestrator {
   }
 
   stop(): void {
+    if (this.statsHeartbeat) { clearInterval(this.statsHeartbeat); this.statsHeartbeat = null; }
     this.detector.stop();
     this.fillTracker.stop();
     console.log('[Orchestrator] Stopped');
@@ -229,6 +250,7 @@ export class TradeOrchestrator {
     if (trade.isStale) {
       const ageS = Math.round((Date.now() - trade.blockTimestampMs) / 1000);
       console.log(`[Orchestrator] Stale fill skipped: ${trade.label} ${trade.side} $${trade.usdcAmount.toFixed(0)} age=${ageS}s block=${new Date(trade.blockTimestampMs).toISOString().slice(11, 19)}`);
+      this.statsStale++;
       return;
     }
 
@@ -236,7 +258,11 @@ export class TradeOrchestrator {
     const trader = await TraderLoader.get(trade.wallet);
     if (!trader) return;
     const COPY_ACTIONS = new Set(['CONTINUE', 'SCALE_UP', 'SCALE_UP_L2']);
-    if (trader.allocAction && !COPY_ACTIONS.has(trader.allocAction)) return;
+    if (trader.allocAction && !COPY_ACTIONS.has(trader.allocAction)) {
+      this.statsSkippedByAction[trader.allocAction] = (this.statsSkippedByAction[trader.allocAction] ?? 0) + 1;
+      return;
+    }
+    this.statsCopied++;
 
     // ── 2. Prefetch orderbook in parallel with everything below ──────────
     this.books.prefetch(trade.tokenId);
