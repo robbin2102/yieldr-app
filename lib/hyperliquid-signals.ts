@@ -1,6 +1,6 @@
-const BASE =
-  process.env.NEXT_PUBLIC_HL_SIGNALS_API_URL?.replace(/\/$/, "") ??
-  "http://localhost:8000";
+// All API calls go through the Next.js proxy at /api/hl/...
+// Railway URL is kept server-side in HL_SIGNALS_API_URL (no NEXT_PUBLIC_ needed).
+const BASE = "/api/hl";
 
 async function get<T>(path: string): Promise<T> {
   const res = await fetch(`${BASE}${path}`, { next: { revalidate: 0 } });
