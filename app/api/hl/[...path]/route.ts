@@ -23,8 +23,9 @@ async function proxy(req: NextRequest, path: string[]) {
     const json = await res.json();
     return NextResponse.json(json, { status: res.status });
   } catch (err) {
+    const configured = !!process.env.HL_SIGNALS_API_URL;
     return NextResponse.json(
-      { error: "HL Signals service unreachable", upstream },
+      { error: "HL Signals service unreachable", env_var_set: configured },
       { status: 503 }
     );
   }
