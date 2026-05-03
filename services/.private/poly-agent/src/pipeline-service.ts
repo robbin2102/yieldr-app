@@ -186,7 +186,7 @@ async function main() {
   // 1-minute delay so market indexer gets a head start on first-ever run.
   setTimeout(() => {
     startPipeline(PIPELINE_CONFIG.INTERVALS.PIPELINE).catch(
-      err => console.error('[Pipeline] startPipeline error:', err),
+      err => console.error('[Pipeline] startPipeline error:', err?.message ?? err),
     );
   }, 1 * 60 * 1000);
 
@@ -194,7 +194,7 @@ async function main() {
   // 2-minute delay to ensure DB is ready.
   setTimeout(() => {
     startAllocationChecker(PIPELINE_CONFIG.INTERVALS.ANALYZE_ALLOCATIONS).catch(
-      err => console.error('[Pipeline] startAllocationChecker error:', err),
+      err => console.error('[Pipeline] startAllocationChecker error:', err?.message ?? err),
     );
   }, 2 * 60 * 1000);
 
@@ -223,10 +223,10 @@ async function shutdown(signal: string) {
 
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT',  () => shutdown('SIGINT'));
-process.on('uncaughtException',  (error)  => console.error('[Pipeline] Uncaught:', error));
-process.on('unhandledRejection', (reason) => console.error('[Pipeline] Unhandled:', reason));
+process.on('uncaughtException',  (error)  => console.error('[Pipeline] Uncaught:', (error as any)?.message ?? error));
+process.on('unhandledRejection', (reason) => console.error('[Pipeline] Unhandled:', (reason as any)?.message ?? reason));
 
 main().catch((error) => {
-  console.error('[Pipeline] Fatal:', error);
+  console.error('[Pipeline] Fatal:', error?.message ?? error);
   process.exit(1);
 });

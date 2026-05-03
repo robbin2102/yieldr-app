@@ -29,8 +29,10 @@ function startBot(): { success: boolean; message: string } {
   botProcess = spawn('node', ['src/v2/index.js'], {
     cwd: POLY_AGENT_DIR,
     env: process.env,
-    stdio: 'inherit',
+    stdio: ['ignore', 'pipe', 'pipe'],
   });
+  botProcess.stdout!.on('data', (d: Buffer) => process.stdout.write(redactLine(d.toString())));
+  botProcess.stderr!.on('data', (d: Buffer) => process.stderr.write(redactLine(d.toString())));
   botProcess.on('exit', (code) => {
     console.log(`[Admin] Bot process exited with code ${code}`);
     botProcess = null;
@@ -56,8 +58,8 @@ function runAdminScript(args: string[], tag: string): Promise<{ exitCode: number
     const startMs = Date.now();
     const proc = spawn('node', args, { cwd: POLY_AGENT_DIR, env: process.env });
     let stdout = '', stderr = '';
-    proc.stdout.on('data', (d: Buffer) => { const s = d.toString(); stdout += s; process.stdout.write(`${tag} ${s}`); });
-    proc.stderr.on('data', (d: Buffer) => { const s = d.toString(); stderr += s; process.stderr.write(`${tag} ${s}`); });
+    proc.stdout.on('data', (d: Buffer) => { const s = redactLine(d.toString()); stdout += s; process.stdout.write(`${tag} ${s}`); });
+    proc.stderr.on('data', (d: Buffer) => { const s = redactLine(d.toString()); stderr += s; process.stderr.write(`${tag} ${s}`); });
     proc.on('close', (code: number | null) => {
       console.log(`${tag} exit=${code} in ${((Date.now() - startMs) / 1000).toFixed(1)}s`);
       resolve({ exitCode: code ?? -1, stdout, stderr });

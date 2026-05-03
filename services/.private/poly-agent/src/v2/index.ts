@@ -89,7 +89,7 @@ process.on('uncaughtException', (err: any) => {
     console.error('[v2] MongoDB error (non-fatal, Mongoose will reconnect):', err.message);
     return;
   }
-  console.error('[v2] Uncaught exception — exiting:', err);
+  console.error('[v2] Uncaught exception — exiting:', err.message ?? err);
   process.exit(1);
 });
 process.on('unhandledRejection', (reason: any) => {
