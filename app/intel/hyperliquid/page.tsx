@@ -163,10 +163,11 @@ export default function HyperliquidDashboard() {
   const qc = useQueryClient();
   const [hours, setHours] = useState(24);
 
-  const { data: dashData, isLoading } = useQuery({
+  const { data: dashData, isLoading, isError: dashError } = useQuery({
     queryKey: ["hl-dashboard", hours],
     queryFn: () => hlSignals.getDashboard(hours),
     refetchInterval: REFETCH_MS,
+    retry: 1,
   });
 
   const { data: alertsData } = useQuery({
@@ -294,6 +295,11 @@ export default function HyperliquidDashboard() {
       )}
 
       {/* 4-Column Dashboard */}
+      {dashError && (
+        <div className="mx-4 mt-3 bg-red-950 border border-red-800 rounded px-4 py-2 text-xs text-red-400 font-mono">
+          ⚠ API unreachable — check NEXT_PUBLIC_HL_SIGNALS_API_URL env var in Vercel
+        </div>
+      )}
       {isLoading ? (
         <div className="p-8 text-center text-gray-600 text-xs">Loading signals…</div>
       ) : (
