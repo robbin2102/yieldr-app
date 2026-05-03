@@ -34,11 +34,28 @@ function arg(name: string, fallback: string): string {
   return idx !== -1 && process.argv[idx + 1] ? process.argv[idx + 1] : fallback;
 }
 
-// High-volume Yes token for "Will there be a US recession?" — good proxy market for traffic
-const DEFAULT_TOKEN = '21742633143463906290569050155826241533067272736897614950488156847949938836455';
-const TOKEN_ID      = arg('token', DEFAULT_TOKEN);
+const TOKEN_ARG     = arg('token', '');
 const DURATION_MS   = parseInt(arg('duration', '60')) * 1000;
+const TOP_N         = parseInt(arg('top', '20'));
 const WSS_MARKET    = process.env.WSS_MARKET || 'wss://ws-subscriptions-clob.polymarket.com/ws/market';
+
+// ── Auto-fetch active high-volume markets from Polymarket Gamma API ────────
+async function fetchActiveTokens(limit: number): Promise<string[]> {
+  const url = `https://gamma-api.polymarket.com/markets?active=true&closed=false&archived=false&order=volumeNum&ascending=false&limit=${limit}`;
+  console.log(`[Latency] Fetching ${limit} top-volume active markets...`);
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Gamma API ${res.status}: ${await res.text()}`);
+  const markets = await res.json() as any[];
+  const tokens: string[] = [];
+  for (const m of markets) {
+    let cti = m.clobTokenIds;
+    if (typeof cti === 'string') {
+      try { cti = JSON.parse(cti); } catch { continue; }
+    }
+    if (Array.isArray(cti)) tokens.push(...cti.filter((t: any) => typeof t === 'string' && /^\d+$/.test(t)));
+  }
+  return [...new Set(tokens)];
+}
 
 // ── Stats helpers ─────────────────────────────────────────────────────────────
 function percentile(sorted: number[], p: number): number {
@@ -72,21 +89,71 @@ const priceSamples:   number[] = [];  // last_trade_price events (higher volume)
 
 let connected = false;
 let done = false;
+let totalMessages = 0;
+const eventTypeCounts: Record<string, number> = {};
+let heartbeat: NodeJS.Timeout;
+let ws: WebSocket;
 
-console.log(`\n[Latency] Connecting to ${WSS_MARKET}`);
-console.log(`[Latency] Token: ${TOKEN_ID.slice(0, 20)}...`);
-console.log(`[Latency] Duration: ${DURATION_MS / 1000}s\n`);
+async function main() {
+  let TOKEN_IDS: string[];
+  if (TOKEN_ARG) {
+    TOKEN_IDS = TOKEN_ARG.split(',').map(t => t.trim()).filter(Boolean);
+  } else {
+    try {
+      TOKEN_IDS = await fetchActiveTokens(TOP_N);
+      console.log(`[Latency] Got ${TOKEN_IDS.length} active token(s) from Gamma API\n`);
+    } catch (e: any) {
+      console.error(`[Latency] Could not fetch active markets: ${e.message}`);
+      console.error(`[Latency] Pass --token <id> to specify manually.`);
+      process.exit(1);
+    }
+  }
 
-const ws = new WebSocket(WSS_MARKET, { handshakeTimeout: 10_000 });
+  if (TOKEN_IDS.length === 0) {
+    console.error('[Latency] No tokens to subscribe to.');
+    process.exit(1);
+  }
 
-ws.on('open', () => {
-  connected = true;
-  console.log(`[Latency] Connected at ${new Date().toISOString()}`);
-  ws.send(JSON.stringify({ type: 'market', assets_ids: [TOKEN_ID] }));
-});
+  console.log(`[Latency] Connecting to ${WSS_MARKET}`);
+  console.log(`[Latency] Subscribing to ${TOKEN_IDS.length} token(s)`);
+  console.log(`[Latency] Duration: ${DURATION_MS / 1000}s\n`);
 
-ws.on('message', (raw: Buffer) => {
+  ws = new WebSocket(WSS_MARKET, { handshakeTimeout: 10_000 });
+
+  ws.on('open', () => {
+    connected = true;
+    console.log(`[Latency] Connected at ${new Date().toISOString()}`);
+    ws.send(JSON.stringify({ type: 'market', assets_ids: TOKEN_IDS }));
+    console.log(`[Latency] Subscribed — waiting for events...\n`);
+  });
+
+  // Heartbeat so user can see progress even when no trade events arrive yet
+  heartbeat = setInterval(() => {
+    const eventSummary = Object.entries(eventTypeCounts)
+      .map(([k, v]) => `${k}=${v}`)
+      .join(' ') || 'none yet';
+    console.log(`[Heartbeat] msgs=${totalMessages} events: ${eventSummary} | trade samples=${clobSamples.length} price samples=${priceSamples.length}`);
+  }, 10_000);
+
+  ws.on('message', onMessage);
+  ws.on('error', (err) => console.error(`[Latency] WS error: ${err.message}`));
+  ws.on('close', (code, reason) => {
+    if (!done) console.warn(`[Latency] WS closed early code=${code} reason=${reason?.toString() || ''}`);
+  });
+
+  setTimeout(finish, DURATION_MS);
+
+  setTimeout(() => {
+    if (!connected) {
+      console.error('[Latency] Failed to connect within 15s. Check network or WSS_MARKET env var.');
+      process.exit(1);
+    }
+  }, 15_000);
+}
+
+function onMessage(raw: Buffer) {
   const receivedAt = Date.now();
+  totalMessages++;
   let msgs: any[];
   try {
     const parsed = JSON.parse(raw.toString());
@@ -96,6 +163,7 @@ ws.on('message', (raw: Buffer) => {
   }
 
   for (const msg of msgs) {
+    if (msg.event_type) eventTypeCounts[msg.event_type] = (eventTypeCounts[msg.event_type] ?? 0) + 1;
     if (!msg.timestamp) continue;
 
     // Polymarket timestamps are Unix seconds (10-digit) or ms (13-digit)
@@ -120,20 +188,13 @@ ws.on('message', (raw: Buffer) => {
       }
     }
   }
-});
-
-ws.on('error', (err) => {
-  console.error(`[Latency] WS error: ${err.message}`);
-});
-
-ws.on('close', (code, reason) => {
-  if (!done) console.warn(`[Latency] WS closed early code=${code} reason=${reason?.toString() || ''}`);
-});
+}
 
 function finish() {
   if (done) return;
   done = true;
-  ws.close();
+  if (heartbeat) clearInterval(heartbeat);
+  if (ws) ws.close();
 
   console.log('\n══════════════════════════════════════════════');
   console.log('  FINAL RESULTS');
@@ -167,17 +228,11 @@ function finish() {
   process.exit(0);
 }
 
-setTimeout(finish, DURATION_MS);
-
 // Allow Ctrl+C early exit with stats
 process.on('SIGINT', finish);
 process.on('SIGTERM', finish);
 
-if (!connected) {
-  setTimeout(() => {
-    if (!connected) {
-      console.error('[Latency] Failed to connect within 15s. Check network or token.');
-      process.exit(1);
-    }
-  }, 15_000);
-}
+main().catch(err => {
+  console.error(`[Latency] Fatal: ${err.message ?? err}`);
+  process.exit(1);
+});
