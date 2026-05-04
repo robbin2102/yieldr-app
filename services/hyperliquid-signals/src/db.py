@@ -55,6 +55,26 @@ async def ensure_indexes() -> None:
     await db.hl_signals_signals.create_index([("signal_type", 1), ("snapshot_ts", -1)])
     await db.hl_signals_signals.create_index([("coin", 1), ("snapshot_ts", -1)])
 
+    # TTL indexes — auto-expire old data to prevent unbounded growth
+    await db.hl_signals_positions.create_index(
+        "snapshot_ts", expireAfterSeconds=7 * 24 * 3600, name="positions_ttl"
+    )
+    await db.hl_signals_convergence.create_index(
+        "snapshot_ts", expireAfterSeconds=7 * 24 * 3600, name="convergence_ttl"
+    )
+    await db.hl_signals_signals.create_index(
+        "snapshot_ts", expireAfterSeconds=7 * 24 * 3600, name="signals_ttl"
+    )
+    await db.hl_signals_coin_metrics.create_index(
+        "snapshot_ts", expireAfterSeconds=30 * 24 * 3600, name="coin_metrics_ttl"
+    )
+    await db.hl_signals_position_changes.create_index(
+        "ts", expireAfterSeconds=30 * 24 * 3600, name="position_changes_ttl"
+    )
+    await db.hl_signals_whale_events.create_index(
+        "ts", expireAfterSeconds=30 * 24 * 3600, name="whale_events_ttl"
+    )
+
     logger.info("MongoDB indexes ensured")
 
 

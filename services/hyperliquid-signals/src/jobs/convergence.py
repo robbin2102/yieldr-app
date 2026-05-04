@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
@@ -11,7 +12,7 @@ from ..lib.hyperliquid import fetch_funding_rates
 logger = logging.getLogger(__name__)
 
 # Time windows in hours for acceleration analysis
-ACCEL_WINDOWS = [1, 4, 12, 24, 72, 168]
+ACCEL_WINDOWS = [1, 4, 12, 24, 48, 72, 168]
 
 
 def _find_closest_before(history: list[dict], cutoff: datetime) -> dict | None:
@@ -189,25 +190,35 @@ async def run_convergence(snapshot_ts: datetime) -> None:
     if convergence_docs:
         await db.hl_signals_convergence.insert_many(convergence_docs)
 
-    # ── 5. Load historical coin_metrics for time-window analysis ─────────────
-    history_since = snapshot_ts - timedelta(days=7)
-    history_cursor = db.hl_signals_coin_metrics.find(
-        {
-            "coin": {"$in": list(coin_metrics.keys())},
-            "snapshot_ts": {"$gte": history_since, "$lt": snapshot_ts},
-        }
-    )
-    history_docs = await history_cursor.to_list(None)
+    # ── 5. Fetch historical snapshots per time-window (targeted, not bulk) ───
+    # Instead of loading all 7d history into RAM, run one aggregation per window
+    # that returns the single closest snapshot per coin. ~176 docs × 6 windows
+    # vs ~350K docs loaded all at once.
+    coins_list = list(coin_metrics.keys())
 
-    history_by_coin: dict[str, list[dict]] = {}
-    for doc in history_docs:
-        history_by_coin.setdefault(doc["coin"], []).append(doc)
-    for coin in history_by_coin:
-        history_by_coin[coin].sort(key=lambda d: d["snapshot_ts"])
+    async def _fetch_window(hours_ago: int) -> dict[str, dict]:
+        """Return coin → nearest coin_metrics doc at or before snapshot_ts - hours_ago."""
+        cutoff = snapshot_ts - timedelta(hours=hours_ago)
+        pipeline = [
+            {"$match": {"coin": {"$in": coins_list}, "snapshot_ts": {"$lte": cutoff}}},
+            {"$sort": {"coin": 1, "snapshot_ts": -1}},
+            {"$group": {"_id": "$coin", "doc": {"$first": "$$ROOT"}}},
+            {"$replaceRoot": {"newRoot": "$doc"}},
+            {"$project": {"_id": 0}},
+        ]
+        docs = await db.hl_signals_coin_metrics.aggregate(pipeline).to_list(
+            len(coins_list) + 10
+        )
+        return {d["coin"]: d for d in docs}
+
+    # Run all window lookups concurrently
+    window_results = await asyncio.gather(*[_fetch_window(w) for w in ACCEL_WINDOWS])
+    hist_by_window: dict[int, dict[str, dict]] = {
+        w: result for w, result in zip(ACCEL_WINDOWS, window_results)
+    }
 
     def find_hist(coin: str, hours_ago: int) -> dict | None:
-        cutoff = snapshot_ts - timedelta(hours=hours_ago)
-        return _find_closest_before(history_by_coin.get(coin, []), cutoff)
+        return hist_by_window.get(hours_ago, {}).get(coin)
 
     # ── 6. Detect signals ────────────────────────────────────────────────────
     signals: list[dict] = []
@@ -449,32 +460,40 @@ async def run_convergence(snapshot_ts: datetime) -> None:
         logger.warning('"Funding divergence check failed", "error": "%s"', e)
 
     # ── Signal 9: STALE_POSITION_DECAY ───────────────────────────────────────
+    # Single bulk aggregation instead of 176×2 per-coin queries
     stale_cutoff = snapshot_ts - timedelta(days=settings.stale_age_days)
     week_cutoff = snapshot_ts - timedelta(days=7)
 
-    for coin, cm in coin_metrics.items():
-        # Count positions older than stale_age_days by checking when they first appeared
-        # Use hl_signals_position_changes with NEW_POSITION type
-        old_entries_cursor = db.hl_signals_position_changes.find(
-            {
-                "coin": coin,
+    stale_pipeline = [
+        {
+            "$match": {
+                "coin": {"$in": coins_list},
                 "change_type": "NEW_POSITION",
                 "ts": {"$lte": stale_cutoff},
-            },
-            {"address": 1},
-        )
-        old_entry_addrs = {doc["address"] async for doc in old_entries_cursor}
-
-        # Count new entries in past 7 days
-        new_entries_cursor = db.hl_signals_position_changes.find(
-            {
-                "coin": coin,
+            }
+        },
+        {"$group": {"_id": "$coin", "old_addrs": {"$addToSet": "$address"}}},
+    ]
+    new_pipeline = [
+        {
+            "$match": {
+                "coin": {"$in": coins_list},
                 "change_type": "NEW_POSITION",
                 "ts": {"$gte": week_cutoff},
-            },
-            {"address": 1},
-        )
-        new_entry_count = len(await new_entries_cursor.to_list(None))
+            }
+        },
+        {"$group": {"_id": "$coin", "new_count": {"$sum": 1}}},
+    ]
+    stale_docs, new_docs = await asyncio.gather(
+        db.hl_signals_position_changes.aggregate(stale_pipeline).to_list(len(coins_list) + 10),
+        db.hl_signals_position_changes.aggregate(new_pipeline).to_list(len(coins_list) + 10),
+    )
+    stale_map = {d["_id"]: d["old_addrs"] for d in stale_docs}
+    new_map = {d["_id"]: d["new_count"] for d in new_docs}
+
+    for coin, cm in coin_metrics.items():
+        old_entry_addrs = stale_map.get(coin, [])
+        new_entry_count = new_map.get(coin, 0)
 
         # Only fire if majority of holders have old entries and few new entries
         if (
