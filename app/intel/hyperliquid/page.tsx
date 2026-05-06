@@ -34,25 +34,58 @@ function pct(n: number | null | undefined, decimals = 0) {
   return `${(n * 100).toFixed(decimals)}%`;
 }
 
-// Short label + color for each signal type
-const SIGNAL_META: Record<string, { label: string; color: string }> = {
-  CONVERGENCE_ACCELERATION: { label: "ACCEL", color: "bg-red-900 text-red-300 border-red-800" },
-  CAPITAL_ROTATION:         { label: "ROT",   color: "bg-orange-900 text-orange-300 border-orange-800" },
-  COHORT_DIRECTION_FLIP:    { label: "FLIP",  color: "bg-yellow-900 text-yellow-300 border-yellow-800" },
-  WHALE_ACTIVITY:           { label: "WHALE", color: "bg-purple-900 text-purple-300 border-purple-800" },
-  SMART_EXIT:               { label: "EXIT",  color: "bg-blue-900 text-blue-300 border-blue-800" },
-  LEVERAGE_SPIKE:           { label: "LEV↑",  color: "bg-pink-900 text-pink-300 border-pink-800" },
-  ASYMMETRIC_POSITIONING:   { label: "ASYM",  color: "bg-teal-900 text-teal-300 border-teal-800" },
-  FUNDING_DIVERGENCE:       { label: "FUND",  color: "bg-indigo-900 text-indigo-300 border-indigo-800" },
-  STALE_POSITION_DECAY:     { label: "STALE", color: "bg-gray-800 text-gray-400 border-gray-700" },
+// Short label + color + tooltip for each signal type
+const SIGNAL_META: Record<string, { label: string; color: string; tooltip: string }> = {
+  CONVERGENCE_ACCELERATION: {
+    label: "ACCEL", color: "bg-red-900 text-red-300 border-red-800",
+    tooltip: "Multiple conviction metrics (count, dollar, cohort%) growing across several time windows — smart money actively building this position.",
+  },
+  CAPITAL_ROTATION: {
+    label: "ROT", color: "bg-orange-900 text-orange-300 border-orange-800",
+    tooltip: "This coin's share of total cohort portfolio shifted significantly — capital flowing in or out relative to other coins.",
+  },
+  COHORT_DIRECTION_FLIP: {
+    label: "FLIP", color: "bg-yellow-900 text-yellow-300 border-yellow-800",
+    tooltip: "Dominant side switched LONG↔SHORT in the last 48h — cohort collectively changed directional view.",
+  },
+  WHALE_ACTIVITY: {
+    label: "WHALE", color: "bg-purple-900 text-purple-300 border-purple-800",
+    tooltip: "A Q1 (top-quartile) trader made a major move: wakeup after dormancy, large scaleup, full direction flip, or full exit.",
+  },
+  SMART_EXIT: {
+    label: "EXIT", color: "bg-blue-900 text-blue-300 border-blue-800",
+    tooltip: "Q1 traders closing positions at a higher rate than Q4 — smart money exiting faster than the crowd. Caution signal.",
+  },
+  LEVERAGE_SPIKE: {
+    label: "LEV↑", color: "bg-pink-900 text-pink-300 border-pink-800",
+    tooltip: "Average leverage jumped significantly vs 4h ago — cohort increasing risk exposure on this coin right now.",
+  },
+  ASYMMETRIC_POSITIONING: {
+    label: "ASYM", color: "bg-teal-900 text-teal-300 border-teal-800",
+    tooltip: "Large gap between headcount conviction and dollar conviction — whales and crowd are sizing very differently on the same side.",
+  },
+  FUNDING_DIVERGENCE: {
+    label: "FUND", color: "bg-indigo-900 text-indigo-300 border-indigo-800",
+    tooltip: "Cohort bias opposes the market funding rate — smart money positioned against the crowd's funding-implied lean.",
+  },
+  STALE_POSITION_DECAY: {
+    label: "STALE", color: "bg-gray-800 text-gray-400 border-gray-700",
+    tooltip: "Most holders entered long ago with few new entries recently — stagnant positions, conviction likely fading.",
+  },
 };
 
 function SignalPill({ type, severity }: { type: string; severity: string }) {
-  const meta = SIGNAL_META[type] ?? { label: type.slice(0, 5), color: "bg-gray-800 text-gray-400 border-gray-700" };
+  const meta = SIGNAL_META[type] ?? { label: type.slice(0, 5), color: "bg-gray-800 text-gray-400 border-gray-700", tooltip: type };
   const dimmed = severity === "MEDIUM" ? "opacity-60" : "";
   return (
-    <span className={`inline-flex items-center text-[9px] font-bold px-1 py-0.5 rounded border ${meta.color} ${dimmed}`}>
-      {meta.label}
+    <span className={`relative group inline-flex ${dimmed}`}>
+      <span className={`inline-flex items-center text-[9px] font-bold px-1 py-0.5 rounded border cursor-default ${meta.color}`}>
+        {meta.label}
+      </span>
+      <span className="pointer-events-none absolute bottom-full left-0 mb-1.5 w-56 bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-[10px] text-gray-300 leading-relaxed invisible group-hover:visible z-50 shadow-xl whitespace-normal">
+        <span className={`font-bold block mb-0.5 ${meta.color.split(" ")[1]}`}>{meta.label}</span>
+        {meta.tooltip}
+      </span>
     </span>
   );
 }
