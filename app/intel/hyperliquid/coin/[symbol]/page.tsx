@@ -93,6 +93,39 @@ const EVENT_COLOR: Record<string, string> = {
   LEVERAGE_PUSH: "text-orange-400",
 };
 
+function SignalPillWithTooltip({ signal }: { signal: { signal_type: string; severity: string } }) {
+  const [anchor, setAnchor] = useState<{ x: number; y: number } | null>(null);
+  const meta = SIGNAL_META[signal.signal_type] ?? {
+    label: signal.signal_type.slice(0, 5),
+    color: "bg-gray-800 text-gray-400 border-gray-700",
+    tooltip: signal.signal_type,
+  };
+  return (
+    <>
+      <span
+        className={`inline-flex items-center gap-1 text-[9px] font-bold px-1.5 py-0.5 rounded border cursor-default ${meta.color}`}
+        onMouseEnter={(e) => {
+          const r = e.currentTarget.getBoundingClientRect();
+          setAnchor({ x: r.left, y: r.top });
+        }}
+        onMouseLeave={() => setAnchor(null)}
+      >
+        <span className={signal.severity === "HIGH" ? "text-red-400" : "text-yellow-500"}>●</span>
+        {meta.label}
+      </span>
+      {anchor && (
+        <span
+          className="fixed w-56 bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-[10px] text-gray-300 leading-relaxed z-[9999] shadow-xl pointer-events-none whitespace-normal"
+          style={{ left: anchor.x, top: anchor.y - 6, transform: "translateY(-100%)" }}
+        >
+          <span className={`font-bold block mb-0.5 ${meta.color.split(" ")[1]}`}>{meta.label}</span>
+          {meta.tooltip}
+        </span>
+      )}
+    </>
+  );
+}
+
 export default function CoinDetailPage({
   params,
 }: {
@@ -203,14 +236,16 @@ export default function CoinDetailPage({
                   </div>
                 </div>
               </div>
-              {/* Whale events compact */}
-              <div className="bg-gray-900 border border-gray-800 rounded p-3 overflow-hidden">
-                <div className="text-gray-500 mb-2 font-bold text-[10px]">WHALE MOVES (72H)</div>
+              {/* Whale events — all, scrollable */}
+              <div className="bg-gray-900 border border-gray-800 rounded p-3 flex flex-col">
+                <div className="text-gray-500 mb-2 font-bold text-[10px] shrink-0">
+                  WHALE MOVES (72H){whaleEvents.length > 0 && <span className="text-gray-700 font-normal ml-1">· {whaleEvents.length}</span>}
+                </div>
                 {whaleEvents.length === 0 ? (
                   <p className="text-gray-700 text-[10px]">None</p>
                 ) : (
-                  <div className="space-y-1">
-                    {whaleEvents.slice(0, 4).map((e, i) => (
+                  <div className="space-y-1 overflow-y-auto max-h-40 pr-1">
+                    {whaleEvents.map((e, i) => (
                       <div key={i} className="flex items-center gap-2 text-[10px]">
                         <span className={`font-bold w-16 shrink-0 ${EVENT_COLOR[e.event_type] ?? "text-gray-400"}`}>
                           {e.event_type}
@@ -229,9 +264,6 @@ export default function CoinDetailPage({
                         <span className="text-gray-700 ml-auto shrink-0">{fmtAge(e.ts)}</span>
                       </div>
                     ))}
-                    {whaleEvents.length > 4 && (
-                      <div className="text-gray-700 text-[10px]">+{whaleEvents.length - 4} more</div>
-                    )}
                   </div>
                 )}
               </div>
@@ -245,22 +277,10 @@ export default function CoinDetailPage({
               <h2 className="text-gray-500 text-xs font-bold tracking-widest shrink-0">
                 POSITIONS ({holders.length})
               </h2>
-              {/* Active signal pills with tooltips */}
-              {signals.map((s, i) => {
-                const meta = SIGNAL_META[s.signal_type] ?? { label: s.signal_type.slice(0, 5), color: "bg-gray-800 text-gray-400 border-gray-700", tooltip: s.signal_type };
-                return (
-                  <span key={i} className="relative group inline-flex">
-                    <span className={`inline-flex items-center gap-1 text-[9px] font-bold px-1.5 py-0.5 rounded border cursor-default ${meta.color}`}>
-                      <span className={s.severity === "HIGH" ? "text-red-400" : "text-yellow-500"}>●</span>
-                      {meta.label}
-                    </span>
-                    <span className="pointer-events-none absolute bottom-full left-0 mb-1.5 w-56 bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-[10px] text-gray-300 leading-relaxed invisible group-hover:visible z-50 shadow-xl whitespace-normal">
-                      <span className={`font-bold block mb-0.5 ${meta.color.split(" ")[1]}`}>{meta.label}</span>
-                      {meta.tooltip}
-                    </span>
-                  </span>
-                );
-              })}
+              {/* Active signal pills with fixed-position tooltips */}
+              {signals.map((s, i) => (
+                <SignalPillWithTooltip key={i} signal={s} />
+              ))}
               <div className="ml-auto flex gap-1">
                 {(["size", "recency"] as const).map((s) => (
                   <button

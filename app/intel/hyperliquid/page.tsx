@@ -75,18 +75,31 @@ const SIGNAL_META: Record<string, { label: string; color: string; tooltip: strin
 };
 
 function SignalPill({ type, severity }: { type: string; severity: string }) {
+  const [anchor, setAnchor] = useState<{ x: number; y: number } | null>(null);
   const meta = SIGNAL_META[type] ?? { label: type.slice(0, 5), color: "bg-gray-800 text-gray-400 border-gray-700", tooltip: type };
   const dimmed = severity === "MEDIUM" ? "opacity-60" : "";
   return (
-    <span className={`relative group inline-flex ${dimmed}`}>
-      <span className={`inline-flex items-center text-[9px] font-bold px-1 py-0.5 rounded border cursor-default ${meta.color}`}>
+    <>
+      <span
+        className={`inline-flex items-center text-[9px] font-bold px-1 py-0.5 rounded border cursor-default ${meta.color} ${dimmed}`}
+        onMouseEnter={(e) => {
+          const r = e.currentTarget.getBoundingClientRect();
+          setAnchor({ x: r.left, y: r.top });
+        }}
+        onMouseLeave={() => setAnchor(null)}
+      >
         {meta.label}
       </span>
-      <span className="pointer-events-none absolute bottom-full left-0 mb-1.5 w-56 bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-[10px] text-gray-300 leading-relaxed invisible group-hover:visible z-50 shadow-xl whitespace-normal">
-        <span className={`font-bold block mb-0.5 ${meta.color.split(" ")[1]}`}>{meta.label}</span>
-        {meta.tooltip}
-      </span>
-    </span>
+      {anchor && (
+        <span
+          className="fixed w-56 bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-[10px] text-gray-300 leading-relaxed z-[9999] shadow-xl pointer-events-none whitespace-normal"
+          style={{ left: anchor.x, top: anchor.y - 6, transform: "translateY(-100%)" }}
+        >
+          <span className={`font-bold block mb-0.5 ${meta.color.split(" ")[1]}`}>{meta.label}</span>
+          {meta.tooltip}
+        </span>
+      )}
+    </>
   );
 }
 
