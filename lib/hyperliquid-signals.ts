@@ -228,8 +228,8 @@ export const hlSignals = {
     return get<{ data: SignalV2[]; total: number }>(`/api/signals/v2/signals?${params}`);
   },
 
-  getWhaleEvents: (coin?: string, eventType?: string, hours = 24) => {
-    const params = new URLSearchParams({ hours: String(hours) });
+  getWhaleEvents: (coin?: string, eventType?: string, hours = 24, limit = 500) => {
+    const params = new URLSearchParams({ hours: String(hours), limit: String(limit) });
     if (coin) params.set("coin", coin);
     if (eventType) params.set("event_type", eventType);
     return get<{ data: WhaleEvent[]; total: number }>(`/api/signals/v2/whale-events?${params}`);

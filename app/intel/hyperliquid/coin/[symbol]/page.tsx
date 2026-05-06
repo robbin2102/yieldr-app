@@ -150,7 +150,7 @@ export default function CoinDetailPage({
 
   const { data: whaleData } = useQuery({
     queryKey: ["hl-coin-whales", coin],
-    queryFn: () => hlSignals.getWhaleEvents(coin, undefined, 72),
+    queryFn: () => hlSignals.getWhaleEvents(coin, undefined, 6),
     refetchInterval: 30_000,
   });
 
@@ -239,7 +239,7 @@ export default function CoinDetailPage({
               {/* Whale events — all, scrollable */}
               <div className="bg-gray-900 border border-gray-800 rounded p-3 flex flex-col">
                 <div className="text-gray-500 mb-2 font-bold text-[10px] shrink-0">
-                  WHALE MOVES (72H){whaleEvents.length > 0 && <span className="text-gray-700 font-normal ml-1">· {whaleEvents.length}</span>}
+                  WHALE MOVES (6H){whaleEvents.length > 0 && <span className="text-gray-700 font-normal ml-1">· {whaleEvents.length}</span>}
                 </div>
                 {whaleEvents.length === 0 ? (
                   <p className="text-gray-700 text-[10px]">None</p>

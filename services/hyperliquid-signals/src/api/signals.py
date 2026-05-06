@@ -192,7 +192,7 @@ async def get_whale_events(
     coin: str | None = Query(None),
     event_type: str | None = Query(None),
     hours: int = Query(24, ge=1, le=168),
-    limit: int = Query(50, ge=1, le=200),
+    limit: int = Query(500, ge=1, le=2000),
 ):
     db = get_db()
     since = _utcnow() - timedelta(hours=hours)
