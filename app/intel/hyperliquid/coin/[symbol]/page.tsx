@@ -1,6 +1,6 @@
 "use client";
 
-import { use } from "react";
+import { use, useState } from "react";
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { hlSignals } from "@/lib/hyperliquid-signals";
@@ -18,8 +18,40 @@ function pct(n: number | null | undefined, d = 1) {
   return `${(n * 100).toFixed(d)}%`;
 }
 
-function fmtTs(ts: string) {
-  return new Date(ts).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
+function fmtTs(ts: string | null | undefined, showDate = false) {
+  if (!ts) return "—";
+  const d = new Date(ts + (ts.endsWith("Z") ? "" : "Z"));
+  if (showDate) {
+    return d.toLocaleDateString("en-US", { month: "short", day: "numeric" }) +
+      " " + d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
+  }
+  return d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
+}
+
+function fmtAge(ts: string | null | undefined) {
+  if (!ts) return "—";
+  const d = new Date(ts + (ts.endsWith("Z") ? "" : "Z"));
+  const diffMs = Date.now() - d.getTime();
+  const diffH = diffMs / 3_600_000;
+  if (diffH < 1) return `${Math.round(diffH * 60)}m ago`;
+  if (diffH < 24) return `${Math.round(diffH)}h ago`;
+  return `${Math.round(diffH / 24)}d ago`;
+}
+
+const Q_COLOR: Record<number, string> = {
+  1: "bg-yellow-500 text-black",
+  2: "bg-blue-700 text-white",
+  3: "bg-gray-700 text-gray-300",
+  4: "bg-gray-800 text-gray-500",
+};
+
+function QBadge({ q }: { q?: number | null }) {
+  if (!q) return null;
+  return (
+    <span className={`text-[9px] font-bold px-1 rounded ${Q_COLOR[q] ?? "bg-gray-800 text-gray-500"}`}>
+      Q{q}
+    </span>
+  );
 }
 
 export default function CoinDetailPage({
@@ -29,6 +61,7 @@ export default function CoinDetailPage({
 }) {
   const { symbol } = use(params);
   const coin = symbol.toUpperCase();
+  const [sortBy, setSortBy] = useState<"size" | "recency">("size");
 
   const { data: coinData, isLoading: coinLoading } = useQuery({
     queryKey: ["hl-coin", coin],
@@ -55,11 +88,21 @@ export default function CoinDetailPage({
     select: (d) => d.data.find((m) => m.coin === coin),
   });
 
-  const holders = (coinData?.holders ?? []) as any[];
-  const convHistory = coinData?.conviction_history ?? [];
+  const rawHolders = (coinData?.holders ?? []) as any[];
   const signals = signalsData?.data ?? [];
-  const whaleEvents = whaleData?.data ?? [];
+  const whaleEvents = [...(whaleData?.data ?? [])].sort(
+    (a, b) => new Date(b.ts).getTime() - new Date(a.ts).getTime()
+  );
   const cm = metricsData;
+
+  const holders = [...rawHolders].sort((a, b) => {
+    if (sortBy === "recency") {
+      const ta = a.opened_at ? new Date(a.opened_at).getTime() : 0;
+      const tb = b.opened_at ? new Date(b.opened_at).getTime() : 0;
+      return tb - ta;
+    }
+    return (b.size_usd ?? 0) - (a.size_usd ?? 0);
+  });
 
   const dominant_side = cm?.dominant_side ?? "LONG";
   const sideColor = dominant_side === "LONG" ? "text-green-400" : "text-red-400";
@@ -151,72 +194,6 @@ export default function CoinDetailPage({
             </div>
           )}
 
-          {/* Top holders */}
-          <section>
-            <h2 className="text-gray-500 text-xs font-bold tracking-widest mb-2">
-              CURRENT HOLDERS ({holders.length})
-            </h2>
-            <div className="bg-gray-900 border border-gray-800 rounded overflow-hidden">
-              <table className="w-full text-xs">
-                <thead>
-                  <tr className="text-gray-600 border-b border-gray-800">
-                    <th className="text-left px-3 py-1.5">#</th>
-                    <th className="text-left px-3 py-1.5">Address</th>
-                    <th className="text-left px-3 py-1.5">Side</th>
-                    <th className="text-right px-3 py-1.5">Size</th>
-                    <th className="text-right px-3 py-1.5">Entry</th>
-                    <th className="text-right px-3 py-1.5">Lev</th>
-                    <th className="text-right px-3 py-1.5">uPnL</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {holders.map((h: any, i: number) => {
-                    const isLong = h.side === "LONG";
-                    return (
-                      <tr
-                        key={h.address + i}
-                        className="border-b border-gray-900 hover:bg-gray-800"
-                      >
-                        <td className="px-3 py-1 text-gray-600">{i + 1}</td>
-                        <td className="px-3 py-1">
-                          <Link
-                            href={`/intel/hyperliquid/trader/${h.address}`}
-                            className="text-blue-400 hover:text-blue-300"
-                          >
-                            {h.address.slice(0, 12)}…
-                          </Link>
-                        </td>
-                        <td
-                          className={`px-3 py-1 font-bold ${
-                            isLong ? "text-green-400" : "text-red-400"
-                          }`}
-                        >
-                          {h.side}
-                        </td>
-                        <td className="px-3 py-1 text-right text-gray-300">
-                          {fmtUsd(h.size_usd)}
-                        </td>
-                        <td className="px-3 py-1 text-right text-gray-500">
-                          ${Number(h.entry_px || 0).toFixed(2)}
-                        </td>
-                        <td className="px-3 py-1 text-right text-gray-500">
-                          {Number(h.leverage || 0).toFixed(1)}x
-                        </td>
-                        <td
-                          className={`px-3 py-1 text-right ${
-                            (h.unrealized_pnl ?? 0) >= 0 ? "text-green-400" : "text-red-400"
-                          }`}
-                        >
-                          {fmtUsd(Math.abs(h.unrealized_pnl ?? 0))}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </section>
-
           {/* Whale events */}
           {whaleEvents.length > 0 && (
             <section>
@@ -237,7 +214,7 @@ export default function CoinDetailPage({
                       key={i}
                       className="flex items-center gap-3 bg-gray-900 border border-gray-800 rounded px-3 py-2 text-xs"
                     >
-                      <span className={`font-bold w-24 shrink-0 ${evColor[e.event_type] ?? "text-gray-400"}`}>
+                      <span className={`font-bold w-28 shrink-0 ${evColor[e.event_type] ?? "text-gray-400"}`}>
                         {e.event_type}
                       </span>
                       <Link
@@ -246,21 +223,113 @@ export default function CoinDetailPage({
                       >
                         {e.address.slice(0, 10)}…
                       </Link>
-                      <span
-                        className={
-                          e.side === "LONG" ? "text-green-400" : "text-red-400"
-                        }
-                      >
-                        {e.side}
+                      <span className={e.side === "LONG" ? "text-green-400" : "text-red-400"}>
+                        {e.side === "LONG" ? "▲" : "▼"} {e.side}
                       </span>
                       <span className="text-gray-300">{fmtUsd(e.size_usd)}</span>
-                      <span className="text-gray-600 ml-auto">{fmtTs(e.ts)}</span>
+                      <span className="text-gray-500 ml-auto">{fmtAge(e.ts)}</span>
+                      <span className="text-gray-600">{fmtTs(e.ts)}</span>
                     </div>
                   );
                 })}
               </div>
             </section>
           )}
+
+          {/* Holders table */}
+          <section>
+            <div className="flex items-center justify-between mb-2">
+              <h2 className="text-gray-500 text-xs font-bold tracking-widest">
+                CURRENT HOLDERS ({holders.length})
+              </h2>
+              <div className="flex gap-1">
+                {(["size", "recency"] as const).map((s) => (
+                  <button
+                    key={s}
+                    onClick={() => setSortBy(s)}
+                    className={`text-[10px] px-2 py-0.5 rounded ${
+                      sortBy === s
+                        ? "bg-gray-700 text-white"
+                        : "text-gray-600 hover:text-gray-400"
+                    }`}
+                  >
+                    {s === "size" ? "By Size" : "By Recency"}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="bg-gray-900 border border-gray-800 rounded overflow-hidden">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="text-gray-600 border-b border-gray-800">
+                    <th className="text-left px-3 py-1.5">#</th>
+                    <th className="text-left px-3 py-1.5">Address</th>
+                    <th className="text-left px-3 py-1.5">Q</th>
+                    <th className="text-left px-3 py-1.5">Side</th>
+                    <th className="text-right px-3 py-1.5">Size</th>
+                    <th className="text-right px-3 py-1.5">Entry</th>
+                    <th className="text-right px-3 py-1.5">Lev</th>
+                    <th className="text-right px-3 py-1.5">uPnL</th>
+                    <th className="text-right px-3 py-1.5">Opened</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {holders.map((h: any, i: number) => {
+                    const isLong = h.side === "LONG";
+                    return (
+                      <tr
+                        key={h.address + i}
+                        className="border-b border-gray-900 hover:bg-gray-800"
+                      >
+                        <td className="px-3 py-1 text-gray-600">{i + 1}</td>
+                        <td className="px-3 py-1">
+                          <Link
+                            href={`/intel/hyperliquid/trader/${h.address}`}
+                            className="text-blue-400 hover:text-blue-300"
+                          >
+                            {h.address.slice(0, 12)}…
+                          </Link>
+                        </td>
+                        <td className="px-3 py-1">
+                          <QBadge q={h.skill_quartile} />
+                        </td>
+                        <td
+                          className={`px-3 py-1 font-bold ${
+                            isLong ? "text-green-400" : "text-red-400"
+                          }`}
+                        >
+                          {h.side}
+                        </td>
+                        <td className="px-3 py-1 text-right text-gray-300">
+                          {fmtUsd(h.size_usd)}
+                        </td>
+                        <td className="px-3 py-1 text-right text-gray-500">
+                          ${Number(h.entry_px || 0).toFixed(3)}
+                        </td>
+                        <td className="px-3 py-1 text-right text-gray-500">
+                          {Number(h.leverage || 0).toFixed(1)}x
+                        </td>
+                        <td
+                          className={`px-3 py-1 text-right ${
+                            (h.unrealized_pnl ?? 0) >= 0 ? "text-green-400" : "text-red-400"
+                          }`}
+                        >
+                          {fmtUsd(Math.abs(h.unrealized_pnl ?? 0))}
+                        </td>
+                        <td className="px-3 py-1 text-right text-gray-600">
+                          {h.opened_at ? (
+                            <span title={h.opened_at}>{fmtAge(h.opened_at)}</span>
+                          ) : (
+                            "—"
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </section>
         </div>
       )}
     </div>

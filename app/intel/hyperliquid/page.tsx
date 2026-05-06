@@ -24,7 +24,20 @@ function fmtUsd(n: number | null | undefined) {
 
 function fmtTs(ts: string | null | undefined) {
   if (!ts) return "—";
-  return new Date(ts).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
+  return new Date(ts + (ts.endsWith("Z") ? "" : "Z")).toLocaleTimeString("en-US", {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function fmtAge(ts: string | null | undefined) {
+  if (!ts) return "—";
+  const d = new Date(ts + (ts.endsWith("Z") ? "" : "Z"));
+  const diffMs = Date.now() - d.getTime();
+  const diffH = diffMs / 3_600_000;
+  if (diffH < 1) return `${Math.round(diffH * 60)}m ago`;
+  if (diffH < 24) return `${Math.round(diffH)}h ago`;
+  return `${Math.round(diffH / 24)}d ago`;
 }
 
 function pct(n: number | null | undefined, decimals = 0) {
@@ -123,10 +136,13 @@ function WhaleCard({ event }: { event: WhaleEvent }) {
         <div className="flex items-center gap-2 mt-1 text-xs font-mono">
           <span className={sideColor}>{event.side === "LONG" ? "▲" : "▼"} {event.side}</span>
           <span className="text-gray-400">{fmtUsd(event.size_usd)}</span>
-          <span className="text-gray-600">{fmtTs(event.ts)}</span>
+          <span className="text-gray-500 ml-auto" title={event.ts}>{fmtAge(event.ts)}</span>
         </div>
-        <div className="text-[10px] font-mono text-gray-600 mt-0.5 truncate">
-          {event.address.slice(0, 10)}…
+        <div className="flex items-center justify-between mt-0.5">
+          <span className="text-[10px] font-mono text-gray-600 truncate">
+            {event.address.slice(0, 10)}…
+          </span>
+          <span className="text-[10px] font-mono text-gray-700">{fmtTs(event.ts)}</span>
         </div>
       </div>
     </Link>
@@ -214,7 +230,9 @@ export default function HyperliquidDashboard() {
   };
 
   const accelerating = dashboard?.accelerating ?? [];
-  const whaleMoves = dashboard?.whale_moves ?? [];
+  const whaleMoves = [...(dashboard?.whale_moves ?? [])].sort(
+    (a, b) => new Date(b.ts).getTime() - new Date(a.ts).getTime()
+  );
   const directionFlips = dashboard?.direction_flips ?? [];
   const exits = dashboard?.exits ?? [];
 

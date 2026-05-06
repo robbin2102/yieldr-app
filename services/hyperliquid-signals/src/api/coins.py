@@ -1,6 +1,11 @@
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from fastapi import APIRouter, Query
 from ..db import get_db
+
+
+def _utcnow() -> datetime:
+    return datetime.utcnow()
+
 
 router = APIRouter(tags=["coins"])
 
@@ -8,7 +13,7 @@ router = APIRouter(tags=["coins"])
 @router.get("/coin/{coin}")
 async def get_coin(coin: str, days: int = Query(7, ge=1, le=30)):
     db = get_db()
-    since = datetime.now(timezone.utc) - timedelta(days=days)
+    since = _utcnow() - timedelta(days=days)
     coin_upper = coin.upper()
 
     # Current holders
@@ -20,6 +25,40 @@ async def get_coin(coin: str, days: int = Query(7, ge=1, le=30)):
             {"coin": coin_upper, "snapshot_ts": snap_ts}, {"_id": 0}
         ).sort("size_usd", -1)
         holders = await cursor.to_list(50)
+
+        if holders:
+            addrs = [h["address"] for h in holders]
+
+            # Enrich with open timestamp: most recent NEW_POSITION per address for this coin
+            open_pipeline = [
+                {
+                    "$match": {
+                        "address": {"$in": addrs},
+                        "coin": coin_upper,
+                        "change_type": "NEW_POSITION",
+                    }
+                },
+                {"$sort": {"ts": -1}},
+                {"$group": {"_id": "$address", "opened_at": {"$first": "$ts"}}},
+            ]
+            open_docs = await db.hl_signals_position_changes.aggregate(open_pipeline).to_list(
+                len(addrs) + 5
+            )
+            open_map = {d["_id"]: d["opened_at"] for d in open_docs}
+
+            # Enrich with skill quartile
+            trader_cursor = db.hl_signals_traders.find(
+                {"address": {"$in": addrs}},
+                {"address": 1, "skill_quartile": 1, "_id": 0},
+            )
+            trader_docs = await trader_cursor.to_list(len(addrs) + 5)
+            trader_map = {t["address"]: t.get("skill_quartile") for t in trader_docs}
+
+            for h in holders:
+                addr = h["address"]
+                ts = open_map.get(addr)
+                h["opened_at"] = ts.isoformat() if ts else None
+                h["skill_quartile"] = trader_map.get(addr)
 
     # Conviction history (last N days)
     cursor = (
