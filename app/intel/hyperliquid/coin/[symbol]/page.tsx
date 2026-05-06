@@ -134,6 +134,7 @@ export default function CoinDetailPage({
   const { symbol } = use(params);
   const coin = symbol.toUpperCase();
   const [sortBy, setSortBy] = useState<"size" | "recency">("size");
+  const [whaleHours, setWhaleHours] = useState<6 | 12 | 24>(6);
 
   const { data: coinData, isLoading } = useQuery({
     queryKey: ["hl-coin", coin],
@@ -149,8 +150,8 @@ export default function CoinDetailPage({
   });
 
   const { data: whaleData } = useQuery({
-    queryKey: ["hl-coin-whales", coin],
-    queryFn: () => hlSignals.getWhaleEvents(coin, undefined, 6),
+    queryKey: ["hl-coin-whales", coin, whaleHours],
+    queryFn: () => hlSignals.getWhaleEvents(coin, undefined, whaleHours),
     refetchInterval: 30_000,
   });
 
@@ -168,8 +169,18 @@ export default function CoinDetailPage({
   const whaleEvents = [...(whaleData?.data ?? [])].sort(
     (a, b) => new Date(b.ts).getTime() - new Date(a.ts).getTime()
   );
+
+  const whaleSummary = {
+    exitUsd:  whaleEvents.filter(e => e.event_type === "EXIT").reduce((s, e) => s + e.size_usd, 0),
+    entryUsd: whaleEvents.filter(e => e.event_type === "WAKEUP" || e.event_type === "SCALEUP").reduce((s, e) => s + e.size_usd, 0),
+    flipCount: whaleEvents.filter(e => e.event_type === "FLIP").length,
+    exitCount: whaleEvents.filter(e => e.event_type === "EXIT").length,
+    entryCount: whaleEvents.filter(e => e.event_type === "WAKEUP" || e.event_type === "SCALEUP").length,
+  };
+
   const cm = metricsData;
 
+  const hasRecencyData = rawHolders.some((h: any) => h.opened_at != null);
   const holders = [...rawHolders].sort((a, b) => {
     if (sortBy === "recency") {
       return (b.opened_at ? new Date(b.opened_at).getTime() : 0) -
@@ -236,13 +247,50 @@ export default function CoinDetailPage({
                   </div>
                 </div>
               </div>
-              {/* Whale events — all, scrollable */}
-              <div className="bg-gray-900 border border-gray-800 rounded p-3 flex flex-col">
-                <div className="text-gray-500 mb-2 font-bold text-[10px] shrink-0">
-                  WHALE MOVES (6H){whaleEvents.length > 0 && <span className="text-gray-700 font-normal ml-1">· {whaleEvents.length}</span>}
+              {/* Whale events — tabbed by time window, scrollable */}
+              <div className="bg-gray-900 border border-gray-800 rounded p-3 flex flex-col gap-2">
+                {/* Header: title + time tabs + count */}
+                <div className="flex items-center gap-2 shrink-0">
+                  <span className="text-gray-500 font-bold text-[10px]">WHALE MOVES</span>
+                  <div className="flex gap-0.5">
+                    {([6, 12, 24] as const).map(h => (
+                      <button
+                        key={h}
+                        onClick={() => setWhaleHours(h)}
+                        className={`text-[9px] px-1.5 py-0.5 rounded ${
+                          whaleHours === h ? "bg-gray-700 text-white" : "text-gray-600 hover:text-gray-400"
+                        }`}
+                      >
+                        {h}H
+                      </button>
+                    ))}
+                  </div>
+                  <span className="text-gray-700 text-[10px] ml-auto">· {whaleEvents.length}</span>
                 </div>
+
+                {/* Summary metrics */}
+                {whaleEvents.length > 0 && (
+                  <div className="flex gap-3 text-[10px] shrink-0 border-t border-gray-800 pt-1.5">
+                    <div>
+                      <span className="text-red-400 font-bold">{fmtUsd(whaleSummary.exitUsd)}</span>
+                      <span className="text-gray-600 ml-1">exit ({whaleSummary.exitCount})</span>
+                    </div>
+                    <div>
+                      <span className="text-green-400 font-bold">{fmtUsd(whaleSummary.entryUsd)}</span>
+                      <span className="text-gray-600 ml-1">entry/up ({whaleSummary.entryCount})</span>
+                    </div>
+                    {whaleSummary.flipCount > 0 && (
+                      <div>
+                        <span className="text-yellow-400 font-bold">{whaleSummary.flipCount}</span>
+                        <span className="text-gray-600 ml-1">flip</span>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Event list */}
                 {whaleEvents.length === 0 ? (
-                  <p className="text-gray-700 text-[10px]">None</p>
+                  <p className="text-gray-700 text-[10px]">None in last {whaleHours}h</p>
                 ) : (
                   <div className="space-y-1 overflow-y-auto max-h-40 pr-1">
                     {whaleEvents.map((e, i) => (
@@ -281,7 +329,10 @@ export default function CoinDetailPage({
               {signals.map((s, i) => (
                 <SignalPillWithTooltip key={i} signal={s} />
               ))}
-              <div className="ml-auto flex gap-1">
+              <div className="ml-auto flex items-center gap-2">
+                {sortBy === "recency" && !hasRecencyData && (
+                  <span className="text-gray-700 text-[9px]">no open dates yet</span>
+                )}
                 {(["size", "recency"] as const).map((s) => (
                   <button
                     key={s}
