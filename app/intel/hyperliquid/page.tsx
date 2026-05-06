@@ -1,11 +1,10 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   hlSignals,
-  type DashboardData,
   type SignalV2,
   type WhaleEvent,
   type CoinMetrics,
@@ -30,148 +29,31 @@ function fmtTs(ts: string | null | undefined) {
   });
 }
 
-function fmtAge(ts: string | null | undefined) {
-  if (!ts) return "—";
-  const d = new Date(ts + (ts.endsWith("Z") ? "" : "Z"));
-  const diffMs = Date.now() - d.getTime();
-  const diffH = diffMs / 3_600_000;
-  if (diffH < 1) return `${Math.round(diffH * 60)}m ago`;
-  if (diffH < 24) return `${Math.round(diffH)}h ago`;
-  return `${Math.round(diffH / 24)}d ago`;
-}
-
 function pct(n: number | null | undefined, decimals = 0) {
   if (n == null) return "—";
   return `${(n * 100).toFixed(decimals)}%`;
 }
 
-// Sub-metric pill: "91% count | 99% $ | 28% cohort"
-function SubMetrics({
-  countConviction,
-  dollarConviction,
-  cohortParticipation,
-}: {
-  countConviction?: number | null;
-  dollarConviction?: number | null;
-  cohortParticipation?: number | null;
-}) {
-  return (
-    <div className="flex gap-1 text-[10px] font-mono text-gray-500 flex-wrap mt-1">
-      <span>{pct(countConviction, 0)} count</span>
-      <span className="text-gray-700">|</span>
-      <span>{pct(dollarConviction, 0)} $</span>
-      <span className="text-gray-700">|</span>
-      <span>{pct(cohortParticipation, 1)} cohort</span>
-    </div>
-  );
-}
-
-const SEV_COLOR: Record<string, string> = {
-  HIGH: "text-red-400 border-red-800",
-  MEDIUM: "text-yellow-400 border-yellow-800",
-  LOW: "text-blue-400 border-blue-800",
+// Short label + color for each signal type
+const SIGNAL_META: Record<string, { label: string; color: string }> = {
+  CONVERGENCE_ACCELERATION: { label: "ACCEL", color: "bg-red-900 text-red-300 border-red-800" },
+  CAPITAL_ROTATION:         { label: "ROT",   color: "bg-orange-900 text-orange-300 border-orange-800" },
+  COHORT_DIRECTION_FLIP:    { label: "FLIP",  color: "bg-yellow-900 text-yellow-300 border-yellow-800" },
+  WHALE_ACTIVITY:           { label: "WHALE", color: "bg-purple-900 text-purple-300 border-purple-800" },
+  SMART_EXIT:               { label: "EXIT",  color: "bg-blue-900 text-blue-300 border-blue-800" },
+  LEVERAGE_SPIKE:           { label: "LEV↑",  color: "bg-pink-900 text-pink-300 border-pink-800" },
+  ASYMMETRIC_POSITIONING:   { label: "ASYM",  color: "bg-teal-900 text-teal-300 border-teal-800" },
+  FUNDING_DIVERGENCE:       { label: "FUND",  color: "bg-indigo-900 text-indigo-300 border-indigo-800" },
+  STALE_POSITION_DECAY:     { label: "STALE", color: "bg-gray-800 text-gray-400 border-gray-700" },
 };
 
-function SignalCard({ signal }: { signal: SignalV2 }) {
-  const side = signal.side;
-  const sideColor = side === "LONG" ? "text-green-400" : "text-red-400";
-  const sevClass = SEV_COLOR[signal.severity] ?? "text-gray-400 border-gray-700";
-
+function SignalPill({ type, severity }: { type: string; severity: string }) {
+  const meta = SIGNAL_META[type] ?? { label: type.slice(0, 5), color: "bg-gray-800 text-gray-400 border-gray-700" };
+  const dimmed = severity === "MEDIUM" ? "opacity-60" : "";
   return (
-    <Link href={`/intel/hyperliquid/coin/${signal.coin}`}>
-      <div
-        className={`border ${sevClass} bg-gray-900 rounded p-2.5 hover:bg-gray-800 transition-colors cursor-pointer`}
-      >
-        <div className="flex items-center justify-between">
-          <span className="font-mono font-bold text-white">{signal.coin}</span>
-          <div className="flex items-center gap-1">
-            <span className={`text-[10px] font-bold px-1 border rounded ${sevClass}`}>
-              {signal.severity}
-            </span>
-            <span className={`text-xs font-bold ${sideColor}`}>
-              {side === "LONG" ? "▲" : "▼"} {side}
-            </span>
-          </div>
-        </div>
-        <div className="text-[10px] font-mono text-gray-500 mt-0.5">
-          {signal.signal_type.replace(/_/g, " ")}
-        </div>
-        {signal.total_usd != null && (
-          <div className="text-xs font-mono text-gray-400 mt-1">
-            {fmtUsd(signal.total_usd)}
-            {signal.total_count != null && (
-              <span className="text-gray-600"> · {signal.total_count} traders</span>
-            )}
-          </div>
-        )}
-        <SubMetrics
-          countConviction={signal.count_conviction}
-          dollarConviction={signal.dollar_conviction}
-          cohortParticipation={signal.cohort_participation}
-        />
-      </div>
-    </Link>
-  );
-}
-
-const EVENT_COLOR: Record<string, string> = {
-  WAKEUP: "text-purple-400",
-  SCALEUP: "text-green-400",
-  FLIP: "text-yellow-400",
-  EXIT: "text-red-400",
-  LEVERAGE_PUSH: "text-orange-400",
-};
-
-function WhaleCard({ event }: { event: WhaleEvent }) {
-  const sideColor = event.side === "LONG" ? "text-green-400" : "text-red-400";
-  const evColor = EVENT_COLOR[event.event_type] ?? "text-gray-400";
-
-  return (
-    <Link href={`/intel/hyperliquid/coin/${event.coin}`}>
-      <div className="border border-gray-800 bg-gray-900 rounded p-2.5 hover:bg-gray-800 transition-colors cursor-pointer">
-        <div className="flex items-center justify-between">
-          <span className="font-mono font-bold text-white">{event.coin}</span>
-          <span className={`text-xs font-bold font-mono ${evColor}`}>{event.event_type}</span>
-        </div>
-        <div className="flex items-center gap-2 mt-1 text-xs font-mono">
-          <span className={sideColor}>{event.side === "LONG" ? "▲" : "▼"} {event.side}</span>
-          <span className="text-gray-400">{fmtUsd(event.size_usd)}</span>
-          <span className="text-gray-500 ml-auto" title={event.ts}>{fmtAge(event.ts)}</span>
-        </div>
-        <div className="flex items-center justify-between mt-0.5">
-          <span className="text-[10px] font-mono text-gray-600 truncate">
-            {event.address.slice(0, 10)}…
-          </span>
-          <span className="text-[10px] font-mono text-gray-700">{fmtTs(event.ts)}</span>
-        </div>
-      </div>
-    </Link>
-  );
-}
-
-function Column({
-  title,
-  children,
-  count,
-}: {
-  title: string;
-  children?: ReactNode;
-  count: number;
-}) {
-  return (
-    <div className="flex flex-col gap-2 min-w-0">
-      <div className="flex items-center gap-2 mb-1">
-        <h2 className="text-gray-500 text-xs font-bold tracking-widest">{title}</h2>
-        <span className="text-gray-700 text-xs">({count})</span>
-      </div>
-      <div className="space-y-2 overflow-y-auto max-h-[calc(100vh-160px)] pr-1">
-        {count === 0 ? (
-          <p className="text-gray-700 text-xs font-mono">No signals yet.</p>
-        ) : (
-          children
-        )}
-      </div>
-    </div>
+    <span className={`inline-flex items-center text-[9px] font-bold px-1 py-0.5 rounded border ${meta.color} ${dimmed}`}>
+      {meta.label}
+    </span>
   );
 }
 
@@ -206,11 +88,10 @@ export default function HyperliquidDashboard() {
 
   const { data: metricsData } = useQuery({
     queryKey: ["hl-coin-metrics"],
-    queryFn: () => hlSignals.getCoinMetrics(50),
+    queryFn: () => hlSignals.getCoinMetrics(200),
     refetchInterval: REFETCH_MS,
   });
 
-  const dashboard = dashData;
   const alerts: Alert[] = alertsData?.data ?? [];
   const tier1Alerts = alerts.filter((a) => a.severity === 1).slice(0, 3);
 
@@ -219,31 +100,53 @@ export default function HyperliquidDashboard() {
   const newToday = todayChanges.filter((c) => c.change_type === "NEW_ENTRANT").length;
   const droppedToday = todayChanges.filter((c) => c.change_type === "DROPPED").length;
 
-  const metrics = metricsData?.data ?? [];
+  const metrics: CoinMetrics[] = metricsData?.data ?? [];
   const totalPortfolioUsd = metrics.reduce((s, m) => s + m.total_usd, 0);
+  const snapshotTs = dashData?.snapshot_ts ?? metricsData?.snapshot_ts ?? null;
 
-  const snapshotTs = dashboard?.snapshot_ts ?? metricsData?.snapshot_ts ?? null;
+  // Build coin → signals map from dashboard data
+  const signalsByCoin = useMemo(() => {
+    const map = new Map<string, SignalV2[]>();
+    const allSigs: SignalV2[] = [
+      ...(dashData?.accelerating ?? []),
+      ...(dashData?.direction_flips ?? []),
+      ...(dashData?.exits ?? []),
+    ];
+    for (const s of allSigs) {
+      const arr = map.get(s.coin) ?? [];
+      arr.push(s);
+      map.set(s.coin, arr);
+    }
+    // Deduplicate per signal_type per coin, keep highest severity
+    const sevOrder: Record<string, number> = { HIGH: 0, MEDIUM: 1, LOW: 2 };
+    map.forEach((sigs, coin) => {
+      const seen = new Map<string, SignalV2>();
+      for (const s of sigs) {
+        const ex = seen.get(s.signal_type);
+        if (!ex || (sevOrder[s.severity] ?? 9) < (sevOrder[ex.severity] ?? 9)) {
+          seen.set(s.signal_type, s);
+        }
+      }
+      map.set(coin, Array.from(seen.values()));
+    });
+    return map;
+  }, [dashData]);
+
+  // Whale moves per coin (latest event type per coin)
+  const whaleByCoin = useMemo(() => {
+    const map = new Map<string, WhaleEvent[]>();
+    for (const e of dashData?.whale_moves ?? []) {
+      const arr = map.get(e.coin) ?? [];
+      arr.push(e);
+      map.set(e.coin, arr);
+    }
+    return map;
+  }, [dashData?.whale_moves]);
 
   const acknowledgeAlert = async (id: string) => {
     await hlSignals.acknowledgeAlert(id);
     qc.invalidateQueries({ queryKey: ["hl-alerts"] });
   };
-
-  const accelerating = dashboard?.accelerating ?? [];
-  const whaleMoves = [...(dashboard?.whale_moves ?? [])].sort(
-    (a, b) => new Date(b.ts).getTime() - new Date(a.ts).getTime()
-  );
-  const directionFlips = dashboard?.direction_flips ?? [];
-  const exits = dashboard?.exits ?? [];
-
-  // Sort signals: HIGH first, then by total_usd desc
-  const sortSigs = (sigs: SignalV2[]) =>
-    [...sigs].sort((a, b) => {
-      const sevOrder: Record<string, number> = { HIGH: 0, MEDIUM: 1, LOW: 2 };
-      const d = (sevOrder[a.severity] ?? 9) - (sevOrder[b.severity] ?? 9);
-      if (d !== 0) return d;
-      return (b.total_usd ?? 0) - (a.total_usd ?? 0);
-    });
 
   return (
     <div className="min-h-screen bg-gray-950 text-gray-200 font-mono text-sm">
@@ -275,10 +178,7 @@ export default function HyperliquidDashboard() {
               </button>
             ))}
           </div>
-          <Link
-            href="/intel/hyperliquid/cohort"
-            className="text-xs text-blue-400 hover:text-blue-300"
-          >
+          <Link href="/intel/hyperliquid/cohort" className="text-xs text-blue-400 hover:text-blue-300">
             Cohort →
           </Link>
           <span className="text-xs text-gray-700">auto-refresh 30s</span>
@@ -295,88 +195,60 @@ export default function HyperliquidDashboard() {
               className="flex items-center gap-2 bg-yellow-900/40 border border-yellow-800 rounded px-3 py-1 text-xs"
             >
               <span className="text-white font-bold">{alert.coin}</span>
-              <span className={alert.side === "LONG" ? "text-green-400" : "text-red-400"}>
-                {alert.side}
-              </span>
+              <span className={alert.side === "LONG" ? "text-green-400" : "text-red-400"}>{alert.side}</span>
               <span className="text-yellow-300">{(alert.conviction * 100).toFixed(0)}% bias</span>
               <span className="text-gray-400">{alert.n_traders} traders</span>
               <span className="text-gray-400">{fmtUsd(alert.total_usd)}</span>
-              <button
-                onClick={() => acknowledgeAlert(alert.id)}
-                className="text-gray-500 hover:text-gray-300 ml-1"
-              >
-                ✕
-              </button>
+              <button onClick={() => acknowledgeAlert(alert.id)} className="text-gray-500 hover:text-gray-300 ml-1">✕</button>
             </div>
           ))}
         </div>
       )}
 
-      {/* 4-Column Dashboard */}
       {dashError && (
         <div className="mx-4 mt-3 bg-red-950 border border-red-800 rounded px-4 py-2 text-xs text-red-400 font-mono">
           ⚠ API unreachable — check HL_SIGNALS_API_URL env var in Vercel (server-side, no NEXT_PUBLIC_ prefix)
         </div>
       )}
-      {isLoading ? (
-        <div className="p-8 text-center text-gray-600 text-xs">Loading signals…</div>
-      ) : (
-        <div className="p-4 grid grid-cols-2 lg:grid-cols-4 gap-4">
-          <Column title="ACCELERATING" count={accelerating.length}>
-            {sortSigs(accelerating).map((s, i) => (
-              <SignalCard key={`${s.signal_type}-${s.coin}-${i}`} signal={s} />
-            ))}
-          </Column>
-
-          <Column title="WHALE MOVES" count={whaleMoves.length}>
-            {whaleMoves.map((e, i) => (
-              <WhaleCard key={`${e.address}-${e.coin}-${i}`} event={e} />
-            ))}
-          </Column>
-
-          <Column title="DIRECTION FLIPS" count={directionFlips.length}>
-            {sortSigs(directionFlips).map((s, i) => (
-              <SignalCard key={`${s.signal_type}-${s.coin}-${i}`} signal={s} />
-            ))}
-          </Column>
-
-          <Column title="EXITS" count={exits.length}>
-            {sortSigs(exits).map((s, i) => (
-              <SignalCard key={`${s.signal_type}-${s.coin}-${i}`} signal={s} />
-            ))}
-          </Column>
-        </div>
-      )}
 
       {/* Coin Metrics Table */}
-      {metrics.length > 0 && (
-        <div className="px-4 pb-6">
-          <h2 className="text-gray-500 text-xs font-bold tracking-widest mb-2">COIN METRICS</h2>
+      <div className="p-4">
+        {isLoading ? (
+          <div className="text-center text-gray-600 text-xs py-12">Loading…</div>
+        ) : metrics.length === 0 ? (
+          <div className="text-center text-gray-700 text-xs py-12">No data yet — waiting for first snapshot.</div>
+        ) : (
           <div className="bg-gray-900 border border-gray-800 rounded overflow-auto">
             <table className="w-full text-xs font-mono">
               <thead>
-                <tr className="text-gray-600 border-b border-gray-800">
-                  <th className="text-left px-3 py-1.5">Coin</th>
-                  <th className="text-left px-3 py-1.5">Side</th>
-                  <th className="text-right px-3 py-1.5">Count %</th>
-                  <th className="text-right px-3 py-1.5">$ %</th>
-                  <th className="text-right px-3 py-1.5">Cohort</th>
-                  <th className="text-right px-3 py-1.5">Traders</th>
-                  <th className="text-right px-3 py-1.5">Total USD</th>
-                  <th className="text-right px-3 py-1.5">Avg Lev</th>
-                  <th className="text-right px-3 py-1.5">Q1 L/S</th>
+                <tr className="text-gray-600 border-b border-gray-800 text-[10px]">
+                  <th className="text-left px-3 py-2">Coin</th>
+                  <th className="text-left px-3 py-2">Side</th>
+                  <th className="text-right px-3 py-2">Count %</th>
+                  <th className="text-right px-3 py-2">$ %</th>
+                  <th className="text-right px-3 py-2">Cohort</th>
+                  <th className="text-right px-3 py-2">Traders</th>
+                  <th className="text-right px-3 py-2">Total USD</th>
+                  <th className="text-right px-3 py-2">Lev</th>
+                  <th className="text-right px-3 py-2">Q1 L/S</th>
+                  <th className="text-left px-3 py-2">Signals</th>
                 </tr>
               </thead>
               <tbody>
                 {metrics.map((m) => {
-                  const sideColor =
-                    m.dominant_side === "LONG" ? "text-green-400" : "text-red-400";
+                  const sideColor = m.dominant_side === "LONG" ? "text-green-400" : "text-red-400";
+                  const coinSigs = signalsByCoin.get(m.coin) ?? [];
+                  const whaleEvts = whaleByCoin.get(m.coin) ?? [];
+
+                  // Sort: HIGH first
+                  const sevOrd: Record<string, number> = { HIGH: 0, MEDIUM: 1, LOW: 2 };
+                  const sortedSigs = [...coinSigs].sort(
+                    (a, b) => (sevOrd[a.severity] ?? 9) - (sevOrd[b.severity] ?? 9)
+                  );
+
                   return (
-                    <tr
-                      key={m.coin}
-                      className="border-b border-gray-900 hover:bg-gray-800 cursor-pointer"
-                    >
-                      <td className="px-3 py-1.5">
+                    <tr key={m.coin} className="border-b border-gray-900 hover:bg-gray-800">
+                      <td className="px-3 py-2">
                         <Link
                           href={`/intel/hyperliquid/coin/${m.coin}`}
                           className="text-white font-bold hover:text-blue-400"
@@ -384,29 +256,31 @@ export default function HyperliquidDashboard() {
                           {m.coin}
                         </Link>
                       </td>
-                      <td className={`px-3 py-1.5 font-bold ${sideColor}`}>
+                      <td className={`px-3 py-2 font-bold ${sideColor}`}>
                         {m.dominant_side === "LONG" ? "▲" : "▼"} {m.dominant_side}
                       </td>
-                      <td className="px-3 py-1.5 text-right text-gray-300">
-                        {pct(m.count_conviction)}
+                      <td className="px-3 py-2 text-right text-gray-300">{pct(m.count_conviction)}</td>
+                      <td className="px-3 py-2 text-right text-gray-300">{pct(m.dollar_conviction)}</td>
+                      <td className="px-3 py-2 text-right text-gray-400">{pct(m.cohort_participation, 1)}</td>
+                      <td className="px-3 py-2 text-right text-gray-400">{m.total_count}</td>
+                      <td className="px-3 py-2 text-right text-gray-300">{fmtUsd(m.total_usd)}</td>
+                      <td className="px-3 py-2 text-right text-gray-500">{m.avg_leverage.toFixed(1)}x</td>
+                      <td className="px-3 py-2 text-right">
+                        <span className="text-green-700">{m.q1_long}</span>
+                        <span className="text-gray-700"> / </span>
+                        <span className="text-red-700">{m.q1_short}</span>
                       </td>
-                      <td className="px-3 py-1.5 text-right text-gray-300">
-                        {pct(m.dollar_conviction)}
-                      </td>
-                      <td className="px-3 py-1.5 text-right text-gray-400">
-                        {pct(m.cohort_participation, 1)}
-                      </td>
-                      <td className="px-3 py-1.5 text-right text-gray-400">{m.total_count}</td>
-                      <td className="px-3 py-1.5 text-right text-gray-300">
-                        {fmtUsd(m.total_usd)}
-                      </td>
-                      <td className="px-3 py-1.5 text-right text-gray-500">
-                        {m.avg_leverage.toFixed(1)}x
-                      </td>
-                      <td className="px-3 py-1.5 text-right text-gray-500">
-                        <span className="text-green-600">{m.q1_long}</span>
-                        {" / "}
-                        <span className="text-red-600">{m.q1_short}</span>
+                      <td className="px-3 py-2">
+                        <div className="flex flex-wrap gap-1">
+                          {sortedSigs.map((s, i) => (
+                            <SignalPill key={i} type={s.signal_type} severity={s.severity} />
+                          ))}
+                          {whaleEvts.length > 0 && (
+                            <span className="inline-flex items-center text-[9px] font-bold px-1 py-0.5 rounded border bg-purple-900 text-purple-300 border-purple-800">
+                              🐋 {whaleEvts.length}
+                            </span>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   );
@@ -414,8 +288,8 @@ export default function HyperliquidDashboard() {
               </tbody>
             </table>
           </div>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }

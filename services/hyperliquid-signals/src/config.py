@@ -32,17 +32,14 @@ class Settings(BaseSettings):
     # --- Filter thresholds ---
     min_av: float = Field(default=50_000, alias="MIN_AV")
     max_av: float = Field(default=50_000_000, alias="MAX_AV")
-    max_month_roi: float = Field(default=5.0, alias="MAX_MONTH_ROI")
-    max_all_roi: float = Field(default=50.0, alias="MAX_ALL_ROI")
+    min_month_roi: float = Field(default=0.3, alias="MIN_MONTH_ROI")   # 30% monthly ROI
+    min_all_roi: float = Field(default=0.5, alias="MIN_ALL_ROI")       # 50% all-time ROI
     min_month_vlm: float = Field(default=1_000_000, alias="MIN_MONTH_VLM")
     min_pnl_av_ratio: float = Field(default=0.1, alias="MIN_PNL_AV_RATIO")
     min_month_eff: float = Field(default=0.005, alias="MIN_MONTH_EFF")
-    min_roi_ratio: float = Field(default=0.3, alias="MIN_ROI_RATIO")
 
     # --- Filter toggles ---
-    filter_roi_cap_enabled: bool = Field(default=False, alias="FILTER_ROI_CAP_ENABLED")
     filter_efficiency_enabled: bool = Field(default=True, alias="FILTER_EFFICIENCY_ENABLED")
-    filter_roi_ratio_enabled: bool = Field(default=True, alias="FILTER_ROI_RATIO_ENABLED")
 
     # --- Position change thresholds ---
     position_change_threshold_pct: float = Field(default=10.0, alias="POSITION_CHANGE_THRESHOLD_PCT")

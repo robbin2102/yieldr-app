@@ -22,33 +22,29 @@ def apply_filters(rows: list[dict], cfg: Settings) -> list[dict]:
         except (KeyError, TypeError, ValueError):
             continue
 
-        # Must be profitable on all windows
-        if not (day_pnl > 0 and week_pnl > 0 and month_pnl > 0 and all_pnl > 0):
+        # Daily PnL must be positive
+        if day_pnl <= 0:
             continue
 
-        # ROI caps — only when toggle is ON
-        if cfg.filter_roi_cap_enabled:
-            if month_roi > cfg.max_month_roi or all_roi > cfg.max_all_roi:
-                continue
+        # Minimum ROI thresholds — core quality gate
+        if month_roi < cfg.min_month_roi:
+            continue
+        if all_roi < cfg.min_all_roi:
+            continue
 
         # Min monthly volume
         if month_vlm < cfg.min_month_vlm:
             continue
 
-        # PnL to AV ratio
+        # PnL to AV ratio (all-time PnL must be meaningful vs account size)
         if all_pnl < av * cfg.min_pnl_av_ratio:
             continue
 
         month_eff = month_pnl / month_vlm if month_vlm > 0 else 0.0
         all_eff = all_pnl / all_vlm if all_vlm > 0 else 0.0
-        roi_ratio = all_roi / month_roi if month_roi > 0 else 0.0
 
         # Efficiency filter
         if cfg.filter_efficiency_enabled and month_eff < cfg.min_month_eff:
-            continue
-
-        # ROI ratio filter
-        if cfg.filter_roi_ratio_enabled and roi_ratio < cfg.min_roi_ratio:
             continue
 
         result.append(
@@ -66,7 +62,7 @@ def apply_filters(rows: list[dict], cfg: Settings) -> list[dict]:
                 "all_vlm": all_vlm,
                 "month_eff": month_eff,
                 "all_eff": all_eff,
-                "roi_ratio": roi_ratio,
+                "roi_ratio": all_roi / month_roi if month_roi > 0 else 0.0,
             }
         )
     return result

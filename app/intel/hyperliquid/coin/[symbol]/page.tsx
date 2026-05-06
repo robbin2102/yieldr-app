@@ -18,24 +18,18 @@ function pct(n: number | null | undefined, d = 1) {
   return `${(n * 100).toFixed(d)}%`;
 }
 
-function fmtTs(ts: string | null | undefined, showDate = false) {
-  if (!ts) return "—";
-  const d = new Date(ts + (ts.endsWith("Z") ? "" : "Z"));
-  if (showDate) {
-    return d.toLocaleDateString("en-US", { month: "short", day: "numeric" }) +
-      " " + d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
-  }
-  return d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
-}
-
 function fmtAge(ts: string | null | undefined) {
-  if (!ts) return "—";
+  if (!ts) return null;
   const d = new Date(ts + (ts.endsWith("Z") ? "" : "Z"));
-  const diffMs = Date.now() - d.getTime();
-  const diffH = diffMs / 3_600_000;
+  const diffH = (Date.now() - d.getTime()) / 3_600_000;
   if (diffH < 1) return `${Math.round(diffH * 60)}m ago`;
   if (diffH < 24) return `${Math.round(diffH)}h ago`;
   return `${Math.round(diffH / 24)}d ago`;
+}
+
+function fmtTs(ts: string) {
+  const d = new Date(ts + (ts.endsWith("Z") ? "" : "Z"));
+  return d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
 }
 
 const Q_COLOR: Record<number, string> = {
@@ -48,11 +42,29 @@ const Q_COLOR: Record<number, string> = {
 function QBadge({ q }: { q?: number | null }) {
   if (!q) return null;
   return (
-    <span className={`text-[9px] font-bold px-1 rounded ${Q_COLOR[q] ?? "bg-gray-800 text-gray-500"}`}>
-      Q{q}
-    </span>
+    <span className={`text-[9px] font-bold px-1 rounded ${Q_COLOR[q] ?? ""}`}>Q{q}</span>
   );
 }
+
+const SIGNAL_META: Record<string, { label: string; color: string }> = {
+  CONVERGENCE_ACCELERATION: { label: "ACCEL", color: "bg-red-900 text-red-300 border-red-800" },
+  CAPITAL_ROTATION:         { label: "ROT",   color: "bg-orange-900 text-orange-300 border-orange-800" },
+  COHORT_DIRECTION_FLIP:    { label: "FLIP",  color: "bg-yellow-900 text-yellow-300 border-yellow-800" },
+  WHALE_ACTIVITY:           { label: "WHALE", color: "bg-purple-900 text-purple-300 border-purple-800" },
+  SMART_EXIT:               { label: "EXIT",  color: "bg-blue-900 text-blue-300 border-blue-800" },
+  LEVERAGE_SPIKE:           { label: "LEV↑",  color: "bg-pink-900 text-pink-300 border-pink-800" },
+  ASYMMETRIC_POSITIONING:   { label: "ASYM",  color: "bg-teal-900 text-teal-300 border-teal-800" },
+  FUNDING_DIVERGENCE:       { label: "FUND",  color: "bg-indigo-900 text-indigo-300 border-indigo-800" },
+  STALE_POSITION_DECAY:     { label: "STALE", color: "bg-gray-800 text-gray-400 border-gray-700" },
+};
+
+const EVENT_COLOR: Record<string, string> = {
+  WAKEUP: "text-purple-400",
+  SCALEUP: "text-green-400",
+  FLIP: "text-yellow-400",
+  EXIT: "text-red-400",
+  LEVERAGE_PUSH: "text-orange-400",
+};
 
 export default function CoinDetailPage({
   params,
@@ -63,7 +75,7 @@ export default function CoinDetailPage({
   const coin = symbol.toUpperCase();
   const [sortBy, setSortBy] = useState<"size" | "recency">("size");
 
-  const { data: coinData, isLoading: coinLoading } = useQuery({
+  const { data: coinData, isLoading } = useQuery({
     queryKey: ["hl-coin", coin],
     queryFn: () => hlSignals.getCoin(coin, 7),
     refetchInterval: 30_000,
@@ -89,7 +101,10 @@ export default function CoinDetailPage({
   });
 
   const rawHolders = (coinData?.holders ?? []) as any[];
-  const signals = signalsData?.data ?? [];
+  const signals = (signalsData?.data ?? []).sort((a, b) => {
+    const o: Record<string, number> = { HIGH: 0, MEDIUM: 1, LOW: 2 };
+    return (o[a.severity] ?? 9) - (o[b.severity] ?? 9);
+  });
   const whaleEvents = [...(whaleData?.data ?? [])].sort(
     (a, b) => new Date(b.ts).getTime() - new Date(a.ts).getTime()
   );
@@ -97,9 +112,8 @@ export default function CoinDetailPage({
 
   const holders = [...rawHolders].sort((a, b) => {
     if (sortBy === "recency") {
-      const ta = a.opened_at ? new Date(a.opened_at).getTime() : 0;
-      const tb = b.opened_at ? new Date(b.opened_at).getTime() : 0;
-      return tb - ta;
+      return (b.opened_at ? new Date(b.opened_at).getTime() : 0) -
+             (a.opened_at ? new Date(a.opened_at).getTime() : 0);
     }
     return (b.size_usd ?? 0) - (a.size_usd ?? 0);
   });
@@ -111,9 +125,7 @@ export default function CoinDetailPage({
     <div className="min-h-screen bg-gray-950 text-gray-200 font-mono text-sm">
       {/* Header */}
       <div className="border-b border-gray-800 px-4 py-3 flex items-center gap-4">
-        <Link href="/intel/hyperliquid" className="text-gray-600 hover:text-gray-400 text-xs">
-          ← Back
-        </Link>
+        <Link href="/intel/hyperliquid" className="text-gray-600 hover:text-gray-400 text-xs">← Back</Link>
         <h1 className="text-white font-bold text-lg">{coin}</h1>
         {cm && (
           <span className={`font-bold ${sideColor}`}>
@@ -122,20 +134,21 @@ export default function CoinDetailPage({
         )}
       </div>
 
-      {coinLoading ? (
+      {isLoading ? (
         <div className="p-8 text-center text-gray-600">Loading…</div>
       ) : (
-        <div className="p-4 space-y-6">
+        <div className="p-4 space-y-4">
+
           {/* Metrics summary */}
           {cm && (
             <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
               {[
                 { label: "Count bias", value: pct(cm.count_conviction) },
-                { label: "$ bias", value: pct(cm.dollar_conviction) },
-                { label: "Cohort", value: pct(cm.cohort_participation, 1) },
-                { label: "Total USD", value: fmtUsd(cm.total_usd) },
-                { label: "Traders", value: String(cm.total_count) },
-                { label: "Avg Lev", value: `${cm.avg_leverage.toFixed(1)}x` },
+                { label: "$ bias",     value: pct(cm.dollar_conviction) },
+                { label: "Cohort",     value: pct(cm.cohort_participation, 1) },
+                { label: "Total USD",  value: fmtUsd(cm.total_usd) },
+                { label: "Traders",    value: String(cm.total_count) },
+                { label: "Avg Lev",    value: `${cm.avg_leverage.toFixed(1)}x` },
               ].map(({ label, value }) => (
                 <div key={label} className="bg-gray-900 border border-gray-800 rounded p-2">
                   <div className="text-gray-600 text-[10px]">{label}</div>
@@ -145,112 +158,87 @@ export default function CoinDetailPage({
             </div>
           )}
 
+          {/* Long vs Short */}
           {cm && (
             <div className="grid grid-cols-2 gap-2 text-xs">
               <div className="bg-gray-900 border border-gray-800 rounded p-3">
-                <div className="text-gray-500 mb-2 font-bold">LONG vs SHORT</div>
-                <div className="flex gap-4">
+                <div className="text-gray-500 mb-2 font-bold text-[10px]">LONG vs SHORT</div>
+                <div className="flex gap-6">
                   <div>
-                    <div className="text-gray-500 text-[10px]">Long</div>
+                    <div className="text-gray-600 text-[10px]">Long</div>
                     <div className="text-green-400 font-bold">{fmtUsd(cm.long_usd)}</div>
-                    <div className="text-gray-500">{cm.long_count} traders</div>
-                    <div className="text-gray-600 text-[10px]">Q1: {cm.q1_long}</div>
+                    <div className="text-gray-500">{cm.long_count} traders · Q1: {cm.q1_long}</div>
                   </div>
                   <div>
-                    <div className="text-gray-500 text-[10px]">Short</div>
+                    <div className="text-gray-600 text-[10px]">Short</div>
                     <div className="text-red-400 font-bold">{fmtUsd(cm.short_usd)}</div>
-                    <div className="text-gray-500">{cm.short_count} traders</div>
-                    <div className="text-gray-600 text-[10px]">Q1: {cm.q1_short}</div>
+                    <div className="text-gray-500">{cm.short_count} traders · Q1: {cm.q1_short}</div>
                   </div>
                 </div>
               </div>
-              <div className="bg-gray-900 border border-gray-800 rounded p-3">
-                <div className="text-gray-500 mb-2 font-bold text-[10px]">ACTIVE SIGNALS</div>
-                {signals.length === 0 ? (
-                  <p className="text-gray-700 text-[10px]">No active signals</p>
+              {/* Whale events compact */}
+              <div className="bg-gray-900 border border-gray-800 rounded p-3 overflow-hidden">
+                <div className="text-gray-500 mb-2 font-bold text-[10px]">WHALE MOVES (72H)</div>
+                {whaleEvents.length === 0 ? (
+                  <p className="text-gray-700 text-[10px]">None</p>
                 ) : (
                   <div className="space-y-1">
-                    {signals.map((s, i) => (
-                      <div key={i} className="flex items-center gap-2">
-                        <span
-                          className={`text-[10px] font-bold ${
-                            s.severity === "HIGH"
-                              ? "text-red-400"
-                              : s.severity === "MEDIUM"
-                              ? "text-yellow-400"
-                              : "text-blue-400"
-                          }`}
+                    {whaleEvents.slice(0, 4).map((e, i) => (
+                      <div key={i} className="flex items-center gap-2 text-[10px]">
+                        <span className={`font-bold w-16 shrink-0 ${EVENT_COLOR[e.event_type] ?? "text-gray-400"}`}>
+                          {e.event_type}
+                        </span>
+                        <span className={e.side === "LONG" ? "text-green-400" : "text-red-400"}>
+                          {e.side === "LONG" ? "▲" : "▼"}
+                        </span>
+                        <span className="text-gray-300">{fmtUsd(e.size_usd)}</span>
+                        <Link
+                          href={`/intel/hyperliquid/trader/${e.address}`}
+                          className="text-blue-400 hover:text-blue-300 truncate"
+                          onClick={(ev) => ev.stopPropagation()}
                         >
-                          {s.severity}
-                        </span>
-                        <span className="text-gray-300 text-[10px]">
-                          {s.signal_type.replace(/_/g, " ")}
-                        </span>
+                          {e.address.slice(0, 8)}…
+                        </Link>
+                        <span className="text-gray-700 ml-auto shrink-0">{fmtAge(e.ts)}</span>
                       </div>
                     ))}
+                    {whaleEvents.length > 4 && (
+                      <div className="text-gray-700 text-[10px]">+{whaleEvents.length - 4} more</div>
+                    )}
                   </div>
                 )}
               </div>
             </div>
           )}
 
-          {/* Whale events */}
-          {whaleEvents.length > 0 && (
-            <section>
-              <h2 className="text-gray-500 text-xs font-bold tracking-widest mb-2">
-                WHALE EVENTS (72H)
-              </h2>
-              <div className="space-y-1.5">
-                {whaleEvents.map((e, i) => {
-                  const evColor: Record<string, string> = {
-                    WAKEUP: "text-purple-400",
-                    SCALEUP: "text-green-400",
-                    FLIP: "text-yellow-400",
-                    EXIT: "text-red-400",
-                    LEVERAGE_PUSH: "text-orange-400",
-                  };
-                  return (
-                    <div
-                      key={i}
-                      className="flex items-center gap-3 bg-gray-900 border border-gray-800 rounded px-3 py-2 text-xs"
-                    >
-                      <span className={`font-bold w-28 shrink-0 ${evColor[e.event_type] ?? "text-gray-400"}`}>
-                        {e.event_type}
-                      </span>
-                      <Link
-                        href={`/intel/hyperliquid/trader/${e.address}`}
-                        className="text-blue-400 hover:text-blue-300 w-28 shrink-0"
-                      >
-                        {e.address.slice(0, 10)}…
-                      </Link>
-                      <span className={e.side === "LONG" ? "text-green-400" : "text-red-400"}>
-                        {e.side === "LONG" ? "▲" : "▼"} {e.side}
-                      </span>
-                      <span className="text-gray-300">{fmtUsd(e.size_usd)}</span>
-                      <span className="text-gray-500 ml-auto">{fmtAge(e.ts)}</span>
-                      <span className="text-gray-600">{fmtTs(e.ts)}</span>
-                    </div>
-                  );
-                })}
-              </div>
-            </section>
-          )}
-
-          {/* Holders table */}
+          {/* Holders table with signals inline */}
           <section>
-            <div className="flex items-center justify-between mb-2">
-              <h2 className="text-gray-500 text-xs font-bold tracking-widest">
-                CURRENT HOLDERS ({holders.length})
+            {/* Section header: title + signal pills + sort toggle */}
+            <div className="flex items-center gap-2 mb-2 flex-wrap">
+              <h2 className="text-gray-500 text-xs font-bold tracking-widest shrink-0">
+                POSITIONS ({holders.length})
               </h2>
-              <div className="flex gap-1">
+              {/* Active signal pills */}
+              {signals.map((s, i) => {
+                const meta = SIGNAL_META[s.signal_type] ?? { label: s.signal_type.slice(0, 5), color: "bg-gray-800 text-gray-400 border-gray-700" };
+                return (
+                  <span
+                    key={i}
+                    className={`inline-flex items-center gap-1 text-[9px] font-bold px-1.5 py-0.5 rounded border ${meta.color}`}
+                    title={s.signal_type.replace(/_/g, " ")}
+                  >
+                    <span className={s.severity === "HIGH" ? "text-red-400" : "text-yellow-500"}>●</span>
+                    {meta.label}
+                  </span>
+                );
+              })}
+              <div className="ml-auto flex gap-1">
                 {(["size", "recency"] as const).map((s) => (
                   <button
                     key={s}
                     onClick={() => setSortBy(s)}
                     className={`text-[10px] px-2 py-0.5 rounded ${
-                      sortBy === s
-                        ? "bg-gray-700 text-white"
-                        : "text-gray-600 hover:text-gray-400"
+                      sortBy === s ? "bg-gray-700 text-white" : "text-gray-600 hover:text-gray-400"
                     }`}
                   >
                     {s === "size" ? "By Size" : "By Recency"}
@@ -258,10 +246,11 @@ export default function CoinDetailPage({
                 ))}
               </div>
             </div>
-            <div className="bg-gray-900 border border-gray-800 rounded overflow-hidden">
+
+            <div className="bg-gray-900 border border-gray-800 rounded overflow-auto">
               <table className="w-full text-xs">
                 <thead>
-                  <tr className="text-gray-600 border-b border-gray-800">
+                  <tr className="text-gray-600 border-b border-gray-800 text-[10px]">
                     <th className="text-left px-3 py-1.5">#</th>
                     <th className="text-left px-3 py-1.5">Address</th>
                     <th className="text-left px-3 py-1.5">Q</th>
@@ -276,11 +265,9 @@ export default function CoinDetailPage({
                 <tbody>
                   {holders.map((h: any, i: number) => {
                     const isLong = h.side === "LONG";
+                    const age = fmtAge(h.opened_at);
                     return (
-                      <tr
-                        key={h.address + i}
-                        className="border-b border-gray-900 hover:bg-gray-800"
-                      >
+                      <tr key={h.address + i} className="border-b border-gray-900 hover:bg-gray-800">
                         <td className="px-3 py-1 text-gray-600">{i + 1}</td>
                         <td className="px-3 py-1">
                           <Link
@@ -290,38 +277,22 @@ export default function CoinDetailPage({
                             {h.address.slice(0, 12)}…
                           </Link>
                         </td>
-                        <td className="px-3 py-1">
-                          <QBadge q={h.skill_quartile} />
+                        <td className="px-3 py-1"><QBadge q={h.skill_quartile} /></td>
+                        <td className={`px-3 py-1 font-bold ${isLong ? "text-green-400" : "text-red-400"}`}>
+                          {isLong ? "▲" : "▼"} {h.side}
                         </td>
-                        <td
-                          className={`px-3 py-1 font-bold ${
-                            isLong ? "text-green-400" : "text-red-400"
-                          }`}
-                        >
-                          {h.side}
-                        </td>
-                        <td className="px-3 py-1 text-right text-gray-300">
-                          {fmtUsd(h.size_usd)}
-                        </td>
+                        <td className="px-3 py-1 text-right text-gray-300">{fmtUsd(h.size_usd)}</td>
                         <td className="px-3 py-1 text-right text-gray-500">
                           ${Number(h.entry_px || 0).toFixed(3)}
                         </td>
                         <td className="px-3 py-1 text-right text-gray-500">
                           {Number(h.leverage || 0).toFixed(1)}x
                         </td>
-                        <td
-                          className={`px-3 py-1 text-right ${
-                            (h.unrealized_pnl ?? 0) >= 0 ? "text-green-400" : "text-red-400"
-                          }`}
-                        >
+                        <td className={`px-3 py-1 text-right ${(h.unrealized_pnl ?? 0) >= 0 ? "text-green-400" : "text-red-400"}`}>
                           {fmtUsd(Math.abs(h.unrealized_pnl ?? 0))}
                         </td>
                         <td className="px-3 py-1 text-right text-gray-600">
-                          {h.opened_at ? (
-                            <span title={h.opened_at}>{fmtAge(h.opened_at)}</span>
-                          ) : (
-                            "—"
-                          )}
+                          {age ? <span title={h.opened_at}>{age}</span> : "—"}
                         </td>
                       </tr>
                     );
@@ -330,6 +301,7 @@ export default function CoinDetailPage({
               </table>
             </div>
           </section>
+
         </div>
       )}
     </div>
