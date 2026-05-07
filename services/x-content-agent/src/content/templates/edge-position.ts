@@ -48,6 +48,7 @@ ${position.traderPnl30d != null ? `30d PnL: $${position.traderPnl30d.toLocaleStr
 ${position.traderRoce30d != null ? `30d ROCE: ${position.traderRoce30d.toFixed(0)}%` : ''}
 ${categoryHook}
 ━━━ WRITING NOTES ━━━
+- KEEP IT SHORT: tweet under 100 words, telegram under 130 words
 - Explain the market in one plain-English sentence (what is actually being predicted?)
 - This is a SIGNAL post — Yieldr agents detected this position, not the vault copying it
 - For the tweet: no links, end with a question that makes people want to reply

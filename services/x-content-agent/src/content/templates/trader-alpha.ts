@@ -54,9 +54,11 @@ ${hcTrades.length ? `Recent big trades:\n${hcTrades.map((h: any) => `"${h.market
 ${winningPositions.length ? `Current winning positions:\n${winningPositions.map((p: any) => `"${p.title?.substring(0, 60)}": ${p.outcome} — entered $${p.avgPrice?.toFixed(2)}, now $${p.curPrice?.toFixed(2)} (+${p.percentPnl?.toFixed(0)}%)`).join('\n')}` : ''}
 
 ━━━ WRITING NOTES ━━━
+- KEEP IT SHORT: tweet under 120 words, telegram under 150 words
 - Use the full wallet address as the trader's identifier — it lets readers search it on Polymarket
-- Pick the 2-3 most striking data points, ignore the rest
-- If they have a weird or specific edge (insider signals, late entries, a niche category), build the story around that
+- Pick 2-3 most striking data points, skip everything else
+- If they have a specific edge (insider signals, late entries, a niche category), lead with that
+- Don't list every category breakdown or every trade — pick the single best one
 - Don't mention @yieldrdotorg or the vault in the tweet — this is pure alpha signal content
-- For telegram: end with a line about how Yieldr's agents track wallets like this 24/7 and link to yieldr.org/vaults`;
+- For telegram: end with "yieldr.org/vaults"`;
 }

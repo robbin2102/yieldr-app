@@ -5,14 +5,23 @@ function stripFinancials(doc: any): any {
   const copy = JSON.parse(JSON.stringify(doc));
   const EXCLUDED = [
     'avg_capital_deployed', 'avgCapitalDeployed',
+    'capitalDeployed', 'capital_deployed',
     'vaultCapital', 'vault_capital',
     'vaultCurrentSize', 'vault_current_size',
+    'currentSize', 'current_size',
+    'totalDeposited', 'total_deposited',
+    'totalWithdrawn', 'total_withdrawn',
+    'tvl', 'TVL', 'aum', 'AUM',
     'periodPnl', 'period_pnl', 'pnl_30d',
+    'totalPnl', 'total_pnl',
+    'netDeposits', 'net_deposits',
+    'balance', 'vaultBalance', 'vault_balance',
   ];
   function scrub(obj: any) {
     if (!obj || typeof obj !== 'object') return;
     for (const key of Object.keys(obj)) {
       if (EXCLUDED.includes(key)) delete obj[key];
+      else if (typeof obj[key] === 'string' && /capital|deployed|vault.?size|balance|deposited/i.test(key)) delete obj[key];
       else if (typeof obj[key] === 'object') scrub(obj[key]);
     }
   }
@@ -20,21 +29,43 @@ function stripFinancials(doc: any): any {
   return copy;
 }
 
+function getVaultCategory(vaultName: string): string | null {
+  const lower = (vaultName || '').toLowerCase();
+  if (lower.includes('nba')) return 'nba';
+  if (lower.includes('soccer')) return 'soccer';
+  if (lower.includes('geo') || lower.includes('politic')) return 'politics';
+  return null;
+}
+
+function isRelevantToVault(marketTitle: string, category: string | null): boolean {
+  if (!category) return true;
+  const t = (marketTitle || '').toLowerCase();
+  switch (category) {
+    case 'nba': return /nba|basketball|lakers|celtics|warriors|bucks|heat|thunder|nuggets|cavaliers|knicks|76ers|nets|bulls|hawks|pistons|rockets|spurs|suns|kings|jazz|grizzlies|pelicans|magic|pacers|raptors|hornets|blazers|timberwolves|clippers|mavericks|wizards|draft|playoff|finals|mvp|all.?star/i.test(t);
+    case 'soccer': return /soccer|football|premier|la liga|serie a|bundesliga|ligue 1|champions league|europa|uefa|fifa|epl|fc |united|city|arsenal|chelsea|liverpool|barcelona|madrid|bayern|psg|juventus|inter|milan|dortmund|atletico/i.test(t);
+    case 'politics': return /politic|president|elect|congress|senate|vote|governor|trump|biden|party|democrat|republican|nato|iran|russia|ukraine|china|war|treaty|sanction|tariff|cabinet|supreme court|fed chair|vance|walz/i.test(t);
+    default: return true;
+  }
+}
+
 export function buildVaultPerformancePrompt(vault: any, style?: ContentStyle): string {
   const s = style || 'narrative';
   const perf = vault.performance || {};
   const posSummary = vault.positionSummary || {};
+  const vaultCat = getVaultCategory(vault.name);
 
   const winningPositions = (vault.openPositions || [])
-    .filter((p: any) => (p.unrealizedPnl || 0) > 0)
-    .slice(0, 4);
+    .filter((p: any) => (p.unrealizedPnl || 0) > 0 && isRelevantToVault(p.market, vaultCat))
+    .slice(0, 3);
 
-  const recentTrades = (vault.recentTrades || []).slice(0, 5);
+  const recentTrades = (vault.recentTrades || [])
+    .filter((t: any) => isRelevantToVault(t.market, vaultCat))
+    .slice(0, 3);
 
   const cleanVaultDoc = stripFinancials(vault.vaultDoc);
   const cleanPositionsDoc = stripFinancials(vault.positionsDoc);
 
-  return `Write a vault performance post for ${vault.name}.
+  return `Write a SHORT vault performance post for ${vault.name}.
 
 ${STYLE_DESCRIPTIONS[s]}
 
@@ -44,11 +75,11 @@ ROI since launch: ${perf.vaultROI != null ? (perf.vaultROI > 0 ? '+' : '') + per
 30d ROCE: ${perf.periodROCE != null ? perf.periodROCE.toFixed(1) + '%' : 'N/A'}
 Open positions: ${posSummary.openCount || 0} (${posSummary.winningCount || 0} winning, ${posSummary.losingCount || 0} losing)
 
-${winningPositions.length ? `Winning positions:\n${winningPositions.map((p: any) =>
+${winningPositions.length ? `Winning positions (${vault.specialty || 'core'} only):\n${winningPositions.map((p: any) =>
   `"${p.market?.substring(0, 65)}": ${p.outcome} — in at $${p.avgPrice?.toFixed(2)}, now $${p.curPrice?.toFixed(2)} (+${p.pnlPercent?.toFixed(0) || '?'}%)`
 ).join('\n')}` : ''}
 
-${recentTrades.length ? `Recent closed trades:\n${recentTrades.map((t: any) =>
+${recentTrades.length ? `Recent closed trades (${vault.specialty || 'core'} only):\n${recentTrades.map((t: any) =>
   `"${t.market?.substring(0, 55)}": ${t.outcome} — ${(t.realizedPnl || 0) > 0 ? 'WIN' : 'LOSS'} (${t.status})`
 ).join('\n')}` : ''}
 
@@ -58,10 +89,12 @@ ${JSON.stringify(cleanVaultDoc, null, 2)}
 ${cleanPositionsDoc ? JSON.stringify(cleanPositionsDoc, null, 2) : ''}
 
 ━━━ WRITING NOTES ━━━
-- NEVER mention dollar amounts for vault size or capital deployed — only ROI %, ROCE %, win rates
+- KEEP IT SHORT: tweet under 150 words, telegram under 200 words
+- Pick 3-4 key stats max — don't list every trade or metric
+- NEVER mention dollar amounts for vault size, capital deployed, or total PnL — only ROI %, ROCE %, win rates
 - Individual trade P&L in dollars is fine ("this position is up +$450")
-- If the vault is down: say it plainly — "rough month" beats spin. Readers respect honesty.
-- Lead with the most human-readable insight — not the first number in the data
-- For tweet: no links, no "yieldr.org", end with a question or observation
-- For telegram: end with "Track live → yieldr.org/vaults"`;
+- ONLY mention trades relevant to the vault's specialty (${vault.specialty || 'Multi-category'}) — ignore off-category trades
+- If the vault is down: say it straight — "down 12% this month" not "navigating rough waters"
+- For tweet: no links, no "yieldr.org", end with a question or short observation
+- For telegram: end with "yieldr.org/vaults"`;
 }
