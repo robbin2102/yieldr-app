@@ -174,6 +174,37 @@ export async function sendPhotoWithButton(
 }
 
 /**
+ * Send a native poll to the channel
+ */
+export async function sendPoll(
+  question: string,
+  options: string[],
+  contextText?: string,
+): Promise<TgMessageResult> {
+  const client = getBotClient();
+  const channelId = getChannelId();
+
+  if (contextText) {
+    await client.post('/sendMessage', {
+      chat_id: channelId,
+      text: toHtml(contextText),
+      parse_mode: 'HTML',
+    });
+  }
+
+  const response = await client.post('/sendPoll', {
+    chat_id: channelId,
+    question,
+    options: JSON.stringify(options.slice(0, 10)),
+    is_anonymous: true,
+  });
+
+  const result = response.data.result;
+  console.log(`[TG] Sent poll to channel: message_id=${result.message_id}`);
+  return result;
+}
+
+/**
  * Verify the bot can access the channel
  */
 export async function verifyBotAccess(): Promise<{ ok: boolean; chatTitle?: string; error?: string }> {

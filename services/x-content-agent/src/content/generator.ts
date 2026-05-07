@@ -16,9 +16,12 @@ import { generateStructuredContent } from '../lib/grok-client';
 import { YIELDR_AGENT_SYSTEM_PROMPT } from './system-prompt';
 import { buildTraderAlphaPrompt } from './templates/trader-alpha';
 import { buildHighConvictionPrompt } from './templates/high-conviction';
-import { buildVaultPerformancePrompt } from './templates/vault-performance';
+import { buildVaultPerformancePrompt, buildCombinedVaultPrompt } from './templates/vault-performance';
 import { buildEdgePositionPrompt } from './templates/edge-position';
+import { buildProjectPrimerPrompt } from './templates/project-primer';
+import { buildCommunityPromptPrompt } from './templates/community-prompt';
 import { buildReplyPrompt } from './templates/reply';
+import { DOC_SECTIONS } from './docs-content';
 import { ContentStyle, randomStyle, weightedVaultStyle } from './styles';
 import * as mcp from '../lib/mcp-client';
 import { getDB, COLLECTIONS } from '../lib/db';
@@ -242,6 +245,92 @@ export async function generateVaultPerformance(vaultName?: string, source: 'test
     telegram: result.telegram || '',
     category: 'VAULT_PERFORMANCE',
     metadata: { vaultName: vault.name, style },
+  };
+  await logContent(post, source);
+  return post;
+}
+
+/**
+ * Generate a combined vault performance post covering all 3 vaults
+ */
+export async function generateCombinedVaultPerformance(source: 'test' | 'scheduler' = 'scheduler'): Promise<GeneratedPost> {
+  const VAULT_NAMES = ['NBA Edge Vault', 'Soccer Alpha Vault', 'Geopolitics Vault'];
+
+  const vaultResults = await Promise.all(
+    VAULT_NAMES.map(name => mcp.getVaultPerformance({ vaultName: name, period: '30d' }).catch(() => null))
+  );
+
+  const vaults = vaultResults
+    .filter(Boolean)
+    .flatMap(r => r!.vaults || []);
+
+  if (vaults.length === 0) throw new Error('No vault data found for combined update');
+
+  const style = weightedVaultStyle();
+  const prompt = buildCombinedVaultPrompt(vaults, style);
+  const result = await generateStructuredContent(YIELDR_AGENT_SYSTEM_PROMPT, prompt, { temperature: 0.9 });
+
+  const post: GeneratedPost = {
+    type: result.type || 'post',
+    tweet: result.tweet || result.content,
+    telegram: result.telegram || '',
+    category: 'VAULT_PERFORMANCE',
+    metadata: { vaultNames: vaults.map((v: any) => v.name), combined: true, style },
+  };
+  await logContent(post, source);
+  return post;
+}
+
+/**
+ * Generate a Project Primer educational post — rotates through 7 doc sections weekly
+ */
+export async function generateProjectPrimer(source: 'test' | 'scheduler' = 'scheduler'): Promise<GeneratedPost> {
+  const dayOfWeek = new Date().getDay(); // 0=Sun .. 6=Sat
+  const section = DOC_SECTIONS[dayOfWeek % DOC_SECTIONS.length];
+  const style = randomStyle();
+
+  const prompt = buildProjectPrimerPrompt(section, style);
+  const result = await generateStructuredContent(YIELDR_AGENT_SYSTEM_PROMPT, prompt, { temperature: 0.9 });
+
+  const post: GeneratedPost = {
+    type: result.type || 'post',
+    tweet: result.tweet || result.content,
+    telegram: result.telegram || '',
+    category: 'PROJECT_PRIMER',
+    metadata: { sectionId: section.id, sectionTitle: section.title, style },
+  };
+  await logContent(post, source);
+  return post;
+}
+
+/**
+ * Generate a Community Prompt — discussion question for X, native poll for TG
+ * Returns a GeneratedPost with an extra `poll` field in metadata
+ */
+export async function generateCommunityPrompt(source: 'test' | 'scheduler' = 'scheduler'): Promise<GeneratedPost> {
+  let vaultData: any = null;
+  try {
+    const randomVault = ['NBA Edge Vault', 'Soccer Alpha Vault', 'Geopolitics Vault'][
+      Math.floor(Math.random() * 3)
+    ];
+    const data = await mcp.getVaultPerformance({ vaultName: randomVault, period: '30d' });
+    vaultData = (data.vaults || [])[0] || null;
+  } catch {
+    // Optional context — proceed without it
+  }
+
+  const prompt = buildCommunityPromptPrompt({ vaultData });
+  const result = await generateStructuredContent(YIELDR_AGENT_SYSTEM_PROMPT, prompt, { temperature: 1.0 });
+
+  const post: GeneratedPost = {
+    type: result.type || 'post',
+    tweet: result.tweet || result.content,
+    telegram: result.telegram || '',
+    category: 'COMMUNITY_PROMPT',
+    metadata: {
+      poll: result.poll || null,
+      style: 'community',
+    },
   };
   await logContent(post, source);
   return post;

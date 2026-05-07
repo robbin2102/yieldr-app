@@ -29,27 +29,27 @@ export const CONFIG = {
   // MCP Server (for fetching data)
   MCP_SERVER_URL: process.env.MCP_SERVER_URL || 'http://localhost:3001',
 
-  // Content calendar (IST times, optimized for US/EU traffic)
+  // Content calendar (IST times, 5 windows, both X + TG)
   POSTING_WINDOWS: [
-    { ist: '19:30', edt: '06:00', content: ['HIGH_CONVICTION', 'TRADER_PROFILE'] },
-    { ist: '21:30', edt: '08:00', content: ['MARKETS_ALPHA', 'VAULT_PERFORMANCE'] },
-    { ist: '23:30', edt: '10:00', content: ['TRADER_PROFILE', 'BASE_POSTING'] },
-    { ist: '02:00', edt: '13:00', content: ['HIGH_CONVICTION', 'MARKETS_ALPHA'] },
-    { ist: '05:30', edt: '16:00', content: ['HIGH_CONVICTION', 'TRADER_PROFILE'] },
-    { ist: '08:30', edt: '19:00', content: ['VAULT_PERFORMANCE', 'MARKETS_ALPHA'] },
-    { ist: '11:00', edt: '21:30', content: ['TRADER_PROFILE', 'HIGH_CONVICTION', 'VAULT_PERFORMANCE', 'BASE_POSTING'] },
+    { ist: '19:30', edt: '10:00', content: ['PROJECT_PRIMER'] },
+    { ist: '21:30', edt: '12:00', content: ['VAULT_PERFORMANCE'] },
+    { ist: '23:30', edt: '14:00', content: ['COMMUNITY_PROMPT'] },
+    { ist: '02:00', edt: '16:30', content: ['HIGH_CONVICTION'] },
+    { ist: '05:30', edt: '20:00', content: ['TRADER_PROFILE'] },
   ],
 
-  // Daily post limits
+  // Daily post limits (5 posts/day on both X and TG)
   DAILY_LIMITS: {
-    TRADER_PROFILE: 3,
+    PROJECT_PRIMER: 1,
+    VAULT_PERFORMANCE: 1,
+    COMMUNITY_PROMPT: 1,
+    HIGH_CONVICTION: 1,
+    TRADER_PROFILE: 1,
     MARKETS_ALPHA: 0,
-    HIGH_CONVICTION: 3,
-    VAULT_PERFORMANCE: 3,
     BASE_POSTING: 0,
     BASE_REPLIES: 12,
     PM_REPLIES: 8,
-    TOTAL: 9,
+    TOTAL: 5,
   },
 
   // Reply monitoring

@@ -98,3 +98,53 @@ ${cleanPositionsDoc ? JSON.stringify(cleanPositionsDoc, null, 2) : ''}
 - For tweet: no links, no "yieldr.org", end with a question or short observation
 - For telegram: end with "yieldr.org/vaults"`;
 }
+
+export function buildCombinedVaultPrompt(vaults: any[], style?: ContentStyle): string {
+  const s = style || 'narrative';
+
+  const vaultBlocks = vaults.map((vault) => {
+    const perf = vault.performance || {};
+    const posSummary = vault.positionSummary || {};
+    const vaultCat = getVaultCategory(vault.name);
+
+    const winningPositions = (vault.openPositions || [])
+      .filter((p: any) => (p.unrealizedPnl || 0) > 0 && isRelevantToVault(p.market, vaultCat))
+      .slice(0, 2);
+
+    const recentTrades = (vault.recentTrades || [])
+      .filter((t: any) => isRelevantToVault(t.market, vaultCat))
+      .slice(0, 2);
+
+    const cleanVaultDoc = stripFinancials(vault.vaultDoc);
+
+    return `
+▸ ${vault.name} (${vault.specialty || 'Multi-category'})
+  ROI since launch: ${perf.vaultROI != null ? (perf.vaultROI > 0 ? '+' : '') + perf.vaultROI.toFixed(1) + '%' : 'N/A'}
+  30d ROCE: ${perf.periodROCE != null ? perf.periodROCE.toFixed(1) + '%' : 'N/A'}
+  Open: ${posSummary.openCount || 0} positions (${posSummary.winningCount || 0}W / ${posSummary.losingCount || 0}L)
+${winningPositions.length ? `  Best positions:\n${winningPositions.map((p: any) =>
+  `    "${p.market?.substring(0, 55)}": ${p.outcome} — $${p.avgPrice?.toFixed(2)} → $${p.curPrice?.toFixed(2)} (+${p.pnlPercent?.toFixed(0) || '?'}%)`
+).join('\n')}` : ''}
+${recentTrades.length ? `  Recent trades:\n${recentTrades.map((t: any) =>
+  `    "${t.market?.substring(0, 50)}": ${(t.realizedPnl || 0) > 0 ? 'WIN' : 'LOSS'}`
+).join('\n')}` : ''}
+${cleanVaultDoc ? `  Extra: ${JSON.stringify(cleanVaultDoc).substring(0, 300)}` : ''}`;
+  }).join('\n');
+
+  return `Write a combined vault update covering ALL vaults below in a single post.
+
+${STYLE_DESCRIPTIONS[s]}
+
+━━━ ALL VAULTS ━━━
+${vaultBlocks}
+
+━━━ WRITING NOTES ━━━
+- KEEP IT SHORT: tweet under 200 words, telegram under 250 words
+- Cover all 3 vaults — give each vault 2-3 lines with its headline stat and best position
+- NEVER mention dollar amounts for vault size, capital deployed, or total PnL — only ROI %, ROCE %, win rates
+- Individual trade P&L in dollars is fine
+- If a vault is down, say it straight — no euphemisms
+- Structure: brief intro line → vault 1 → vault 2 → vault 3 → one-line closing
+- For tweet: no links, end with a question or observation
+- For telegram: end with "yieldr.org/vaults"`;
+}

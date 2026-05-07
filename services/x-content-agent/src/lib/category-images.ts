@@ -8,6 +8,8 @@ const CATEGORY_MAP: Record<string, string> = {
   HIGH_CONVICTION: 'live-signal.png',
   VAULT_PERFORMANCE: 'vault-update.png',
   VAULT_LOSS: 'vault-alert.png',
+  PROJECT_PRIMER: 'project-primer.png',
+  COMMUNITY_PROMPT: 'community-prompt.png',
 };
 
 export function getCategoryImage(category: string, isLoss?: boolean): string | null {
