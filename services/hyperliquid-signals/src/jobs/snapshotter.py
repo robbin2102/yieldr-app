@@ -1,6 +1,7 @@
 import asyncio
+import gc
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 import aiohttp
 
@@ -10,6 +11,10 @@ from ..lib.hyperliquid import fetch_positions
 from .convergence import run_convergence
 
 logger = logging.getLogger(__name__)
+
+# How many traders to hold in memory at once.
+# 50 keeps peak usage well under 100 MB even with large cohorts.
+BATCH_SIZE = 50
 
 
 def _parse_position(raw: dict, address: str, snapshot_ts: datetime) -> dict | None:
@@ -32,6 +37,13 @@ def _parse_position(raw: dict, address: str, snapshot_ts: datetime) -> dict | No
     }
 
 
+def _slim(pos: dict | None) -> dict | None:
+    """Slim position dict for storage in change records — avoids storing full copies."""
+    if pos is None:
+        return None
+    return {k: pos.get(k) for k in ("coin", "side", "size_usd", "leverage", "entry_px")}
+
+
 async def _detect_changes(
     db,
     address: str,
@@ -42,102 +54,71 @@ async def _detect_changes(
 ) -> list[dict]:
     changes = []
 
-    prev_cursor = db.hl_signals_positions.find(
+    prev_docs = await db.hl_signals_positions.find(
         {"address": address},
         sort=[("snapshot_ts", -1)],
         limit=1,
-    )
-    prev_docs = await prev_cursor.to_list(1)
+    ).to_list(1)
 
     if not prev_docs:
-        for pos in current_positions:
-            changes.append(
-                {
-                    "address": address,
-                    "coin": pos["coin"],
-                    "change_type": "NEW_POSITION",
-                    "previous_state": None,
-                    "new_state": pos,
-                    "ts": snapshot_ts,
-                }
-            )
-        return changes
+        return [
+            {
+                "address": address,
+                "coin": pos["coin"],
+                "change_type": "NEW_POSITION",
+                "previous_state": None,
+                "new_state": _slim(pos),
+                "ts": snapshot_ts,
+            }
+            for pos in current_positions
+        ]
 
     prev_snapshot_ts = prev_docs[0]["snapshot_ts"]
     prev_cursor = db.hl_signals_positions.find(
-        {"address": address, "snapshot_ts": prev_snapshot_ts}
+        {"address": address, "snapshot_ts": prev_snapshot_ts},
+        {"_id": 0},
     )
     prev_positions = {doc["coin"]: doc async for doc in prev_cursor}
     current_map = {p["coin"]: p for p in current_positions}
 
     for coin, cur in current_map.items():
         if coin not in prev_positions:
-            changes.append(
-                {
-                    "address": address,
-                    "coin": coin,
-                    "change_type": "NEW_POSITION",
-                    "previous_state": None,
-                    "new_state": cur,
-                    "ts": snapshot_ts,
-                }
-            )
+            changes.append({
+                "address": address, "coin": coin, "change_type": "NEW_POSITION",
+                "previous_state": None, "new_state": _slim(cur), "ts": snapshot_ts,
+            })
             continue
 
         prev = prev_positions[coin]
 
         if cur["side"] != prev["side"]:
-            changes.append(
-                {
-                    "address": address,
-                    "coin": coin,
-                    "change_type": "FLIP",
-                    "previous_state": prev,
-                    "new_state": cur,
-                    "ts": snapshot_ts,
-                }
-            )
+            changes.append({
+                "address": address, "coin": coin, "change_type": "FLIP",
+                "previous_state": _slim(prev), "new_state": _slim(cur), "ts": snapshot_ts,
+            })
             continue
 
         if prev["size_usd"] > 0:
             size_change_pct = abs(cur["size_usd"] - prev["size_usd"]) / prev["size_usd"] * 100
             if size_change_pct > change_threshold_pct:
-                changes.append(
-                    {
-                        "address": address,
-                        "coin": coin,
-                        "change_type": "SIZE_CHANGE",
-                        "previous_state": prev,
-                        "new_state": cur,
-                        "ts": snapshot_ts,
-                    }
-                )
+                changes.append({
+                    "address": address, "coin": coin, "change_type": "SIZE_CHANGE",
+                    "previous_state": _slim(prev), "new_state": _slim(cur), "ts": snapshot_ts,
+                })
 
-        lev_diff = abs(cur["leverage"] - prev.get("leverage", 0))
-        if lev_diff > leverage_threshold:
-            changes.append(
-                {
-                    "address": address,
-                    "coin": coin,
-                    "change_type": "LEVERAGE_CHANGE",
-                    "previous_state": prev,
-                    "new_state": cur,
-                    "ts": snapshot_ts,
-                }
-            )
+        if abs(cur["leverage"] - prev.get("leverage", 0)) > leverage_threshold:
+            changes.append({
+                "address": address, "coin": coin, "change_type": "LEVERAGE_CHANGE",
+                "previous_state": _slim(prev), "new_state": _slim(cur), "ts": snapshot_ts,
+            })
 
     for coin in prev_positions:
         if coin not in current_map:
-            changes.append(
-                {
-                    "address": address,
-                    "coin": coin,
-                    "change_type": "CLOSED",
-                    "previous_state": prev_positions[coin],
-                    "new_state": None,
-                    "ts": snapshot_ts,
-                }
-            )
+            changes.append({
+                "address": address, "coin": coin, "change_type": "CLOSED",
+                "previous_state": _slim(prev_positions[coin]), "new_state": None,
+                "ts": snapshot_ts,
+            })
 
     return changes
 
@@ -147,18 +128,13 @@ async def _detect_whale_events(
     address: str,
     current_positions: list[dict],
     snapshot_ts: datetime,
-    skill_quartile: int,
 ) -> list[dict]:
-    """Detect whale events for Q1 traders only."""
-    if skill_quartile != 1:
-        return []
-
+    """Detect whale events for a Q1 trader. Caller is responsible for quartile check."""
     events = []
     dormant_cutoff = snapshot_ts - timedelta(days=settings.whale_dormant_days)
 
     current_map = {p["coin"]: p for p in current_positions}
 
-    # Get most recent prior snapshot for this trader
     prev_pos_doc = await db.hl_signals_positions.find_one(
         {"address": address, "snapshot_ts": {"$lt": snapshot_ts}},
         sort=[("snapshot_ts", -1)],
@@ -167,110 +143,75 @@ async def _detect_whale_events(
     if prev_pos_doc:
         prev_ts = prev_pos_doc["snapshot_ts"]
         cursor = db.hl_signals_positions.find(
-            {"address": address, "snapshot_ts": prev_ts}
+            {"address": address, "snapshot_ts": prev_ts}, {"_id": 0}
         )
         prev_map = {doc["coin"]: doc async for doc in cursor}
+
+    # Batch-check dormancy for all new coins in one query
+    new_coins = [coin for coin in current_map if coin not in prev_map
+                 and current_map[coin]["size_usd"] >= settings.whale_min_usd]
+    dormant_coins: set[str] = set()
+    if new_coins:
+        recent_pipeline = [
+            {"$match": {
+                "address": address,
+                "coin": {"$in": new_coins},
+                "snapshot_ts": {"$gte": dormant_cutoff, "$lt": snapshot_ts},
+            }},
+            {"$group": {"_id": "$coin"}},
+        ]
+        recent_docs = await db.hl_signals_positions.aggregate(recent_pipeline).to_list(
+            len(new_coins) + 5
+        )
+        recent_seen = {d["_id"] for d in recent_docs}
+        dormant_coins = set(new_coins) - recent_seen
 
     for coin, cur in current_map.items():
         if cur["size_usd"] < settings.whale_min_usd:
             continue
 
         if coin not in prev_map:
-            # Check if dormant — no position in past N days
-            had_recent = await db.hl_signals_positions.find_one(
-                {
-                    "address": address,
-                    "coin": coin,
-                    "snapshot_ts": {"$gte": dormant_cutoff, "$lt": snapshot_ts},
-                }
-            )
-            event_type = "WAKEUP" if not had_recent else "WAKEUP"
-            events.append(
-                {
-                    "address": address,
-                    "coin": coin,
-                    "event_type": event_type,
-                    "side": cur["side"],
-                    "size_usd": cur["size_usd"],
-                    "ts": snapshot_ts,
-                    "metadata": {"prev_size_usd": 0, "new_size_usd": cur["size_usd"]},
-                }
-            )
+            event_type = "WAKEUP" if coin in dormant_coins else "SCALEUP"
+            events.append({
+                "address": address, "coin": coin, "event_type": event_type,
+                "side": cur["side"], "size_usd": cur["size_usd"], "ts": snapshot_ts,
+                "metadata": {"prev_size_usd": 0, "new_size_usd": cur["size_usd"]},
+            })
             continue
 
         prev = prev_map[coin]
 
-        # FLIP — side change
         if cur["side"] != prev["side"]:
-            events.append(
-                {
-                    "address": address,
-                    "coin": coin,
-                    "event_type": "FLIP",
-                    "side": cur["side"],
-                    "size_usd": cur["size_usd"],
-                    "ts": snapshot_ts,
-                    "metadata": {
-                        "prev_side": prev["side"],
-                        "prev_size_usd": prev["size_usd"],
-                        "new_size_usd": cur["size_usd"],
-                    },
-                }
-            )
+            events.append({
+                "address": address, "coin": coin, "event_type": "FLIP",
+                "side": cur["side"], "size_usd": cur["size_usd"], "ts": snapshot_ts,
+                "metadata": {"prev_side": prev["side"], "prev_size_usd": prev["size_usd"]},
+            })
             continue
 
-        # SCALEUP — significant size increase
         if prev["size_usd"] > 0:
             ratio = (cur["size_usd"] - prev["size_usd"]) / prev["size_usd"]
             if ratio >= settings.whale_scaleup_threshold:
-                events.append(
-                    {
-                        "address": address,
-                        "coin": coin,
-                        "event_type": "SCALEUP",
-                        "side": cur["side"],
-                        "size_usd": cur["size_usd"],
-                        "ts": snapshot_ts,
-                        "metadata": {
-                            "prev_size_usd": prev["size_usd"],
-                            "new_size_usd": cur["size_usd"],
-                            "ratio": ratio,
-                        },
-                    }
-                )
+                events.append({
+                    "address": address, "coin": coin, "event_type": "SCALEUP",
+                    "side": cur["side"], "size_usd": cur["size_usd"], "ts": snapshot_ts,
+                    "metadata": {"prev_size_usd": prev["size_usd"], "ratio": ratio},
+                })
 
-        # LEVERAGE_PUSH
-        lev_diff = cur["leverage"] - prev.get("leverage", 0)
-        if lev_diff >= settings.leverage_change_threshold:
-            events.append(
-                {
-                    "address": address,
-                    "coin": coin,
-                    "event_type": "LEVERAGE_PUSH",
-                    "side": cur["side"],
-                    "size_usd": cur["size_usd"],
-                    "ts": snapshot_ts,
-                    "metadata": {
-                        "prev_leverage": prev.get("leverage", 0),
-                        "new_leverage": cur["leverage"],
-                    },
-                }
-            )
+        if cur["leverage"] - prev.get("leverage", 0) >= settings.leverage_change_threshold:
+            events.append({
+                "address": address, "coin": coin, "event_type": "LEVERAGE_PUSH",
+                "side": cur["side"], "size_usd": cur["size_usd"], "ts": snapshot_ts,
+                "metadata": {"prev_leverage": prev.get("leverage", 0), "new_leverage": cur["leverage"]},
+            })
 
-    # EXIT events — positions in prev but not in current
     for coin, prev in prev_map.items():
         if coin not in current_map and prev["size_usd"] >= settings.whale_min_usd:
-            events.append(
-                {
-                    "address": address,
-                    "coin": coin,
-                    "event_type": "EXIT",
-                    "side": prev["side"],
-                    "size_usd": prev["size_usd"],
-                    "ts": snapshot_ts,
-                    "metadata": {"prev_size_usd": prev["size_usd"], "new_size_usd": 0},
-                }
-            )
+            events.append({
+                "address": address, "coin": coin, "event_type": "EXIT",
+                "side": prev["side"], "size_usd": prev["size_usd"], "ts": snapshot_ts,
+                "metadata": {"prev_size_usd": prev["size_usd"]},
+            })
 
     return events
 
@@ -278,10 +219,8 @@ async def _detect_whale_events(
 async def run_snapshot() -> None:
     logger.info('"Starting position snapshot"')
     db = get_db()
-    # Use naive UTC throughout — Motor stores/returns naive datetimes
     now = datetime.utcnow()
 
-    # Load active cohort with skill quartile
     cursor = db.hl_signals_traders.find(
         {"cohort_status": "active"},
         {"address": 1, "skill_quartile": 1},
@@ -289,83 +228,85 @@ async def run_snapshot() -> None:
     traders = [doc async for doc in cursor]
     addresses = [doc["address"] for doc in traders]
     skill_map = {doc["address"]: doc.get("skill_quartile", 4) for doc in traders}
+    del traders  # free before the heavy work begins
 
     if not addresses:
         logger.warning('"No active traders in cohort, skipping snapshot"')
         return
 
-    logger.info('"Fetching positions for %d traders"', len(addresses))
+    logger.info('"Fetching positions", "traders": %d, "batch_size": %d', len(addresses), BATCH_SIZE)
 
     semaphore = asyncio.Semaphore(settings.snapshot_concurrency)
-    async with aiohttp.ClientSession() as session:
-        tasks = [fetch_positions(session, addr, semaphore) for addr in addresses]
-        results = await asyncio.gather(*tasks)
-
-    all_positions: list[dict] = []
+    total_positions = 0
+    total_changes = 0
+    total_whale_events = 0
     errors = 0
-    for addr, raw_positions in zip(addresses, results):
-        if raw_positions is None:
-            errors += 1
-            continue
-        for raw in raw_positions:
-            parsed = _parse_position(raw, addr, now)
-            if parsed:
-                all_positions.append(parsed)
 
-    if all_positions:
-        await db.hl_signals_positions.insert_many(all_positions)
+    async with aiohttp.ClientSession() as session:
+        for batch_start in range(0, len(addresses), BATCH_SIZE):
+            batch_addrs = addresses[batch_start : batch_start + BATCH_SIZE]
 
-    # Detect position changes per address
-    all_changes: list[dict] = []
-    addr_positions: dict[str, list[dict]] = {}
-    for pos in all_positions:
-        addr_positions.setdefault(pos["address"], []).append(pos)
+            # ── 1. Fetch positions for this batch (concurrent, bounded by semaphore) ──
+            fetch_results = await asyncio.gather(
+                *[fetch_positions(session, addr, semaphore) for addr in batch_addrs]
+            )
 
-    change_tasks = [
-        _detect_changes(
-            db,
-            addr,
-            addr_positions.get(addr, []),
-            now,
-            settings.position_change_threshold_pct,
-            settings.leverage_change_threshold,
-        )
-        for addr in addresses
-    ]
-    change_results = await asyncio.gather(*change_tasks)
-    for changes in change_results:
-        all_changes.extend(changes)
+            # ── 2. Parse ──────────────────────────────────────────────────────────────
+            batch_positions: list[dict] = []
+            addr_positions: dict[str, list[dict]] = {}
+            for addr, raw_pos in zip(batch_addrs, fetch_results):
+                if raw_pos is None:
+                    errors += 1
+                    continue
+                parsed = [p for r in raw_pos if (p := _parse_position(r, addr, now))]
+                if parsed:
+                    batch_positions.extend(parsed)
+                    addr_positions[addr] = parsed
 
-    if all_changes:
-        await db.hl_signals_position_changes.insert_many(all_changes)
+            del fetch_results  # HTTP response payloads no longer needed
 
-    # Detect whale events for Q1 traders
-    whale_tasks = [
-        _detect_whale_events(
-            db,
-            addr,
-            addr_positions.get(addr, []),
-            now,
-            skill_map.get(addr, 4),
-        )
-        for addr in addresses
-    ]
-    whale_results = await asyncio.gather(*whale_tasks)
-    all_whale_events: list[dict] = []
-    for events in whale_results:
-        all_whale_events.extend(events)
+            # ── 3. Write positions ────────────────────────────────────────────────────
+            if batch_positions:
+                await db.hl_signals_positions.insert_many(batch_positions, ordered=False)
+                total_positions += len(batch_positions)
+            del batch_positions
 
-    if all_whale_events:
-        await db.hl_signals_whale_events.insert_many(all_whale_events)
-        logger.info('"Whale events detected", "count": %d', len(all_whale_events))
+            # ── 4. Detect position changes (concurrent within batch — 50 max) ────────
+            change_lists = await asyncio.gather(*[
+                _detect_changes(
+                    db, addr, addr_positions.get(addr, []), now,
+                    settings.position_change_threshold_pct,
+                    settings.leverage_change_threshold,
+                )
+                for addr in batch_addrs
+            ])
+            batch_changes = [c for cs in change_lists for c in cs]
+            del change_lists
+            if batch_changes:
+                await db.hl_signals_position_changes.insert_many(batch_changes, ordered=False)
+                total_changes += len(batch_changes)
+            del batch_changes
+
+            # ── 5. Detect whale events for Q1 traders only ───────────────────────────
+            q1_addrs = [a for a in batch_addrs if skill_map.get(a, 4) == 1]
+            if q1_addrs:
+                whale_lists = await asyncio.gather(*[
+                    _detect_whale_events(db, addr, addr_positions.get(addr, []), now)
+                    for addr in q1_addrs
+                ])
+                batch_whale = [e for es in whale_lists for e in es]
+                del whale_lists
+                if batch_whale:
+                    await db.hl_signals_whale_events.insert_many(batch_whale, ordered=False)
+                    total_whale_events += len(batch_whale)
+                del batch_whale
+
+            del addr_positions
+            gc.collect()  # return cyclic-ref memory promptly between batches
 
     logger.info(
         '"Snapshot complete", "positions": %d, "changes": %d, "whale_events": %d, "errors": %d',
-        len(all_positions),
-        len(all_changes),
-        len(all_whale_events),
-        errors,
+        total_positions, total_changes, total_whale_events, errors,
     )
 
-    # Run convergence engine immediately after snapshot
     await run_convergence(now)
