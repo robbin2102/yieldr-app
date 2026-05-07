@@ -22,10 +22,6 @@ def apply_filters(rows: list[dict], cfg: Settings) -> list[dict]:
         except (KeyError, TypeError, ValueError):
             continue
 
-        # Daily PnL must be positive
-        if day_pnl <= 0:
-            continue
-
         # Minimum ROI thresholds — core quality gate
         if month_roi < cfg.min_month_roi:
             continue
