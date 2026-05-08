@@ -71,11 +71,11 @@ ${STYLE_DESCRIPTIONS[s]}
 
 ━━━ VAULT SNAPSHOT ━━━
 Vault: ${vault.name} (${vault.specialty || 'Multi-category'})
-ROI since launch: ${perf.vaultROI != null ? (perf.vaultROI > 0 ? '+' : '') + perf.vaultROI.toFixed(1) + '%' : 'N/A'}
-30d ROCE: ${perf.periodROCE != null ? perf.periodROCE.toFixed(1) + '%' : 'N/A'}
+ROI (capital-weighted return metric): ${perf.vaultROI != null ? (perf.vaultROI > 0 ? '+' : '') + perf.vaultROI.toFixed(1) + '%' : 'N/A'}
+30d ROCE (return on capital employed, last 30 days): ${perf.periodROCE != null ? perf.periodROCE.toFixed(1) + '%' : 'N/A'}
 Open positions: ${posSummary.openCount || 0} (${posSummary.winningCount || 0} winning, ${posSummary.losingCount || 0} losing)
 
-${winningPositions.length ? `Winning positions (${vault.specialty || 'core'} only):\n${winningPositions.map((p: any) =>
+${winningPositions.length ? `Winning open positions (${vault.specialty || 'core'} only):\n${winningPositions.map((p: any) =>
   `"${p.market?.substring(0, 65)}": ${p.outcome} — in at $${p.avgPrice?.toFixed(2)}, now $${p.curPrice?.toFixed(2)} (+${p.pnlPercent?.toFixed(0) || '?'}%)`
 ).join('\n')}` : ''}
 
@@ -88,13 +88,20 @@ ${JSON.stringify(cleanVaultDoc, null, 2)}
 
 ${cleanPositionsDoc ? JSON.stringify(cleanPositionsDoc, null, 2) : ''}
 
+━━━ CRITICAL: DATA RULES ━━━
+- ONLY state what the data above explicitly shows. Do NOT infer, assume, or editorialize beyond it.
+- ROI and ROCE are specific metrics — report them as numbers. Do NOT interpret a negative ROI as "the vault is losing money overall" or "in loss since inception." A vault can have negative ROI but positive total PnL (realized + unrealized).
+- If a vault has winning open positions, say so — those are real unrealized gains regardless of what the ROI metric shows.
+- Do NOT assume or mention launch dates, inception dates, or timeframes unless the data explicitly includes them.
+- Report each metric exactly as labeled. "30d ROCE: -165%" means the 30-day ROCE is -165%, not that the vault lost 165% of its money.
+- When a metric is negative but open positions are winning, present both facts without contradiction.
+
 ━━━ WRITING NOTES ━━━
 - KEEP IT SHORT: tweet under 150 words, telegram under 200 words
 - Pick 3-4 key stats max — don't list every trade or metric
 - NEVER mention dollar amounts for vault size, capital deployed, or total PnL — only ROI %, ROCE %, win rates
 - Individual trade P&L in dollars is fine ("this position is up +$450")
 - ONLY mention trades relevant to the vault's specialty (${vault.specialty || 'Multi-category'}) — ignore off-category trades
-- If the vault is down: say it straight — "down 12% this month" not "navigating rough waters"
 - For tweet: no links, no "yieldr.org", end with a question or short observation
 - For telegram: end with "yieldr.org/vaults"`;
 }
@@ -119,13 +126,13 @@ export function buildCombinedVaultPrompt(vaults: any[], style?: ContentStyle): s
 
     return `
 ▸ ${vault.name} (${vault.specialty || 'Multi-category'})
-  ROI since launch: ${perf.vaultROI != null ? (perf.vaultROI > 0 ? '+' : '') + perf.vaultROI.toFixed(1) + '%' : 'N/A'}
-  30d ROCE: ${perf.periodROCE != null ? perf.periodROCE.toFixed(1) + '%' : 'N/A'}
+  ROI (capital-weighted return metric): ${perf.vaultROI != null ? (perf.vaultROI > 0 ? '+' : '') + perf.vaultROI.toFixed(1) + '%' : 'N/A'}
+  30d ROCE (return on capital employed, last 30 days): ${perf.periodROCE != null ? perf.periodROCE.toFixed(1) + '%' : 'N/A'}
   Open: ${posSummary.openCount || 0} positions (${posSummary.winningCount || 0}W / ${posSummary.losingCount || 0}L)
-${winningPositions.length ? `  Best positions:\n${winningPositions.map((p: any) =>
+${winningPositions.length ? `  Best open positions:\n${winningPositions.map((p: any) =>
   `    "${p.market?.substring(0, 55)}": ${p.outcome} — $${p.avgPrice?.toFixed(2)} → $${p.curPrice?.toFixed(2)} (+${p.pnlPercent?.toFixed(0) || '?'}%)`
 ).join('\n')}` : ''}
-${recentTrades.length ? `  Recent trades:\n${recentTrades.map((t: any) =>
+${recentTrades.length ? `  Recent closed trades:\n${recentTrades.map((t: any) =>
   `    "${t.market?.substring(0, 50)}": ${(t.realizedPnl || 0) > 0 ? 'WIN' : 'LOSS'}`
 ).join('\n')}` : ''}
 ${cleanVaultDoc ? `  Extra: ${JSON.stringify(cleanVaultDoc).substring(0, 300)}` : ''}`;
@@ -138,12 +145,19 @@ ${STYLE_DESCRIPTIONS[s]}
 ━━━ ALL VAULTS ━━━
 ${vaultBlocks}
 
+━━━ CRITICAL: DATA RULES ━━━
+- ONLY state what the data above explicitly shows. Do NOT infer, assume, or editorialize beyond it.
+- ROI and ROCE are specific metrics — report them as numbers. Do NOT interpret a negative ROI as "the vault is losing money overall" or "in loss since inception." A vault can have negative ROI but positive total PnL (realized + unrealized).
+- If a vault has winning open positions, say so — those are real unrealized gains regardless of what the ROI metric shows.
+- Do NOT assume or mention launch dates, inception dates, or timeframes unless the data explicitly includes them.
+- Report each metric exactly as labeled. "30d ROCE: -165%" means the 30-day return on capital employed is -165%, not that the vault lost 165% of its money.
+- When a metric is negative but open positions are winning, present both facts without contradiction.
+
 ━━━ WRITING NOTES ━━━
 - KEEP IT SHORT: tweet under 200 words, telegram under 250 words
 - Cover all 3 vaults — give each vault 2-3 lines with its headline stat and best position
 - NEVER mention dollar amounts for vault size, capital deployed, or total PnL — only ROI %, ROCE %, win rates
 - Individual trade P&L in dollars is fine
-- If a vault is down, say it straight — no euphemisms
 - Structure: brief intro line → vault 1 → vault 2 → vault 3 → one-line closing
 - For tweet: no links, end with a question or observation
 - For telegram: end with "yieldr.org/vaults"`;
