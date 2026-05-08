@@ -189,6 +189,26 @@ export default function CoinDetailPage({
     return (b.size_usd ?? 0) - (a.size_usd ?? 0);
   });
 
+  // Entry price stats per side
+  const entryStats = (() => {
+    const sides = ["LONG", "SHORT"] as const;
+    const result: Record<string, { mean: number; wtMean: number; median: number; count: number } | null> = {};
+    for (const side of sides) {
+      const ps = rawHolders.filter((h: any) => h.side === side && h.entry_px > 0);
+      if (ps.length === 0) { result[side] = null; continue; }
+      const prices = ps.map((h: any) => Number(h.entry_px));
+      const sizes  = ps.map((h: any) => Number(h.size_usd));
+      const mean   = prices.reduce((a, b) => a + b, 0) / prices.length;
+      const totalSz = sizes.reduce((a, b) => a + b, 0);
+      const wtMean = prices.reduce((a, p, i) => a + p * sizes[i], 0) / totalSz;
+      const sorted = [...prices].sort((a, b) => a - b);
+      const mid = Math.floor(sorted.length / 2);
+      const median = sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
+      result[side] = { mean, wtMean, median, count: ps.length };
+    }
+    return result;
+  })();
+
   const dominant_side = cm?.dominant_side ?? "LONG";
   const sideColor = dominant_side === "LONG" ? "text-green-400" : "text-red-400";
 
@@ -346,6 +366,29 @@ export default function CoinDetailPage({
                 ))}
               </div>
             </div>
+
+            {/* Entry price summary */}
+            {(entryStats["LONG"] || entryStats["SHORT"]) && (
+              <div className="flex flex-wrap gap-3 mb-2 text-[10px] font-mono">
+                {(["LONG", "SHORT"] as const).map((side) => {
+                  const s = entryStats[side];
+                  if (!s) return null;
+                  const col = side === "LONG" ? "text-green-400" : "text-red-400";
+                  return (
+                    <div key={side} className="flex items-center gap-3 bg-gray-900 border border-gray-800 rounded px-3 py-1.5">
+                      <span className={`font-bold ${col}`}>{side === "LONG" ? "▲" : "▼"} {side}</span>
+                      <span className="text-gray-600">mean</span>
+                      <span className="text-gray-300">${s.mean.toFixed(1)}</span>
+                      <span className="text-gray-600">wt.mean</span>
+                      <span className="text-white font-bold">${s.wtMean.toFixed(1)}</span>
+                      <span className="text-gray-600">median</span>
+                      <span className="text-gray-300">${s.median.toFixed(1)}</span>
+                      <span className="text-gray-700">({s.count})</span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
 
             <div className="bg-gray-900 border border-gray-800 rounded overflow-auto">
               <table className="w-full text-xs">
