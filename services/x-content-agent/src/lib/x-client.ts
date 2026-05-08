@@ -107,6 +107,40 @@ export async function postTweet(content: string, imagePath?: string): Promise<Tw
 }
 
 /**
+ * Post a tweet with a native poll
+ */
+export async function postPoll(
+  content: string,
+  options: string[],
+  durationMinutes: number = 1440,
+  imagePath?: string,
+): Promise<TweetResult> {
+  const xClient = getXClient();
+
+  let mediaIds: string[] | undefined;
+  if (imagePath && fs.existsSync(imagePath)) {
+    try {
+      const mediaId = await uploadMedia(imagePath);
+      mediaIds = [mediaId];
+    } catch (error: any) {
+      console.error(`[X] Media upload failed, posting poll without image:`, error.message);
+    }
+  }
+
+  const params: any = {
+    poll: {
+      options: options.slice(0, 4),
+      duration_minutes: durationMinutes,
+    },
+  };
+  if (mediaIds) params.media = { media_ids: mediaIds };
+
+  const result = await xClient.v2.tweet(content, params);
+  console.log(`[X] Posted poll: ${result.data.id} (${options.length} options, ${durationMinutes}min)`);
+  return result.data;
+}
+
+/**
  * Reply to a tweet
  */
 export async function replyToTweet(content: string, replyToId: string): Promise<TweetResult> {

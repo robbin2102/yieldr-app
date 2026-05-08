@@ -22,7 +22,7 @@ import {
   generateCommunityPrompt,
   GeneratedPost,
 } from '../content/generator';
-import { postTweet, quoteTweet } from '../lib/x-client';
+import { postTweet, postPoll, quoteTweet } from '../lib/x-client';
 import { sendChannelMessageWithButton, sendPhotoWithButton, sendPoll } from '../lib/tg-client';
 import { getCategoryImage } from '../lib/category-images';
 import { getDB, COLLECTIONS } from '../lib/db';
@@ -79,12 +79,15 @@ async function publishPost(post: GeneratedPost): Promise<void> {
 
     if (post.type === 'quote' && post.target_post_id) {
       tweetData = await quoteTweet(tweetText, post.target_post_id);
+    } else if (post.category === 'COMMUNITY_PROMPT' && post.metadata?.poll) {
+      const poll = post.metadata.poll;
+      tweetData = await postPoll(tweetText, poll.options, 1440, imagePath || undefined);
     } else {
       tweetData = await postTweet(tweetText, imagePath || undefined);
     }
 
     tweetId = tweetData.id;
-    console.log(`[Calendar] Published to X: ${post.category} (${tweetId})${imagePath ? ' [with image]' : ''}`);
+    console.log(`[Calendar] Published to X: ${post.category} (${tweetId})${post.metadata?.poll ? ' [poll]' : imagePath ? ' [with image]' : ''}`);
   } catch (error: any) {
     const detail = error.data?.detail || error.data?.errors?.[0]?.message || '';
     console.error(`[Calendar] X post failed for ${post.category}: ${error.message}${detail ? ' — ' + detail : ''}`);
