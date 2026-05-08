@@ -12,6 +12,22 @@ function fmtUsd(n: number | null | undefined) {
   return `$${n.toFixed(0)}`;
 }
 
+function fmtPrice(p: number) {
+  if (p <= 0) return "—";
+  if (p >= 1_000) return p.toFixed(1);
+  if (p >= 1) return p.toFixed(3);
+  if (p >= 0.0001) return p.toFixed(5);
+  return p.toExponential(3);
+}
+
+function calcMarkPrice(p: { entry_px: number; size_usd: number; unrealized_pnl: number; side: string }): number | null {
+  const { entry_px, size_usd, unrealized_pnl, side } = p;
+  if (!entry_px || !size_usd) return null;
+  const denom = side === "LONG" ? size_usd - unrealized_pnl : size_usd + unrealized_pnl;
+  if (denom <= 0) return null;
+  return (entry_px * size_usd) / denom;
+}
+
 function Stat({ label, value, color }: { label: string; value: string; color?: string }) {
   return (
     <div className="bg-gray-900 border border-gray-800 rounded p-2">
@@ -126,6 +142,7 @@ export default function TraderDetailPage({
                       <th className="text-left px-3 py-1.5">Side</th>
                       <th className="text-right px-3 py-1.5">Size</th>
                       <th className="text-right px-3 py-1.5">Entry</th>
+                      <th className="text-right px-3 py-1.5">Mark</th>
                       <th className="text-right px-3 py-1.5">Lev</th>
                       <th className="text-right px-3 py-1.5">uPnL</th>
                     </tr>
@@ -156,7 +173,10 @@ export default function TraderDetailPage({
                               {fmtUsd(p.size_usd)}
                             </td>
                             <td className="px-3 py-1 text-right text-gray-500">
-                              ${Number(p.entry_px).toFixed(2)}
+                              ${fmtPrice(Number(p.entry_px))}
+                            </td>
+                            <td className="px-3 py-1 text-right text-gray-300">
+                              ${fmtPrice(calcMarkPrice(p) ?? 0)}
                             </td>
                             <td className="px-3 py-1 text-right text-gray-500">
                               {Number(p.leverage).toFixed(1)}x

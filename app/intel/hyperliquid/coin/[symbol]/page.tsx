@@ -5,6 +5,22 @@ import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { hlSignals } from "@/lib/hyperliquid-signals";
 
+function fmtPrice(p: number) {
+  if (p <= 0) return "—";
+  if (p >= 1_000) return p.toFixed(1);
+  if (p >= 1) return p.toFixed(3);
+  if (p >= 0.0001) return p.toFixed(5);
+  return p.toExponential(3);
+}
+
+function calcMarkPrice(p: { entry_px: number; size_usd: number; unrealized_pnl: number; side: string }): number | null {
+  const { entry_px, size_usd, unrealized_pnl, side } = p;
+  if (!entry_px || !size_usd) return null;
+  const denom = side === "LONG" ? size_usd - unrealized_pnl : size_usd + unrealized_pnl;
+  if (denom <= 0) return null;
+  return (entry_px * size_usd) / denom;
+}
+
 function fmtUsd(n: number | null | undefined) {
   if (n == null) return "—";
   if (n >= 1_000_000_000) return `$${(n / 1_000_000_000).toFixed(2)}B`;
@@ -400,6 +416,7 @@ export default function CoinDetailPage({
                     <th className="text-left px-3 py-1.5">Side</th>
                     <th className="text-right px-3 py-1.5">Size</th>
                     <th className="text-right px-3 py-1.5">Entry</th>
+                    <th className="text-right px-3 py-1.5">Mark</th>
                     <th className="text-right px-3 py-1.5">Lev</th>
                     <th className="text-right px-3 py-1.5">uPnL</th>
                     <th className="text-right px-3 py-1.5">Opened</th>
@@ -426,7 +443,10 @@ export default function CoinDetailPage({
                         </td>
                         <td className="px-3 py-1 text-right text-gray-300">{fmtUsd(h.size_usd)}</td>
                         <td className="px-3 py-1 text-right text-gray-500">
-                          ${Number(h.entry_px || 0).toFixed(3)}
+                          ${fmtPrice(Number(h.entry_px || 0))}
+                        </td>
+                        <td className="px-3 py-1 text-right text-gray-300">
+                          ${fmtPrice(calcMarkPrice({ entry_px: h.entry_px, size_usd: h.size_usd, unrealized_pnl: h.unrealized_pnl, side: h.side }) ?? 0)}
                         </td>
                         <td className="px-3 py-1 text-right text-gray-500">
                           {Number(h.leverage || 0).toFixed(1)}x
