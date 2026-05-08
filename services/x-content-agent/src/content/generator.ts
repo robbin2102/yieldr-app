@@ -21,7 +21,7 @@ import { buildEdgePositionPrompt } from './templates/edge-position';
 import { buildProjectPrimerPrompt } from './templates/project-primer';
 import { buildCommunityPromptPrompt } from './templates/community-prompt';
 import { buildReplyPrompt } from './templates/reply';
-import { DOC_SECTIONS } from './docs-content';
+import { PRIMER_ENTRIES } from './docs-content';
 import { ContentStyle, randomStyle, weightedVaultStyle } from './styles';
 import * as mcp from '../lib/mcp-client';
 import { getDB, COLLECTIONS } from '../lib/db';
@@ -285,11 +285,12 @@ export async function generateCombinedVaultPerformance(source: 'test' | 'schedul
  * Generate a Project Primer educational post — rotates through 7 doc sections weekly
  */
 export async function generateProjectPrimer(source: 'test' | 'scheduler' = 'scheduler'): Promise<GeneratedPost> {
-  const dayOfWeek = new Date().getDay(); // 0=Sun .. 6=Sat
-  const section = DOC_SECTIONS[dayOfWeek % DOC_SECTIONS.length];
+  // Rotate through entries by day-of-year so full list cycles every ~20 days
+  const dayOfYear = Math.floor((Date.now() - new Date(new Date().getFullYear(), 0, 0).getTime()) / 86400000);
+  const entry = PRIMER_ENTRIES[dayOfYear % PRIMER_ENTRIES.length];
   const style = randomStyle();
 
-  const prompt = buildProjectPrimerPrompt(section, style);
+  const prompt = buildProjectPrimerPrompt(entry, style);
   const result = await generateStructuredContent(YIELDR_AGENT_SYSTEM_PROMPT, prompt, { temperature: 0.9 });
 
   const post: GeneratedPost = {
@@ -297,7 +298,7 @@ export async function generateProjectPrimer(source: 'test' | 'scheduler' = 'sche
     tweet: result.tweet || result.content,
     telegram: result.telegram || '',
     category: 'PROJECT_PRIMER',
-    metadata: { sectionId: section.id, sectionTitle: section.title, style },
+    metadata: { entryId: entry.id, topic: entry.topic, style },
   };
   await logContent(post, source);
   return post;
