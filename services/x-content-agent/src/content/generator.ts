@@ -309,18 +309,7 @@ export async function generateProjectPrimer(source: 'test' | 'scheduler' = 'sche
  * Returns a GeneratedPost with an extra `poll` field in metadata
  */
 export async function generateCommunityPrompt(source: 'test' | 'scheduler' = 'scheduler'): Promise<GeneratedPost> {
-  let vaultData: any = null;
-  try {
-    const randomVault = ['NBA Edge Vault', 'Soccer Alpha Vault', 'Geopolitics Vault'][
-      Math.floor(Math.random() * 3)
-    ];
-    const data = await mcp.getVaultPerformance({ vaultName: randomVault, period: '30d' });
-    vaultData = (data.vaults || [])[0] || null;
-  } catch {
-    // Optional context — proceed without it
-  }
-
-  const prompt = buildCommunityPromptPrompt({ vaultData });
+  const prompt = buildCommunityPromptPrompt();
   const result = await generateStructuredContent(YIELDR_AGENT_SYSTEM_PROMPT, prompt, { temperature: 1.0 });
 
   const post: GeneratedPost = {
