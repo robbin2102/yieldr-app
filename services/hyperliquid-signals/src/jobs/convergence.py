@@ -1,4 +1,5 @@
 import asyncio
+import gc
 import logging
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
@@ -302,27 +303,28 @@ async def run_convergence(snapshot_ts: datetime) -> None:
             )
 
     # ── Signal 4: SMART_EXIT ─────────────────────────────────────────────────
-    # Q1 closing at higher rate than Q4 in past 24h
-    recent_changes_cursor = db.hl_signals_position_changes.find(
-        {
+    # Q1 closing at higher rate than Q4 in past 24h.
+    # Aggregate (coin, address) → close_count instead of loading every event doc.
+    close_agg = await db.hl_signals_position_changes.aggregate([
+        {"$match": {
             "ts": {"$gte": snapshot_ts - timedelta(hours=24)},
             "change_type": "CLOSED",
-        },
-        {"address": 1, "coin": 1},
-    )
-    recent_closes = await recent_changes_cursor.to_list(None)
+        }},
+        {"$group": {"_id": {"coin": "$coin", "address": "$address"}, "n": {"$sum": 1}}},
+    ]).to_list(10_000)
 
     closes_by_coin: dict[str, dict[str, int]] = {}
-    for rc in recent_closes:
-        coin = rc["coin"]
-        addr = rc["address"]
+    for row in close_agg:
+        coin = row["_id"]["coin"]
+        addr = row["_id"]["address"]
         q = traders.get(addr, {}).get("skill_quartile", 4)
         if coin not in closes_by_coin:
             closes_by_coin[coin] = {"q1": 0, "q4": 0}
         if q == 1:
-            closes_by_coin[coin]["q1"] += 1
+            closes_by_coin[coin]["q1"] += row["n"]
         elif q == 4:
-            closes_by_coin[coin]["q4"] += 1
+            closes_by_coin[coin]["q4"] += row["n"]
+    del close_agg
 
     for coin, close_counts in closes_by_coin.items():
         cm = coin_metrics.get(coin)
@@ -524,7 +526,15 @@ async def run_convergence(snapshot_ts: datetime) -> None:
         await db.hl_signals_signals.insert_many(signals)
 
     # ── 8. Legacy tier alerts ────────────────────────────────────────────────
-    now = snapshot_ts  # already naive UTC
+    # Single query to find all existing open alerts, then bulk-insert new ones.
+    existing_alert_keys: set[tuple] = set()
+    async for doc in db.hl_signals_alerts.find(
+        {"coin": {"$in": coins_list}, "acknowledged": False},
+        {"coin": 1, "side": 1, "severity": 1},
+    ):
+        existing_alert_keys.add((doc["coin"], doc["side"], doc["severity"]))
+
+    new_alerts = []
     for coin, cm in coin_metrics.items():
         conviction = cm["dollar_conviction"]
         n = cm["long_count"] if cm["dominant_side"] == "LONG" else cm["short_count"]
@@ -542,38 +552,37 @@ async def run_convergence(snapshot_ts: datetime) -> None:
         elif n >= settings.tier3_min_traders:
             tier = 3
 
-        if tier:
-            existing = await db.hl_signals_alerts.find_one(
-                {
-                    "coin": coin,
-                    "side": cm["dominant_side"],
-                    "severity": tier,
-                    "acknowledged": False,
-                }
-            )
-            if not existing:
-                await db.hl_signals_alerts.insert_one(
-                    {
-                        "coin": coin,
-                        "side": cm["dominant_side"],
-                        "severity": tier,
-                        "alert_type": "TIER_SIGNAL",
-                        "n_traders": n,
-                        "total_usd": total_usd,
-                        "conviction": conviction,
-                        "acknowledged": False,
-                        "created_at": now,
-                        "snapshot_ts": snapshot_ts,
-                    }
-                )
+        if tier and (coin, cm["dominant_side"], tier) not in existing_alert_keys:
+            new_alerts.append({
+                "coin": coin,
+                "side": cm["dominant_side"],
+                "severity": tier,
+                "alert_type": "TIER_SIGNAL",
+                "n_traders": n,
+                "total_usd": total_usd,
+                "conviction": conviction,
+                "acknowledged": False,
+                "created_at": snapshot_ts,
+                "snapshot_ts": snapshot_ts,
+            })
+
+    if new_alerts:
+        await db.hl_signals_alerts.insert_many(new_alerts, ordered=False)
 
     by_type = defaultdict(int)
     for s in signals:
         by_type[s["signal_type"]] += 1
+    n_metrics = len(coin_metrics)
+    n_signals = len(signals)
+
+    # Free all large in-memory structures before returning
+    del positions, traders, coin_buckets, coin_metrics, coin_metrics_docs
+    del convergence_docs, hist_by_window, signals, closes_by_coin, new_alerts
+    gc.collect()
 
     logger.info(
         '"Convergence v2 complete", "coin_metrics": %d, "signals": %d, "breakdown": %s',
-        len(coin_metrics),
-        len(signals),
+        n_metrics,
+        n_signals,
         dict(by_type),
     )
