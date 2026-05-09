@@ -29,19 +29,21 @@ export const CONFIG = {
   // MCP Server (for fetching data)
   MCP_SERVER_URL: process.env.MCP_SERVER_URL || 'http://localhost:3001',
 
-  // Content calendar (IST times, 5 windows, both X + TG)
+  // Content calendar (IST times, 7 windows, both X + TG)
   POSTING_WINDOWS: [
     { ist: '19:30', edt: '10:00', content: ['PROJECT_PRIMER'] },
-    { ist: '21:30', edt: '12:00', content: ['VAULT_PERFORMANCE'] },
-    { ist: '23:30', edt: '14:00', content: ['COMMUNITY_PROMPT'] },
-    { ist: '02:00', edt: '16:30', content: ['HIGH_CONVICTION'] },
-    { ist: '05:30', edt: '20:00', content: ['TRADER_PROFILE'] },
+    { ist: '21:00', edt: '11:30', content: ['VAULT_PERFORMANCE'] },
+    { ist: '22:30', edt: '13:00', content: ['VAULT_PERFORMANCE'] },
+    { ist: '00:00', edt: '14:30', content: ['COMMUNITY_PROMPT'] },
+    { ist: '02:00', edt: '16:30', content: ['VAULT_PERFORMANCE'] },
+    { ist: '04:00', edt: '18:30', content: ['HIGH_CONVICTION'] },
+    { ist: '06:00', edt: '20:30', content: ['TRADER_PROFILE'] },
   ],
 
-  // Daily post limits (5 posts/day on both X and TG)
+  // Daily post limits (7 posts/day on both X and TG)
   DAILY_LIMITS: {
     PROJECT_PRIMER: 1,
-    VAULT_PERFORMANCE: 1,
+    VAULT_PERFORMANCE: 3,
     COMMUNITY_PROMPT: 1,
     HIGH_CONVICTION: 1,
     TRADER_PROFILE: 1,
@@ -49,7 +51,7 @@ export const CONFIG = {
     BASE_POSTING: 0,
     BASE_REPLIES: 12,
     PM_REPLIES: 8,
-    TOTAL: 5,
+    TOTAL: 7,
   },
 
   // Reply monitoring

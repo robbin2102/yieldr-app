@@ -4,6 +4,9 @@
  * Each entry is a single idea with enough context for the LLM to write
  * one focused, factual post. Rotates daily through the full list.
  *
+ * Categories: problem (4), solution (4), product (4), vision (2) = 14 entries.
+ * Roadmap and token entries excluded — too shallow for standalone posts.
+ *
  * Fields:
  *   - id: unique key (category_nn)
  *   - topic: one-line subject for the post
@@ -141,49 +144,5 @@ export const PRIMER_ENTRIES: PrimerEntry[] = [
     supporting_data: 'Polymarket validates the agent stack in a clean, outcome-driven market. Next: Hyperliquid perps, Avantis trading, Uniswap/Aerodrome LP, multi-chain deployment.',
     yieldr_position: 'The agent stack is market-agnostic. Once proven on prediction markets, it deploys to any onchain strategy where edge can be measured.',
     hook: 'Polymarket is chapter one. Perps, LP, spot — every onchain strategy with measurable edge is on the roadmap.',
-  },
-
-  // ── ROADMAP ──────────────────────────────────────────────
-  {
-    id: 'roadmap_01',
-    topic: 'Phase 1 — proving with own capital',
-    core_claim: 'Yieldr is in Phase 1: trading project capital through its own vaults to prove the agent stack before taking outside money.',
-    supporting_data: '3 live vaults on Polymarket (NBA Edge, Soccer Alpha, Geopolitics). All using Yieldr\'s own capital. Agent stack running in production.',
-    yieldr_position: 'Most projects raise first, build later. Yieldr builds first, proves with own money, then raises. Skin in the game from day one.',
-    hook: 'Most crypto projects raise money before they have a product. Yieldr is trading its own capital first.',
-  },
-  {
-    id: 'roadmap_02',
-    topic: 'Phase 2-5 — from raise to open marketplace',
-    core_claim: 'The roadmap goes from internal vaults to an open marketplace where anyone with verified edge can launch a fund.',
-    supporting_data: 'Phase 2: Capital raise + TGE at $9M-$34M FDV tiers. Phase 3: Whitelisted trader marketplace on Polymarket. Phase 4: Multi-protocol expansion (perps, LP). Phase 5: Fully open, permissionless.',
-    yieldr_position: 'The progression is deliberate: prove → raise → curate → expand → open. Each phase reduces trust assumptions.',
-    hook: 'Phase 1 is live. Here\'s the path from 3 internal vaults to an open marketplace for AI-native funds.',
-  },
-
-  // ── TOKEN ────────────────────────────────────────────────
-  {
-    id: 'token_01',
-    topic: 'YLDR token — no VC advantage',
-    core_claim: 'No VC tiers, no private rounds at preferential pricing. Retail and institutions buy YLDR at the same price.',
-    supporting_data: '210M total supply on Base. 41% community, 20% team (12mo cliff + 36mo vesting), 15% treasury, 10% strategic partners, 9% ecosystem, 5% DEX liquidity.',
-    yieldr_position: 'This is a deliberate break from typical crypto fundraising where VCs get 10x better pricing than retail. Equal access by design.',
-    hook: 'In most token sales, VCs buy at a fraction of what retail pays. YLDR doesn\'t have a VC round.',
-  },
-  {
-    id: 'token_02',
-    topic: '50% of raise goes into vaults',
-    core_claim: '50% of raised capital gets deposited directly into vaults — not kept in a treasury or spent on marketing.',
-    supporting_data: 'Raise target: $5M. Use of funds: 50% into vaults (skin in the game), 40% protocol development + go-to-market, 10% DEX liquidity. TGE fires T+7 days from raise completion.',
-    yieldr_position: 'The 50% vault deposit mechanic aligns incentives: raised capital is immediately put to work in the same vaults investors will use. The team eats its own cooking.',
-    hook: 'Half of every dollar raised goes straight into the vaults. Not treasury. Not marketing. Into the product.',
-  },
-  {
-    id: 'token_03',
-    topic: 'YLDR tokenomics breakdown',
-    core_claim: 'Community gets 41% — the largest single allocation. Team tokens are locked for 12 months with 36-month linear vesting.',
-    supporting_data: '210M supply. First raise sells 13.87% across 5 tiers ($9M-$34M FDV, avg ~$18M). Community: 41%. Team: 20% (locked). Treasury: 15%. Partners: 10%. Ecosystem: 9%. DEX liquidity: 5%.',
-    yieldr_position: 'Majority ownership stays with the community. Team can\'t dump — 12-month cliff means zero liquid tokens for the first year.',
-    hook: '41% to community. 20% to team — locked for a year. Here\'s the full YLDR breakdown.',
   },
 ];

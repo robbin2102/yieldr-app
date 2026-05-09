@@ -1,15 +1,17 @@
 /**
  * Content Calendar & Scheduler
  *
- * 5 posts per day on both X and Telegram.
+ * 7 posts per day on both X and Telegram.
  * IST times mapped to EDT for prime engagement windows.
  *
  * Schedule:
  *   1. 7:30 PM IST / 10:00 AM EDT — Project Primer
- *   2. 9:30 PM IST / 12:00 PM EDT — Vault Combined (all 3 in 1)
- *   3. 11:30 PM IST / 2:00 PM EDT — Community Prompt
- *   4. 2:00 AM IST / 4:30 PM EDT — High Conviction
- *   5. 5:30 AM IST / 8:00 PM EDT — Trader Profile
+ *   2. 9:00 PM IST / 11:30 AM EDT — NBA Edge Vault
+ *   3. 10:30 PM IST / 1:00 PM EDT — Soccer Alpha Vault
+ *   4. 12:00 AM IST / 2:30 PM EDT — Community Prompt
+ *   5. 2:00 AM IST / 4:30 PM EDT — Geopolitics Vault
+ *   6. 4:00 AM IST / 6:30 PM EDT — High Conviction
+ *   7. 6:00 AM IST / 8:30 PM EDT — Trader Profile
  */
 
 import * as cron from 'node-cron';
@@ -17,7 +19,7 @@ import { CONFIG } from '../config';
 import {
   generateTraderAlpha,
   generateHighConvictionAlert,
-  generateCombinedVaultPerformance,
+  generateVaultPerformance,
   generateProjectPrimer,
   generateCommunityPrompt,
   GeneratedPost,
@@ -62,7 +64,7 @@ function randomJitter(): number {
 
 /**
  * Publish a generated post to X + Telegram channel and log it.
- * For COMMUNITY_PROMPT posts, TG uses native poll instead of text message.
+ * For COMMUNITY_PROMPT posts, both X and TG use native polls.
  */
 async function publishPost(post: GeneratedPost): Promise<void> {
   let tweetId: string | null = null;
@@ -146,9 +148,12 @@ async function publishPost(post: GeneratedPost): Promise<void> {
 }
 
 /**
- * Execute a single content window — generate one post type and publish to both X and TG
+ * Execute a single content window — generate one post and publish to both X and TG
  */
-async function executeWindow(contentType: string, windowOpts?: { hcCategory?: string }): Promise<void> {
+async function executeWindow(
+  contentType: string,
+  windowOpts?: { hcCategory?: string; vaultName?: string },
+): Promise<void> {
   if (!canPost(contentType)) {
     console.log(`[Calendar] Daily limit reached for ${contentType}, skipping`);
     return;
@@ -162,7 +167,7 @@ async function executeWindow(contentType: string, windowOpts?: { hcCategory?: st
         post = await generateProjectPrimer();
         break;
       case 'VAULT_PERFORMANCE':
-        post = await generateCombinedVaultPerformance();
+        post = await generateVaultPerformance(windowOpts?.vaultName);
         break;
       case 'COMMUNITY_PROMPT':
         post = await generateCommunityPrompt();
@@ -188,7 +193,7 @@ async function executeWindow(contentType: string, windowOpts?: { hcCategory?: st
 }
 
 /**
- * Start the posting scheduler — 5 windows, all posts go to both X and TG
+ * Start the posting scheduler — 7 windows, all posts go to both X and TG
  */
 export function startScheduler(): void {
   console.log('[Calendar] Starting content scheduler...');
@@ -198,26 +203,36 @@ export function startScheduler(): void {
     setTimeout(() => executeWindow('PROJECT_PRIMER'), randomJitter());
   }, { timezone: 'Asia/Kolkata' });
 
-  // Window 2: 9:30 PM IST / 12:00 PM EDT — Vault Combined (all 3 in 1)
-  cron.schedule('30 21 * * *', () => {
-    setTimeout(() => executeWindow('VAULT_PERFORMANCE'), randomJitter());
+  // Window 2: 9:00 PM IST / 11:30 AM EDT — NBA Edge Vault
+  cron.schedule('0 21 * * *', () => {
+    setTimeout(() => executeWindow('VAULT_PERFORMANCE', { vaultName: 'NBA Edge Vault' }), randomJitter());
   }, { timezone: 'Asia/Kolkata' });
 
-  // Window 3: 11:30 PM IST / 2:00 PM EDT — Community Prompt (X: question, TG: poll)
-  cron.schedule('30 23 * * *', () => {
+  // Window 3: 10:30 PM IST / 1:00 PM EDT — Soccer Alpha Vault
+  cron.schedule('30 22 * * *', () => {
+    setTimeout(() => executeWindow('VAULT_PERFORMANCE', { vaultName: 'Soccer Alpha Vault' }), randomJitter());
+  }, { timezone: 'Asia/Kolkata' });
+
+  // Window 4: 12:00 AM IST / 2:30 PM EDT — Community Prompt (native polls on both X and TG)
+  cron.schedule('0 0 * * *', () => {
     setTimeout(() => executeWindow('COMMUNITY_PROMPT'), randomJitter());
   }, { timezone: 'Asia/Kolkata' });
 
-  // Window 4: 2:00 AM IST / 4:30 PM EDT — High Conviction
+  // Window 5: 2:00 AM IST / 4:30 PM EDT — Geopolitics Vault
   cron.schedule('0 2 * * *', () => {
+    setTimeout(() => executeWindow('VAULT_PERFORMANCE', { vaultName: 'Geopolitics Vault' }), randomJitter());
+  }, { timezone: 'Asia/Kolkata' });
+
+  // Window 6: 4:00 AM IST / 6:30 PM EDT — High Conviction
+  cron.schedule('0 4 * * *', () => {
     setTimeout(() => executeWindow('HIGH_CONVICTION'), randomJitter());
   }, { timezone: 'Asia/Kolkata' });
 
-  // Window 5: 5:30 AM IST / 8:00 PM EDT — Trader Profile
-  cron.schedule('30 5 * * *', () => {
+  // Window 7: 6:00 AM IST / 8:30 PM EDT — Trader Profile
+  cron.schedule('0 6 * * *', () => {
     setTimeout(() => executeWindow('TRADER_PROFILE'), randomJitter());
   }, { timezone: 'Asia/Kolkata' });
 
-  console.log('[Calendar] 5 posting windows scheduled (IST timezone)');
-  console.log('[Calendar] Daily: 5 posts on X + 5 posts on TG (both channels every window)');
+  console.log('[Calendar] 7 posting windows scheduled (IST timezone)');
+  console.log('[Calendar] Daily: 7 posts on X + 7 posts on TG (1 per vault + primer + community + HC + trader)');
 }
