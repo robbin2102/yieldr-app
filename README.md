@@ -4,11 +4,11 @@
 
 Top traders launch vaults and let agents run the fund. Investors deploy capital and let agents run the portfolio. Every part of fund operations and capital allocation that doesn't require a human is handled by the agent stack.
 
-[![Launch App](https://img.shields.io/badge/Launch-App-00C805?style=for-the-badge)](https://app.yieldr.org)
+[![Launch App](https://img.shields.io/badge/Launch-App-00C805?style=for-the-badge)](https://yieldr.org)
 [![Docs](https://img.shields.io/badge/Read-Docs-0088FF?style=for-the-badge)](https://yieldr.org/docs)
-[![Discord](https://img.shields.io/badge/Join-Discord-5865F2?style=for-the-badge)](https://discord.com/channels/1426305214176165941/1426305389812646091)
+[![Telegram](https://img.shields.io/badge/Join-Telegram-26A5E4?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/yieldrdotorg)
 [![Twitter](https://img.shields.io/badge/Follow-Twitter-1DA1F2?style=for-the-badge)](https://x.com/yieldrdotorg)
-[![Base Batches](https://img.shields.io/badge/Base%20Batches%20002-Winner-FFD700?style=for-the-badge)](https://base.org)
+[![Base Batches](https://img.shields.io/badge/Base%20Batches%20002-Winner-FFD700?style=for-the-badge)](https://x.com/BasedIndia/status/2017103443341795568)
 
 ---
 
