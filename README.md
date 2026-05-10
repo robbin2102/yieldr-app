@@ -222,7 +222,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 | 📱 App | [app.yieldr.org](https://app.yieldr.org) |
 | 📖 Documentation | [yieldr.org/docs](https://yieldr.org/docs) |
 | 📊 Vaults | [yieldr.org/vaults](https://yieldr.org/vaults) |
-| 🔨 Build Log | [yieldr.org/build-log](https://yieldr.org/build-log) |
+| 🔨 Build Log | [yieldr.org/build-log]([https://yieldr.org/build-log](https://www.yieldr.org/build-in-public)) |
 | 🐦 Twitter | [@yieldrdotorg](https://twitter.com/yieldrdotorg) |
 | 💬 Telegram | [@yieldrdotorg](https://t.me/yieldrdotorg) |
 | 💻 GitHub | Open source build |
