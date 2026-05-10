@@ -4,7 +4,7 @@
 
 Top traders launch vaults and let agents run the fund. Investors deploy capital and let agents run the portfolio. Every part of fund operations and capital allocation that doesn't require a human is handled by the agent stack.
 
-[![Launch App](https://img.shields.io/badge/Launch-App-00C805?style=for-the-badge)](https://yieldr.org)
+[![Launch App](https://img.shields.io/badge/Launch-App-00C805?style=for-the-badge)](https://app.yieldr.org)
 [![Docs](https://img.shields.io/badge/Read-Docs-0088FF?style=for-the-badge)](https://yieldr.org/docs)
 [![Telegram](https://img.shields.io/badge/Join-Telegram-26A5E4?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/yieldrdotorg)
 [![Twitter](https://img.shields.io/badge/Follow-Twitter-1DA1F2?style=for-the-badge)](https://x.com/yieldrdotorg)
@@ -103,9 +103,13 @@ Phase 5: Open Marketplace    →  ○ Vision
 |----------|-------|
 | Total Supply | 210,000,000 YLDR (fixed) |
 | Network | Base |
-| Raise Target | $5M |
+| Total Contribution Target | $5M |
+| → Token Sale (YLDR) | $2.5M |
+| → Vault Deposits | $2.5M |
 | TGE | T+7 days from target |
 | Genesis FDV | $9M |
+
+> **How the raise is structured:** Every $100 contributed splits 50/50 — $50 into agent-managed vaults (yours, withdrawable, no lock-up) and $50 into YLDR token allocation. The $2.5M token sale is what actually funds the protocol; the $2.5M in vaults stays as your capital working under the agent stack.
 
 ### Allocation
 
@@ -134,13 +138,21 @@ Phase 5: Open Marketplace    →  ○ Vision
 
 ### Use of Funds
 
-Every $100 raised splits as follows:
+**Step 1 — Every $100 contributed splits 50/50:**
 
-| Allocation | Amount | Purpose |
-|------------|--------|---------|
-| 💰 **Vault Deposits** | $50 | Goes into agent-managed vaults. No lock-up |
-| 🛠️ **Protocol Dev & GTM** | $40 | Engineering, agent infrastructure, go-to-market |
-| 💧 **DEX Liquidity** | $10 | Seeds YLDR liquidity at TGE |
+| Split | Amount | Where It Goes |
+|-------|--------|---------------|
+| 💰 **Vault Deposits** | $50 | Into agent-managed vaults. Yours. Withdrawable anytime. No lock-up |
+| 🪙 **YLDR Token Sale** | $50 | Funds the protocol (see below) |
+
+**Step 2 — The $2.5M token sale funds the protocol:**
+
+| Allocation | % of Sale | Amount | Purpose |
+|------------|-----------|--------|---------|
+| 🛠️ **Protocol Dev & GTM** | 80% | $2.0M | Engineering, agent infrastructure, go-to-market |
+| 💧 **DEX Liquidity** | 20% | $0.5M | Seeds YLDR liquidity at TGE |
+
+> Net effect on a $5M raise: **$2.5M to depositor vaults · $2.0M to protocol build · $0.5M to liquidity.**
 
 ### Key Properties
 
@@ -169,7 +181,7 @@ Transparent development. No bullshit. Real treasury data, real trading performan
 | 🏆 Recognition | Base Batches 002 Winner |
 | 💵 Base Grant | $10K |
 
-> 📖 Track every commit and module shipped at [yieldr.org/build-log](https://yieldr.org/build-log)
+> 📖 Track every commit and module shipped at [yieldr.org/build-in-public](https://www.yieldr.org/build-in-public)
 
 ---
 
