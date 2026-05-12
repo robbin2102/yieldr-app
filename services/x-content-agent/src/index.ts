@@ -17,6 +17,7 @@ dotenv.config({ path: path.resolve(__dirname, '../../../.env.local') });
 
 import * as http from 'http';
 import { connectDB, closeDB, getDB, COLLECTIONS } from './lib/db';
+import { seedProductKnowledge } from './lib/seed-product-knowledge';
 import { verifyCredentials } from './lib/x-client';
 import { startScheduler } from './scheduler/calendar';
 import { startReplyMonitor, stopReplyMonitor } from './replies/monitor';
@@ -82,8 +83,9 @@ async function main() {
   // Health server first
   startHealthServer();
 
-  // Connect to MongoDB
+  // Connect to MongoDB and seed product knowledge
   await connectDB();
+  await seedProductKnowledge();
 
   // Verify X API credentials
   console.log('[Init] Verifying X API credentials...');

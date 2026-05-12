@@ -18,11 +18,16 @@ let lastSeenMentionId: string | null = null;
 let isRunning = false;
 
 /**
- * On startup, fetch our recent tweets and seed their in_reply_to IDs
- * into x_mentions so we don't double-reply to mentions we already
- * responded to manually or in a previous session.
+ * On startup, seed already-replied mention IDs and set the cursor
+ * so the first real poll only picks up genuinely new mentions.
+ *
+ * Two-step approach:
+ *   1. Fetch our last 50 tweets — mark their parent conversation IDs as replied
+ *   2. Fetch current mentions — set lastSeenMentionId to the newest one
+ *      without processing any of them (they pre-date this boot)
  */
 async function seedRepliedMentions(): Promise<void> {
+  // Step 1: seed conversation IDs from our recent tweets
   try {
     const userId = getAuthenticatedUserId();
     if (!userId) {
@@ -32,41 +37,58 @@ async function seedRepliedMentions(): Promise<void> {
 
     const tweetsResult = await getUserTweets(userId, 50);
     const tweets = tweetsResult?.data || [];
-    if (tweets.length === 0) return;
 
-    const db = await getDB();
-    let seeded = 0;
+    if (tweets.length > 0) {
+      const db = await getDB();
+      let seeded = 0;
 
-    for (const tweet of tweets) {
-      const replyTo = (tweet as any).in_reply_to_user_id;
-      const convId = (tweet as any).conversation_id;
+      for (const tweet of tweets) {
+        const replyTo = (tweet as any).in_reply_to_user_id;
+        const convId = (tweet as any).conversation_id;
 
-      // If this tweet is a reply (has conversation_id different from its own id),
-      // mark the parent as already replied to
-      if (convId && convId !== tweet.id) {
-        const existing = await db.collection(COLLECTIONS.X_MENTIONS).findOne({
-          tweetId: convId,
-        });
-        if (!existing) {
-          await db.collection(COLLECTIONS.X_MENTIONS).insertOne({
+        if (convId && convId !== tweet.id) {
+          const existing = await db.collection(COLLECTIONS.X_MENTIONS).findOne({
             tweetId: convId,
-            authorId: replyTo || 'unknown',
-            text: '',
-            processed: true,
-            repliedTo: true,
-            seededOnStartup: true,
-            indexedAt: new Date(),
           });
-          seeded++;
+          if (!existing) {
+            await db.collection(COLLECTIONS.X_MENTIONS).insertOne({
+              tweetId: convId,
+              authorId: replyTo || 'unknown',
+              text: '',
+              processed: true,
+              repliedTo: true,
+              seededOnStartup: true,
+              indexedAt: new Date(),
+            });
+            seeded++;
+          }
         }
       }
-    }
 
-    if (seeded > 0) {
-      console.log(`[Replies] Seeded ${seeded} already-replied mention IDs from recent tweets`);
+      if (seeded > 0) {
+        console.log(`[Replies] Seeded ${seeded} already-replied mention IDs from recent tweets`);
+      }
     }
   } catch (error: any) {
-    console.error('[Replies] Startup seed failed (non-critical):', error.message);
+    console.error('[Replies] Tweet seed failed (non-critical):', error.message);
+  }
+
+  // Step 2: set cursor to latest mention so first poll only gets new ones
+  try {
+    const mentionsResult = await getMentions(undefined, 10);
+    const mentions = mentionsResult?.data || [];
+    if (mentions.length > 0) {
+      let newest = mentions[0].id;
+      for (const m of mentions) {
+        if (m.id > newest) newest = m.id;
+      }
+      lastSeenMentionId = newest;
+      console.log(`[Replies] Cursor set to latest mention ${newest} — will only process newer mentions`);
+    } else {
+      console.log('[Replies] No existing mentions found — starting fresh');
+    }
+  } catch (error: any) {
+    console.error('[Replies] Mention cursor seed failed (non-critical):', error.message);
   }
 }
 
