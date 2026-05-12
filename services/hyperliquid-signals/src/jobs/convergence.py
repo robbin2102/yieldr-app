@@ -65,19 +65,14 @@ async def run_convergence(snapshot_ts: datetime) -> None:
         coin = p["coin"]
         if coin not in coin_buckets:
             coin_buckets[coin] = {
-                "long_usd": 0.0,
-                "short_usd": 0.0,
-                "long_count": 0,
-                "short_count": 0,
+                "long_usd": 0.0, "short_usd": 0.0,
+                "long_count": 0, "short_count": 0,
+                "long_entry_wsum": 0.0, "short_entry_wsum": 0.0,
                 "leverages": [],
-                "q1_long": 0,
-                "q1_short": 0,
-                "q4_long": 0,
-                "q4_short": 0,
-                "roi_sum_long": 0.0,
-                "roi_sum_short": 0.0,
-                "top_long": [],
-                "top_short": [],
+                "q1_long": 0, "q1_short": 0,
+                "q4_long": 0, "q4_short": 0,
+                "roi_sum_long": 0.0, "roi_sum_short": 0.0,
+                "top_long": [], "top_short": [],
             }
         t = traders.get(p["address"], {})
         q = t.get("skill_quartile", 4)
@@ -88,20 +83,18 @@ async def run_convergence(snapshot_ts: datetime) -> None:
             cd["long_usd"] += p["size_usd"]
             cd["long_count"] += 1
             cd["roi_sum_long"] += roi
+            cd["long_entry_wsum"] += p["entry_px"] * p["size_usd"]
             cd["top_long"].append({"address": p["address"], "size_usd": p["size_usd"]})
-            if q == 1:
-                cd["q1_long"] += 1
-            if q == 4:
-                cd["q4_long"] += 1
+            if q == 1: cd["q1_long"] += 1
+            if q == 4: cd["q4_long"] += 1
         else:
             cd["short_usd"] += p["size_usd"]
             cd["short_count"] += 1
             cd["roi_sum_short"] += roi
+            cd["short_entry_wsum"] += p["entry_px"] * p["size_usd"]
             cd["top_short"].append({"address": p["address"], "size_usd": p["size_usd"]})
-            if q == 1:
-                cd["q1_short"] += 1
-            if q == 4:
-                cd["q4_short"] += 1
+            if q == 1: cd["q1_short"] += 1
+            if q == 4: cd["q4_short"] += 1
 
         cd["leverages"].append(p["leverage"])
         coin_current_addrs.setdefault(coin, set()).add(p["address"])
@@ -137,6 +130,8 @@ async def run_convergence(snapshot_ts: datetime) -> None:
         cohort_participation = total_count / total_cohort if total_cohort > 0 else 0.0
         active_cohort_size = len(coin_current_addrs.get(coin, set()) | closed_30d_map.get(coin, set()))
         active_participation = total_count / active_cohort_size if active_cohort_size > 0 else 0.0
+        wt_avg_entry_long = cd["long_entry_wsum"] / cd["long_usd"] if cd["long_usd"] > 0 else 0.0
+        wt_avg_entry_short = cd["short_entry_wsum"] / cd["short_usd"] if cd["short_usd"] > 0 else 0.0
         dominant_side = "LONG" if cd["long_usd"] >= cd["short_usd"] else "SHORT"
         avg_leverage = sum(cd["leverages"]) / len(cd["leverages"]) if cd["leverages"] else 0.0
         portfolio_share = total_usd / total_portfolio_usd if total_portfolio_usd > 0 else 0.0
@@ -162,6 +157,8 @@ async def run_convergence(snapshot_ts: datetime) -> None:
             "cohort_participation": cohort_participation,
             "active_cohort_size": active_cohort_size,
             "active_participation": active_participation,
+            "wt_avg_entry_long": wt_avg_entry_long,
+            "wt_avg_entry_short": wt_avg_entry_short,
             "dominant_side": dominant_side,
             "avg_leverage": avg_leverage,
             "portfolio_share": portfolio_share,

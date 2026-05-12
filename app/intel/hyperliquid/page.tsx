@@ -34,6 +34,15 @@ function pct(n: number | null | undefined, decimals = 0) {
   return `${(n * 100).toFixed(decimals)}%`;
 }
 
+function fmtEntry(p: number | null | undefined): string {
+  if (p == null || p <= 0) return "—";
+  if (p >= 10_000) return `$${p.toFixed(0)}`;
+  if (p >= 1_000) return `$${p.toFixed(1)}`;
+  if (p >= 1) return `$${p.toFixed(2)}`;
+  if (p >= 0.01) return `$${p.toFixed(4)}`;
+  return `$${p.toFixed(5)}`;
+}
+
 // Short label + color + tooltip for each signal type
 const SIGNAL_META: Record<string, { label: string; color: string; tooltip: string }> = {
   CONVERGENCE_ACCELERATION: {
@@ -281,15 +290,15 @@ export default function HyperliquidDashboard() {
               <thead>
                 <tr className="text-gray-600 border-b border-gray-800 text-[10px]">
                   <th className="text-left px-3 py-2">Coin</th>
-                  <th className="text-left px-3 py-2">Long / Short</th>
-                  <th className="text-right px-3 py-2">Count %</th>
-                  <th className="text-right px-3 py-2">$ %</th>
-                  <th className="text-right px-3 py-2">Cohort %</th>
-                  <th className="text-right px-3 py-2">Active %</th>
-                  <th className="text-right px-3 py-2">Traders</th>
+                  <th className="text-left px-3 py-2">Bias</th>
+                  <th className="text-left px-3 py-2">Long (t · Q1 · Wt.Entry)</th>
+                  <th className="text-left px-3 py-2">Short (t · Q1 · Wt.Entry)</th>
+                  <th className="text-right px-3 py-2">L:S $</th>
+                  <th className="text-right px-3 py-2">Cohort</th>
+                  <th className="text-right px-3 py-2">Active /N</th>
+                  <th className="text-right px-3 py-2">Total</th>
                   <th className="text-right px-3 py-2">1h Δ</th>
-                  <th className="text-right px-3 py-2">Lev</th>
-                  <th className="text-right px-3 py-2">Q1 L/S</th>
+                  <th className="text-right px-3 py-2">🐋 {hours}h</th>
                   <th className="text-left px-3 py-2">Signals</th>
                 </tr>
               </thead>
@@ -302,74 +311,106 @@ export default function HyperliquidDashboard() {
                     (a, b) => (sevOrd[a.severity] ?? 9) - (sevOrd[b.severity] ?? 9)
                   );
 
-                  // 1h delta on dominant side's USD value
                   const prev = prevMetricMap.get(m.coin);
                   const domUsd = m.dominant_side === "LONG" ? m.long_usd : m.short_usd;
                   const prevDomUsd = prev ? (m.dominant_side === "LONG" ? prev.long_usd : prev.short_usd) : null;
                   const deltaPct = prevDomUsd && prevDomUsd > 0
-                    ? (domUsd - prevDomUsd) / prevDomUsd * 100
-                    : null;
+                    ? (domUsd - prevDomUsd) / prevDomUsd * 100 : null;
+
+                  const lsRatio = m.short_usd > 0
+                    ? (m.long_usd / m.short_usd).toFixed(1) + ":1"
+                    : m.long_usd > 0 ? "∞L" : "—";
+
+                  const wEntries = whaleEvts.filter((e: WhaleEvent) => ["WAKEUP","SCALEUP"].includes(e.event_type));
+                  const wExits   = whaleEvts.filter((e: WhaleEvent) => e.event_type === "EXIT");
+                  const wEntryUsd = wEntries.reduce((s: number, e: WhaleEvent) => s + e.size_usd, 0);
+                  const wExitUsd  = wExits.reduce((s: number, e: WhaleEvent) => s + e.size_usd, 0);
+
+                  const isLongDom = m.dominant_side === "LONG";
 
                   return (
                     <tr key={m.coin} className="border-b border-gray-900 hover:bg-gray-800">
+
+                      {/* Coin */}
                       <td className="px-3 py-2">
                         <Link href={`/intel/hyperliquid/coin/${m.coin}`} className="text-white font-bold hover:text-blue-400">
                           {m.coin}
                         </Link>
                       </td>
-                      <td className="px-3 py-2">
-                        <div className="text-[10px] space-y-0.5">
-                          <div className="flex items-center gap-1 whitespace-nowrap">
-                            <span className="text-green-400 font-bold">▲</span>
-                            <span className="text-green-300 font-bold">{fmtUsd(m.long_usd)}</span>
-                            <span className="text-gray-600">{m.long_count}t</span>
-                            {m.q1_long > 0 && <span className="text-yellow-600">Q1:{m.q1_long}</span>}
-                          </div>
-                          <div className="flex items-center gap-1 whitespace-nowrap">
-                            <span className="text-red-400 font-bold">▼</span>
-                            <span className="text-red-300">{fmtUsd(m.short_usd)}</span>
-                            <span className="text-gray-600">{m.short_count}t</span>
-                            {m.q1_short > 0 && <span className="text-yellow-600">Q1:{m.q1_short}</span>}
-                          </div>
+
+                      {/* Bias: dominant side + $conviction + #conviction */}
+                      <td className="px-3 py-2 whitespace-nowrap">
+                        <div className={`font-bold text-[11px] ${isLongDom ? "text-green-400" : "text-red-400"}`}>
+                          {isLongDom ? "▲ LONG" : "▼ SHORT"}
+                        </div>
+                        <div className="text-[9px] text-gray-500 mt-0.5">
+                          ${pct(m.dollar_conviction)} · #{pct(m.count_conviction)}
                         </div>
                       </td>
-                      <td className="px-3 py-2 text-right text-gray-300">{pct(m.count_conviction)}</td>
-                      <td className="px-3 py-2 text-right text-gray-300">{pct(m.dollar_conviction)}</td>
-                      <td className="px-3 py-2 text-right text-gray-400">{pct(m.cohort_participation, 1)}</td>
-                      <td className="px-3 py-2 text-right">
-                        {m.active_participation != null ? (
-                          <span className="text-blue-300">{pct(m.active_participation, 1)}</span>
-                        ) : <span className="text-gray-700">—</span>}
-                        {m.active_cohort_size != null && (
-                          <span className="text-gray-700 text-[9px] ml-1">/{m.active_cohort_size}</span>
-                        )}
+
+                      {/* Long side */}
+                      <td className="px-3 py-2 whitespace-nowrap">
+                        <div className="text-green-300 font-bold text-[11px]">{fmtUsd(m.long_usd)}</div>
+                        <div className="text-[9px] text-gray-500">
+                          {m.long_count}t
+                          {m.q1_long > 0 && <span className="text-yellow-600 ml-1">Q1:{m.q1_long}</span>}
+                          <span className="text-gray-700 ml-1">@{fmtEntry(m.wt_avg_entry_long)}</span>
+                        </div>
                       </td>
+
+                      {/* Short side */}
+                      <td className="px-3 py-2 whitespace-nowrap">
+                        <div className="text-red-300 font-bold text-[11px]">{fmtUsd(m.short_usd)}</div>
+                        <div className="text-[9px] text-gray-500">
+                          {m.short_count}t
+                          {m.q1_short > 0 && <span className="text-yellow-600 ml-1">Q1:{m.q1_short}</span>}
+                          <span className="text-gray-700 ml-1">@{fmtEntry(m.wt_avg_entry_short)}</span>
+                        </div>
+                      </td>
+
+                      {/* L:S ratio */}
+                      <td className="px-3 py-2 text-right text-gray-400 text-[10px] whitespace-nowrap">{lsRatio}</td>
+
+                      {/* Cohort % (all 215 traders) */}
+                      <td className="px-3 py-2 text-right text-gray-400">{pct(m.cohort_participation, 1)}</td>
+
+                      {/* Active % / active cohort size */}
+                      <td className="px-3 py-2 text-right whitespace-nowrap">
+                        <span className="text-blue-300">{pct(m.active_participation, 1)}</span>
+                        <span className="text-gray-700 text-[9px] ml-1">/{m.active_cohort_size ?? "—"}</span>
+                      </td>
+
+                      {/* Total traders */}
                       <td className="px-3 py-2 text-right text-gray-400">{m.total_count}</td>
-                      <td className="px-3 py-2 text-right">
+
+                      {/* 1h delta on dominant side */}
+                      <td className="px-3 py-2 text-right whitespace-nowrap">
                         {deltaPct != null ? (
                           <span className={`font-bold text-[10px] ${deltaPct >= 0 ? "text-green-400" : "text-red-400"}`}>
                             {deltaPct >= 0 ? "▲" : "▼"} {Math.abs(deltaPct).toFixed(1)}%
                           </span>
-                        ) : (
-                          <span className="text-gray-700 text-[10px]">—</span>
+                        ) : <span className="text-gray-700 text-[10px]">—</span>}
+                      </td>
+
+                      {/* Whale summary for selected window */}
+                      <td className="px-3 py-2 text-right whitespace-nowrap">
+                        {wEntries.length > 0 && (
+                          <div className="text-green-500 text-[9px]">↑{wEntries.length} {fmtUsd(wEntryUsd)}</div>
+                        )}
+                        {wExits.length > 0 && (
+                          <div className="text-red-500 text-[9px]">↓{wExits.length} {fmtUsd(wExitUsd)}</div>
+                        )}
+                        {wEntries.length === 0 && wExits.length === 0 && (
+                          <span className="text-gray-800 text-[9px]">—</span>
                         )}
                       </td>
-                      <td className="px-3 py-2 text-right text-gray-500">{m.avg_leverage.toFixed(1)}x</td>
-                      <td className="px-3 py-2 text-right">
-                        <span className="text-green-700">{m.q1_long}</span>
-                        <span className="text-gray-700"> / </span>
-                        <span className="text-red-700">{m.q1_short}</span>
-                      </td>
+
+                      {/* Signals */}
                       <td className="px-3 py-2">
                         <div className="flex flex-wrap gap-1">
                           {sortedSigs.map((s, i) => (
                             <SignalPill key={i} type={s.signal_type} severity={s.severity} />
                           ))}
-                          {whaleEvts.length > 0 && (
-                            <span className="inline-flex items-center text-[9px] font-bold px-1 py-0.5 rounded border bg-purple-900 text-purple-300 border-purple-800">
-                              🐋 {whaleEvts.length}
-                            </span>
-                          )}
                         </div>
                       </td>
                     </tr>

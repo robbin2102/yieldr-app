@@ -70,6 +70,8 @@ export interface CoinMetrics {
   cohort_participation: number;
   active_cohort_size: number;
   active_participation: number;
+  wt_avg_entry_long: number;
+  wt_avg_entry_short: number;
   dominant_side: "LONG" | "SHORT";
   avg_leverage: number;
   portfolio_share: number;

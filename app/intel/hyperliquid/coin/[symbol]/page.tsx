@@ -394,11 +394,11 @@ export default function CoinDetailPage({
                     <div key={side} className="flex items-center gap-3 bg-gray-900 border border-gray-800 rounded px-3 py-1.5">
                       <span className={`font-bold ${col}`}>{side === "LONG" ? "▲" : "▼"} {side}</span>
                       <span className="text-gray-600">mean</span>
-                      <span className="text-gray-300">${s.mean.toFixed(1)}</span>
+                      <span className="text-gray-300">${fmtPrice(s.mean)}</span>
                       <span className="text-gray-600">wt.mean</span>
-                      <span className="text-white font-bold">${s.wtMean.toFixed(1)}</span>
+                      <span className="text-white font-bold">${fmtPrice(s.wtMean)}</span>
                       <span className="text-gray-600">median</span>
-                      <span className="text-gray-300">${s.median.toFixed(1)}</span>
+                      <span className="text-gray-300">${fmtPrice(s.median)}</span>
                       <span className="text-gray-700">({s.count})</span>
                     </div>
                   );
