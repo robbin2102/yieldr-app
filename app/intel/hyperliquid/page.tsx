@@ -288,18 +288,18 @@ export default function HyperliquidDashboard() {
           <div className="bg-gray-900 border border-gray-800 rounded overflow-auto">
             <table className="w-full text-xs font-mono">
               <thead>
-                <tr className="text-gray-600 border-b border-gray-800 text-[10px]">
-                  <th className="text-left px-3 py-2">Coin</th>
-                  <th className="text-left px-3 py-2">Bias</th>
-                  <th className="text-left px-3 py-2">Long (t · Q1 · Wt.Entry)</th>
-                  <th className="text-left px-3 py-2">Short (t · Q1 · Wt.Entry)</th>
-                  <th className="text-right px-3 py-2">L:S $</th>
-                  <th className="text-right px-3 py-2">Cohort</th>
-                  <th className="text-right px-3 py-2">Active /N</th>
-                  <th className="text-right px-3 py-2">Total</th>
-                  <th className="text-right px-3 py-2">1h Δ</th>
-                  <th className="text-right px-3 py-2">🐋 {hours}h</th>
-                  <th className="text-left px-3 py-2">Signals</th>
+                <tr className="text-gray-500 border-b border-gray-800 text-xs">
+                  <th className="text-left px-4 py-3">Coin</th>
+                  <th className="text-left px-4 py-3">Bias</th>
+                  <th className="text-left px-4 py-3">Long (traders · Q1 · entry)</th>
+                  <th className="text-left px-4 py-3">Short (traders · Q1 · entry)</th>
+                  <th className="text-right px-4 py-3">L:S</th>
+                  <th className="text-right px-4 py-3">Cohort</th>
+                  <th className="text-right px-4 py-3">Active /N</th>
+                  <th className="text-right px-4 py-3">Total</th>
+                  <th className="text-right px-4 py-3">1h Δ</th>
+                  <th className="text-right px-4 py-3">🐋 {hours}h</th>
+                  <th className="text-left px-4 py-3">Signals</th>
                 </tr>
               </thead>
               <tbody>
@@ -329,84 +329,84 @@ export default function HyperliquidDashboard() {
                   const isLongDom = m.dominant_side === "LONG";
 
                   return (
-                    <tr key={m.coin} className="border-b border-gray-900 hover:bg-gray-800">
+                    <tr key={m.coin} className="border-b border-gray-800/50 hover:bg-gray-800/60">
 
                       {/* Coin */}
-                      <td className="px-3 py-2">
-                        <Link href={`/intel/hyperliquid/coin/${m.coin}`} className="text-white font-bold hover:text-blue-400">
+                      <td className="px-4 py-3">
+                        <Link href={`/intel/hyperliquid/coin/${m.coin}`} className="text-white font-bold text-sm hover:text-blue-400">
                           {m.coin}
                         </Link>
                       </td>
 
-                      {/* Bias: dominant side + $conviction + #conviction */}
-                      <td className="px-3 py-2 whitespace-nowrap">
-                        <div className={`font-bold text-[11px] ${isLongDom ? "text-green-400" : "text-red-400"}`}>
+                      {/* Bias */}
+                      <td className="px-4 py-3 whitespace-nowrap">
+                        <div className={`font-bold text-sm ${isLongDom ? "text-green-400" : "text-red-400"}`}>
                           {isLongDom ? "▲ LONG" : "▼ SHORT"}
                         </div>
-                        <div className="text-[9px] text-gray-500 mt-0.5">
+                        <div className="text-xs text-gray-500 mt-0.5">
                           ${pct(m.dollar_conviction)} · #{pct(m.count_conviction)}
                         </div>
                       </td>
 
                       {/* Long side */}
-                      <td className="px-3 py-2 whitespace-nowrap">
-                        <div className="text-green-300 font-bold text-[11px]">{fmtUsd(m.long_usd)}</div>
-                        <div className="text-[9px] text-gray-500">
+                      <td className="px-4 py-3 whitespace-nowrap">
+                        <div className="text-green-300 font-bold text-sm">{fmtUsd(m.long_usd)}</div>
+                        <div className="text-xs text-gray-500 mt-0.5">
                           {m.long_count}t
-                          {m.q1_long > 0 && <span className="text-yellow-600 ml-1">Q1:{m.q1_long}</span>}
-                          <span className="text-gray-700 ml-1">@{fmtEntry(m.wt_avg_entry_long)}</span>
+                          {m.q1_long > 0 && <span className="text-yellow-500 ml-1.5">Q1:{m.q1_long}</span>}
+                          <span className="text-gray-600 ml-1.5">@{fmtEntry(m.wt_avg_entry_long)}</span>
                         </div>
                       </td>
 
                       {/* Short side */}
-                      <td className="px-3 py-2 whitespace-nowrap">
-                        <div className="text-red-300 font-bold text-[11px]">{fmtUsd(m.short_usd)}</div>
-                        <div className="text-[9px] text-gray-500">
+                      <td className="px-4 py-3 whitespace-nowrap">
+                        <div className="text-red-300 font-bold text-sm">{fmtUsd(m.short_usd)}</div>
+                        <div className="text-xs text-gray-500 mt-0.5">
                           {m.short_count}t
-                          {m.q1_short > 0 && <span className="text-yellow-600 ml-1">Q1:{m.q1_short}</span>}
-                          <span className="text-gray-700 ml-1">@{fmtEntry(m.wt_avg_entry_short)}</span>
+                          {m.q1_short > 0 && <span className="text-yellow-500 ml-1.5">Q1:{m.q1_short}</span>}
+                          <span className="text-gray-600 ml-1.5">@{fmtEntry(m.wt_avg_entry_short)}</span>
                         </div>
                       </td>
 
                       {/* L:S ratio */}
-                      <td className="px-3 py-2 text-right text-gray-400 text-[10px] whitespace-nowrap">{lsRatio}</td>
+                      <td className="px-4 py-3 text-right text-gray-300 text-sm whitespace-nowrap">{lsRatio}</td>
 
-                      {/* Cohort % (all 215 traders) */}
-                      <td className="px-3 py-2 text-right text-gray-400">{pct(m.cohort_participation, 1)}</td>
+                      {/* Cohort % */}
+                      <td className="px-4 py-3 text-right text-gray-300 text-sm">{pct(m.cohort_participation, 1)}</td>
 
                       {/* Active % / active cohort size */}
-                      <td className="px-3 py-2 text-right whitespace-nowrap">
-                        <span className="text-blue-300">{pct(m.active_participation, 1)}</span>
-                        <span className="text-gray-700 text-[9px] ml-1">/{m.active_cohort_size ?? "—"}</span>
+                      <td className="px-4 py-3 text-right whitespace-nowrap">
+                        <span className="text-blue-300 text-sm">{pct(m.active_participation, 1)}</span>
+                        <span className="text-gray-600 text-xs ml-1">/{m.active_cohort_size ?? "—"}</span>
                       </td>
 
                       {/* Total traders */}
-                      <td className="px-3 py-2 text-right text-gray-400">{m.total_count}</td>
+                      <td className="px-4 py-3 text-right text-gray-300 text-sm">{m.total_count}</td>
 
-                      {/* 1h delta on dominant side */}
-                      <td className="px-3 py-2 text-right whitespace-nowrap">
+                      {/* 1h delta */}
+                      <td className="px-4 py-3 text-right whitespace-nowrap">
                         {deltaPct != null ? (
-                          <span className={`font-bold text-[10px] ${deltaPct >= 0 ? "text-green-400" : "text-red-400"}`}>
+                          <span className={`font-bold text-sm ${deltaPct >= 0 ? "text-green-400" : "text-red-400"}`}>
                             {deltaPct >= 0 ? "▲" : "▼"} {Math.abs(deltaPct).toFixed(1)}%
                           </span>
-                        ) : <span className="text-gray-700 text-[10px]">—</span>}
+                        ) : <span className="text-gray-700 text-sm">—</span>}
                       </td>
 
-                      {/* Whale summary for selected window */}
-                      <td className="px-3 py-2 text-right whitespace-nowrap">
+                      {/* Whale summary */}
+                      <td className="px-4 py-3 text-right whitespace-nowrap">
                         {wEntries.length > 0 && (
-                          <div className="text-green-500 text-[9px]">↑{wEntries.length} {fmtUsd(wEntryUsd)}</div>
+                          <div className="text-green-400 text-xs">↑{wEntries.length} {fmtUsd(wEntryUsd)}</div>
                         )}
                         {wExits.length > 0 && (
-                          <div className="text-red-500 text-[9px]">↓{wExits.length} {fmtUsd(wExitUsd)}</div>
+                          <div className="text-red-400 text-xs">↓{wExits.length} {fmtUsd(wExitUsd)}</div>
                         )}
                         {wEntries.length === 0 && wExits.length === 0 && (
-                          <span className="text-gray-800 text-[9px]">—</span>
+                          <span className="text-gray-700 text-xs">—</span>
                         )}
                       </td>
 
                       {/* Signals */}
-                      <td className="px-3 py-2">
+                      <td className="px-4 py-3">
                         <div className="flex flex-wrap gap-1">
                           {sortedSigs.map((s, i) => (
                             <SignalPill key={i} type={s.signal_type} severity={s.severity} />
