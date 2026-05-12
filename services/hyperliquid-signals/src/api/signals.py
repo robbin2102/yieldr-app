@@ -87,10 +87,20 @@ async def acknowledge_alert(alert_id: str):
 # ── v2 endpoints ──────────────────────────────────────────────────────────────
 
 @router.get("/signals/v2/coin-metrics")
-async def get_coin_metrics(limit: int = Query(50, ge=1, le=200)):
-    """Latest coin metrics snapshot — the 3 sub-metrics per coin."""
+async def get_coin_metrics(
+    limit: int = Query(50, ge=1, le=200),
+    hours_ago: int = Query(0, ge=0, le=168),
+):
+    """Latest coin metrics snapshot, or the snapshot closest to N hours ago."""
     db = get_db()
-    latest = await db.hl_signals_coin_metrics.find_one(sort=[("snapshot_ts", -1)])
+    if hours_ago == 0:
+        latest = await db.hl_signals_coin_metrics.find_one(sort=[("snapshot_ts", -1)])
+    else:
+        cutoff = _utcnow() - timedelta(hours=hours_ago)
+        latest = await db.hl_signals_coin_metrics.find_one(
+            {"snapshot_ts": {"$lte": cutoff}},
+            sort=[("snapshot_ts", -1)],
+        )
     if not latest:
         return {"data": [], "snapshot_ts": None}
     snap_ts = latest["snapshot_ts"]

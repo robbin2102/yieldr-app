@@ -222,6 +222,11 @@ export const hlSignals = {
       `/api/signals/v2/coin-metrics?limit=${limit}`
     ),
 
+  getCoinMetricsAt: (hoursAgo: number, limit = 200) =>
+    get<{ data: CoinMetrics[]; snapshot_ts: string | null }>(
+      `/api/signals/v2/coin-metrics?limit=${limit}&hours_ago=${hoursAgo}`
+    ),
+
   getSignalsV2: (signalType?: string, hours = 24) => {
     const params = new URLSearchParams({ hours: String(hours) });
     if (signalType) params.set("signal_type", signalType);

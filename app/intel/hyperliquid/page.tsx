@@ -138,6 +138,12 @@ export default function HyperliquidDashboard() {
     refetchInterval: REFETCH_MS,
   });
 
+  const { data: metrics1hData } = useQuery({
+    queryKey: ["hl-coin-metrics-1h"],
+    queryFn: () => hlSignals.getCoinMetricsAt(1, 200),
+    refetchInterval: REFETCH_MS * 4,
+  });
+
   const alerts: Alert[] = alertsData?.data ?? [];
   const tier1Alerts = alerts.filter((a) => a.severity === 1).slice(0, 3);
 
@@ -149,6 +155,12 @@ export default function HyperliquidDashboard() {
   const metrics: CoinMetrics[] = metricsData?.data ?? [];
   const totalPortfolioUsd = metrics.reduce((s, m) => s + m.total_usd, 0);
   const snapshotTs = dashData?.snapshot_ts ?? metricsData?.snapshot_ts ?? null;
+
+  const prevMetricMap = useMemo(() => {
+    const map = new Map<string, CoinMetrics>();
+    for (const m of metrics1hData?.data ?? []) map.set(m.coin, m);
+    return map;
+  }, [metrics1hData]);
 
   // Build coin → signals map from dashboard data
   const signalsByCoin = useMemo(() => {
@@ -269,12 +281,11 @@ export default function HyperliquidDashboard() {
               <thead>
                 <tr className="text-gray-600 border-b border-gray-800 text-[10px]">
                   <th className="text-left px-3 py-2">Coin</th>
-                  <th className="text-left px-3 py-2">Side</th>
+                  <th className="text-left px-3 py-2 min-w-[180px]">Long / Short</th>
                   <th className="text-right px-3 py-2">Count %</th>
                   <th className="text-right px-3 py-2">$ %</th>
                   <th className="text-right px-3 py-2">Cohort</th>
-                  <th className="text-right px-3 py-2">Traders</th>
-                  <th className="text-right px-3 py-2">Total USD</th>
+                  <th className="text-right px-3 py-2">1h Δ</th>
                   <th className="text-right px-3 py-2">Lev</th>
                   <th className="text-right px-3 py-2">Q1 L/S</th>
                   <th className="text-left px-3 py-2">Signals</th>
@@ -282,34 +293,56 @@ export default function HyperliquidDashboard() {
               </thead>
               <tbody>
                 {metrics.map((m) => {
-                  const sideColor = m.dominant_side === "LONG" ? "text-green-400" : "text-red-400";
                   const coinSigs = signalsByCoin.get(m.coin) ?? [];
                   const whaleEvts = whaleByCoin.get(m.coin) ?? [];
-
-                  // Sort: HIGH first
                   const sevOrd: Record<string, number> = { HIGH: 0, MEDIUM: 1, LOW: 2 };
                   const sortedSigs = [...coinSigs].sort(
                     (a, b) => (sevOrd[a.severity] ?? 9) - (sevOrd[b.severity] ?? 9)
                   );
 
+                  // 1h delta on dominant side's USD value
+                  const prev = prevMetricMap.get(m.coin);
+                  const domUsd = m.dominant_side === "LONG" ? m.long_usd : m.short_usd;
+                  const prevDomUsd = prev ? (m.dominant_side === "LONG" ? prev.long_usd : prev.short_usd) : null;
+                  const deltaPct = prevDomUsd && prevDomUsd > 0
+                    ? (domUsd - prevDomUsd) / prevDomUsd * 100
+                    : null;
+
                   return (
                     <tr key={m.coin} className="border-b border-gray-900 hover:bg-gray-800">
                       <td className="px-3 py-2">
-                        <Link
-                          href={`/intel/hyperliquid/coin/${m.coin}`}
-                          className="text-white font-bold hover:text-blue-400"
-                        >
+                        <Link href={`/intel/hyperliquid/coin/${m.coin}`} className="text-white font-bold hover:text-blue-400">
                           {m.coin}
                         </Link>
                       </td>
-                      <td className={`px-3 py-2 font-bold ${sideColor}`}>
-                        {m.dominant_side === "LONG" ? "▲" : "▼"} {m.dominant_side}
+                      <td className="px-3 py-2">
+                        <div className="text-[10px] leading-relaxed">
+                          <div className="flex items-baseline gap-1.5">
+                            <span className="text-green-400 font-bold">▲</span>
+                            <span className="text-green-300">{fmtUsd(m.long_usd)}</span>
+                            <span className="text-gray-600">{m.long_count} traders</span>
+                            {m.q1_long > 0 && <span className="text-yellow-600 text-[9px]">Q1:{m.q1_long}</span>}
+                          </div>
+                          <div className="flex items-baseline gap-1.5">
+                            <span className="text-red-400 font-bold">▼</span>
+                            <span className="text-red-300">{fmtUsd(m.short_usd)}</span>
+                            <span className="text-gray-600">{m.short_count} traders</span>
+                            {m.q1_short > 0 && <span className="text-yellow-600 text-[9px]">Q1:{m.q1_short}</span>}
+                          </div>
+                        </div>
                       </td>
                       <td className="px-3 py-2 text-right text-gray-300">{pct(m.count_conviction)}</td>
                       <td className="px-3 py-2 text-right text-gray-300">{pct(m.dollar_conviction)}</td>
                       <td className="px-3 py-2 text-right text-gray-400">{pct(m.cohort_participation, 1)}</td>
-                      <td className="px-3 py-2 text-right text-gray-400">{m.total_count}</td>
-                      <td className="px-3 py-2 text-right text-gray-300">{fmtUsd(m.total_usd)}</td>
+                      <td className="px-3 py-2 text-right">
+                        {deltaPct != null ? (
+                          <span className={`font-bold text-[10px] ${deltaPct >= 0 ? "text-green-400" : "text-red-400"}`}>
+                            {deltaPct >= 0 ? "▲" : "▼"} {Math.abs(deltaPct).toFixed(1)}%
+                          </span>
+                        ) : (
+                          <span className="text-gray-700 text-[10px]">—</span>
+                        )}
+                      </td>
                       <td className="px-3 py-2 text-right text-gray-500">{m.avg_leverage.toFixed(1)}x</td>
                       <td className="px-3 py-2 text-right">
                         <span className="text-green-700">{m.q1_long}</span>
