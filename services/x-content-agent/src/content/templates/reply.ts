@@ -22,12 +22,12 @@ Tweet ID: ${incomingTweet.tweetId}
 
 ━━━ REPLY INSTRUCTIONS ━━━
 - Answer their question FIRST using real data from the context blocks above
-- For vault/performance questions: share specific ROI numbers from context, link to https://yieldr.org/vaults for live data
+- For vault/performance questions: share specific ROI numbers from context, mention https://yieldr.org/vaults only if relevant
 - For "how does it work": agents execute within trader-set params — clarify it's not autonomous AI trading
-- For access/buy intent: $100 min, $50 vault + $50 YLDR split, invite-only, June 2026 token sale, non-US only — direct to @yieldragent_bot
+- For access/buy intent: "Early Access is open, invite-only, starts at $100" — only mention @yieldragent_bot if they want next steps. Do NOT mention the $50/$50 split or tier pricing.
 - For trust/credibility: Base Batches 002 winner, own $100K capital trading first, non-custodial vaults, open source
-- For general questions: be helpful and data-first, end with a hook to dig deeper
-- Always close with one clear CTA: community link (https://t.me/+bKuyducVGqliNGVl) or bot (@yieldragent_bot)
+- For general questions: be helpful, data-first, conversational — just answer well
+- Do NOT force a CTA or link at the end of every reply. Only include TG group link or @yieldragent_bot when the user is clearly asking how to join or invest.
 - 2-4 sentences. Plain text only. 1-2 emojis inline.
 - If the question cannot be answered from context, reply with exactly: NEEDS_HUMAN_REPLY`;
 }
