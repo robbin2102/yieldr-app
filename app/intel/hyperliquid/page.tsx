@@ -281,10 +281,11 @@ export default function HyperliquidDashboard() {
               <thead>
                 <tr className="text-gray-600 border-b border-gray-800 text-[10px]">
                   <th className="text-left px-3 py-2">Coin</th>
-                  <th className="text-left px-3 py-2 min-w-[180px]">Long / Short</th>
+                  <th className="text-left px-3 py-2">Long / Short</th>
                   <th className="text-right px-3 py-2">Count %</th>
                   <th className="text-right px-3 py-2">$ %</th>
                   <th className="text-right px-3 py-2">Cohort</th>
+                  <th className="text-right px-3 py-2">Traders</th>
                   <th className="text-right px-3 py-2">1h Δ</th>
                   <th className="text-right px-3 py-2">Lev</th>
                   <th className="text-right px-3 py-2">Q1 L/S</th>
@@ -334,6 +335,7 @@ export default function HyperliquidDashboard() {
                       <td className="px-3 py-2 text-right text-gray-300">{pct(m.count_conviction)}</td>
                       <td className="px-3 py-2 text-right text-gray-300">{pct(m.dollar_conviction)}</td>
                       <td className="px-3 py-2 text-right text-gray-400">{pct(m.cohort_participation, 1)}</td>
+                      <td className="px-3 py-2 text-right text-gray-400">{m.total_count}</td>
                       <td className="px-3 py-2 text-right">
                         {deltaPct != null ? (
                           <span className={`font-bold text-[10px] ${deltaPct >= 0 ? "text-green-400" : "text-red-400"}`}>
