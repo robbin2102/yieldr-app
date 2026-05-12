@@ -38,6 +38,7 @@ async def ensure_indexes() -> None:
     await db.hl_signals_position_changes.create_index([("ts", -1)])
     await db.hl_signals_position_changes.create_index([("address", 1), ("ts", -1)])
     await db.hl_signals_position_changes.create_index("coin")
+    await db.hl_signals_position_changes.create_index([("coin", 1), ("ts", -1)])
 
     await db.hl_signals_convergence.create_index([("coin", 1), ("side", 1), ("snapshot_ts", -1)])
 

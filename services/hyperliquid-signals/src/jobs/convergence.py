@@ -58,6 +58,7 @@ async def run_convergence(snapshot_ts: datetime) -> None:
 
     # ── 3. Aggregate per-coin ────────────────────────────────────────────────
     coin_buckets: dict[str, dict] = {}
+    coin_current_addrs: dict[str, set] = {}
     total_portfolio_usd = sum(p["size_usd"] for p in positions)
 
     for p in positions:
@@ -103,6 +104,21 @@ async def run_convergence(snapshot_ts: datetime) -> None:
                 cd["q4_short"] += 1
 
         cd["leverages"].append(p["leverage"])
+        coin_current_addrs.setdefault(coin, set()).add(p["address"])
+
+    # ── 3b. Active cohort per coin (current holders + closed last 30d) ───────
+    coins_list_early = list(coin_buckets.keys())
+    thirty_days_ago = snapshot_ts - timedelta(days=30)
+    active_close_docs = await db.hl_signals_position_changes.aggregate([
+        {"$match": {
+            "coin": {"$in": coins_list_early},
+            "change_type": "CLOSED",
+            "ts": {"$gte": thirty_days_ago},
+        }},
+        {"$group": {"_id": "$coin", "closers": {"$addToSet": "$address"}}},
+    ]).to_list(len(coins_list_early) + 10)
+    closed_30d_map: dict[str, set] = {d["_id"]: set(d["closers"]) for d in active_close_docs}
+    del active_close_docs
 
     # ── 4. Compute coin_metrics and save ────────────────────────────────────
     coin_metrics: dict[str, dict] = {}
@@ -119,6 +135,8 @@ async def run_convergence(snapshot_ts: datetime) -> None:
             abs(cd["long_usd"] - cd["short_usd"]) / total_usd if total_usd > 0 else 0.0
         )
         cohort_participation = total_count / total_cohort if total_cohort > 0 else 0.0
+        active_cohort_size = len(coin_current_addrs.get(coin, set()) | closed_30d_map.get(coin, set()))
+        active_participation = total_count / active_cohort_size if active_cohort_size > 0 else 0.0
         dominant_side = "LONG" if cd["long_usd"] >= cd["short_usd"] else "SHORT"
         avg_leverage = sum(cd["leverages"]) / len(cd["leverages"]) if cd["leverages"] else 0.0
         portfolio_share = total_usd / total_portfolio_usd if total_portfolio_usd > 0 else 0.0
@@ -142,6 +160,8 @@ async def run_convergence(snapshot_ts: datetime) -> None:
             "count_conviction": count_conviction,
             "dollar_conviction": dollar_conviction,
             "cohort_participation": cohort_participation,
+            "active_cohort_size": active_cohort_size,
+            "active_participation": active_participation,
             "dominant_side": dominant_side,
             "avg_leverage": avg_leverage,
             "portfolio_share": portfolio_share,
@@ -576,8 +596,9 @@ async def run_convergence(snapshot_ts: datetime) -> None:
     n_signals = len(signals)
 
     # Free all large in-memory structures before returning
-    del positions, traders, coin_buckets, coin_metrics, coin_metrics_docs
-    del convergence_docs, hist_by_window, signals, closes_by_coin, new_alerts
+    del positions, traders, coin_buckets, coin_current_addrs, closed_30d_map
+    del coin_metrics, coin_metrics_docs, convergence_docs, hist_by_window
+    del signals, closes_by_coin, new_alerts
     gc.collect()
 
     logger.info(

@@ -68,6 +68,8 @@ export interface CoinMetrics {
   count_conviction: number;
   dollar_conviction: number;
   cohort_participation: number;
+  active_cohort_size: number;
+  active_participation: number;
   dominant_side: "LONG" | "SHORT";
   avg_leverage: number;
   portfolio_share: number;
