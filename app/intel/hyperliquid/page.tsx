@@ -316,18 +316,18 @@ export default function HyperliquidDashboard() {
                         </Link>
                       </td>
                       <td className="px-3 py-2">
-                        <div className="text-[10px] leading-relaxed">
-                          <div className="flex items-baseline gap-1.5">
+                        <div className="text-[10px] space-y-0.5">
+                          <div className="flex items-center gap-1 whitespace-nowrap">
                             <span className="text-green-400 font-bold">▲</span>
-                            <span className="text-green-300">{fmtUsd(m.long_usd)}</span>
-                            <span className="text-gray-600">{m.long_count} traders</span>
-                            {m.q1_long > 0 && <span className="text-yellow-600 text-[9px]">Q1:{m.q1_long}</span>}
+                            <span className="text-green-300 font-bold">{fmtUsd(m.long_usd)}</span>
+                            <span className="text-gray-600">{m.long_count}t</span>
+                            {m.q1_long > 0 && <span className="text-yellow-600">Q1:{m.q1_long}</span>}
                           </div>
-                          <div className="flex items-baseline gap-1.5">
+                          <div className="flex items-center gap-1 whitespace-nowrap">
                             <span className="text-red-400 font-bold">▼</span>
                             <span className="text-red-300">{fmtUsd(m.short_usd)}</span>
-                            <span className="text-gray-600">{m.short_count} traders</span>
-                            {m.q1_short > 0 && <span className="text-yellow-600 text-[9px]">Q1:{m.q1_short}</span>}
+                            <span className="text-gray-600">{m.short_count}t</span>
+                            {m.q1_short > 0 && <span className="text-yellow-600">Q1:{m.q1_short}</span>}
                           </div>
                         </div>
                       </td>
