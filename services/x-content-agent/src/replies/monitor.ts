@@ -1,9 +1,14 @@
 /**
  * Reply Monitor
- * Polls for new mentions and generates contextual replies
+ * Polls for new mentions and generates contextual replies.
+ *
+ * Double-reply prevention:
+ *   - On startup: fetches our last 50 tweets to seed already-replied IDs
+ *   - Per mention: checks MongoDB x_mentions collection before replying
+ *   - NEEDS_HUMAN_REPLY: logs but doesn't post (flags for manual follow-up)
  */
 
-import { getMentions, likeTweet, replyToTweet } from '../lib/x-client';
+import { getMentions, getUserTweets, getAuthenticatedUserId, likeTweet, replyToTweet } from '../lib/x-client';
 import { generateReply } from '../content/generator';
 import { getDB, COLLECTIONS } from '../lib/db';
 import { CONFIG } from '../config';
@@ -11,6 +16,59 @@ import { CONFIG } from '../config';
 let intervalId: NodeJS.Timeout | null = null;
 let lastSeenMentionId: string | null = null;
 let isRunning = false;
+
+/**
+ * On startup, fetch our recent tweets and seed their in_reply_to IDs
+ * into x_mentions so we don't double-reply to mentions we already
+ * responded to manually or in a previous session.
+ */
+async function seedRepliedMentions(): Promise<void> {
+  try {
+    const userId = getAuthenticatedUserId();
+    if (!userId) {
+      console.log('[Replies] No authenticated user ID — skipping startup seed');
+      return;
+    }
+
+    const tweetsResult = await getUserTweets(userId, 50);
+    const tweets = tweetsResult?.data || [];
+    if (tweets.length === 0) return;
+
+    const db = await getDB();
+    let seeded = 0;
+
+    for (const tweet of tweets) {
+      const replyTo = (tweet as any).in_reply_to_user_id;
+      const convId = (tweet as any).conversation_id;
+
+      // If this tweet is a reply (has conversation_id different from its own id),
+      // mark the parent as already replied to
+      if (convId && convId !== tweet.id) {
+        const existing = await db.collection(COLLECTIONS.X_MENTIONS).findOne({
+          tweetId: convId,
+        });
+        if (!existing) {
+          await db.collection(COLLECTIONS.X_MENTIONS).insertOne({
+            tweetId: convId,
+            authorId: replyTo || 'unknown',
+            text: '',
+            processed: true,
+            repliedTo: true,
+            seededOnStartup: true,
+            indexedAt: new Date(),
+          });
+          seeded++;
+        }
+      }
+    }
+
+    if (seeded > 0) {
+      console.log(`[Replies] Seeded ${seeded} already-replied mention IDs from recent tweets`);
+    }
+  } catch (error: any) {
+    console.error('[Replies] Startup seed failed (non-critical):', error.message);
+  }
+}
 
 async function processNewMentions(): Promise<void> {
   if (isRunning) return;
@@ -25,18 +83,15 @@ async function processNewMentions(): Promise<void> {
     const db = await getDB();
 
     for (const mention of mentions) {
-      // Update last seen
       if (!lastSeenMentionId || mention.id > lastSeenMentionId) {
         lastSeenMentionId = mention.id;
       }
 
-      // Check if already replied
       const existing = await db.collection(COLLECTIONS.X_MENTIONS).findOne({
         tweetId: mention.id,
       });
       if (existing) continue;
 
-      // Log the mention
       await db.collection(COLLECTIONS.X_MENTIONS).insertOne({
         tweetId: mention.id,
         authorId: mention.author_id,
@@ -47,27 +102,35 @@ async function processNewMentions(): Promise<void> {
         indexedAt: new Date(),
       });
 
-      // Skip if it looks like spam
       if (isSpam(mention.text)) {
         console.log(`[Replies] Skipping spam mention: ${mention.id}`);
+        await db.collection(COLLECTIONS.X_MENTIONS).updateOne(
+          { tweetId: mention.id },
+          { $set: { processed: true, spam: true } },
+        );
         continue;
       }
 
       try {
-        // Generate reply
         const reply = await generateReply({
           text: mention.text,
-          authorUsername: mention.author_id || 'user', // Would need user lookup for username
+          authorUsername: mention.author_id || 'user',
           tweetId: mention.id,
         });
 
-        // Post reply
-        await replyToTweet(reply.tweet, mention.id);
+        // NEEDS_HUMAN_REPLY — log and skip, don't post
+        if (reply.metadata?.needsHuman || reply.tweet === 'NEEDS_HUMAN_REPLY') {
+          console.log(`[Replies] NEEDS_HUMAN_REPLY for mention ${mention.id}: "${mention.text?.substring(0, 80)}"`);
+          await db.collection(COLLECTIONS.X_MENTIONS).updateOne(
+            { tweetId: mention.id },
+            { $set: { processed: true, repliedTo: false, needsHuman: true } },
+          );
+          continue;
+        }
 
-        // Like the mention
+        await replyToTweet(reply.tweet, mention.id);
         await likeTweet(mention.id);
 
-        // Log reply
         await db.collection(COLLECTIONS.X_REPLIES).insertOne({
           parentTweetId: mention.id,
           content: reply.tweet,
@@ -76,15 +139,13 @@ async function processNewMentions(): Promise<void> {
           postedAt: new Date(),
         });
 
-        // Mark mention as replied
         await db.collection(COLLECTIONS.X_MENTIONS).updateOne(
           { tweetId: mention.id },
-          { $set: { processed: true, repliedTo: true, repliedAt: new Date() } }
+          { $set: { processed: true, repliedTo: true, repliedAt: new Date() } },
         );
 
         console.log(`[Replies] Replied to mention ${mention.id}`);
 
-        // Delay between replies (30s - 60s)
         await new Promise(r => setTimeout(r, 30000 + Math.random() * 30000));
       } catch (error: any) {
         console.error(`[Replies] Error replying to ${mention.id}:`, error.message);
@@ -116,8 +177,9 @@ export function startReplyMonitor(): void {
 
   console.log(`[Replies] Starting reply monitor (every ${CONFIG.REPLY_POLL_INTERVAL_MS / 60000}m)`);
 
-  // Delay start by 60s
-  setTimeout(() => {
+  // Startup: seed already-replied mentions, then start polling
+  setTimeout(async () => {
+    await seedRepliedMentions();
     processNewMentions();
     intervalId = setInterval(processNewMentions, CONFIG.REPLY_POLL_INTERVAL_MS);
   }, 60_000);

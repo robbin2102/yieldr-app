@@ -1,44 +1,33 @@
 /**
  * Reply Template
- * Generates contextual replies to mentions and comments
+ * Builds the user-role prompt for replying to X mentions.
+ * Product knowledge and live vault data are injected as context blocks.
  */
 
 export function buildReplyPrompt(data: {
   incomingTweet: { text: string; authorUsername: string; tweetId: string };
-  context?: {
-    vaultData?: any;
-    traderData?: any;
-    marketData?: any;
-  };
+  productContext: string;
+  liveVaultData?: string;
 }): string {
-  const { incomingTweet, context } = data;
+  const { incomingTweet, productContext, liveVaultData } = data;
 
-  let contextBlock = '';
-  if (context?.vaultData) {
-    contextBlock += `\nVAULT DATA: ${JSON.stringify(context.vaultData).substring(0, 300)}`;
-  }
-  if (context?.traderData) {
-    contextBlock += `\nTRADER DATA: ${JSON.stringify(context.traderData).substring(0, 300)}`;
-  }
-  if (context?.marketData) {
-    contextBlock += `\nMARKET DATA: ${JSON.stringify(context.marketData).substring(0, 300)}`;
-  }
+  return `━━━ PRODUCT KNOWLEDGE ━━━
+${productContext}
 
-  return `Generate a reply to this tweet mentioning @yieldrdotorg.
-
-INCOMING TWEET (from @${incomingTweet.authorUsername}):
-"${incomingTweet.text}"
+${liveVaultData ? `━━━ LIVE VAULT DATA ━━━\n${liveVaultData}\n` : ''}
+━━━ TWEET TO REPLY TO ━━━
+From: @${incomingTweet.authorUsername}
 Tweet ID: ${incomingTweet.tweetId}
+"${incomingTweet.text}"
 
-${contextBlock ? `RELEVANT DATA:${contextBlock}` : ''}
-
-Reply rules:
-1. Answer their question FIRST with real data if available
-2. Be helpful, sharp, and data-first
-3. If they ask about vaults/performance/access, share real numbers and warmly guide to TG channel or yieldr.org
-4. If they show buying intent, mention Early Access details
-5. Keep it concise (2-4 sentences max)
-6. End with an invitation to ask more or check yieldr.org
-7. Use 1-2 emojis naturally
-8. Type is "reply" to tweet ID ${incomingTweet.tweetId}`;
+━━━ REPLY INSTRUCTIONS ━━━
+- Answer their question FIRST using real data from the context blocks above
+- For vault/performance questions: share specific ROI numbers from context, link to https://yieldr.org/vaults for live data
+- For "how does it work": agents execute within trader-set params — clarify it's not autonomous AI trading
+- For access/buy intent: $100 min, $50 vault + $50 YLDR split, invite-only, June 2026 token sale, non-US only — direct to @yieldragent_bot
+- For trust/credibility: Base Batches 002 winner, own $100K capital trading first, non-custodial vaults, open source
+- For general questions: be helpful and data-first, end with a hook to dig deeper
+- Always close with one clear CTA: community link (https://t.me/+bKuyducVGqliNGVl) or bot (@yieldragent_bot)
+- 2-4 sentences. Plain text only. 1-2 emojis inline.
+- If the question cannot be answered from context, reply with exactly: NEEDS_HUMAN_REPLY`;
 }

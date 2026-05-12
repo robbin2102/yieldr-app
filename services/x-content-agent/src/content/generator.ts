@@ -14,6 +14,7 @@
 
 import { generateStructuredContent } from '../lib/grok-client';
 import { YIELDR_AGENT_SYSTEM_PROMPT } from './system-prompt';
+import { REPLY_SYSTEM_PROMPT } from './reply-system-prompt';
 import { buildTraderAlphaPrompt } from './templates/trader-alpha';
 import { buildHighConvictionPrompt } from './templates/high-conviction';
 import { buildVaultPerformancePrompt, buildCombinedVaultPrompt } from './templates/vault-performance';
@@ -25,6 +26,8 @@ import { PRIMER_ENTRIES } from './docs-content';
 import { ContentStyle, randomStyle, weightedVaultStyle } from './styles';
 import * as mcp from '../lib/mcp-client';
 import { getDB, COLLECTIONS } from '../lib/db';
+import { getRelevantBlocks } from '../lib/product-knowledge';
+import { getLiveVaultSummary, isPerformanceQuery } from '../lib/vault-data';
 
 function normalizeMarket(title: string): string {
   return (title || '').toLowerCase().replace(/[^a-z0-9]/g, '').substring(0, 60);
@@ -327,35 +330,37 @@ export async function generateCommunityPrompt(source: 'test' | 'scheduler' = 'sc
 }
 
 /**
- * Generate a reply to a mention or comment
+ * Generate a reply to a mention or comment.
+ * Fetches relevant product knowledge blocks + live vault data from MongoDB.
  */
 export async function generateReply(incomingTweet: {
   text: string;
   authorUsername: string;
   tweetId: string;
 }): Promise<GeneratedPost> {
-  let context: any = {};
+  const [productContext, liveVaultData] = await Promise.all([
+    getRelevantBlocks(incomingTweet.text).catch(() => ''),
+    isPerformanceQuery(incomingTweet.text) ? getLiveVaultSummary().catch(() => '') : Promise.resolve(''),
+  ]);
 
-  try {
-    if (/vault|performance|pnl|roi|return/i.test(incomingTweet.text)) {
-      context.vaultData = await mcp.getVaultPerformance({ period: '30d' });
-    }
-    if (/trader|edge|alpha|whale/i.test(incomingTweet.text)) {
-      context.traderData = await mcp.getEdgeRankedTraders({ limit: 3 });
-    }
-  } catch {
-    // Context fetch failed, reply without data
-  }
+  const prompt = buildReplyPrompt({
+    incomingTweet,
+    productContext,
+    liveVaultData: liveVaultData || undefined,
+  });
+  const result = await generateStructuredContent(REPLY_SYSTEM_PROMPT, prompt);
 
-  const prompt = buildReplyPrompt({ incomingTweet, context });
-  const result = await generateStructuredContent(YIELDR_AGENT_SYSTEM_PROMPT, prompt);
+  const replyText = result.tweet || result.content || '';
 
   return {
     type: 'reply',
-    tweet: result.tweet || result.content,
+    tweet: replyText,
     telegram: '',
     category: 'REPLY',
     target_post_id: incomingTweet.tweetId,
-    metadata: { replyTo: incomingTweet.authorUsername },
+    metadata: {
+      replyTo: incomingTweet.authorUsername,
+      needsHuman: replyText === 'NEEDS_HUMAN_REPLY',
+    },
   };
 }
