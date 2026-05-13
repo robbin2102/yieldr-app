@@ -1,6 +1,9 @@
 import asyncio
+import ctypes
+import ctypes.util
 import gc
 import logging
+import resource
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
@@ -598,9 +601,20 @@ async def run_convergence(snapshot_ts: datetime) -> None:
     del signals, closes_by_coin, new_alerts
     gc.collect()
 
+    # On Linux, force the allocator to return freed pages to the OS.
+    # Without this, Python's heap grows slowly across cycles even after gc.collect().
+    _lib = ctypes.util.find_library("c")
+    if _lib:
+        try:
+            ctypes.CDLL(_lib).malloc_trim(0)
+        except Exception:
+            pass
+
+    rss_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
     logger.info(
-        '"Convergence v2 complete", "coin_metrics": %d, "signals": %d, "breakdown": %s',
+        '"Convergence v2 complete", "coin_metrics": %d, "signals": %d, "rss_mb": %.1f, "breakdown": %s',
         n_metrics,
         n_signals,
+        rss_mb,
         dict(by_type),
     )

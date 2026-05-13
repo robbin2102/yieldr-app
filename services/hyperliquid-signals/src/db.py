@@ -73,13 +73,18 @@ async def ensure_indexes() -> None:
         "snapshot_ts", expireAfterSeconds=7 * 24 * 3600, name="convergence_ttl"
     )
 
+    # Signals: dashboard queries at most 24h, no need for 7-day TTL.
+    await _drop_index_if_exists(db.hl_signals_signals, "signals_ttl")
     await db.hl_signals_signals.create_index(
-        "snapshot_ts", expireAfterSeconds=7 * 24 * 3600, name="signals_ttl"
+        "snapshot_ts", expireAfterSeconds=48 * 3600, name="signals_ttl"
     )
 
+    # Coin metrics: _fetch_window looks back at most 168h (7 days); 8-day TTL
+    # keeps one day of headroom while cutting the collection size by ~75%.
+    await _drop_index_if_exists(db.hl_signals_coin_metrics, "coin_metrics_ttl")
     await _drop_index_if_exists(db.hl_signals_coin_metrics, "snapshot_ts_1")
     await db.hl_signals_coin_metrics.create_index(
-        "snapshot_ts", expireAfterSeconds=30 * 24 * 3600, name="coin_metrics_ttl"
+        "snapshot_ts", expireAfterSeconds=8 * 24 * 3600, name="coin_metrics_ttl"
     )
 
     await db.hl_signals_position_changes.create_index(
