@@ -1,6 +1,7 @@
 import asyncio
 import gc
 import logging
+import resource
 from datetime import datetime, timedelta
 
 import aiohttp
@@ -216,8 +217,12 @@ async def _detect_whale_events(
     return events
 
 
+def _rss_mb() -> float:
+    return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
+
+
 async def run_snapshot() -> None:
-    logger.info('"Starting position snapshot"')
+    logger.info('"Starting position snapshot", "rss_mb": %.1f', _rss_mb())
     db = get_db()
     now = datetime.utcnow()
 
@@ -237,6 +242,10 @@ async def run_snapshot() -> None:
     logger.info('"Fetching positions", "traders": %d, "batch_size": %d', len(addresses), BATCH_SIZE)
 
     semaphore = asyncio.Semaphore(settings.snapshot_concurrency)
+    # Limit concurrent MongoDB operations: each _detect_changes call opens 2 cursors.
+    # 50 concurrent × 2 cursors = 100 pool connections — saturates the 20-connection
+    # pool and queues everything in memory. Cap at 10 to stay well within the pool.
+    db_sem = asyncio.Semaphore(10)
     total_positions = 0
     total_changes = 0
     total_whale_events = 0
@@ -271,15 +280,16 @@ async def run_snapshot() -> None:
                 total_positions += len(batch_positions)
             del batch_positions
 
-            # ── 4. Detect position changes (concurrent within batch — 50 max) ────────
-            change_lists = await asyncio.gather(*[
-                _detect_changes(
-                    db, addr, addr_positions.get(addr, []), now,
-                    settings.position_change_threshold_pct,
-                    settings.leverage_change_threshold,
-                )
-                for addr in batch_addrs
-            ])
+            # ── 4. Detect position changes (capped at 10 concurrent DB ops) ─────────
+            async def _detect_changes_bounded(addr):
+                async with db_sem:
+                    return await _detect_changes(
+                        db, addr, addr_positions.get(addr, []), now,
+                        settings.position_change_threshold_pct,
+                        settings.leverage_change_threshold,
+                    )
+
+            change_lists = await asyncio.gather(*[_detect_changes_bounded(a) for a in batch_addrs])
             batch_changes = [c for cs in change_lists for c in cs]
             del change_lists
             if batch_changes:
@@ -290,10 +300,11 @@ async def run_snapshot() -> None:
             # ── 5. Detect whale events for Q1 traders only ───────────────────────────
             q1_addrs = [a for a in batch_addrs if skill_map.get(a, 4) == 1]
             if q1_addrs:
-                whale_lists = await asyncio.gather(*[
-                    _detect_whale_events(db, addr, addr_positions.get(addr, []), now)
-                    for addr in q1_addrs
-                ])
+                async def _whale_bounded(addr):
+                    async with db_sem:
+                        return await _detect_whale_events(db, addr, addr_positions.get(addr, []), now)
+
+                whale_lists = await asyncio.gather(*[_whale_bounded(a) for a in q1_addrs])
                 batch_whale = [e for es in whale_lists for e in es]
                 del whale_lists
                 if batch_whale:
@@ -305,8 +316,8 @@ async def run_snapshot() -> None:
             gc.collect()  # return cyclic-ref memory promptly between batches
 
     logger.info(
-        '"Snapshot complete", "positions": %d, "changes": %d, "whale_events": %d, "errors": %d',
-        total_positions, total_changes, total_whale_events, errors,
+        '"Snapshot complete", "positions": %d, "changes": %d, "whale_events": %d, "errors": %d, "rss_mb": %.1f',
+        total_positions, total_changes, total_whale_events, errors, _rss_mb(),
     )
 
     await run_convergence(now)

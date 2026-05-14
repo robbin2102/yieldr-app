@@ -10,7 +10,9 @@ _client: AsyncIOMotorClient | None = None
 def get_client() -> AsyncIOMotorClient:
     global _client
     if _client is None:
-        _client = AsyncIOMotorClient(settings.mongo_uri)
+        # Hard-cap the pool: each TLS connection to Atlas uses ~10-20 MB of SSL
+        # context + BSON codec state. 100 (default) × 10 MB = 1 GB just in the pool.
+        _client = AsyncIOMotorClient(settings.mongo_uri, maxPoolSize=20, minPoolSize=2)
     return _client
 
 
@@ -63,9 +65,13 @@ async def ensure_indexes() -> None:
 
     # TTL indexes — drop any pre-existing plain indexes on the same field first,
     # then create TTL versions (MongoDB rejects duplicate-key indexes with different options).
+    # Positions: we only need the previous snapshot for change detection (5 min ago).
+    # 1-day TTL keeps ~288 snapshots as a safety buffer while cutting the collection
+    # from 3.3 M+ docs to ~470 K — 7× fewer docs means 7× faster _detect_changes queries.
+    await _drop_index_if_exists(db.hl_signals_positions, "positions_ttl")
     await _drop_index_if_exists(db.hl_signals_positions, "snapshot_ts_1")
     await db.hl_signals_positions.create_index(
-        "snapshot_ts", expireAfterSeconds=7 * 24 * 3600, name="positions_ttl"
+        "snapshot_ts", expireAfterSeconds=1 * 24 * 3600, name="positions_ttl"
     )
 
     await _drop_index_if_exists(db.hl_signals_convergence, "snapshot_ts_1")
