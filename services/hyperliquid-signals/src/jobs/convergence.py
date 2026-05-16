@@ -3,6 +3,7 @@ import ctypes
 import ctypes.util
 import gc
 import logging
+import os
 import resource
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
@@ -12,6 +13,24 @@ import aiohttp
 from ..db import get_db
 from ..config import settings
 from ..lib.hyperliquid import fetch_funding_rates
+
+# Exit cleanly when RSS exceeds this level so Railway restarts with a fresh heap.
+# Python's pymalloc arena fragmentation is permanent within a process lifetime;
+# the only cure is periodic restart before RSS hits the 2 GB Railway limit.
+_RSS_RESTART_MB = 1300
+
+
+def _current_rss_mb() -> float:
+    """Current RSS in MB. Reads /proc/self/status (Linux); falls back to ru_maxrss."""
+    try:
+        with open("/proc/self/status") as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    return int(line.split()[1]) / 1024  # kB → MB
+    except Exception:
+        pass
+    # Fallback: ru_maxrss is historical peak (KB on Linux), not current, but better than nothing
+    return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
 
 logger = logging.getLogger(__name__)
 
@@ -601,8 +620,9 @@ async def run_convergence(snapshot_ts: datetime) -> None:
     del signals, closes_by_coin, new_alerts
     gc.collect()
 
-    # On Linux, force the allocator to return freed pages to the OS.
-    # Without this, Python's heap grows slowly across cycles even after gc.collect().
+    # malloc_trim(0) releases glibc-malloc free pages to the OS.
+    # Note: Python's pymalloc (small objects <512 B) bypasses glibc malloc,
+    # so arena fragmentation there is NOT fixed by this — see watchdog below.
     _lib = ctypes.util.find_library("c")
     if _lib:
         try:
@@ -610,7 +630,7 @@ async def run_convergence(snapshot_ts: datetime) -> None:
         except Exception:
             pass
 
-    rss_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
+    rss_mb = _current_rss_mb()
     logger.info(
         '"Convergence v2 complete", "coin_metrics": %d, "signals": %d, "rss_mb": %.1f, "breakdown": %s',
         n_metrics,
@@ -618,3 +638,12 @@ async def run_convergence(snapshot_ts: datetime) -> None:
         rss_mb,
         dict(by_type),
     )
+
+    # Watchdog: Python pymalloc arenas fragment permanently — the only fix is restart.
+    # Exit cleanly here so Railway (restartPolicyType=ALWAYS) brings up a fresh process.
+    if rss_mb > _RSS_RESTART_MB:
+        logger.warning(
+            '"RSS %.1f MB exceeds %d MB threshold — exiting for clean heap restart"',
+            rss_mb, _RSS_RESTART_MB,
+        )
+        os._exit(0)  # bypass Python cleanup to avoid triggering atexit bugs at high RSS

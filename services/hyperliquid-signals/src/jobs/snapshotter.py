@@ -218,6 +218,14 @@ async def _detect_whale_events(
 
 
 def _rss_mb() -> float:
+    """Current RSS in MB from /proc/self/status; fallback to ru_maxrss historical peak."""
+    try:
+        with open("/proc/self/status") as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    return int(line.split()[1]) / 1024
+    except Exception:
+        pass
     return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
 
 
