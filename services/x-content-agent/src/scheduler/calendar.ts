@@ -1,17 +1,15 @@
 /**
  * Content Calendar & Scheduler
  *
- * 7 posts per day on both X and Telegram.
- * IST times mapped to EDT for prime engagement windows.
+ * 5 posts/day on X, 3 posts/day on TG.
+ * TG gets community-facing content; X gets everything.
  *
- * Schedule:
- *   1. 7:30 PM IST / 10:00 AM EDT — Project Primer
- *   2. 9:00 PM IST / 11:30 AM EDT — NBA Edge Vault
- *   3. 10:30 PM IST / 1:00 PM EDT — Soccer Alpha Vault
- *   4. 12:00 AM IST / 2:30 PM EDT — Community Prompt
- *   5. 2:00 AM IST / 4:30 PM EDT — Geopolitics Vault
- *   6. 4:00 AM IST / 6:30 PM EDT — High Conviction
- *   7. 6:00 AM IST / 8:30 PM EDT — Trader Profile
+ * Schedule (IST → EDT):
+ *   1. 7:30 PM / 10:00 AM — Project Primer        (X + TG)
+ *   2. 10:00 PM / 12:30 PM — Vault Performance     (X + TG) — rotates daily: NBA → Soccer → Geo
+ *   3. 12:00 AM / 2:30 PM — Community Prompt/Poll  (X + TG)
+ *   4. 3:00 AM / 5:30 PM — High Conviction          (X only)
+ *   5. 6:00 AM / 8:30 PM — Trader Profile            (X only)
  */
 
 import * as cron from 'node-cron';
@@ -28,6 +26,10 @@ import { postTweet, postPoll, quoteTweet } from '../lib/x-client';
 import { sendChannelMessageWithButton, sendPhotoWithButton, sendPoll } from '../lib/tg-client';
 import { getCategoryImage } from '../lib/category-images';
 import { getDB, COLLECTIONS } from '../lib/db';
+
+type Channel = 'x' | 'tg';
+
+const VAULT_ROTATION = ['NBA Edge Vault', 'Soccer Alpha Vault', 'Geopolitics Vault'];
 
 const dailyCounts: Record<string, number> = {};
 let lastResetDate = '';
@@ -52,6 +54,11 @@ function nextHcCategory(): string {
   return category;
 }
 
+function todaysVault(): string {
+  const dayOfYear = Math.floor((Date.now() - new Date(new Date().getFullYear(), 0, 0).getTime()) / 86400000);
+  return VAULT_ROTATION[dayOfYear % VAULT_ROTATION.length];
+}
+
 function canPost(category: string): boolean {
   resetDailyCounts();
   const limit = (CONFIG.DAILY_LIMITS as any)[category] || 999;
@@ -62,11 +69,7 @@ function randomJitter(): number {
   return CONFIG.JITTER_MIN_MS + Math.random() * (CONFIG.JITTER_MAX_MS - CONFIG.JITTER_MIN_MS);
 }
 
-/**
- * Publish a generated post to X + Telegram channel and log it.
- * For COMMUNITY_PROMPT posts, both X and TG use native polls.
- */
-async function publishPost(post: GeneratedPost): Promise<void> {
+async function publishPost(post: GeneratedPost, channels: Channel[]): Promise<void> {
   let tweetId: string | null = null;
   let tgMessageId: number | null = null;
 
@@ -75,31 +78,33 @@ async function publishPost(post: GeneratedPost): Promise<void> {
   const imagePath = getCategoryImage(post.category, isVaultLoss);
 
   // 1. Post to X
-  try {
-    const tweetText = post.tweet;
-    let tweetData;
+  if (channels.includes('x')) {
+    try {
+      const tweetText = post.tweet;
+      let tweetData;
 
-    if (post.type === 'quote' && post.target_post_id) {
-      tweetData = await quoteTweet(tweetText, post.target_post_id);
-    } else if (post.category === 'COMMUNITY_PROMPT' && post.metadata?.poll) {
-      const poll = post.metadata.poll;
-      tweetData = await postPoll(tweetText, poll.options, 1440, imagePath || undefined);
-    } else {
-      tweetData = await postTweet(tweetText, imagePath || undefined);
-    }
+      if (post.type === 'quote' && post.target_post_id) {
+        tweetData = await quoteTweet(tweetText, post.target_post_id);
+      } else if (post.category === 'COMMUNITY_PROMPT' && post.metadata?.poll) {
+        const poll = post.metadata.poll;
+        tweetData = await postPoll(tweetText, poll.options, 1440, imagePath || undefined);
+      } else {
+        tweetData = await postTweet(tweetText, imagePath || undefined);
+      }
 
-    tweetId = tweetData.id;
-    console.log(`[Calendar] Published to X: ${post.category} (${tweetId})${post.metadata?.poll ? ' [poll]' : imagePath ? ' [with image]' : ''}`);
-  } catch (error: any) {
-    const detail = error.data?.detail || error.data?.errors?.[0]?.message || '';
-    console.error(`[Calendar] X post failed for ${post.category}: ${error.message}${detail ? ' — ' + detail : ''}`);
-    if (error.code === 403 || error.message?.includes('403')) {
-      console.error(`[Calendar] 403 likely cause: duplicate content or tweet too long (${post.tweet?.length} chars)`);
+      tweetId = tweetData.id;
+      console.log(`[Calendar] Published to X: ${post.category} (${tweetId})${post.metadata?.poll ? ' [poll]' : imagePath ? ' [with image]' : ''}`);
+    } catch (error: any) {
+      const detail = error.data?.detail || error.data?.errors?.[0]?.message || '';
+      console.error(`[Calendar] X post failed for ${post.category}: ${error.message}${detail ? ' — ' + detail : ''}`);
+      if (error.code === 403 || error.message?.includes('403')) {
+        console.error(`[Calendar] 403 likely cause: duplicate content or tweet too long (${post.tweet?.length} chars)`);
+      }
     }
   }
 
   // 2. Post to Telegram
-  if (post.telegram || post.metadata?.poll) {
+  if (channels.includes('tg') && (post.telegram || post.metadata?.poll)) {
     try {
       let tgResult;
 
@@ -133,6 +138,7 @@ async function publishPost(post: GeneratedPost): Promise<void> {
     await db.collection(COLLECTIONS.X_POSTS).insertOne({
       tweetId,
       tgMessageId,
+      channels,
       type: post.type,
       tweet: post.tweet,
       telegram: post.telegram,
@@ -147,11 +153,9 @@ async function publishPost(post: GeneratedPost): Promise<void> {
   dailyCounts[post.category] = (dailyCounts[post.category] || 0) + 1;
 }
 
-/**
- * Execute a single content window — generate one post and publish to both X and TG
- */
 async function executeWindow(
   contentType: string,
+  channels: Channel[],
   windowOpts?: { hcCategory?: string; vaultName?: string },
 ): Promise<void> {
   if (!canPost(contentType)) {
@@ -186,53 +190,42 @@ async function executeWindow(
         return;
     }
 
-    await publishPost(post);
+    await publishPost(post, channels);
   } catch (error: any) {
     console.error(`[Calendar] Error generating ${contentType}:`, error.message);
   }
 }
 
-/**
- * Start the posting scheduler — 7 windows, all posts go to both X and TG
- */
 export function startScheduler(): void {
   console.log('[Calendar] Starting content scheduler...');
 
-  // Window 1: 7:30 PM IST / 10:00 AM EDT — Project Primer
+  // Window 1: 7:30 PM IST / 10:00 AM EDT — Project Primer (X + TG)
   cron.schedule('30 19 * * *', () => {
-    setTimeout(() => executeWindow('PROJECT_PRIMER'), randomJitter());
+    setTimeout(() => executeWindow('PROJECT_PRIMER', ['x', 'tg']), randomJitter());
   }, { timezone: 'Asia/Kolkata' });
 
-  // Window 2: 9:00 PM IST / 11:30 AM EDT — NBA Edge Vault
-  cron.schedule('0 21 * * *', () => {
-    setTimeout(() => executeWindow('VAULT_PERFORMANCE', { vaultName: 'NBA Edge Vault' }), randomJitter());
+  // Window 2: 10:00 PM IST / 12:30 PM EDT — Vault Performance (X + TG, daily rotation)
+  cron.schedule('0 22 * * *', () => {
+    const vault = todaysVault();
+    console.log(`[Calendar] Today's vault: ${vault}`);
+    setTimeout(() => executeWindow('VAULT_PERFORMANCE', ['x', 'tg'], { vaultName: vault }), randomJitter());
   }, { timezone: 'Asia/Kolkata' });
 
-  // Window 3: 10:30 PM IST / 1:00 PM EDT — Soccer Alpha Vault
-  cron.schedule('30 22 * * *', () => {
-    setTimeout(() => executeWindow('VAULT_PERFORMANCE', { vaultName: 'Soccer Alpha Vault' }), randomJitter());
-  }, { timezone: 'Asia/Kolkata' });
-
-  // Window 4: 12:00 AM IST / 2:30 PM EDT — Community Prompt (native polls on both X and TG)
+  // Window 3: 12:00 AM IST / 2:30 PM EDT — Community Prompt (X + TG, native polls)
   cron.schedule('0 0 * * *', () => {
-    setTimeout(() => executeWindow('COMMUNITY_PROMPT'), randomJitter());
+    setTimeout(() => executeWindow('COMMUNITY_PROMPT', ['x', 'tg']), randomJitter());
   }, { timezone: 'Asia/Kolkata' });
 
-  // Window 5: 2:00 AM IST / 4:30 PM EDT — Geopolitics Vault
-  cron.schedule('0 2 * * *', () => {
-    setTimeout(() => executeWindow('VAULT_PERFORMANCE', { vaultName: 'Geopolitics Vault' }), randomJitter());
+  // Window 4: 3:00 AM IST / 5:30 PM EDT — High Conviction (X only)
+  cron.schedule('0 3 * * *', () => {
+    setTimeout(() => executeWindow('HIGH_CONVICTION', ['x']), randomJitter());
   }, { timezone: 'Asia/Kolkata' });
 
-  // Window 6: 4:00 AM IST / 6:30 PM EDT — High Conviction
-  cron.schedule('0 4 * * *', () => {
-    setTimeout(() => executeWindow('HIGH_CONVICTION'), randomJitter());
-  }, { timezone: 'Asia/Kolkata' });
-
-  // Window 7: 6:00 AM IST / 8:30 PM EDT — Trader Profile
+  // Window 5: 6:00 AM IST / 8:30 PM EDT — Trader Profile (X only)
   cron.schedule('0 6 * * *', () => {
-    setTimeout(() => executeWindow('TRADER_PROFILE'), randomJitter());
+    setTimeout(() => executeWindow('TRADER_PROFILE', ['x']), randomJitter());
   }, { timezone: 'Asia/Kolkata' });
 
-  console.log('[Calendar] 7 posting windows scheduled (IST timezone)');
-  console.log('[Calendar] Daily: 7 posts on X + 7 posts on TG (1 per vault + primer + community + HC + trader)');
+  console.log('[Calendar] 5 posting windows scheduled (IST timezone)');
+  console.log('[Calendar] Daily: 5 posts on X, 3 posts on TG');
 }
