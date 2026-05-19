@@ -153,15 +153,18 @@ async def _detect_whale_events(
                  and current_map[coin]["size_usd"] >= settings.whale_min_usd]
     dormant_coins: set[str] = set()
     if new_coins:
+        # Use position_changes (30-day TTL) instead of positions (1-day TTL).
+        # Positions older than 1 day are gone, so querying them always returns empty,
+        # making every new coin look dormant and generating false WAKEUP events.
         recent_pipeline = [
             {"$match": {
                 "address": address,
                 "coin": {"$in": new_coins},
-                "snapshot_ts": {"$gte": dormant_cutoff, "$lt": snapshot_ts},
+                "ts": {"$gte": dormant_cutoff},
             }},
             {"$group": {"_id": "$coin"}},
         ]
-        recent_docs = await db.hl_signals_positions.aggregate(recent_pipeline).to_list(
+        recent_docs = await db.hl_signals_position_changes.aggregate(recent_pipeline).to_list(
             len(new_coins) + 5
         )
         recent_seen = {d["_id"] for d in recent_docs}

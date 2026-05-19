@@ -43,9 +43,13 @@ function fmtAge(ts: string | null | undefined) {
   return `${Math.round(diffH / 24)}d ago`;
 }
 
-function fmtTs(ts: string) {
-  const d = new Date(ts + (ts.endsWith("Z") ? "" : "Z"));
-  return d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
+function fmtDateTime(ts: string | null | undefined) {
+  if (!ts) return null;
+  const d = new Date(ts.endsWith("Z") ? ts : ts + "Z");
+  const month = d.toLocaleString("en-US", { month: "short" });
+  const day = d.getDate();
+  const time = d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
+  return `${month} ${day}, ${time}`;
 }
 
 const Q_COLOR: Record<number, string> = {
@@ -425,7 +429,7 @@ export default function CoinDetailPage({
                 <tbody>
                   {holders.map((h: any, i: number) => {
                     const isLong = h.side === "LONG";
-                    const age = fmtAge(h.opened_at);
+                    const openedAt = fmtDateTime(h.opened_at);
                     return (
                       <tr key={h.address + i} className="border-b border-gray-900 hover:bg-gray-800">
                         <td className="px-3 py-1 text-gray-600">{i + 1}</td>
@@ -455,7 +459,7 @@ export default function CoinDetailPage({
                           {fmtUsd(Math.abs(h.unrealized_pnl ?? 0))}
                         </td>
                         <td className="px-3 py-1 text-right text-gray-600">
-                          {age ? <span title={h.opened_at}>{age}</span> : "—"}
+                          {openedAt ?? "—"}
                         </td>
                       </tr>
                     );

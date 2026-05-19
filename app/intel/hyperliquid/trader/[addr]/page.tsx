@@ -12,6 +12,15 @@ function fmtUsd(n: number | null | undefined) {
   return `$${n.toFixed(0)}`;
 }
 
+function fmtDateTime(ts: string | null | undefined) {
+  if (!ts) return "—";
+  const d = new Date(ts.endsWith("Z") ? ts : ts + "Z");
+  const month = d.toLocaleString("en-US", { month: "short" });
+  const day = d.getDate();
+  const time = d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
+  return `${month} ${day} · ${time}`;
+}
+
 function fmtPrice(p: number) {
   if (p <= 0) return "—";
   if (p >= 1_000) return p.toFixed(1);
@@ -228,10 +237,7 @@ export default function TraderDetailPage({
                       </span>
                       <span className="text-gray-300">{fmtUsd(e.size_usd)}</span>
                       <span className="text-gray-600 ml-auto text-[10px]">
-                        {new Date(e.ts).toLocaleTimeString("en-US", {
-                          hour: "2-digit",
-                          minute: "2-digit",
-                        })}
+                        {fmtDateTime(e.ts)}
                       </span>
                     </div>
                   );
@@ -249,11 +255,8 @@ export default function TraderDetailPage({
               <div className="space-y-1 max-h-60 overflow-y-auto">
                 {changes.slice(0, 30).map((c: any, i: number) => (
                   <div key={i} className="flex gap-3 text-xs text-gray-400">
-                    <span className="text-gray-600 w-20 shrink-0">
-                      {new Date(c.ts).toLocaleTimeString("en-US", {
-                        hour: "2-digit",
-                        minute: "2-digit",
-                      })}
+                    <span className="text-gray-600 w-28 shrink-0">
+                      {fmtDateTime(c.ts)}
                     </span>
                     <span className="text-yellow-400 w-24 shrink-0">{c.change_type}</span>
                     <Link
