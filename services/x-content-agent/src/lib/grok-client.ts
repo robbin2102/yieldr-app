@@ -73,7 +73,13 @@ export async function generateStructuredContent(
   if (cleaned.endsWith('```')) cleaned = cleaned.slice(0, -3);
   cleaned = cleaned.trim();
 
-  const parsed = JSON.parse(cleaned);
+  let parsed: any;
+  try {
+    parsed = JSON.parse(cleaned);
+  } catch {
+    // LLM sometimes returns plain text instead of JSON — wrap it
+    parsed = { type: 'reply', tweet: cleaned, telegram: '' };
+  }
 
   // New format: LLM writes separate tweet + telegram fields
   // tweet: strip **bold**, strip any URLs (X penalises external links)

@@ -87,7 +87,7 @@ async function publishPost(post: GeneratedPost, channels: Channel[]): Promise<vo
         tweetData = await quoteTweet(tweetText, post.target_post_id);
       } else if (post.category === 'COMMUNITY_PROMPT' && post.metadata?.poll) {
         const poll = post.metadata.poll;
-        tweetData = await postPoll(tweetText, poll.options, 1440, imagePath || undefined);
+        tweetData = await postPoll(tweetText, poll.options, 1440);
       } else {
         tweetData = await postTweet(tweetText, imagePath || undefined);
       }

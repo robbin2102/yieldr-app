@@ -52,8 +52,8 @@ export const CONFIG = {
     TOTAL: 5,
   },
 
-  // Reply monitoring
-  REPLY_POLL_INTERVAL_MS: 3 * 60 * 1000, // 3 minutes
+  // Reply monitoring (15min to reduce API costs — was 3min, causing 480 GET requests/day)
+  REPLY_POLL_INTERVAL_MS: 15 * 60 * 1000, // 15 minutes
   MAX_REPLY_LATENCY_MS: 15 * 60 * 1000,  // 15 minutes
 
   // Jitter range for posting (ms)
