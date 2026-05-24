@@ -28,11 +28,13 @@ async def lifespan(app: FastAPI):
 
     from .jobs.discovery import run_discovery
     from .jobs.snapshotter import run_snapshot
+    from .jobs.price_logger import run_price_log
 
     scheduler.add_job(run_discovery, CronTrigger(hour=0, minute=0), id="discovery", replace_existing=True)
     scheduler.add_job(run_snapshot, IntervalTrigger(minutes=5), id="snapshotter", replace_existing=True)
+    scheduler.add_job(run_price_log, IntervalTrigger(minutes=5), id="price_logger", replace_existing=True)
     scheduler.start()
-    logger.info('"Scheduler started: discovery=daily@00:00UTC, snapshot=every5min"')
+    logger.info('"Scheduler started: discovery=daily@00:00UTC, snapshot=every5min, prices=every5min"')
 
     yield
 

@@ -73,3 +73,43 @@ async def fetch_funding_rates(session: aiohttp.ClientSession) -> dict[str, float
     except Exception as e:
         logger.warning('"fetch_funding_rates error", "error": "%s"', e)
         return {}
+
+
+async def fetch_all_mids(session: aiohttp.ClientSession) -> dict[str, float]:
+    """Return coin → current mid price for every perp on Hyperliquid."""
+    try:
+        async with session.post(
+            INFO_URL,
+            json={"type": "allMids"},
+            timeout=_POSITION_TIMEOUT,
+        ) as resp:
+            resp.raise_for_status()
+            data = await resp.json(content_type=None)
+        return {coin: float(px) for coin, px in data.items() if not coin.startswith("@")}
+    except Exception as e:
+        logger.warning('"fetch_all_mids error", "error": "%s"', e)
+        return {}
+
+
+async def fetch_candles(
+    session: aiohttp.ClientSession,
+    coin: str,
+    interval: str,
+    start_ms: int,
+    end_ms: int,
+) -> list[dict]:
+    """Fetch historical candles for a coin. Used by the backtest backfill script."""
+    try:
+        async with session.post(
+            INFO_URL,
+            json={
+                "type": "candleSnapshot",
+                "req": {"coin": coin, "interval": interval, "startTime": start_ms, "endTime": end_ms},
+            },
+            timeout=aiohttp.ClientTimeout(total=60, connect=10),
+        ) as resp:
+            resp.raise_for_status()
+            return await resp.json(content_type=None)
+    except Exception as e:
+        logger.warning('"fetch_candles error", "coin": "%s", "error": "%s"', coin, e)
+        return []

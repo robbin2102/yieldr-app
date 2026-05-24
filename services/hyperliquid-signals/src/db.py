@@ -85,12 +85,19 @@ async def ensure_indexes() -> None:
         "snapshot_ts", expireAfterSeconds=48 * 3600, name="signals_ttl"
     )
 
-    # Coin metrics: _fetch_window looks back at most 168h (7 days); 8-day TTL
-    # keeps one day of headroom while cutting the collection size by ~75%.
+    # Coin metrics: 30-day TTL gives a usable window for backtests while still
+    # bounded — the convergence job itself only looks back 168h.
     await _drop_index_if_exists(db.hl_signals_coin_metrics, "coin_metrics_ttl")
     await _drop_index_if_exists(db.hl_signals_coin_metrics, "snapshot_ts_1")
     await db.hl_signals_coin_metrics.create_index(
-        "snapshot_ts", expireAfterSeconds=8 * 24 * 3600, name="coin_metrics_ttl"
+        "snapshot_ts", expireAfterSeconds=30 * 24 * 3600, name="coin_metrics_ttl"
+    )
+
+    # Prices: 5m mid snapshots for every HL perp, used by backtests.
+    await db.hl_signals_prices.create_index([("coin", 1), ("ts", -1)])
+    await _drop_index_if_exists(db.hl_signals_prices, "prices_ttl")
+    await db.hl_signals_prices.create_index(
+        "ts", expireAfterSeconds=30 * 24 * 3600, name="prices_ttl"
     )
 
     await db.hl_signals_position_changes.create_index(
