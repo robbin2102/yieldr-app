@@ -13,7 +13,7 @@ import argparse
 import asyncio
 import logging
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import aiohttp
 
@@ -32,15 +32,18 @@ async def backfill_coin(
     start_ms: int,
     end_ms: int,
     sem: asyncio.Semaphore,
+    pause_s: float = 0.3,
 ) -> int:
     async with sem:
         candles = await fetch_candles(session, coin, "5m", start_ms, end_ms)
+        # Polite pacing — HL allows ~10 req/s before rate-limiting hard.
+        await asyncio.sleep(pause_s)
     if not candles:
         return 0
 
     docs = []
     for c in candles:
-        ts = datetime.utcfromtimestamp(c["t"] / 1000)
+        ts = datetime.fromtimestamp(c["t"] / 1000, tz=timezone.utc).replace(tzinfo=None)
         try:
             close = float(c["c"])
         except (KeyError, TypeError, ValueError):
@@ -76,12 +79,12 @@ async def main(days: int) -> None:
         return
     logger.info("Backfilling %d coins for %d days", len(coins), days)
 
-    end_dt = datetime.utcnow()
+    end_dt = datetime.now(timezone.utc).replace(tzinfo=None)
     start_dt = end_dt - timedelta(days=days)
     start_ms = int(start_dt.timestamp() * 1000)
     end_ms = int(end_dt.timestamp() * 1000)
 
-    sem = asyncio.Semaphore(5)
+    sem = asyncio.Semaphore(2)
     total = 0
     async with aiohttp.ClientSession() as session:
         results = await asyncio.gather(

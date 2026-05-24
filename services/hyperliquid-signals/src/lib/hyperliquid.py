@@ -97,19 +97,31 @@ async def fetch_candles(
     interval: str,
     start_ms: int,
     end_ms: int,
+    retries: int = 5,
 ) -> list[dict]:
-    """Fetch historical candles for a coin. Used by the backtest backfill script."""
-    try:
-        async with session.post(
-            INFO_URL,
-            json={
-                "type": "candleSnapshot",
-                "req": {"coin": coin, "interval": interval, "startTime": start_ms, "endTime": end_ms},
-            },
-            timeout=aiohttp.ClientTimeout(total=60, connect=10),
-        ) as resp:
-            resp.raise_for_status()
-            return await resp.json(content_type=None)
-    except Exception as e:
-        logger.warning('"fetch_candles error", "coin": "%s", "error": "%s"', coin, e)
-        return []
+    """Fetch historical candles for a coin. Retries on 429 with exponential backoff."""
+    for attempt in range(1, retries + 1):
+        try:
+            async with session.post(
+                INFO_URL,
+                json={
+                    "type": "candleSnapshot",
+                    "req": {"coin": coin, "interval": interval, "startTime": start_ms, "endTime": end_ms},
+                },
+                timeout=aiohttp.ClientTimeout(total=60, connect=10),
+            ) as resp:
+                if resp.status == 429:
+                    wait = 2 ** attempt
+                    logger.warning('"fetch_candles 429", "coin": "%s", "attempt": %d, "sleep": %d', coin, attempt, wait)
+                    await asyncio.sleep(wait)
+                    continue
+                resp.raise_for_status()
+                return await resp.json(content_type=None)
+        except asyncio.TimeoutError:
+            logger.warning('"fetch_candles timeout", "coin": "%s", "attempt": %d', coin, attempt)
+            await asyncio.sleep(2 ** attempt)
+        except Exception as e:
+            logger.warning('"fetch_candles error", "coin": "%s", "error": "%s"', coin, e)
+            return []
+    logger.warning('"fetch_candles giving up after %d retries", "coin": "%s"', retries, coin)
+    return []
