@@ -59,12 +59,14 @@ from .api.signals import router as signals_router
 from .api.positions import router as positions_router
 from .api.coins import router as coins_router
 from .api.config import router as config_router
+from .api.trade_alerts import router as trade_alerts_router
 
 app.include_router(cohort_router, prefix="/api")
 app.include_router(signals_router, prefix="/api")
 app.include_router(positions_router, prefix="/api")
 app.include_router(coins_router, prefix="/api")
 app.include_router(config_router, prefix="/api")
+app.include_router(trade_alerts_router, prefix="/api")
 
 
 @app.get("/health")

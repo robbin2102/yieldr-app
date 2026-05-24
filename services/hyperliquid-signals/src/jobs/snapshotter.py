@@ -332,3 +332,6 @@ async def run_snapshot() -> None:
     )
 
     await run_convergence(now)
+
+    from .alert_engine import run_alert_engine
+    await run_alert_engine(now)

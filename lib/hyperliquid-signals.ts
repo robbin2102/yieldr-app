@@ -144,6 +144,51 @@ export interface Alert {
   snapshot_ts: string;
 }
 
+export interface TradeAlertStrategyMeta {
+  label: string;
+  rule: string;
+  hold_hours: number;
+  backtest_win_pct: number;
+  backtest_return_pct: number;
+  backtest_horizon_h: number;
+  backtest_n: number;
+}
+
+export interface TradeAlert {
+  strategy: "WAKEUP_LS10" | "LS10_CROSS" | "WHALE_EXIT_FADE";
+  coin: string;
+  side: "LONG" | "SHORT";
+  entry_px: number;
+  fired_at: string;
+  hold_hours: number;
+  hold_until: string;
+  status: "OPEN" | "WIN" | "LOSS";
+  exit_px: number | null;
+  return_pct: number | null;
+  current_px?: number;
+  live_return_pct?: number;
+  trigger_detail: Record<string, unknown>;
+  strategy_meta: TradeAlertStrategyMeta;
+}
+
+export interface TradeAlertScorecard {
+  strategy: string;
+  label: string;
+  rule: string;
+  hold_hours: number;
+  backtest_win_pct: number;
+  backtest_return_pct: number;
+  backtest_horizon_h: number;
+  backtest_n: number;
+  open: number;
+  live_wins: number;
+  live_losses: number;
+  live_total: number;
+  live_win_pct: number | null;
+  live_avg_win_pct: number | null;
+  live_avg_loss_pct: number | null;
+}
+
 export interface PositionChange {
   address: string;
   coin: string;
@@ -236,6 +281,15 @@ export const hlSignals = {
     if (signalType) params.set("signal_type", signalType);
     return get<{ data: SignalV2[]; total: number }>(`/api/signals/v2/signals?${params}`);
   },
+
+  getTradeAlertsActive: () =>
+    get<{ data: TradeAlert[]; total: number }>("/api/trade-alerts/active"),
+
+  getTradeAlertsHistory: (days = 30) =>
+    get<{ data: TradeAlert[]; total: number }>(`/api/trade-alerts/history?days=${days}`),
+
+  getTradeAlertsScorecard: () =>
+    get<{ data: TradeAlertScorecard[] }>("/api/trade-alerts/scorecard"),
 
   getWhaleEvents: (coin?: string, eventType?: string, hours = 24, limit = 500) => {
     const params = new URLSearchParams({ hours: String(hours), limit: String(limit) });

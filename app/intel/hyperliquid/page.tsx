@@ -248,6 +248,9 @@ export default function HyperliquidDashboard() {
           <Link href="/intel/hyperliquid/cohort" className="text-xs text-blue-400 hover:text-blue-300">
             Cohort →
           </Link>
+          <Link href="/intel/hyperliquid/alerts" className="text-xs text-purple-400 hover:text-purple-300">
+            Alerts →
+          </Link>
           <span className="text-xs text-gray-700">auto-refresh 30s</span>
         </div>
       </div>

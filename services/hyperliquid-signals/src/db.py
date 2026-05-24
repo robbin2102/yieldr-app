@@ -108,6 +108,14 @@ async def ensure_indexes() -> None:
         "ts", expireAfterSeconds=30 * 24 * 3600, name="whale_events_ttl"
     )
 
+    # Trade alerts (strategy-based, from alert_engine)
+    await db.hl_signals_trade_alerts.create_index([("status", 1), ("fired_at", -1)])
+    await db.hl_signals_trade_alerts.create_index([("strategy", 1), ("coin", 1), ("status", 1)])
+    await db.hl_signals_trade_alerts.create_index("hold_until")
+    await db.hl_signals_trade_alerts.create_index(
+        "fired_at", expireAfterSeconds=90 * 24 * 3600, name="trade_alerts_ttl"
+    )
+
     logger.info("MongoDB indexes ensured")
 
 
