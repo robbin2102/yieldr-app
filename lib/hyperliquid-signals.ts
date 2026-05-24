@@ -22,15 +22,20 @@ export interface Trader {
   address: string;
   display_name: string | null;
   account_value: number;
-  month_roi: number;
-  all_roi: number;
+  day_pnl: number;
+  week_pnl: number;
   month_pnl: number;
   all_pnl: number;
+  month_roi: number;
+  all_roi: number;
   month_vlm: number;
   month_eff: number;
+  all_eff: number;
   roi_ratio: number;
   skill_score?: number;
   skill_quartile?: 1 | 2 | 3 | 4;
+  active_positions_count?: number;
+  active_positions_usd?: number;
   cohort_status: "active" | "dropped";
   in_cohort_since: string;
   last_seen: string;
@@ -206,9 +211,9 @@ export interface CohortChange {
 }
 
 export const hlSignals = {
-  getCohort: (page = 1, limit = 50, sortBy = "month_roi") =>
+  getCohort: (page = 1, limit = 50, sortBy = "month_roi", order: "asc" | "desc" = "desc") =>
     get<{ data: Trader[]; total: number; page: number }>(
-      `/api/cohort?page=${page}&limit=${limit}&sort_by=${sortBy}`
+      `/api/cohort?page=${page}&limit=${limit}&sort_by=${sortBy}&order=${order}`
     ),
 
   getCohortChanges: (days = 7) =>

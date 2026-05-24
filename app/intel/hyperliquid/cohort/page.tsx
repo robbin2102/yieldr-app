@@ -11,6 +11,20 @@ function fmtUsd(n: number) {
   return `$${n.toFixed(0)}`;
 }
 
+function fmtPnl(n: number | null | undefined) {
+  if (n == null) return <span className="text-zinc-600">—</span>;
+  const abs = Math.abs(n);
+  const str =
+    abs >= 1_000_000 ? `$${(abs / 1_000_000).toFixed(1)}M` :
+    abs >= 1_000     ? `$${(abs / 1_000).toFixed(0)}K` :
+                       `$${abs.toFixed(0)}`;
+  return (
+    <span className={n >= 0 ? "text-emerald-400" : "text-red-400"}>
+      {n >= 0 ? "+" : "-"}{str}
+    </span>
+  );
+}
+
 const Q_COLOR: Record<number, string> = {
   1: "bg-amber-500 text-black",
   2: "bg-sky-700 text-white",
@@ -18,21 +32,53 @@ const Q_COLOR: Record<number, string> = {
   4: "bg-zinc-900 text-zinc-500",
 };
 
-const SORT_OPTIONS = [
-  { value: "month_roi",    label: "MO ROI" },
-  { value: "account_value", label: "ACCT VALUE" },
-  { value: "roi_ratio",    label: "ROI RATIO" },
-  { value: "month_eff",   label: "EFFICIENCY" },
+type SortField =
+  | "month_roi" | "all_roi" | "account_value" | "roi_ratio"
+  | "month_eff" | "skill_score" | "day_pnl" | "week_pnl" | "month_pnl"
+  | "active_positions_count" | "active_positions_usd";
+
+interface ColDef {
+  field: SortField;
+  label: string;
+}
+
+const COLUMNS: ColDef[] = [
+  { field: "account_value",          label: "Acct Value"  },
+  { field: "active_positions_count", label: "Positions"   },
+  { field: "active_positions_usd",   label: "Pos Size"    },
+  { field: "day_pnl",                label: "1d PnL"      },
+  { field: "week_pnl",               label: "7d PnL"      },
+  { field: "month_roi",              label: "Mo ROI"      },
+  { field: "all_roi",                label: "All ROI"     },
+  { field: "roi_ratio",              label: "Ratio"       },
+  { field: "month_eff",              label: "Mo Eff"      },
+  { field: "skill_score",            label: "Skill"       },
 ];
 
+function SortIcon({ active, order }: { active: boolean; order: "asc" | "desc" }) {
+  if (!active) return <span className="ml-1 text-zinc-700">⇅</span>;
+  return <span className="ml-1 text-orange-400">{order === "desc" ? "↓" : "↑"}</span>;
+}
+
 export default function CohortPage() {
-  const [sortBy, setSortBy] = useState("month_roi");
+  const [sortBy, setSortBy] = useState<SortField>("month_roi");
+  const [order, setOrder] = useState<"asc" | "desc">("desc");
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState("");
 
+  function handleSort(field: SortField) {
+    if (field === sortBy) {
+      setOrder((o) => (o === "desc" ? "asc" : "desc"));
+    } else {
+      setSortBy(field);
+      setOrder("desc");
+    }
+    setPage(1);
+  }
+
   const { data, isLoading } = useQuery({
-    queryKey: ["hl-cohort-full", page, sortBy],
-    queryFn: () => hlSignals.getCohort(page, 50, sortBy),
+    queryKey: ["hl-cohort-full", page, sortBy, order],
+    queryFn: () => hlSignals.getCohort(page, 50, sortBy, order),
     refetchInterval: 60_000,
   });
 
@@ -51,21 +97,6 @@ export default function CohortPage() {
         <span className="text-zinc-100 font-bold text-sm tracking-widest">
           {total} <span className="text-zinc-500 font-normal text-xs">ACTIVE TRADERS</span>
         </span>
-        <div className="flex gap-1 ml-2">
-          {SORT_OPTIONS.map((o) => (
-            <button
-              key={o.value}
-              onClick={() => { setSortBy(o.value); setPage(1); }}
-              className={`text-xs px-2.5 py-1 rounded border transition-colors ${
-                sortBy === o.value
-                  ? "bg-orange-500/10 border-orange-500/50 text-orange-400"
-                  : "border-zinc-800 text-zinc-600 hover:text-zinc-300 hover:border-zinc-600"
-              }`}
-            >
-              {o.label}
-            </button>
-          ))}
-        </div>
         <input
           type="text"
           placeholder="Search address or name…"
@@ -83,21 +114,28 @@ export default function CohortPage() {
             <div className="bg-[#0D1117] border border-zinc-800 rounded overflow-auto">
               <table className="w-full text-sm">
                 <thead>
-                  <tr className="text-zinc-500 border-b border-zinc-800 text-xs uppercase tracking-widest">
-                    <th className="text-left px-4 py-2.5">#</th>
-                    <th className="text-left px-4 py-2.5">Q</th>
-                    <th className="text-left px-4 py-2.5">Name / Address</th>
-                    <th className="text-right px-4 py-2.5">Acct Value</th>
-                    <th className="text-right px-4 py-2.5">Mo ROI</th>
-                    <th className="text-right px-4 py-2.5">All ROI</th>
-                    <th className="text-right px-4 py-2.5">Ratio</th>
-                    <th className="text-right px-4 py-2.5">Mo Eff</th>
-                    <th className="text-right px-4 py-2.5">Skill</th>
+                  <tr className="border-b border-zinc-800 text-xs uppercase tracking-widest">
+                    <th className="text-left px-4 py-2.5 text-zinc-500 select-none">#</th>
+                    <th className="text-left px-4 py-2.5 text-zinc-500 select-none">Q</th>
+                    <th className="text-left px-4 py-2.5 text-zinc-500 select-none">Name / Address</th>
+                    {COLUMNS.map((col) => (
+                      <th
+                        key={col.field}
+                        onClick={() => handleSort(col.field)}
+                        className={`text-right px-4 py-2.5 cursor-pointer select-none whitespace-nowrap hover:text-zinc-300 transition-colors ${
+                          sortBy === col.field ? "text-orange-400" : "text-zinc-500"
+                        }`}
+                      >
+                        {col.label}
+                        <SortIcon active={sortBy === col.field} order={order} />
+                      </th>
+                    ))}
                   </tr>
                 </thead>
                 <tbody>
                   {traders.map((t: Trader, i: number) => {
                     const q = t.skill_quartile ?? 4;
+                    const posCount = t.active_positions_count ?? 0;
                     return (
                       <tr key={t.address} className="border-b border-zinc-800/50 hover:bg-zinc-800/40">
                         <td className="px-4 py-2 text-zinc-600">{(page - 1) * 50 + i + 1}</td>
@@ -114,19 +152,43 @@ export default function CohortPage() {
                             {t.display_name || t.address.slice(0, 14) + "…"}
                           </Link>
                         </td>
+                        {/* Acct Value */}
                         <td className="px-4 py-2 text-right text-zinc-300">{fmtUsd(t.account_value)}</td>
+                        {/* Positions count */}
+                        <td className="px-4 py-2 text-right">
+                          {posCount > 0
+                            ? <span className="text-zinc-100 font-medium">{posCount}</span>
+                            : <span className="text-zinc-700">0</span>
+                          }
+                        </td>
+                        {/* Pos size USD */}
+                        <td className="px-4 py-2 text-right text-zinc-400">
+                          {t.active_positions_usd
+                            ? fmtUsd(t.active_positions_usd)
+                            : <span className="text-zinc-700">—</span>
+                          }
+                        </td>
+                        {/* 1d PnL */}
+                        <td className="px-4 py-2 text-right">{fmtPnl(t.day_pnl)}</td>
+                        {/* 7d PnL */}
+                        <td className="px-4 py-2 text-right">{fmtPnl(t.week_pnl)}</td>
+                        {/* Mo ROI */}
                         <td className="px-4 py-2 text-right text-emerald-400 font-medium">
                           {(t.month_roi * 100).toFixed(1)}%
                         </td>
+                        {/* All ROI */}
                         <td className="px-4 py-2 text-right text-emerald-400 font-medium">
                           {(t.all_roi * 100).toFixed(1)}%
                         </td>
+                        {/* Ratio */}
                         <td className="px-4 py-2 text-right text-zinc-400">
                           {t.roi_ratio.toFixed(2)}x
                         </td>
+                        {/* Mo Eff */}
                         <td className="px-4 py-2 text-right text-zinc-400">
                           {(t.month_eff * 100).toFixed(3)}%
                         </td>
+                        {/* Skill */}
                         <td className="px-4 py-2 text-right text-zinc-500">
                           {t.skill_score?.toFixed(3) ?? "—"}
                         </td>

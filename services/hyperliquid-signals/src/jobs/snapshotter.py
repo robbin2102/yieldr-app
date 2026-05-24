@@ -5,6 +5,7 @@ import resource
 from datetime import datetime, timedelta
 
 import aiohttp
+from pymongo import UpdateOne
 
 from ..db import get_db
 from ..config import settings
@@ -330,6 +331,34 @@ async def run_snapshot() -> None:
         '"Snapshot complete", "positions": %d, "changes": %d, "whale_events": %d, "errors": %d, "rss_mb": %.1f',
         total_positions, total_changes, total_whale_events, errors, _rss_mb(),
     )
+
+    # ── Aggregate active position counts/sizes into trader docs ──────────────
+    pos_pipeline = [
+        {"$match": {"snapshot_ts": now}},
+        {"$group": {
+            "_id": "$address",
+            "active_positions_count": {"$sum": 1},
+            "active_positions_usd": {"$sum": "$size_usd"},
+        }},
+    ]
+    pos_stats = await db.hl_signals_positions.aggregate(pos_pipeline).to_list(10_000)
+    if pos_stats:
+        bulk_ops = [
+            UpdateOne(
+                {"address": doc["_id"]},
+                {"$set": {
+                    "active_positions_count": doc["active_positions_count"],
+                    "active_positions_usd": doc["active_positions_usd"],
+                }},
+            )
+            for doc in pos_stats
+        ]
+        await db.hl_signals_traders.bulk_write(bulk_ops, ordered=False)
+        active_addrs = {doc["_id"] for doc in pos_stats}
+        await db.hl_signals_traders.update_many(
+            {"address": {"$nin": list(active_addrs)}, "cohort_status": "active"},
+            {"$set": {"active_positions_count": 0, "active_positions_usd": 0.0}},
+        )
 
     await run_convergence(now)
 

@@ -4,6 +4,12 @@ from ..db import get_db
 
 router = APIRouter(tags=["cohort"])
 
+SORTABLE_FIELDS = {
+    "month_roi", "all_roi", "account_value", "roi_ratio", "month_eff", "all_eff",
+    "skill_score", "skill_quartile", "day_pnl", "week_pnl", "month_pnl", "all_pnl",
+    "active_positions_count", "active_positions_usd",
+}
+
 
 @router.get("/cohort")
 async def get_cohort(
@@ -12,6 +18,8 @@ async def get_cohort(
     sort_by: str = Query("month_roi"),
     order: str = Query("desc"),
 ):
+    if sort_by not in SORTABLE_FIELDS:
+        sort_by = "month_roi"
     db = get_db()
     sort_dir = -1 if order == "desc" else 1
     skip = (page - 1) * limit
