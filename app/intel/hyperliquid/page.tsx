@@ -54,7 +54,7 @@ const SIGNAL_META: Record<string, { label: string; color: string; tooltip: strin
     tooltip: "This coin's share of total cohort portfolio shifted significantly — capital flowing in or out relative to other coins.",
   },
   COHORT_DIRECTION_FLIP: {
-    label: "FLIP", color: "bg-yellow-900 text-yellow-300 border-yellow-800",
+    label: "FLIP", color: "bg-yellow-900 text-orange-300 border-yellow-800",
     tooltip: "Dominant side switched LONG↔SHORT in the last 48h — cohort collectively changed directional view.",
   },
   WHALE_ACTIVITY: {
@@ -78,14 +78,14 @@ const SIGNAL_META: Record<string, { label: string; color: string; tooltip: strin
     tooltip: "Cohort bias opposes the market funding rate — smart money positioned against the crowd's funding-implied lean.",
   },
   STALE_POSITION_DECAY: {
-    label: "STALE", color: "bg-gray-800 text-gray-400 border-gray-700",
+    label: "STALE", color: "bg-zinc-800 text-zinc-400 border-zinc-700",
     tooltip: "Most holders entered long ago with few new entries recently — stagnant positions, conviction likely fading.",
   },
 };
 
 function SignalPill({ type, severity }: { type: string; severity: string }) {
   const [anchor, setAnchor] = useState<{ x: number; y: number } | null>(null);
-  const meta = SIGNAL_META[type] ?? { label: type.slice(0, 5), color: "bg-gray-800 text-gray-400 border-gray-700", tooltip: type };
+  const meta = SIGNAL_META[type] ?? { label: type.slice(0, 5), color: "bg-zinc-800 text-zinc-400 border-zinc-700", tooltip: type };
   const dimmed = severity === "MEDIUM" ? "opacity-60" : "";
   return (
     <>
@@ -101,7 +101,7 @@ function SignalPill({ type, severity }: { type: string; severity: string }) {
       </span>
       {anchor && (
         <span
-          className="fixed w-56 bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-[10px] text-gray-300 leading-relaxed z-[9999] shadow-xl pointer-events-none whitespace-normal"
+          className="fixed w-56 bg-zinc-900 border border-zinc-700 rounded px-2 py-1.5 text-[10px] text-zinc-300 leading-relaxed z-[9999] shadow-xl pointer-events-none whitespace-normal"
           style={{ left: anchor.x, top: anchor.y - 6, transform: "translateY(-100%)" }}
         >
           <span className={`font-bold block mb-0.5 ${meta.color.split(" ")[1]}`}>{meta.label}</span>
@@ -216,67 +216,58 @@ export default function HyperliquidDashboard() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-950 text-gray-200 font-mono text-sm">
-      {/* Header */}
-      <div className="border-b border-gray-800 px-4 py-3 flex flex-wrap items-center gap-6">
-        <h1 className="text-white font-bold text-base tracking-wider">
-          HL SIGNALS <span className="text-green-500">▶</span>
-        </h1>
-        <div className="flex gap-5 text-xs text-gray-400 flex-wrap">
-          <span>COHORT <span className="text-white font-bold">{totalTraders}</span></span>
-          <span>PORTFOLIO <span className="text-green-400 font-bold">{fmtUsd(totalPortfolioUsd)}</span></span>
-          <span>SNAPSHOT <span className="text-gray-300">{fmtTs(snapshotTs)}</span></span>
+    <div>
+      {/* Stats bar */}
+      <div className="border-b border-zinc-800 px-4 py-2 flex flex-wrap items-center gap-6">
+        <div className="flex gap-6 text-xs text-zinc-500 flex-wrap">
+          <span>COHORT <span className="text-zinc-100 font-bold text-sm">{totalTraders}</span></span>
+          <span>PORTFOLIO <span className="text-emerald-400 font-bold text-sm">{fmtUsd(totalPortfolioUsd)}</span></span>
+          <span>SNAPSHOT <span className="text-zinc-300 text-sm">{fmtTs(snapshotTs)}</span></span>
           <span>
-            NEW <span className="text-green-400 font-bold">+{newToday}</span>{" / "}
+            NEW <span className="text-emerald-400 font-bold">+{newToday}</span>
+            <span className="text-zinc-600 mx-1">/</span>
             DROP <span className="text-red-400 font-bold">-{droppedToday}</span>
           </span>
         </div>
-        <div className="ml-auto flex items-center gap-3">
-          <div className="flex gap-1">
-            {[4, 24, 48].map((h) => (
-              <button
-                key={h}
-                onClick={() => setHours(h)}
-                className={`text-xs px-2 py-0.5 rounded ${
-                  hours === h ? "bg-gray-700 text-white" : "text-gray-600 hover:text-gray-400"
-                }`}
-              >
-                {h}h
-              </button>
-            ))}
-          </div>
-          <Link href="/intel/hyperliquid/cohort" className="text-xs text-blue-400 hover:text-blue-300">
-            Cohort →
-          </Link>
-          <Link href="/intel/hyperliquid/alerts" className="text-xs text-purple-400 hover:text-purple-300">
-            Alerts →
-          </Link>
-          <span className="text-xs text-gray-700">auto-refresh 30s</span>
+        <div className="ml-auto flex items-center gap-1">
+          {[4, 24, 48].map((h) => (
+            <button
+              key={h}
+              onClick={() => setHours(h)}
+              className={`text-xs px-2.5 py-1 rounded border transition-colors ${
+                hours === h
+                  ? "bg-orange-500/10 border-orange-500/50 text-orange-400"
+                  : "border-zinc-800 text-zinc-600 hover:text-zinc-300 hover:border-zinc-600"
+              }`}
+            >
+              {h}h
+            </button>
+          ))}
         </div>
       </div>
 
       {/* Tier 1 Alert Banner */}
       {tier1Alerts.length > 0 && (
-        <div className="bg-yellow-950 border-b border-yellow-800 px-4 py-2 flex flex-wrap gap-3">
-          <span className="text-yellow-500 font-bold text-xs shrink-0">⚠ TIER 1</span>
+        <div className="bg-orange-950/40 border-b border-orange-800/50 px-4 py-2 flex flex-wrap gap-3">
+          <span className="text-orange-400 font-bold text-xs shrink-0 tracking-widest">⚠ TIER 1</span>
           {tier1Alerts.map((alert) => (
             <div
               key={alert.id}
-              className="flex items-center gap-2 bg-yellow-900/40 border border-yellow-800 rounded px-3 py-1 text-xs"
+              className="flex items-center gap-2 bg-orange-900/30 border border-orange-700/50 rounded px-3 py-1 text-xs"
             >
               <span className="text-white font-bold">{alert.coin}</span>
               <span className={alert.side === "LONG" ? "text-green-400" : "text-red-400"}>{alert.side}</span>
-              <span className="text-yellow-300">{(alert.conviction * 100).toFixed(0)}% bias</span>
-              <span className="text-gray-400">{alert.n_traders} traders</span>
-              <span className="text-gray-400">{fmtUsd(alert.total_usd)}</span>
-              <button onClick={() => acknowledgeAlert(alert.id)} className="text-gray-500 hover:text-gray-300 ml-1">✕</button>
+              <span className="text-orange-300">{(alert.conviction * 100).toFixed(0)}% bias</span>
+              <span className="text-zinc-400">{alert.n_traders} traders</span>
+              <span className="text-zinc-400">{fmtUsd(alert.total_usd)}</span>
+              <button onClick={() => acknowledgeAlert(alert.id)} className="text-zinc-500 hover:text-zinc-300 ml-1">✕</button>
             </div>
           ))}
         </div>
       )}
 
       {dashError && (
-        <div className="mx-4 mt-3 bg-red-950 border border-red-800 rounded px-4 py-2 text-xs text-red-400 font-mono">
+        <div className="mx-4 mt-3 bg-red-950/50 border border-red-800/50 rounded px-4 py-2 text-xs text-red-400 font-mono">
           ⚠ API unreachable — check HL_SIGNALS_API_URL env var in Vercel (server-side, no NEXT_PUBLIC_ prefix)
         </div>
       )}
@@ -284,14 +275,14 @@ export default function HyperliquidDashboard() {
       {/* Coin Metrics Table */}
       <div className="p-4">
         {isLoading ? (
-          <div className="text-center text-gray-600 text-xs py-12">Loading…</div>
+          <div className="text-center text-zinc-600 text-sm py-12">Loading…</div>
         ) : metrics.length === 0 ? (
-          <div className="text-center text-gray-700 text-xs py-12">No data yet — waiting for first snapshot.</div>
+          <div className="text-center text-zinc-600 text-sm py-12">No data yet — waiting for first snapshot.</div>
         ) : (
-          <div className="bg-gray-900 border border-gray-800 rounded overflow-auto">
+          <div className="bg-[#0D1117] border border-zinc-800 rounded overflow-auto">
             <table className="w-full text-xs font-mono">
               <thead>
-                <tr className="text-gray-500 border-b border-gray-800 text-xs">
+                <tr className="text-zinc-500 border-b border-zinc-800 text-xs uppercase tracking-widest">
                   <th className="text-left px-4 py-3">Coin</th>
                   <th className="text-left px-4 py-3">Bias</th>
                   <th className="text-left px-4 py-3">Long (traders · Q1 · entry)</th>
@@ -332,11 +323,11 @@ export default function HyperliquidDashboard() {
                   const isLongDom = m.dominant_side === "LONG";
 
                   return (
-                    <tr key={m.coin} className="border-b border-gray-800/50 hover:bg-gray-800/60">
+                    <tr key={m.coin} className="border-b border-zinc-800/50 hover:bg-zinc-800/40">
 
                       {/* Coin */}
                       <td className="px-4 py-3">
-                        <Link href={`/intel/hyperliquid/coin/${m.coin}`} className="text-white font-bold text-sm hover:text-blue-400">
+                        <Link href={`/intel/hyperliquid/coin/${m.coin}`} className="text-zinc-100 font-bold text-sm hover:text-orange-400">
                           {m.coin}
                         </Link>
                       </td>
@@ -346,45 +337,45 @@ export default function HyperliquidDashboard() {
                         <div className={`font-bold text-sm ${isLongDom ? "text-green-400" : "text-red-400"}`}>
                           {isLongDom ? "▲ LONG" : "▼ SHORT"}
                         </div>
-                        <div className="text-xs text-gray-500 mt-0.5">
+                        <div className="text-xs text-zinc-500 mt-0.5">
                           ${pct(m.dollar_conviction)} · #{pct(m.count_conviction)}
                         </div>
                       </td>
 
                       {/* Long side */}
                       <td className="px-4 py-3 whitespace-nowrap">
-                        <div className="text-green-300 font-bold text-sm">{fmtUsd(m.long_usd)}</div>
-                        <div className="text-xs text-gray-500 mt-0.5">
+                        <div className="text-emerald-400 font-bold text-sm">{fmtUsd(m.long_usd)}</div>
+                        <div className="text-xs text-zinc-500 mt-0.5">
                           {m.long_count}t
-                          {m.q1_long > 0 && <span className="text-yellow-500 ml-1.5">Q1:{m.q1_long}</span>}
-                          <span className="text-gray-600 ml-1.5">@{fmtEntry(m.wt_avg_entry_long)}</span>
+                          {m.q1_long > 0 && <span className="text-orange-400 ml-1.5">Q1:{m.q1_long}</span>}
+                          <span className="text-zinc-600 ml-1.5">@{fmtEntry(m.wt_avg_entry_long)}</span>
                         </div>
                       </td>
 
                       {/* Short side */}
                       <td className="px-4 py-3 whitespace-nowrap">
                         <div className="text-red-300 font-bold text-sm">{fmtUsd(m.short_usd)}</div>
-                        <div className="text-xs text-gray-500 mt-0.5">
+                        <div className="text-xs text-zinc-500 mt-0.5">
                           {m.short_count}t
-                          {m.q1_short > 0 && <span className="text-yellow-500 ml-1.5">Q1:{m.q1_short}</span>}
-                          <span className="text-gray-600 ml-1.5">@{fmtEntry(m.wt_avg_entry_short)}</span>
+                          {m.q1_short > 0 && <span className="text-orange-400 ml-1.5">Q1:{m.q1_short}</span>}
+                          <span className="text-zinc-600 ml-1.5">@{fmtEntry(m.wt_avg_entry_short)}</span>
                         </div>
                       </td>
 
                       {/* L:S ratio */}
-                      <td className="px-4 py-3 text-right text-gray-300 text-sm whitespace-nowrap">{lsRatio}</td>
+                      <td className="px-4 py-3 text-right text-zinc-300 text-sm whitespace-nowrap">{lsRatio}</td>
 
                       {/* Cohort % */}
-                      <td className="px-4 py-3 text-right text-gray-300 text-sm">{pct(m.cohort_participation, 1)}</td>
+                      <td className="px-4 py-3 text-right text-zinc-300 text-sm">{pct(m.cohort_participation, 1)}</td>
 
                       {/* Active % / active cohort size */}
                       <td className="px-4 py-3 text-right whitespace-nowrap">
-                        <span className="text-blue-300 text-sm">{pct(m.active_participation, 1)}</span>
-                        <span className="text-gray-600 text-xs ml-1">/{m.active_cohort_size ?? "—"}</span>
+                        <span className="text-sky-400 text-sm">{pct(m.active_participation, 1)}</span>
+                        <span className="text-zinc-600 text-xs ml-1">/{m.active_cohort_size ?? "—"}</span>
                       </td>
 
                       {/* Total traders */}
-                      <td className="px-4 py-3 text-right text-gray-300 text-sm">{m.total_count}</td>
+                      <td className="px-4 py-3 text-right text-zinc-300 text-sm">{m.total_count}</td>
 
                       {/* 1h delta */}
                       <td className="px-4 py-3 text-right whitespace-nowrap">
@@ -392,7 +383,7 @@ export default function HyperliquidDashboard() {
                           <span className={`font-bold text-sm ${deltaPct >= 0 ? "text-green-400" : "text-red-400"}`}>
                             {deltaPct >= 0 ? "▲" : "▼"} {Math.abs(deltaPct).toFixed(1)}%
                           </span>
-                        ) : <span className="text-gray-700 text-sm">—</span>}
+                        ) : <span className="text-zinc-700 text-sm">—</span>}
                       </td>
 
                       {/* Whale summary */}
@@ -404,7 +395,7 @@ export default function HyperliquidDashboard() {
                           <div className="text-red-400 text-xs">↓{wExits.length} {fmtUsd(wExitUsd)}</div>
                         )}
                         {wEntries.length === 0 && wExits.length === 0 && (
-                          <span className="text-gray-700 text-xs">—</span>
+                          <span className="text-zinc-700 text-xs">—</span>
                         )}
                       </td>
 
@@ -427,3 +418,4 @@ export default function HyperliquidDashboard() {
     </div>
   );
 }
+

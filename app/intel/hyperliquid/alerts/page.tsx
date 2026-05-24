@@ -24,7 +24,10 @@ function fmtPct(n: number | null | undefined, showPlus = true) {
 function fmtDateTime(ts: string | null | undefined) {
   if (!ts) return "—";
   const d = new Date(ts.endsWith("Z") ? ts : ts + "Z");
-  return `${d.toLocaleString("en-US", { month: "short" })} ${d.getDate()}, ${d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}`;
+  const month = d.toLocaleString("en-US", { month: "short" });
+  const day = d.getDate();
+  const time = d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
+  return `${month} ${day} · ${time}`;
 }
 
 function timeLeft(until: string) {
@@ -32,64 +35,58 @@ function timeLeft(until: string) {
   if (diff <= 0) return "expired";
   const h = Math.floor(diff / 3_600_000);
   const m = Math.floor((diff % 3_600_000) / 60_000);
-  if (h > 0) return `${h}h ${m}m left`;
-  return `${m}m left`;
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
 }
 
-const STRATEGY_COLOR: Record<string, string> = {
-  WAKEUP_LS10: "text-purple-400 bg-purple-950 border-purple-800",
-  LS10_CROSS: "text-blue-400 bg-blue-950 border-blue-800",
-  WHALE_EXIT_FADE: "text-orange-400 bg-orange-950 border-orange-800",
+const STRATEGY_COLOR: Record<string, { badge: string; card: string }> = {
+  WAKEUP_LS10:     { badge: "text-violet-300 bg-violet-950/60 border-violet-800", card: "border-violet-800/50 bg-violet-950/20" },
+  LS10_CROSS:      { badge: "text-sky-300 bg-sky-950/60 border-sky-800",          card: "border-sky-800/50 bg-sky-950/20" },
+  WHALE_EXIT_FADE: { badge: "text-orange-300 bg-orange-950/60 border-orange-800", card: "border-orange-800/50 bg-orange-950/20" },
 };
 
 const STRATEGY_SHORT: Record<string, string> = {
-  WAKEUP_LS10: "WAKEUP+",
-  LS10_CROSS: "L:S≥10",
+  WAKEUP_LS10:     "WAKEUP+",
+  LS10_CROSS:      "L:S≥10",
   WHALE_EXIT_FADE: "EXIT↩",
 };
 
-function ReturnBadge({ val }: { val: number | null | undefined }) {
-  if (val == null) return <span className="text-gray-600">—</span>;
-  return (
-    <span className={val > 0 ? "text-green-400" : "text-red-400"}>
-      {val > 0 ? "▲" : "▼"} {fmtPct(Math.abs(val), false)}
-    </span>
-  );
-}
-
 function ScoreCard({ s }: { s: TradeAlertScorecard }) {
-  const col = STRATEGY_COLOR[s.strategy] ?? "text-gray-400 bg-gray-900 border-gray-700";
+  const col = STRATEGY_COLOR[s.strategy] ?? { badge: "text-zinc-400 bg-zinc-900 border-zinc-700", card: "border-zinc-800 bg-zinc-900/30" };
   const liveTotal = s.live_total;
   const liveWinPct = s.live_win_pct;
   return (
-    <div className={`border rounded p-3 space-y-2 ${col.split(" ").slice(1).join(" ")}`}>
-      <div className={`text-xs font-bold ${col.split(" ")[0]}`}>{s.label}</div>
-      <div className="text-gray-500 text-[10px] leading-relaxed">{s.rule}</div>
+    <div className={`border rounded p-4 space-y-3 ${col.card}`}>
+      <div className="flex items-center justify-between">
+        <span className={`text-xs font-bold px-2 py-0.5 rounded border ${col.badge}`}>
+          {STRATEGY_SHORT[s.strategy] ?? s.strategy}
+        </span>
+        <span className="text-zinc-500 text-xs">{s.hold_hours}h hold</span>
+      </div>
 
-      <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[10px]">
-        <div>
-          <div className="text-gray-600">Backtest ({s.backtest_horizon_h}h)</div>
-          <div className="text-white font-bold">
-            {s.backtest_win_pct}% win · +{s.backtest_return_pct}% avg
-            <span className="text-gray-600 font-normal ml-1">({s.backtest_n} trades)</span>
-          </div>
+      <div className="text-zinc-400 text-xs leading-relaxed">{s.rule}</div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <div className="space-y-0.5">
+          <div className="text-zinc-600 text-[10px] uppercase tracking-widest">Backtest {s.backtest_horizon_h}h</div>
+          <div className="text-zinc-100 font-bold text-sm">{s.backtest_win_pct}% win</div>
+          <div className="text-zinc-400 text-xs">+{s.backtest_return_pct}% avg · {s.backtest_n}n</div>
         </div>
-        <div>
-          <div className="text-gray-600">Live ({liveTotal} resolved)</div>
-          <div className={`font-bold ${liveTotal === 0 ? "text-gray-600" : liveWinPct != null && liveWinPct >= 60 ? "text-green-400" : "text-yellow-400"}`}>
-            {liveTotal === 0 ? "no data yet" : `${liveWinPct}% win`}
-            {s.live_avg_win_pct != null && (
-              <span className="text-gray-500 font-normal ml-1">· avg +{s.live_avg_win_pct}%</span>
-            )}
+        <div className="space-y-0.5">
+          <div className="text-zinc-600 text-[10px] uppercase tracking-widest">Live ({liveTotal} closed)</div>
+          <div className={`font-bold text-sm ${liveTotal === 0 ? "text-zinc-600" : liveWinPct != null && liveWinPct >= 60 ? "text-emerald-400" : "text-yellow-400"}`}>
+            {liveTotal === 0 ? "—" : `${liveWinPct}% win`}
           </div>
+          {s.live_avg_win_pct != null && (
+            <div className="text-zinc-500 text-xs">+{s.live_avg_win_pct}% avg</div>
+          )}
         </div>
       </div>
 
-      <div className="flex gap-3 text-[10px] pt-1 border-t border-gray-800">
-        <span className="text-gray-500">{s.open} open</span>
-        <span className="text-green-600">{s.live_wins} wins</span>
-        <span className="text-red-600">{s.live_losses} losses</span>
-        <span className="text-gray-600">hold {s.hold_hours}h</span>
+      <div className="flex gap-4 text-xs pt-2 border-t border-zinc-800">
+        <span className="text-zinc-500">{s.open} open</span>
+        <span className="text-emerald-500">{s.live_wins}W</span>
+        <span className="text-red-500">{s.live_losses}L</span>
       </div>
     </div>
   );
@@ -98,30 +95,30 @@ function ScoreCard({ s }: { s: TradeAlertScorecard }) {
 function ActiveRow({ a }: { a: TradeAlert }) {
   const isLong = a.side === "LONG";
   const ret = a.live_return_pct;
-  const retColor = ret == null ? "text-gray-600" : ret > 0 ? "text-green-400" : "text-red-400";
-  const stratCol = STRATEGY_COLOR[a.strategy] ?? "text-gray-400 bg-gray-900 border-gray-700";
+  const retColor = ret == null ? "text-zinc-600" : ret > 0 ? "text-emerald-400" : "text-red-400";
+  const col = STRATEGY_COLOR[a.strategy] ?? { badge: "text-zinc-400 bg-zinc-900 border-zinc-700", card: "" };
   return (
-    <tr className="border-b border-gray-900 hover:bg-gray-800">
-      <td className="px-3 py-1.5">
-        <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded border ${stratCol}`}>
+    <tr className="border-b border-zinc-800/50 hover:bg-zinc-800/40">
+      <td className="px-4 py-2">
+        <span className={`text-xs font-bold px-1.5 py-0.5 rounded border ${col.badge}`}>
           {STRATEGY_SHORT[a.strategy] ?? a.strategy}
         </span>
       </td>
-      <td className="px-3 py-1.5">
-        <Link href={`/intel/hyperliquid/coin/${a.coin}`} className="text-white font-bold hover:text-blue-400">
+      <td className="px-4 py-2">
+        <Link href={`/intel/hyperliquid/coin/${a.coin}`} className="text-sky-400 hover:text-orange-400 font-bold transition-colors">
           {a.coin}
         </Link>
       </td>
-      <td className={`px-3 py-1.5 font-bold ${isLong ? "text-green-400" : "text-red-400"}`}>
+      <td className={`px-4 py-2 font-bold ${isLong ? "text-emerald-400" : "text-red-400"}`}>
         {isLong ? "▲ LONG" : "▼ SHORT"}
       </td>
-      <td className="px-3 py-1.5 text-right text-gray-400 font-mono">${fmtPx(a.entry_px)}</td>
-      <td className="px-3 py-1.5 text-right text-gray-300 font-mono">${fmtPx(a.current_px)}</td>
-      <td className={`px-3 py-1.5 text-right font-mono font-bold ${retColor}`}>
+      <td className="px-4 py-2 text-right text-zinc-400">${fmtPx(a.entry_px)}</td>
+      <td className="px-4 py-2 text-right text-zinc-300">${fmtPx(a.current_px)}</td>
+      <td className={`px-4 py-2 text-right font-bold ${retColor}`}>
         {ret == null ? "—" : fmtPct(ret)}
       </td>
-      <td className="px-3 py-1.5 text-right text-gray-600 text-[10px]">{fmtDateTime(a.fired_at)}</td>
-      <td className="px-3 py-1.5 text-right text-gray-500 text-[10px]">{timeLeft(a.hold_until)}</td>
+      <td className="px-4 py-2 text-right text-zinc-600 text-xs">{fmtDateTime(a.fired_at)}</td>
+      <td className="px-4 py-2 text-right text-zinc-500 text-xs">{timeLeft(a.hold_until)}</td>
     </tr>
   );
 }
@@ -129,30 +126,30 @@ function ActiveRow({ a }: { a: TradeAlert }) {
 function HistoryRow({ a }: { a: TradeAlert }) {
   const isLong = a.side === "LONG";
   const isWin = a.status === "WIN";
-  const stratCol = STRATEGY_COLOR[a.strategy] ?? "text-gray-400 bg-gray-900 border-gray-700";
+  const col = STRATEGY_COLOR[a.strategy] ?? { badge: "text-zinc-400 bg-zinc-900 border-zinc-700", card: "" };
   return (
-    <tr className="border-b border-gray-900 hover:bg-gray-800">
-      <td className="px-3 py-1.5 text-gray-500 text-[10px]">{fmtDateTime(a.fired_at)}</td>
-      <td className="px-3 py-1.5">
-        <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded border ${stratCol}`}>
+    <tr className="border-b border-zinc-800/50 hover:bg-zinc-800/40">
+      <td className="px-4 py-2 text-zinc-500 text-xs">{fmtDateTime(a.fired_at)}</td>
+      <td className="px-4 py-2">
+        <span className={`text-xs font-bold px-1.5 py-0.5 rounded border ${col.badge}`}>
           {STRATEGY_SHORT[a.strategy] ?? a.strategy}
         </span>
       </td>
-      <td className="px-3 py-1.5">
-        <Link href={`/intel/hyperliquid/coin/${a.coin}`} className="text-white font-bold hover:text-blue-400">
+      <td className="px-4 py-2">
+        <Link href={`/intel/hyperliquid/coin/${a.coin}`} className="text-sky-400 hover:text-orange-400 font-bold transition-colors">
           {a.coin}
         </Link>
       </td>
-      <td className={`px-3 py-1.5 font-bold ${isLong ? "text-green-400" : "text-red-400"}`}>
+      <td className={`px-4 py-2 font-bold ${isLong ? "text-emerald-400" : "text-red-400"}`}>
         {isLong ? "▲" : "▼"} {a.side}
       </td>
-      <td className="px-3 py-1.5 text-right text-gray-400 font-mono">${fmtPx(a.entry_px)}</td>
-      <td className="px-3 py-1.5 text-right text-gray-400 font-mono">${fmtPx(a.exit_px)}</td>
-      <td className={`px-3 py-1.5 text-right font-mono font-bold ${isWin ? "text-green-400" : "text-red-400"}`}>
+      <td className="px-4 py-2 text-right text-zinc-400">${fmtPx(a.entry_px)}</td>
+      <td className="px-4 py-2 text-right text-zinc-400">${fmtPx(a.exit_px)}</td>
+      <td className={`px-4 py-2 text-right font-bold ${isWin ? "text-emerald-400" : "text-red-400"}`}>
         {fmtPct(a.return_pct)}
       </td>
-      <td className="px-3 py-1.5 text-center">
-        <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${isWin ? "bg-green-900 text-green-300" : "bg-red-900 text-red-300"}`}>
+      <td className="px-4 py-2 text-center">
+        <span className={`text-xs font-bold px-2 py-0.5 rounded ${isWin ? "bg-emerald-900/60 text-emerald-300" : "bg-red-900/60 text-red-300"}`}>
           {a.status}
         </span>
       </td>
@@ -189,24 +186,24 @@ export default function AlertsPage() {
   const overallWinPct = totalDone > 0 ? Math.round(totalWins / totalDone * 100) : null;
 
   return (
-    <div className="min-h-screen bg-gray-950 text-gray-200 font-mono text-sm">
-      {/* Header */}
-      <div className="border-b border-gray-800 px-4 py-3 flex items-center gap-4">
-        <Link href="/intel/hyperliquid" className="text-gray-600 hover:text-gray-400 text-xs">← Dashboard</Link>
-        <h1 className="text-white font-bold">Trade Alerts</h1>
+    <div>
+      {/* Sub-header */}
+      <div className="border-b border-zinc-800 px-4 py-2 flex items-center gap-4 flex-wrap">
+        <span className="text-zinc-100 font-bold text-sm tracking-widest">
+          {active.length} <span className="text-zinc-500 font-normal text-xs">OPEN ALERTS</span>
+        </span>
         {overallWinPct != null && (
-          <span className={`text-xs font-bold px-2 py-0.5 rounded ${overallWinPct >= 60 ? "bg-green-900 text-green-300" : "bg-yellow-900 text-yellow-300"}`}>
-            Overall {overallWinPct}% win ({totalWins}/{totalDone})
+          <span className={`text-xs font-bold px-2.5 py-1 rounded border ${overallWinPct >= 60 ? "bg-emerald-500/10 border-emerald-500/50 text-emerald-400" : "bg-yellow-500/10 border-yellow-500/50 text-yellow-400"}`}>
+            {overallWinPct}% WIN RATE · {totalWins}W {totalLosses}L
           </span>
         )}
-        <span className="text-gray-700 text-xs ml-auto">auto-refresh 30s</span>
       </div>
 
       <div className="p-4 space-y-6">
 
         {/* Strategy Scorecards */}
         <section>
-          <h2 className="text-gray-500 text-xs font-bold tracking-widest mb-3">STRATEGY PERFORMANCE</h2>
+          <div className="text-zinc-500 text-xs font-bold tracking-widest mb-3 uppercase">Strategy Performance</div>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             {scorecard.map(s => <ScoreCard key={s.strategy} s={s} />)}
           </div>
@@ -214,24 +211,24 @@ export default function AlertsPage() {
 
         {/* Active Alerts */}
         <section>
-          <h2 className="text-gray-500 text-xs font-bold tracking-widest mb-2">
-            ACTIVE ALERTS ({active.length})
-          </h2>
+          <div className="text-zinc-500 text-xs font-bold tracking-widest mb-2 uppercase">
+            Active Alerts ({active.length})
+          </div>
           {active.length === 0 ? (
-            <p className="text-gray-700 text-xs">No open alerts — next check at next 5m snapshot.</p>
+            <p className="text-zinc-700 text-sm py-4">No open alerts — fires on next 5m snapshot.</p>
           ) : (
-            <div className="bg-gray-900 border border-gray-800 rounded overflow-auto">
-              <table className="w-full text-xs">
+            <div className="bg-[#0D1117] border border-zinc-800 rounded overflow-auto">
+              <table className="w-full text-sm">
                 <thead>
-                  <tr className="text-gray-600 border-b border-gray-800 text-[10px]">
-                    <th className="text-left px-3 py-1.5">Strategy</th>
-                    <th className="text-left px-3 py-1.5">Coin</th>
-                    <th className="text-left px-3 py-1.5">Side</th>
-                    <th className="text-right px-3 py-1.5">Entry $</th>
-                    <th className="text-right px-3 py-1.5">Now $</th>
-                    <th className="text-right px-3 py-1.5">P&L</th>
-                    <th className="text-right px-3 py-1.5">Fired</th>
-                    <th className="text-right px-3 py-1.5">Expires</th>
+                  <tr className="text-zinc-500 border-b border-zinc-800 text-xs uppercase tracking-widest">
+                    <th className="text-left px-4 py-2.5">Strategy</th>
+                    <th className="text-left px-4 py-2.5">Coin</th>
+                    <th className="text-left px-4 py-2.5">Side</th>
+                    <th className="text-right px-4 py-2.5">Entry</th>
+                    <th className="text-right px-4 py-2.5">Current</th>
+                    <th className="text-right px-4 py-2.5">P&amp;L</th>
+                    <th className="text-right px-4 py-2.5">Fired</th>
+                    <th className="text-right px-4 py-2.5">Expires</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -244,26 +241,24 @@ export default function AlertsPage() {
 
         {/* History */}
         <section>
-          <div className="flex items-center gap-3 mb-2">
-            <h2 className="text-gray-500 text-xs font-bold tracking-widest">
-              COMPLETED (30d) — {totalWins} wins · {totalLosses} losses
-            </h2>
+          <div className="text-zinc-500 text-xs font-bold tracking-widest mb-2 uppercase">
+            Completed (30d) — {totalWins} wins · {totalLosses} losses
           </div>
           {history.length === 0 ? (
-            <p className="text-gray-700 text-xs">No completed alerts yet — alerts resolve after their hold window ends.</p>
+            <p className="text-zinc-700 text-sm py-4">No completed alerts yet — resolves after hold window ends.</p>
           ) : (
-            <div className="bg-gray-900 border border-gray-800 rounded overflow-auto">
-              <table className="w-full text-xs">
+            <div className="bg-[#0D1117] border border-zinc-800 rounded overflow-auto">
+              <table className="w-full text-sm">
                 <thead>
-                  <tr className="text-gray-600 border-b border-gray-800 text-[10px]">
-                    <th className="text-left px-3 py-1.5">Date</th>
-                    <th className="text-left px-3 py-1.5">Strategy</th>
-                    <th className="text-left px-3 py-1.5">Coin</th>
-                    <th className="text-left px-3 py-1.5">Side</th>
-                    <th className="text-right px-3 py-1.5">Entry $</th>
-                    <th className="text-right px-3 py-1.5">Exit $</th>
-                    <th className="text-right px-3 py-1.5">Return</th>
-                    <th className="text-center px-3 py-1.5">Result</th>
+                  <tr className="text-zinc-500 border-b border-zinc-800 text-xs uppercase tracking-widest">
+                    <th className="text-left px-4 py-2.5">Date</th>
+                    <th className="text-left px-4 py-2.5">Strategy</th>
+                    <th className="text-left px-4 py-2.5">Coin</th>
+                    <th className="text-left px-4 py-2.5">Side</th>
+                    <th className="text-right px-4 py-2.5">Entry</th>
+                    <th className="text-right px-4 py-2.5">Exit</th>
+                    <th className="text-right px-4 py-2.5">Return</th>
+                    <th className="text-center px-4 py-2.5">Result</th>
                   </tr>
                 </thead>
                 <tbody>
