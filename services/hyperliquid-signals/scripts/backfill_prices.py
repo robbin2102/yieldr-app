@@ -32,7 +32,7 @@ async def backfill_coin(
     start_ms: int,
     end_ms: int,
     sem: asyncio.Semaphore,
-    pause_s: float = 0.3,
+    pause_s: float = 0.5,
 ) -> int:
     async with sem:
         candles = await fetch_candles(session, coin, "5m", start_ms, end_ms)
@@ -84,7 +84,7 @@ async def main(days: int) -> None:
     start_ms = int(start_dt.timestamp() * 1000)
     end_ms = int(end_dt.timestamp() * 1000)
 
-    sem = asyncio.Semaphore(2)
+    sem = asyncio.Semaphore(1)
     total = 0
     async with aiohttp.ClientSession() as session:
         results = await asyncio.gather(
