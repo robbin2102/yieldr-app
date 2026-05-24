@@ -10,13 +10,18 @@ logger = logging.getLogger(__name__)
 
 
 async def run_price_log() -> None:
-    """Snapshot mid prices for every HL perp into hl_signals_prices.
+    """Snapshot mid prices for cohort-active coins into hl_signals_prices.
 
-    Runs every 5 minutes alongside the position snapshotter so each price row
-    aligns with a coin_metrics row at the same timestamp.
+    Only stores coins currently tracked in coin_metrics (i.e. coins where
+    cohort traders have open positions) — no need to log all 400+ HL perps.
     """
     db = get_db()
     now = datetime.utcnow()
+
+    active_coins: set[str] = set(await db.hl_signals_coin_metrics.distinct("coin"))
+    if not active_coins:
+        logger.warning('"Price log skipped — no active coins in coin_metrics"')
+        return
 
     async with aiohttp.ClientSession() as session:
         mids = await fetch_all_mids(session)
@@ -25,6 +30,10 @@ async def run_price_log() -> None:
         logger.warning('"Price log skipped — no mids returned"')
         return
 
-    docs = [{"coin": coin, "price": px, "ts": now} for coin, px in mids.items()]
+    docs = [
+        {"coin": coin, "price": px, "ts": now}
+        for coin, px in mids.items()
+        if coin in active_coins
+    ]
     await db.hl_signals_prices.insert_many(docs, ordered=False)
     logger.info('"Price log complete", "coins": %d', len(docs))

@@ -69,15 +69,23 @@ async def backfill_coin(
     return inserted
 
 
-async def main(days: int) -> None:
+async def main(days: int, top: int) -> None:
     await ensure_indexes()
     db = get_db()
 
-    coins: list[str] = await db.hl_signals_coin_metrics.distinct("coin")
+    # Pick top N coins by their peak total_usd in coin_metrics.
+    # This matches what the dashboard shows — coins with meaningful cohort exposure.
+    pipeline = [
+        {"$group": {"_id": "$coin", "max_usd": {"$max": "$total_usd"}}},
+        {"$sort": {"max_usd": -1}},
+        {"$limit": top},
+    ]
+    rows = await db.hl_signals_coin_metrics.aggregate(pipeline).to_list(top)
+    coins = [r["_id"] for r in rows]
     if not coins:
         logger.error("No coins found in hl_signals_coin_metrics — run service first")
         return
-    logger.info("Backfilling %d coins for %d days", len(coins), days)
+    logger.info("Backfilling top %d coins for %d days: %s", len(coins), days, ", ".join(coins))
 
     end_dt = datetime.now(timezone.utc).replace(tzinfo=None)
     start_dt = end_dt - timedelta(days=days)
@@ -100,8 +108,12 @@ async def main(days: int) -> None:
     logger.info("Backfill complete — %d new price rows across %d coins", total, len(coins))
 
 
+
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--days", type=int, default=30)
+    ap.add_argument("--top", type=int, default=30, help="Only backfill top N coins by peak total_usd")
     args = ap.parse_args()
-    asyncio.run(main(args.days))
+    asyncio.run(main(args.days, args.top))
