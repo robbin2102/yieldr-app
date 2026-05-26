@@ -42,6 +42,7 @@ WORK-SUMMARY.md
 IMPLEMENTATION-PLAN.md
 IMPLEMENTATION-SUMMARY.md
 BUILD-IN-PUBLIC-TRANSPARENCY.md
+AI-AGENTS-CAPABILITY-BRIEF.md
 
 # Service-specific docs (keep READMEs, ignore internal docs)
 services/**/*_NOTES.md
