@@ -31,12 +31,26 @@ class PriceIndex:
     def __init__(self):
         self._series: dict[str, list[tuple[datetime, float]]] = {}
 
-    async def load(self, db, coins: list[str]) -> None:
-        for coin in coins:
-            cursor = db.hl_signals_prices.find(
-                {"coin": coin}, {"_id": 0, "ts": 1, "price": 1}
-            ).sort("ts", 1)
-            self._series[coin] = [(d["ts"], d["price"]) async for d in cursor]
+    async def _load_one(self, db, coin: str, since: datetime | None, until: datetime | None) -> None:
+        filt: dict = {"coin": coin}
+        if since or until:
+            filt["ts"] = {}
+            if since:
+                filt["ts"]["$gte"] = since
+            if until:
+                filt["ts"]["$lte"] = until
+        cursor = db.hl_signals_prices.find(filt, {"_id": 0, "ts": 1, "price": 1}).sort("ts", 1)
+        self._series[coin] = [(d["ts"], d["price"]) async for d in cursor]
+
+    async def load(self, db, coins: list[str], since: datetime | None = None,
+                   until: datetime | None = None, concurrency: int = 20) -> None:
+        sem = asyncio.Semaphore(concurrency)
+
+        async def _bounded(coin):
+            async with sem:
+                await self._load_one(db, coin, since, until)
+
+        await asyncio.gather(*[_bounded(c) for c in coins])
         loaded = sum(len(v) for v in self._series.values())
         logger.info("Loaded %d price points across %d coins", loaded, len(coins))
 
@@ -275,8 +289,14 @@ async def main(horizons_h: list[int], out_path: str | None) -> None:
         return
 
     coins = sorted({e["coin"] for e in all_events})
+    # Bound price window to the actual event range + max horizon — avoids loading
+    # months of price history when only a few weeks of events exist.
+    event_times = [e["ts"] for e in all_events if isinstance(e["ts"], datetime)]
+    price_since = min(event_times) - timedelta(minutes=10) if event_times else None
+    price_until = max(event_times) + timedelta(hours=max(horizons_h) + 1) if event_times else None
+    logger.info("Price window: %s → %s across %d coins", price_since, price_until, len(coins))
     prices = PriceIndex()
-    await prices.load(db, coins)
+    await prices.load(db, coins, since=price_since, until=price_until)
 
     report = evaluate(all_events, prices, horizons_h)
     md = render_markdown(report, horizons_h)
