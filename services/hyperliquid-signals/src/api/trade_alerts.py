@@ -27,14 +27,14 @@ STRATEGY_META: dict[str, dict] = {
         "backtest_horizon_h": 24,
         "backtest_n": 33,
     },
-    "WAKEUP_LS10_WHALE_EXIT": {
-        "label": "WAKEUP + L:S≥10 · whale exit",
-        "rule": "Q1 whale wakes up while L:S ≥ 10 — exit when that whale closes",
-        "hold_hours": None,
-        "backtest_win_pct": None,
-        "backtest_return_pct": None,
-        "backtest_horizon_h": None,
-        "backtest_n": None,
+    "WAKEUP_LS20": {
+        "label": "WAKEUP + L:S≥20 · 4h",
+        "rule": "Q1 whale wakes up while L:S ≥ 20 — exit after 4h",
+        "hold_hours": 4,
+        "backtest_win_pct": 71.4,
+        "backtest_return_pct": 1.20,
+        "backtest_horizon_h": 4,
+        "backtest_n": 63,
     },
     "LS10_CROSS": {
         "label": "L:S≥10 Cross",

@@ -42,7 +42,7 @@ function timeLeft(until: string) {
 const STRATEGY_COLOR: Record<string, { badge: string; card: string }> = {
   WAKEUP_LS10_4H:         { badge: "text-violet-300 bg-violet-950/60 border-violet-800", card: "border-violet-800/50 bg-violet-950/20" },
   WAKEUP_LS10:            { badge: "text-fuchsia-300 bg-fuchsia-950/60 border-fuchsia-800", card: "border-fuchsia-800/50 bg-fuchsia-950/20" },
-  WAKEUP_LS10_WHALE_EXIT: { badge: "text-pink-300 bg-pink-950/60 border-pink-800",       card: "border-pink-800/50 bg-pink-950/20" },
+  WAKEUP_LS20:            { badge: "text-emerald-300 bg-emerald-950/60 border-emerald-800", card: "border-emerald-800/50 bg-emerald-950/20" },
   LS10_CROSS:             { badge: "text-sky-300 bg-sky-950/60 border-sky-800",          card: "border-sky-800/50 bg-sky-950/20" },
   WHALE_FLIP:             { badge: "text-orange-300 bg-orange-950/60 border-orange-800", card: "border-orange-800/50 bg-orange-950/20" },
 };
@@ -50,7 +50,7 @@ const STRATEGY_COLOR: Record<string, { badge: string; card: string }> = {
 const STRATEGY_SHORT: Record<string, string> = {
   WAKEUP_LS10_4H:         "WAKE 4h",
   WAKEUP_LS10:            "WAKE 24h",
-  WAKEUP_LS10_WHALE_EXIT: "WAKE→exit",
+  WAKEUP_LS20:            "WAKE≥20",
   LS10_CROSS:             "L:S≥10",
   WHALE_FLIP:             "FLIP",
 };

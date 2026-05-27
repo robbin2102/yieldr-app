@@ -152,7 +152,7 @@ export interface Alert {
 export type TradeStrategy =
   | "WAKEUP_LS10"
   | "WAKEUP_LS10_4H"
-  | "WAKEUP_LS10_WHALE_EXIT"
+  | "WAKEUP_LS20"
   | "LS10_CROSS"
   | "WHALE_FLIP";
 
