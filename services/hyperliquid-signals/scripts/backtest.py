@@ -839,7 +839,7 @@ if __name__ == "__main__":
     ap.add_argument("--actual-exit", action="store_true",
                     help="Add WAKEUP_ACTUAL_EXIT section: exit when triggering whale closes")
     ap.add_argument("--flow-windows", action="store_true",
-                    help="Add position-unwind signals: cohort OI drops ≥X% in 1h/3h/6h")
+                    help="Add position-unwind signals: cohort OI drops ≥X%% in 1h/3h/6h")
     args = ap.parse_args()
     horizons = [int(h) for h in args.horizons.split(",")]
     focus_coins = [c.strip().upper() for c in args.coins.split(",") if c.strip()]
