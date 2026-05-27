@@ -209,8 +209,9 @@ export default function AlertsPage() {
   });
 
   const scorecard = scorecardData?.data ?? [];
-  const active = activeData?.data ?? [];
-  const history = historyData?.data ?? [];
+  // Hide alerts from strategies we no longer track (stale OPEN rows still in DB).
+  const active = (activeData?.data ?? []).filter(a => a.strategy in STRATEGY_SHORT);
+  const history = (historyData?.data ?? []).filter(a => a.strategy in STRATEGY_SHORT);
 
   const totalWins   = history.filter(a => a.status === "WIN").length;
   const totalLosses = history.filter(a => a.status === "LOSS").length;
