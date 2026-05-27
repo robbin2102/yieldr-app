@@ -204,99 +204,81 @@ def evaluate_actual_exit(events: list[dict], prices: PriceIndex) -> dict:
     }
 
 
-def build_whale_flow_events(
-    raw_events: list[dict],
-    ls_series: dict[str, list[tuple[datetime, float]]],
+def build_oi_unwind_events(
+    oi_series: dict[str, list[tuple[datetime, float, float]]],
     windows_h: tuple = (1, 3, 6),
-    oi_thresholds: tuple = (0.01, 0.02, 0.05, 0.10),
+    decline_thresholds: tuple = (0.20, 0.30, 0.40, 0.50),
+    min_notional: float = 1_000_000,
 ) -> list[dict]:
-    """Net exit flow over rolling windows as % of estimated OI (long_usd + short_usd).
+    """Detect systematic unwinding of open positions in the cohort.
 
-    For each coin, scans EXIT events as anchors. Looks back win_h hours summing
-    exit and entry sizes. Uses total_usd from the L:S series denominator as OI proxy.
-    Only emits one signal per (coin, window, threshold) within any 1-hour block.
+    For each coin we have a time series of (ts, long_usd, short_usd) — the cohort's
+    aggregate open notional on each side. We scan for windows where one side's open
+    notional drops ≥ decline% from its in-window peak (e.g. 30% of open longs removed
+    over 3h). That captures "whales systematically unwinding" regardless of how many
+    individual EXIT events the snapshotter logged.
+
+    Forward returns are measured LONG-perspective (raw price change), so the reader
+    sees which direction price actually moved:
+      - mean > 0  → price ROSE after the unwind (capitulation bounce → go LONG)
+      - mean < 0  → price kept FALLING (continuation → go SHORT)
+
+    Only one signal per (coin, side, window, threshold) within win_h hours (cooldown).
     """
-    # Build a total_usd series from the ls_series denominator... but we don't have
-    # total_usd here. Instead we build a separate per-coin exit flow series and
-    # normalize by max(long_usd, 1) from the ls_series as a rough OI proxy.
-    # A simpler approach: deduplicate per whale per coin within a window (to avoid
-    # the snapshot-artifact issue where one whale shows many small events).
-
-    exits_by_coin: dict[str, list[dict]] = defaultdict(list)
-    entries_by_coin: dict[str, list[dict]] = defaultdict(list)
-    for e in raw_events:
-        et = e.get("event_type", "")
-        if et == "EXIT":
-            exits_by_coin[e["coin"]].append(e)
-        elif et in ("WAKEUP", "SCALEUP"):
-            entries_by_coin[e["coin"]].append(e)
-
     out = []
-    for coin, exits in exits_by_coin.items():
-        ls_ser = ls_series.get(coin, [])
-        if not ls_ser:
+    for coin, series in oi_series.items():
+        if len(series) < 2:
             continue
-        exits.sort(key=lambda x: x["ts"])
-
-        fired: dict[tuple, datetime] = {}  # (win_h, thr_str) → last fire ts, for 1h dedup
-
-        for anchor in exits:
-            ats = anchor["ts"]
-            # OI proxy: get L:S numerator (long_usd) from nearest ls snapshot
-            # ls_series stores (ts, ls_ratio) not (ts, long_usd), so we can't get
-            # absolute OI from it. Instead use a rough heuristic: sum unique-whale
-            # exit USD in window, normalize per-coin by the max exit ever seen.
-            for win_h in windows_h:
-                win_start = ats - timedelta(hours=win_h)
-                # Unique-whale dedup: sum max exit per whale in window to avoid snapshot artifacts
-                whale_exit: dict[str, float] = defaultdict(float)
-                whale_entry: dict[str, float] = defaultdict(float)
-                for ev in exits:
-                    if ev["ts"] < win_start:
+        series = sorted(series, key=lambda s: s[0])
+        for side_name, idx in (("LONG", 1), ("SHORT", 2)):
+            fired: dict[tuple, datetime] = {}
+            for i, row in enumerate(series):
+                ts = row[0]
+                cur = row[idx]
+                for win_h in windows_h:
+                    win_start = ts - timedelta(hours=win_h)
+                    peak = cur
+                    j = i
+                    while j >= 0 and series[j][0] >= win_start:
+                        peak = max(peak, series[j][idx])
+                        j -= 1
+                    if peak < min_notional:
                         continue
-                    if ev["ts"] > ats:
-                        break
-                    addr = ev.get("address", "unknown")
-                    whale_exit[addr] = max(whale_exit[addr], ev.get("size_usd", 0))
-                for ev in entries_by_coin.get(coin, []):
-                    if ev["ts"] < win_start or ev["ts"] > ats:
-                        continue
-                    addr = ev.get("address", "unknown")
-                    whale_entry[addr] = max(whale_entry[addr], ev.get("size_usd", 0))
-
-                total_exit = sum(whale_exit.values())
-                total_entry = sum(whale_entry.values())
-                n_whales_exiting = len(whale_exit)
-
-                for thr in oi_thresholds:
-                    # Use n_whales and total_exit as signal: threshold in USD millions
-                    usd_thr = thr * 1_000_000  # thr as $ millions
-                    thr_key = (win_h, f"${int(thr)}M")
-                    last_fired = fired.get(thr_key)
-                    if last_fired and (ats - last_fired).total_seconds() < 3600:
-                        continue
-                    if total_exit >= usd_thr and n_whales_exiting >= 2:
-                        trigger = f"FLOW_EXIT_{win_h}h≥${int(thr)}M"
-                        out.append({
-                            "trigger": trigger,
-                            "coin": coin,
-                            "ts": ats,
-                            "trade_side": "SHORT",
-                            "size_usd": total_exit,
-                            "n_whales": n_whales_exiting,
-                        })
-                        fired[thr_key] = ats
+                    decline = (peak - cur) / peak if peak > 0 else 0.0
+                    for thr in decline_thresholds:
+                        key = (side_name, win_h, thr)
+                        last = fired.get(key)
+                        if last and (ts - last).total_seconds() < win_h * 3600:
+                            continue
+                        if decline >= thr:
+                            out.append({
+                                "trigger": f"OI_{side_name}_UNWIND_{win_h}h≥{int(thr*100)}%",
+                                "coin": coin,
+                                "ts": ts,
+                                "trade_side": "LONG",  # eval raw price move; sign shows direction
+                                "size_usd": peak - cur,
+                                "decline": round(decline, 3),
+                                "peak_usd": peak,
+                            })
+                            fired[key] = ts
     return out
 
 
-async def load_threshold_events(db) -> tuple[list[dict], dict[str, list[tuple[datetime, float]]]]:
+async def load_threshold_events(db) -> tuple[
+    list[dict],
+    dict[str, list[tuple[datetime, float]]],
+    dict[str, list[tuple[datetime, float, float]]],
+]:
     """Synthesise events from coin_metrics threshold crossings.
 
-    Returns (events, ls_series) where ls_series[coin] is the time-ordered
-    L:S ratio series — reused to tag whale wakeups by the L:S band at fire time.
+    Returns (events, ls_series, oi_series):
+      - ls_series[coin]: time-ordered L:S ratio — tags whale wakeups by L:S band.
+      - oi_series[coin]: time-ordered (ts, long_usd, short_usd) open notional —
+        used to detect systematic position unwinding.
     """
     out: list[dict] = []
     ls_series: dict[str, list[tuple[datetime, float]]] = {}
+    oi_series: dict[str, list[tuple[datetime, float, float]]] = {}
 
     coins = await db.hl_signals_coin_metrics.distinct("coin")
     for coin in coins:
@@ -320,6 +302,9 @@ async def load_threshold_events(db) -> tuple[list[dict], dict[str, list[tuple[da
             return longc / shortc
 
         ls_series[coin] = [(r["snapshot_ts"], ls(r)) for r in rows]
+        oi_series[coin] = [
+            (r["snapshot_ts"], r.get("long_usd", 0), r.get("short_usd", 0)) for r in rows
+        ]
 
         prev_ls = None
         prev_q1_long = 0
@@ -406,7 +391,7 @@ async def load_threshold_events(db) -> tuple[list[dict], dict[str, list[tuple[da
             )
             prev_q1_ls, prev_q4_ls = cur_q1_ls, cur_q4_ls
 
-    return out, ls_series
+    return out, ls_series, oi_series
 
 
 # ─── composite events: whale + threshold together ────────────────────────────
@@ -577,25 +562,32 @@ def render_actual_exit(result: dict) -> str:
     return "\n".join(lines)
 
 
-def render_whale_flow(flow_events: list[dict], prices: PriceIndex, horizons_h: list[int]) -> str:
-    """Evaluate FLOW_EXIT signals and render as markdown section."""
-    lines = ["", "## Whale Flow Signals — net exit pressure vs forward price", ""]
-    if not flow_events:
-        lines.append("No flow events generated.")
+def render_oi_unwind(unwind_events: list[dict], prices: PriceIndex, horizons_h: list[int]) -> str:
+    """Evaluate OI-unwind signals and render as markdown section."""
+    lines = ["", "## Position Unwind Signals — cohort OI decline vs forward price", ""]
+    if not unwind_events:
+        lines.append("No unwind events generated.")
         return "\n".join(lines)
 
-    report = evaluate(flow_events, prices, horizons_h)
+    report = evaluate(unwind_events, prices, horizons_h)
+    # avg decline per trigger for context
+    avg_decline: dict[str, float] = {}
+    for e in unwind_events:
+        avg_decline.setdefault(e["trigger"], [])
+        avg_decline[e["trigger"]].append(e["decline"])
+    avg_decline = {k: mean(v) for k, v in avg_decline.items()}
 
     def pct(v): return f"{v*100:.1f}%" if v is not None else "—"
     def pcts(v): return f"{v*100:+.2f}%" if v is not None else "—"
 
-    header = ["Trigger", "N (priced/total)"] + [f"{h}h: win% / mean" for h in horizons_h]
+    header = ["Signal (side / window / decline)", "N (priced/total)", "Avg drop"] + \
+             [f"{h}h: price-up% / mean" for h in horizons_h]
     lines.append("| " + " | ".join(header) + " |")
     lines.append("|" + "|".join(["---"] * len(header)) + "|")
 
     rows = sorted(report.items(), key=lambda kv: kv[0])
     for trigger, r in rows:
-        cells = [trigger, f"{r['n_priced']}/{r['n_total']}"]
+        cells = [trigger, f"{r['n_priced']}/{r['n_total']}", pct(avg_decline.get(trigger))]
         for h in horizons_h:
             hd = r["horizons"][h]
             cells.append(f"{pct(hd['win_rate'])} / {pcts(hd['mean'])}")
@@ -603,8 +595,11 @@ def render_whale_flow(flow_events: list[dict], prices: PriceIndex, horizons_h: l
 
     lines += [
         "",
-        "_SHORT signal: multiple unique whales exiting ≥$N in last Xh._",
-        "_Deduped by whale address to remove snapshot-artifact repetitions._",
+        "_Signal fires when a coin's cohort open notional on one side drops ≥X% from "
+        "its in-window peak. Returns are LONG-perspective (raw price move):_",
+        "_  • `price-up%` and `mean` > 0 → price ROSE after the unwind (capitulation bounce → LONG)._",
+        "_  • mean < 0 → price kept FALLING (continuation → SHORT, i.e. follow the exit)._",
+        "_OI taken from coin_metrics long_usd/short_usd; min peak notional $1M._",
     ]
     return "\n".join(lines)
 
@@ -619,12 +614,12 @@ async def main(horizons_h: list[int], out_path: str | None,
     logger.info("Whale events: %d", len(whale_events))
 
     raw_events = None
-    if actual_exit or flow_windows:
+    if actual_exit:
         logger.info("Loading raw whale events for cross-event analysis…")
         raw_events = await load_whale_events_raw(db)
 
     logger.info("Loading threshold events from coin_metrics…")
-    thresh_events, ls_series = await load_threshold_events(db)
+    thresh_events, ls_series, oi_series = await load_threshold_events(db)
     logger.info("Threshold events: %d", len(thresh_events))
 
     comp = composite_events(whale_events, thresh_events, ls_series)
@@ -658,11 +653,11 @@ async def main(horizons_h: list[int], out_path: str | None,
         ae_result = evaluate_actual_exit(ae_events, prices)
         md += render_actual_exit(ae_result)
 
-    if flow_windows and raw_events is not None:
-        logger.info("Building whale flow events…")
-        flow_evs = build_whale_flow_events(raw_events, ls_series)
-        logger.info("Flow events: %d", len(flow_evs))
-        md += render_whale_flow(flow_evs, prices, horizons_h)
+    if flow_windows:
+        logger.info("Building OI-unwind events…")
+        unwind_evs = build_oi_unwind_events(oi_series)
+        logger.info("Unwind events: %d", len(unwind_evs))
+        md += render_oi_unwind(unwind_evs, prices, horizons_h)
 
     print("\n" + md)
     if out_path:
@@ -682,7 +677,7 @@ if __name__ == "__main__":
     ap.add_argument("--actual-exit", action="store_true",
                     help="Add WAKEUP_ACTUAL_EXIT section: exit when triggering whale closes")
     ap.add_argument("--flow-windows", action="store_true",
-                    help="Add whale net-flow window signals (1h/3h/6h exit pressure)")
+                    help="Add position-unwind signals: cohort OI drops ≥X% in 1h/3h/6h")
     args = ap.parse_args()
     horizons = [int(h) for h in args.horizons.split(",")]
     focus_coins = [c.strip().upper() for c in args.coins.split(",") if c.strip()]
