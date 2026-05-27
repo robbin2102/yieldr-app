@@ -40,37 +40,59 @@ function timeLeft(until: string) {
 }
 
 const STRATEGY_COLOR: Record<string, { badge: string; card: string }> = {
-  WAKEUP_LS10:     { badge: "text-violet-300 bg-violet-950/60 border-violet-800", card: "border-violet-800/50 bg-violet-950/20" },
-  LS10_CROSS:      { badge: "text-sky-300 bg-sky-950/60 border-sky-800",          card: "border-sky-800/50 bg-sky-950/20" },
-  WHALE_EXIT_FADE: { badge: "text-orange-300 bg-orange-950/60 border-orange-800", card: "border-orange-800/50 bg-orange-950/20" },
+  WAKEUP_LS10_4H:         { badge: "text-violet-300 bg-violet-950/60 border-violet-800", card: "border-violet-800/50 bg-violet-950/20" },
+  WAKEUP_LS10:            { badge: "text-fuchsia-300 bg-fuchsia-950/60 border-fuchsia-800", card: "border-fuchsia-800/50 bg-fuchsia-950/20" },
+  WAKEUP_LS10_WHALE_EXIT: { badge: "text-pink-300 bg-pink-950/60 border-pink-800",       card: "border-pink-800/50 bg-pink-950/20" },
+  LS10_CROSS:             { badge: "text-sky-300 bg-sky-950/60 border-sky-800",          card: "border-sky-800/50 bg-sky-950/20" },
+  WHALE_EXIT_FADE:        { badge: "text-orange-300 bg-orange-950/60 border-orange-800", card: "border-orange-800/50 bg-orange-950/20" },
 };
 
 const STRATEGY_SHORT: Record<string, string> = {
-  WAKEUP_LS10:     "WAKEUP+",
-  LS10_CROSS:      "L:S≥10",
-  WHALE_EXIT_FADE: "EXIT↩",
+  WAKEUP_LS10_4H:         "WAKE 4h",
+  WAKEUP_LS10:            "WAKE 24h",
+  WAKEUP_LS10_WHALE_EXIT: "WAKE→exit",
+  LS10_CROSS:             "L:S≥10",
+  WHALE_EXIT_FADE:        "EXIT↩",
 };
+
+function entryLs(a: TradeAlert): string {
+  const r = a.trigger_detail?.ls_ratio;
+  return typeof r === "number" ? `${r.toFixed(1)}:1` : "—";
+}
 
 function ScoreCard({ s }: { s: TradeAlertScorecard }) {
   const col = STRATEGY_COLOR[s.strategy] ?? { badge: "text-zinc-400 bg-zinc-900 border-zinc-700", card: "border-zinc-800 bg-zinc-900/30" };
   const liveTotal = s.live_total;
   const liveWinPct = s.live_win_pct;
+  const hasBacktest = s.backtest_win_pct != null;
+  const holdLabel = s.hold_hours != null ? `${s.hold_hours}h hold` : "exit on whale close";
+  // Same-horizon comparison: live holds at s.hold_hours, backtest shown at s.backtest_horizon_h
+  // (set equal in STRATEGY_META) so the two numbers are directly comparable.
+  const beating = hasBacktest && liveWinPct != null && liveTotal > 0 && liveWinPct >= (s.backtest_win_pct ?? 0);
   return (
     <div className={`border rounded p-4 space-y-3 ${col.card}`}>
       <div className="flex items-center justify-between">
         <span className={`text-xs font-bold px-2 py-0.5 rounded border ${col.badge}`}>
           {STRATEGY_SHORT[s.strategy] ?? s.strategy}
         </span>
-        <span className="text-zinc-500 text-xs">{s.hold_hours}h hold</span>
+        <span className="text-zinc-500 text-xs">{holdLabel}</span>
       </div>
 
       <div className="text-zinc-400 text-xs leading-relaxed">{s.rule}</div>
 
       <div className="grid grid-cols-2 gap-3">
         <div className="space-y-0.5">
-          <div className="text-zinc-600 text-[10px] uppercase tracking-widest">Backtest {s.backtest_horizon_h}h</div>
-          <div className="text-zinc-100 font-bold text-sm">{s.backtest_win_pct}% win</div>
-          <div className="text-zinc-400 text-xs">+{s.backtest_return_pct}% avg · {s.backtest_n}n</div>
+          <div className="text-zinc-600 text-[10px] uppercase tracking-widest">
+            {hasBacktest ? `Backtest ${s.backtest_horizon_h}h` : "Backtest"}
+          </div>
+          {hasBacktest ? (
+            <>
+              <div className="text-zinc-100 font-bold text-sm">{s.backtest_win_pct}% win</div>
+              <div className="text-zinc-400 text-xs">+{s.backtest_return_pct}% avg · {s.backtest_n}n</div>
+            </>
+          ) : (
+            <div className="text-zinc-600 text-sm">variable hold —<br/>no fixed-horizon backtest</div>
+          )}
         </div>
         <div className="space-y-0.5">
           <div className="text-zinc-600 text-[10px] uppercase tracking-widest">Live ({liveTotal} closed)</div>
@@ -79,6 +101,11 @@ function ScoreCard({ s }: { s: TradeAlertScorecard }) {
           </div>
           {s.live_avg_win_pct != null && (
             <div className="text-zinc-500 text-xs">+{s.live_avg_win_pct}% avg</div>
+          )}
+          {hasBacktest && liveTotal > 0 && (
+            <div className={`text-[10px] ${beating ? "text-emerald-500" : "text-yellow-600"}`}>
+              {beating ? "▲ at/above backtest" : "▼ below backtest"}
+            </div>
           )}
         </div>
       </div>
@@ -112,6 +139,7 @@ function ActiveRow({ a }: { a: TradeAlert }) {
       <td className={`px-4 py-2 font-bold ${isLong ? "text-emerald-400" : "text-red-400"}`}>
         {isLong ? "▲ LONG" : "▼ SHORT"}
       </td>
+      <td className="px-4 py-2 text-right text-zinc-500">{entryLs(a)}</td>
       <td className="px-4 py-2 text-right text-zinc-400">${fmtPx(a.entry_px)}</td>
       <td className="px-4 py-2 text-right text-zinc-300">${fmtPx(a.current_px)}</td>
       <td className={`px-4 py-2 text-right font-bold ${retColor}`}>
@@ -143,6 +171,7 @@ function HistoryRow({ a }: { a: TradeAlert }) {
       <td className={`px-4 py-2 font-bold ${isLong ? "text-emerald-400" : "text-red-400"}`}>
         {isLong ? "▲" : "▼"} {a.side}
       </td>
+      <td className="px-4 py-2 text-right text-zinc-500">{entryLs(a)}</td>
       <td className="px-4 py-2 text-right text-zinc-400">${fmtPx(a.entry_px)}</td>
       <td className="px-4 py-2 text-right text-zinc-400">${fmtPx(a.exit_px)}</td>
       <td className={`px-4 py-2 text-right font-bold ${isWin ? "text-emerald-400" : "text-red-400"}`}>
@@ -152,6 +181,9 @@ function HistoryRow({ a }: { a: TradeAlert }) {
         <span className={`text-xs font-bold px-2 py-0.5 rounded ${isWin ? "bg-emerald-900/60 text-emerald-300" : "bg-red-900/60 text-red-300"}`}>
           {a.status}
         </span>
+        {a.exit_reason === "whale_exit" && (
+          <span className="ml-1 text-[10px] text-pink-400" title="closed when whale exited">↩</span>
+        )}
       </td>
     </tr>
   );
@@ -224,6 +256,7 @@ export default function AlertsPage() {
                     <th className="text-left px-4 py-2.5">Strategy</th>
                     <th className="text-left px-4 py-2.5">Coin</th>
                     <th className="text-left px-4 py-2.5">Side</th>
+                    <th className="text-right px-4 py-2.5">Entry L:S</th>
                     <th className="text-right px-4 py-2.5">Entry</th>
                     <th className="text-right px-4 py-2.5">Current</th>
                     <th className="text-right px-4 py-2.5">P&amp;L</th>
@@ -255,6 +288,7 @@ export default function AlertsPage() {
                     <th className="text-left px-4 py-2.5">Strategy</th>
                     <th className="text-left px-4 py-2.5">Coin</th>
                     <th className="text-left px-4 py-2.5">Side</th>
+                    <th className="text-right px-4 py-2.5">Entry L:S</th>
                     <th className="text-right px-4 py-2.5">Entry</th>
                     <th className="text-right px-4 py-2.5">Exit</th>
                     <th className="text-right px-4 py-2.5">Return</th>

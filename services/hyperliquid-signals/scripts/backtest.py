@@ -9,6 +9,7 @@ Usage:
 """
 import argparse
 import asyncio
+import bisect
 import logging
 import sys
 from collections import defaultdict
@@ -20,6 +21,36 @@ from src.db import get_db  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
+
+# Fine-grained L:S bands so we can see at which ratio forward return peaks,
+# rather than only the coarse 5/10/20 crossings.
+LS_THRESHOLDS = (2, 3, 4, 5, 7, 10, 15, 20)
+
+
+def ls_band_label(ls: float) -> str:
+    for lo, hi, lbl in (
+        (20, float("inf"), "≥20"),
+        (10, 20, "10-20"),
+        (7, 10, "7-10"),
+        (5, 7, "5-7"),
+        (3, 5, "3-5"),
+        (2, 3, "2-3"),
+        (1, 2, "1-2"),
+    ):
+        if lo <= ls < hi:
+            return lbl
+    return "<1 (short-heavy)"
+
+
+def ls_at(series: list[tuple[datetime, float]], ts: datetime) -> float | None:
+    """Nearest L:S value at or before ts (the metrics snapshot preceding the event)."""
+    if not series:
+        return None
+    arr = [s[0] for s in series]
+    idx = bisect.bisect_right(arr, ts) - 1
+    if idx < 0:
+        return None
+    return series[idx][1]
 
 
 # ─── price lookup ─────────────────────────────────────────────────────────────
@@ -99,9 +130,14 @@ async def load_whale_events(db) -> list[dict]:
     return out
 
 
-async def load_threshold_events(db) -> list[dict]:
-    """Synthesise events from coin_metrics threshold crossings."""
+async def load_threshold_events(db) -> tuple[list[dict], dict[str, list[tuple[datetime, float]]]]:
+    """Synthesise events from coin_metrics threshold crossings.
+
+    Returns (events, ls_series) where ls_series[coin] is the time-ordered
+    L:S ratio series — reused to tag whale wakeups by the L:S band at fire time.
+    """
     out: list[dict] = []
+    ls_series: dict[str, list[tuple[datetime, float]]] = {}
 
     coins = await db.hl_signals_coin_metrics.distinct("coin")
     for coin in coins:
@@ -119,20 +155,33 @@ async def load_threshold_events(db) -> list[dict]:
                 return float("inf") if l > 0 else 1.0
             return l / s
 
+        ls_series[coin] = [(r["snapshot_ts"], ls(r)) for r in rows]
+
         prev_ls = None
         prev_q1_long = 0
         prev_dconv = 0
         prev_cohort = 0
         prev_lev = 0
-        for r in rows:
+        for i, r in enumerate(rows):
             cur_ls = ls(r)
             ts = r["snapshot_ts"]
 
-            for thr in (5, 10, 20):
+            for thr in LS_THRESHOLDS:
                 if prev_ls is not None:
                     if prev_ls < thr <= cur_ls:
                         out.append({"trigger": f"L:S≥{thr} (long)", "coin": coin,
                                     "ts": ts, "trade_side": "LONG", "size_usd": r["long_usd"]})
+                        # Velocity tag at the key 10x level: how fast did it climb here?
+                        if thr == 10:
+                            cutoff = ts - timedelta(hours=4)
+                            base_ls = cur_ls
+                            for j in range(i, -1, -1):
+                                if rows[j]["snapshot_ts"] < cutoff:
+                                    break
+                                base_ls = ls(rows[j])
+                            speed = "fast" if base_ls > 0 and cur_ls >= 2 * base_ls else "slow"
+                            out.append({"trigger": f"L:S≥10 {speed} (≤4h)", "coin": coin,
+                                        "ts": ts, "trade_side": "LONG", "size_usd": r["long_usd"]})
                     inv = 1 / thr
                     if prev_ls > inv >= cur_ls:
                         out.append({"trigger": f"L:S≤1/{thr} (short)", "coin": coin,
@@ -176,15 +225,23 @@ async def load_threshold_events(db) -> list[dict]:
                 cur_ls, q1l, dconv, cp, lev
             )
 
-    return out
+    return out, ls_series
 
 
 # ─── composite events: whale + threshold together ────────────────────────────
 
 
-def composite_events(whale: list[dict], thresh: list[dict]) -> list[dict]:
-    """WAKEUP + (L:S≥10 active) — find whale events that happen while a threshold
-    condition is true on the same coin within the past 1h."""
+def composite_events(
+    whale: list[dict],
+    thresh: list[dict],
+    ls_series: dict[str, list[tuple[datetime, float]]],
+) -> list[dict]:
+    """Composite whale+L:S triggers.
+
+    1. WAKEUP + L:S≥10 — original composite (kept for continuity).
+    2. WAKEUP @ L:S {band} — every wakeup tagged by the L:S band at fire time,
+       so we can see at which crowding level wakeups produce the best forward return.
+    """
     out = []
     # index threshold events by coin
     by_coin = defaultdict(list)
@@ -196,13 +253,20 @@ def composite_events(whale: list[dict], thresh: list[dict]) -> list[dict]:
     for w in whale:
         if w["trigger"] != "WHALE_WAKEUP":
             continue
-        # was L:S≥10 (or any high-conviction L:S) triggered in past 60 min on same side?
+
+        # 1. original ≥10 composite
         relevant = [t for t in by_coin.get(w["coin"], [])
                     if "L:S≥" in t["trigger"]
                     and t["trade_side"] == w["trade_side"]
                     and timedelta(0) <= (w["ts"] - t["ts"]) <= timedelta(minutes=60)]
         if relevant:
             out.append({**w, "trigger": "WAKEUP + L:S≥10"})
+
+        # 2. band-tagged wakeup
+        cur_ls = ls_at(ls_series.get(w["coin"], []), w["ts"])
+        if cur_ls is not None:
+            out.append({**w, "trigger": f"WAKEUP @ L:S {ls_band_label(cur_ls)}"})
+
     return out
 
 
@@ -277,10 +341,10 @@ async def main(horizons_h: list[int], out_path: str | None) -> None:
     logger.info("Whale events: %d", len(whale_events))
 
     logger.info("Loading threshold events from coin_metrics…")
-    thresh_events = await load_threshold_events(db)
+    thresh_events, ls_series = await load_threshold_events(db)
     logger.info("Threshold events: %d", len(thresh_events))
 
-    comp = composite_events(whale_events, thresh_events)
+    comp = composite_events(whale_events, thresh_events, ls_series)
     logger.info("Composite events: %d", len(comp))
 
     all_events = whale_events + thresh_events + comp

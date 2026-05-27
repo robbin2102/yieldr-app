@@ -149,18 +149,25 @@ export interface Alert {
   snapshot_ts: string;
 }
 
+export type TradeStrategy =
+  | "WAKEUP_LS10"
+  | "WAKEUP_LS10_4H"
+  | "WAKEUP_LS10_WHALE_EXIT"
+  | "LS10_CROSS"
+  | "WHALE_EXIT_FADE";
+
 export interface TradeAlertStrategyMeta {
   label: string;
   rule: string;
-  hold_hours: number;
-  backtest_win_pct: number;
-  backtest_return_pct: number;
-  backtest_horizon_h: number;
-  backtest_n: number;
+  hold_hours: number | null;
+  backtest_win_pct: number | null;
+  backtest_return_pct: number | null;
+  backtest_horizon_h: number | null;
+  backtest_n: number | null;
 }
 
 export interface TradeAlert {
-  strategy: "WAKEUP_LS10" | "LS10_CROSS" | "WHALE_EXIT_FADE";
+  strategy: TradeStrategy;
   coin: string;
   side: "LONG" | "SHORT";
   entry_px: number;
@@ -170,6 +177,7 @@ export interface TradeAlert {
   status: "OPEN" | "WIN" | "LOSS";
   exit_px: number | null;
   return_pct: number | null;
+  exit_reason?: "timer" | "whale_exit" | "max_hold";
   current_px?: number;
   live_return_pct?: number;
   trigger_detail: Record<string, unknown>;
@@ -180,11 +188,11 @@ export interface TradeAlertScorecard {
   strategy: string;
   label: string;
   rule: string;
-  hold_hours: number;
-  backtest_win_pct: number;
-  backtest_return_pct: number;
-  backtest_horizon_h: number;
-  backtest_n: number;
+  hold_hours: number | null;
+  backtest_win_pct: number | null;
+  backtest_return_pct: number | null;
+  backtest_horizon_h: number | null;
+  backtest_n: number | null;
   open: number;
   live_wins: number;
   live_losses: number;

@@ -6,15 +6,35 @@ from ..db import get_db
 
 router = APIRouter(tags=["trade-alerts"])
 
+# backtest_* values are shown at the SAME horizon as the live hold so live-vs-backtest
+# is an apples-to-apples comparison. Numbers from backtest_report.md (2026-05-24 run).
 STRATEGY_META: dict[str, dict] = {
-    "WAKEUP_LS10": {
-        "label": "WAKEUP + L:S≥10",
-        "rule": "Q1 whale wakes up while L:S ≥ 10 on same coin",
-        "hold_hours": 24,
+    "WAKEUP_LS10_4H": {
+        "label": "WAKEUP + L:S≥10 · 4h",
+        "rule": "Q1 whale wakes up while L:S ≥ 10 — exit after 4h",
+        "hold_hours": 4,
         "backtest_win_pct": 91.7,
         "backtest_return_pct": 1.58,
         "backtest_horizon_h": 4,
         "backtest_n": 36,
+    },
+    "WAKEUP_LS10": {
+        "label": "WAKEUP + L:S≥10 · 24h",
+        "rule": "Q1 whale wakes up while L:S ≥ 10 — exit after 24h",
+        "hold_hours": 24,
+        "backtest_win_pct": 60.6,
+        "backtest_return_pct": 2.60,
+        "backtest_horizon_h": 24,
+        "backtest_n": 33,
+    },
+    "WAKEUP_LS10_WHALE_EXIT": {
+        "label": "WAKEUP + L:S≥10 · whale exit",
+        "rule": "Q1 whale wakes up while L:S ≥ 10 — exit when that whale closes",
+        "hold_hours": None,
+        "backtest_win_pct": None,
+        "backtest_return_pct": None,
+        "backtest_horizon_h": None,
+        "backtest_n": None,
     },
     "LS10_CROSS": {
         "label": "L:S≥10 Cross",

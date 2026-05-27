@@ -1,9 +1,14 @@
 """Alert engine — evaluates trading rules after each snapshot and resolves expired alerts.
 
-Three rules (from backtest results):
-  WAKEUP_LS10   : Q1 whale WAKEUP fires while coin L:S ≥ 10  → hold 24h  (91.7% win @ 4h)
-  LS10_CROSS    : L:S ratio crosses above 10 for the first time → hold 72h (73.1% win @ 72h)
-  WHALE_EXIT_FADE: Q1 whale EXIT fires → fade their side      → hold 72h  (71.5% win @ 72h)
+Rules (from backtest results):
+  WAKEUP_LS10            : Q1 whale WAKEUP while L:S ≥ 10 → hold 24h
+  WAKEUP_LS10_4H         : same trigger → hold 4h          (backtest edge peaks at 4h)
+  WAKEUP_LS10_WHALE_EXIT : same trigger → exit when the triggering whale closes
+  LS10_CROSS             : L:S crosses above 10 first time → hold 72h
+  WHALE_EXIT_FADE        : Q1 whale EXIT → fade their side  → hold 72h
+
+The three WAKEUP_LS10* variants fire on the SAME condition simultaneously so their
+exit rules can be compared head-to-head in live simulation.
 """
 import logging
 from datetime import datetime, timedelta
@@ -12,11 +17,17 @@ from ..db import get_db
 
 logger = logging.getLogger(__name__)
 
+# Fixed-timer holds in hours. WHALE_EXIT variant uses this only as a safety cap;
+# it normally resolves early when the triggering whale closes the position.
 STRATEGY_HOLD: dict[str, int] = {
     "WAKEUP_LS10": 24,
+    "WAKEUP_LS10_4H": 4,
+    "WAKEUP_LS10_WHALE_EXIT": 168,  # 7-day safety cap
     "LS10_CROSS": 72,
     "WHALE_EXIT_FADE": 72,
 }
+
+WAKEUP_VARIANTS = ("WAKEUP_LS10", "WAKEUP_LS10_4H", "WAKEUP_LS10_WHALE_EXIT")
 
 
 async def _current_price(db, coin: str) -> float | None:
@@ -52,6 +63,21 @@ async def _fire(db, strategy: str, coin: str, side: str, entry_px: float,
                 strategy, coin, side, entry_px)
 
 
+async def _close_alert(db, alert: dict, exit_px: float, exit_reason: str) -> None:
+    entry_px = alert["entry_px"]
+    raw = (exit_px - entry_px) / entry_px if entry_px > 0 else 0.0
+    ret = raw if alert["side"] == "LONG" else -raw
+    await db.hl_signals_trade_alerts.update_one(
+        {"_id": alert["_id"]},
+        {"$set": {
+            "status": "WIN" if ret > 0 else "LOSS",
+            "exit_px": exit_px,
+            "return_pct": round(ret * 100, 3),
+            "exit_reason": exit_reason,
+        }},
+    )
+
+
 async def _resolve_expired(db, now: datetime) -> int:
     expired = db.hl_signals_trade_alerts.find({
         "status": "OPEN",
@@ -62,17 +88,36 @@ async def _resolve_expired(db, now: datetime) -> int:
         exit_px = await _current_price(db, alert["coin"])
         if exit_px is None:
             continue
-        entry_px = alert["entry_px"]
-        raw = (exit_px - entry_px) / entry_px if entry_px > 0 else 0.0
-        ret = raw if alert["side"] == "LONG" else -raw
-        await db.hl_signals_trade_alerts.update_one(
-            {"_id": alert["_id"]},
-            {"$set": {
-                "status": "WIN" if ret > 0 else "LOSS",
-                "exit_px": exit_px,
-                "return_pct": round(ret * 100, 3),
-            }},
-        )
+        reason = "max_hold" if alert["strategy"] == "WAKEUP_LS10_WHALE_EXIT" else "timer"
+        await _close_alert(db, alert, exit_px, reason)
+        resolved += 1
+    return resolved
+
+
+async def _resolve_whale_exits(db, now: datetime) -> int:
+    """Close WAKEUP_LS10_WHALE_EXIT alerts when the triggering whale closes/flips
+    the position on that coin (detected via position_changes since fire time)."""
+    cursor = db.hl_signals_trade_alerts.find({
+        "strategy": "WAKEUP_LS10_WHALE_EXIT",
+        "status": "OPEN",
+    })
+    resolved = 0
+    async for alert in cursor:
+        whale = (alert.get("trigger_detail") or {}).get("whale_address")
+        if not whale:
+            continue
+        closed = await db.hl_signals_position_changes.find_one({
+            "address": whale,
+            "coin": alert["coin"],
+            "change_type": {"$in": ["CLOSED", "FLIP"]},
+            "ts": {"$gt": alert["fired_at"]},
+        })
+        if not closed:
+            continue
+        exit_px = await _current_price(db, alert["coin"])
+        if exit_px is None:
+            continue
+        await _close_alert(db, alert, exit_px, "whale_exit")
         resolved += 1
     return resolved
 
@@ -82,8 +127,9 @@ async def run_alert_engine(snapshot_ts: datetime) -> None:
     now = snapshot_ts
 
     resolved = await _resolve_expired(db, now)
+    resolved += await _resolve_whale_exits(db, now)
     if resolved:
-        logger.info('"Resolved %d expired trade alerts"', resolved)
+        logger.info('"Resolved %d trade alerts"', resolved)
 
     # Latest coin_metrics snapshot
     latest_doc = await db.hl_signals_coin_metrics.find_one(sort=[("snapshot_ts", -1)])
@@ -101,7 +147,7 @@ async def run_alert_engine(snapshot_ts: datetime) -> None:
     wakeups = [w for w in whale_docs if w["event_type"] == "WAKEUP"]
     exits   = [w for w in whale_docs if w["event_type"] == "EXIT"]
 
-    # ── Rule 1: WAKEUP + L:S ≥ 10 ────────────────────────────────────────
+    # ── Rule 1: WAKEUP + L:S ≥ 10 (fires 3 exit-variants for comparison) ──
     for w in wakeups:
         coin = w["coin"]
         cm = metrics.get(coin)
@@ -116,11 +162,13 @@ async def run_alert_engine(snapshot_ts: datetime) -> None:
         px = await _current_price(db, coin)
         if not px:
             continue
-        await _fire(db, "WAKEUP_LS10", coin, w["side"], px, now, {
+        detail = {
             "ls_ratio": round(ls, 2),
             "whale_size_usd": w.get("size_usd", 0),
             "whale_address": w.get("address", ""),
-        })
+        }
+        for variant in WAKEUP_VARIANTS:
+            await _fire(db, variant, coin, w["side"], px, now, detail)
 
     # ── Rule 2: L:S crosses above 10 ────────────────────────────────────
     for coin, cm in metrics.items():
