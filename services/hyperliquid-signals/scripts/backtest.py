@@ -155,10 +155,17 @@ async def load_threshold_events(db) -> tuple[list[dict], dict[str, list[tuple[da
                 return float("inf") if l > 0 else 1.0
             return l / s
 
+        def count_ls(longc, shortc):
+            if shortc <= 0:
+                return float("inf") if longc > 0 else 1.0
+            return longc / shortc
+
         ls_series[coin] = [(r["snapshot_ts"], ls(r)) for r in rows]
 
         prev_ls = None
         prev_q1_long = 0
+        prev_q1_ls = None
+        prev_q4_ls = None
         prev_dconv = 0
         prev_cohort = 0
         prev_lev = 0
@@ -186,6 +193,20 @@ async def load_threshold_events(db) -> tuple[list[dict], dict[str, list[tuple[da
                     if prev_ls > inv >= cur_ls:
                         out.append({"trigger": f"L:S≤1/{thr} (short)", "coin": coin,
                                     "ts": ts, "trade_side": "SHORT", "size_usd": r["short_usd"]})
+
+            # Q1 vs Q4 crowding by trader COUNT — does smart-money crowding beat
+            # dumb-money crowding? (only meaningful with ≥3 traders in that quartile)
+            q1l_c, q1s_c = r.get("q1_long", 0), r.get("q1_short", 0)
+            q4l_c, q4s_c = r.get("q4_long", 0), r.get("q4_short", 0)
+            cur_q1_ls = count_ls(q1l_c, q1s_c)
+            cur_q4_ls = count_ls(q4l_c, q4s_c)
+            for thr in (2, 3, 5, 10):
+                if prev_q1_ls is not None and (q1l_c + q1s_c) >= 3 and prev_q1_ls < thr <= cur_q1_ls:
+                    out.append({"trigger": f"Q1 L:S≥{thr} (cnt)", "coin": coin, "ts": ts,
+                                "trade_side": "LONG", "size_usd": r["long_usd"]})
+                if prev_q4_ls is not None and (q4l_c + q4s_c) >= 3 and prev_q4_ls < thr <= cur_q4_ls:
+                    out.append({"trigger": f"Q4 L:S≥{thr} (cnt)", "coin": coin, "ts": ts,
+                                "trade_side": "LONG", "size_usd": r["long_usd"]})
 
             q1l = r.get("q1_long", 0)
             if prev_q1_long < 10 <= q1l:
@@ -224,6 +245,7 @@ async def load_threshold_events(db) -> tuple[list[dict], dict[str, list[tuple[da
             prev_ls, prev_q1_long, prev_dconv, prev_cohort, prev_lev = (
                 cur_ls, q1l, dconv, cp, lev
             )
+            prev_q1_ls, prev_q4_ls = cur_q1_ls, cur_q4_ls
 
     return out, ls_series
 
@@ -333,7 +355,45 @@ def render_markdown(report: dict, horizons_h: list[int]) -> str:
     return "\n".join(lines)
 
 
-async def main(horizons_h: list[int], out_path: str | None) -> None:
+def render_by_coin(
+    events: list[dict], prices: PriceIndex, horizons_h: list[int],
+    focus_triggers: list[str], focus_coins: list[str],
+) -> str:
+    """Per-coin breakdown: for each focus trigger, a table with one row per focus coin."""
+    lines = ["", "## Per-coin breakdown", ""]
+
+    def pct(v): return f"{v*100:.1f}%" if v is not None else "—"
+    def pcts(v): return f"{v*100:+.2f}%" if v is not None else "—"
+
+    for trigger in focus_triggers:
+        sub = [e for e in events if e["trigger"] == trigger]
+        if not sub:
+            continue
+        lines.append(f"### {trigger}")
+        lines.append("")
+        header = ["Coin", "N"] + [f"{h}h: win% / mean" for h in horizons_h]
+        lines.append("| " + " | ".join(header) + " |")
+        lines.append("|" + "|".join(["---"] * len(header)) + "|")
+        for coin in focus_coins:
+            coin_events = [e for e in sub if e["coin"] == coin]
+            if not coin_events:
+                continue
+            rep = evaluate(coin_events, prices, horizons_h)[trigger]
+            cells = [coin, str(rep["n_priced"])]
+            for h in horizons_h:
+                hd = rep["horizons"][h]
+                cells.append(f"{pct(hd['win_rate'])} / {pcts(hd['mean'])}")
+            lines.append("| " + " | ".join(cells) + " |")
+        lines.append("")
+    return "\n".join(lines)
+
+
+DEFAULT_FOCUS_COINS = ["BTC", "ETH", "SOL", "HYPE", "XRP", "DOGE", "SUI", "LINK", "AAVE", "NEAR"]
+DEFAULT_FOCUS_TRIGGERS = ["L:S≥2 (long)", "L:S≥3 (long)", "L:S≥5 (long)", "L:S≥10 (long)"]
+
+
+async def main(horizons_h: list[int], out_path: str | None,
+               by_coin: bool, focus_coins: list[str]) -> None:
     db = get_db()
 
     logger.info("Loading whale events…")
@@ -365,6 +425,11 @@ async def main(horizons_h: list[int], out_path: str | None) -> None:
     report = evaluate(all_events, prices, horizons_h)
     md = render_markdown(report, horizons_h)
 
+    if by_coin:
+        md += "\n\n" + render_by_coin(
+            all_events, prices, horizons_h, DEFAULT_FOCUS_TRIGGERS, focus_coins
+        )
+
     print("\n" + md)
     if out_path:
         with open(out_path, "w") as f:
@@ -376,6 +441,11 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--horizons", default="1,4,24,72", help="Forward return horizons in hours, comma-separated")
     ap.add_argument("--out", default="backtest_report.md")
+    ap.add_argument("--by-coin", action="store_true",
+                    help="Append a per-coin breakdown for the L:S long ladder on focus coins")
+    ap.add_argument("--coins", default=",".join(DEFAULT_FOCUS_COINS),
+                    help="Comma-separated focus coins for --by-coin")
     args = ap.parse_args()
     horizons = [int(h) for h in args.horizons.split(",")]
-    asyncio.run(main(horizons, args.out))
+    focus_coins = [c.strip().upper() for c in args.coins.split(",") if c.strip()]
+    asyncio.run(main(horizons, args.out, args.by_coin, focus_coins))
