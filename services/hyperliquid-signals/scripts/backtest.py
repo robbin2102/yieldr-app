@@ -136,6 +136,95 @@ async def load_whale_events_raw(db) -> list[dict]:
     return [doc async for doc in cursor]
 
 
+def _state_size(state: dict | None) -> float | None:
+    """Best-effort extraction of a position's USD-ish magnitude from a state blob.
+
+    position_changes schema isn't guaranteed, so try several common keys and fall
+    back to |szi| (coin units) — fine since it's only used for relative per-address
+    shares within the same coin."""
+    if not state:
+        return None
+    for k in ("size_usd", "notional_usd", "notional", "position_value", "value", "usd"):
+        v = state.get(k)
+        if isinstance(v, (int, float)) and v != 0:
+            return abs(float(v))
+    szi = state.get("szi")
+    if isinstance(szi, (int, float)) and szi != 0:
+        return abs(float(szi))
+    return None
+
+
+def _state_side(state: dict | None) -> str | None:
+    if not state:
+        return None
+    s = state.get("side")
+    if s in ("LONG", "SHORT"):
+        return s
+    szi = state.get("szi")
+    if isinstance(szi, (int, float)) and szi != 0:
+        return "LONG" if szi > 0 else "SHORT"
+    return None
+
+
+async def load_position_reductions(db) -> dict[str, list[dict]]:
+    """Load position_changes that REDUCE exposure, indexed by coin and sorted by ts.
+
+    Reductions = CLOSED / FLIP, plus SIZE_CHANGE where size shrank. Each entry keeps
+    the address, the side being reduced (from previous_state), and a magnitude proxy
+    so we can count distinct whales and measure concentration during an unwind window.
+    """
+    cursor = db.hl_signals_position_changes.find(
+        {"change_type": {"$in": ["CLOSED", "FLIP", "SIZE_CHANGE"]}},
+        {"_id": 0, "address": 1, "coin": 1, "change_type": 1, "ts": 1,
+         "previous_state": 1, "new_state": 1},
+    ).sort("ts", 1)
+
+    by_coin: dict[str, list[dict]] = defaultdict(list)
+    async for d in cursor:
+        ct = d.get("change_type")
+        prev, new = d.get("previous_state"), d.get("new_state")
+        prev_sz, new_sz = _state_size(prev), _state_size(new)
+        if ct == "SIZE_CHANGE":
+            if prev_sz is None or new_sz is None or new_sz >= prev_sz:
+                continue  # not a reduction
+            reduced = prev_sz - new_sz
+        else:  # CLOSED or FLIP — full previous side removed
+            reduced = prev_sz if prev_sz is not None else 0.0
+        by_coin[d["coin"]].append({
+            "address": d.get("address", "unknown"),
+            "ts": d["ts"],
+            "side": _state_side(prev),
+            "reduced": reduced,
+        })
+    return by_coin
+
+
+def _window_whale_stats(
+    pc_list: list[dict], pc_ts: list[datetime],
+    win_start: datetime, anchor_ts: datetime, side: str,
+) -> tuple[int, float | None]:
+    """Within [win_start, anchor_ts], count distinct addresses reducing `side`
+    exposure and the top-1 address's share of total reduced magnitude.
+
+    Side filtering is best-effort: entries with unknown side are counted too
+    (schema may not expose side), so we never under-count due to missing fields.
+    """
+    lo = bisect.bisect_left(pc_ts, win_start)
+    hi = bisect.bisect_right(pc_ts, anchor_ts)
+    per_addr: dict[str, float] = defaultdict(float)
+    for i in range(lo, hi):
+        pc = pc_list[i]
+        if pc["side"] is not None and pc["side"] != side:
+            continue
+        per_addr[pc["address"]] += pc["reduced"] or 0.0
+    if not per_addr:
+        return 0, None
+    total = sum(per_addr.values())
+    top1 = max(per_addr.values())
+    top1_share = (top1 / total) if total > 0 else None
+    return len(per_addr), top1_share
+
+
 def build_actual_exit_events(raw_events: list[dict]) -> list[dict]:
     """For each WAKEUP, find when that same whale next exits or flips on the same coin.
 
@@ -206,6 +295,7 @@ def evaluate_actual_exit(events: list[dict], prices: PriceIndex) -> dict:
 
 def build_oi_unwind_events(
     oi_series: dict[str, list[tuple[datetime, float, float]]],
+    reductions_by_coin: dict[str, list[dict]] | None = None,
     windows_h: tuple = (1, 3, 6),
     decline_thresholds: tuple = (0.20, 0.30, 0.40, 0.50),
     min_notional: float = 1_000_000,
@@ -218,6 +308,11 @@ def build_oi_unwind_events(
     over 3h). That captures "whales systematically unwinding" regardless of how many
     individual EXIT events the snapshotter logged.
 
+    If reductions_by_coin is provided (from position_changes), each event is enriched
+    with n_whales (distinct addresses reducing that side in the window) and top1_share
+    (largest single address's fraction of total reduced) — so we can tell a broad
+    consensus exit apart from one whale cleaning up their book.
+
     Forward returns are measured LONG-perspective (raw price change), so the reader
     sees which direction price actually moved:
       - mean > 0  → price ROSE after the unwind (capitulation bounce → go LONG)
@@ -225,11 +320,19 @@ def build_oi_unwind_events(
 
     Only one signal per (coin, side, window, threshold) within win_h hours (cooldown).
     """
+    reductions_by_coin = reductions_by_coin or {}
+    # Pre-extract sorted ts arrays per coin for fast window slicing.
+    pc_ts_by_coin = {
+        c: [p["ts"] for p in lst] for c, lst in reductions_by_coin.items()
+    }
+
     out = []
     for coin, series in oi_series.items():
         if len(series) < 2:
             continue
         series = sorted(series, key=lambda s: s[0])
+        pc_list = reductions_by_coin.get(coin, [])
+        pc_ts = pc_ts_by_coin.get(coin, [])
         for side_name, idx in (("LONG", 1), ("SHORT", 2)):
             fired: dict[tuple, datetime] = {}
             for i, row in enumerate(series):
@@ -251,6 +354,11 @@ def build_oi_unwind_events(
                         if last and (ts - last).total_seconds() < win_h * 3600:
                             continue
                         if decline >= thr:
+                            n_whales, top1_share = (0, None)
+                            if pc_list:
+                                n_whales, top1_share = _window_whale_stats(
+                                    pc_list, pc_ts, win_start, ts, side_name
+                                )
                             out.append({
                                 "trigger": f"OI_{side_name}_UNWIND_{win_h}h≥{int(thr*100)}%",
                                 "coin": coin,
@@ -259,6 +367,8 @@ def build_oi_unwind_events(
                                 "size_usd": peak - cur,
                                 "decline": round(decline, 3),
                                 "peak_usd": peak,
+                                "n_whales": n_whales,
+                                "top1_share": top1_share,
                             })
                             fired[key] = ts
     return out
@@ -580,14 +690,23 @@ def render_oi_unwind(unwind_events: list[dict], prices: PriceIndex, horizons_h: 
     def pct(v): return f"{v*100:.1f}%" if v is not None else "—"
     def pcts(v): return f"{v*100:+.2f}%" if v is not None else "—"
 
-    header = ["Signal (side / window / decline)", "N (priced/total)", "Avg drop"] + \
+    # avg distinct-whale count per trigger for context
+    avg_whales: dict[str, list[int]] = defaultdict(list)
+    for e in unwind_events:
+        avg_whales[e["trigger"]].append(e.get("n_whales", 0))
+    avg_whales = {k: mean(v) for k, v in avg_whales.items()}
+    has_whale_data = any(e.get("n_whales") for e in unwind_events)
+
+    header = ["Signal (side / window / decline)", "N (priced/total)", "Avg drop", "Avg whales"] + \
              [f"{h}h: price-up% / mean" for h in horizons_h]
     lines.append("| " + " | ".join(header) + " |")
     lines.append("|" + "|".join(["---"] * len(header)) + "|")
 
     rows = sorted(report.items(), key=lambda kv: kv[0])
     for trigger, r in rows:
-        cells = [trigger, f"{r['n_priced']}/{r['n_total']}", pct(avg_decline.get(trigger))]
+        nw = avg_whales.get(trigger)
+        cells = [trigger, f"{r['n_priced']}/{r['n_total']}", pct(avg_decline.get(trigger)),
+                 f"{nw:.1f}" if nw is not None else "—"]
         for h in horizons_h:
             hd = r["horizons"][h]
             cells.append(f"{pct(hd['win_rate'])} / {pcts(hd['mean'])}")
@@ -599,8 +718,48 @@ def render_oi_unwind(unwind_events: list[dict], prices: PriceIndex, horizons_h: 
         "its in-window peak. Returns are LONG-perspective (raw price move):_",
         "_  • `price-up%` and `mean` > 0 → price ROSE after the unwind (capitulation bounce → LONG)._",
         "_  • mean < 0 → price kept FALLING (continuation → SHORT, i.e. follow the exit)._",
+        "_`Avg whales` = distinct addresses from position_changes reducing that side in the window._",
         "_OI taken from coin_metrics long_usd/short_usd; min peak notional $1M._",
     ]
+
+    # ── Concentration breakdown: does it matter how many whales were unwinding? ──
+    if has_whale_data:
+        lines += ["", "### Unwind by participant concentration", ""]
+        lines += [
+            "_Buckets ALL long-side unwind events by how many distinct whales were "
+            "reducing. Tests whether a broad consensus exit (many whales) predicts "
+            "price differently than one whale cleaning up._", "",
+        ]
+        long_unwinds = [e for e in unwind_events if "_LONG_" in e["trigger"]]
+        buckets = [
+            ("1 whale", lambda n: n == 1),
+            ("2 whales", lambda n: n == 2),
+            ("3-5 whales", lambda n: 3 <= n <= 5),
+            ("6+ whales", lambda n: n >= 6),
+            ("concentrated (top1 >70%)", None),  # special-cased below
+            ("distributed (top1 ≤70%)", None),
+        ]
+        header2 = ["Bucket (long unwind)", "N (priced/total)"] + \
+                  [f"{h}h: price-up% / mean" for h in horizons_h]
+        lines.append("| " + " | ".join(header2) + " |")
+        lines.append("|" + "|".join(["---"] * len(header2)) + "|")
+        for label, pred in buckets:
+            if label.startswith("concentrated"):
+                sub = [e for e in long_unwinds if e.get("top1_share") is not None and e["top1_share"] > 0.7]
+            elif label.startswith("distributed"):
+                sub = [e for e in long_unwinds if e.get("top1_share") is not None and e["top1_share"] <= 0.7]
+            else:
+                sub = [e for e in long_unwinds if pred(e.get("n_whales", 0))]
+            if not sub:
+                continue
+            tagged = [{**e, "trigger": label} for e in sub]
+            rep = evaluate(tagged, prices, horizons_h)[label]
+            cells = [label, f"{rep['n_priced']}/{rep['n_total']}"]
+            for h in horizons_h:
+                hd = rep["horizons"][h]
+                cells.append(f"{pct(hd['win_rate'])} / {pcts(hd['mean'])}")
+            lines.append("| " + " | ".join(cells) + " |")
+
     return "\n".join(lines)
 
 
@@ -654,8 +813,11 @@ async def main(horizons_h: list[int], out_path: str | None,
         md += render_actual_exit(ae_result)
 
     if flow_windows:
+        logger.info("Loading position reductions for whale-count enrichment…")
+        reductions = await load_position_reductions(db)
+        logger.info("Coins with position-reduction data: %d", len(reductions))
         logger.info("Building OI-unwind events…")
-        unwind_evs = build_oi_unwind_events(oi_series)
+        unwind_evs = build_oi_unwind_events(oi_series, reductions)
         logger.info("Unwind events: %d", len(unwind_evs))
         md += render_oi_unwind(unwind_evs, prices, horizons_h)
 
