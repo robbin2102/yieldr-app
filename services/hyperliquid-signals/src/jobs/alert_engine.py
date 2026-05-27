@@ -24,7 +24,7 @@ STRATEGY_HOLD: dict[str, int] = {
     "WAKEUP_LS10_4H": 4,
     "WAKEUP_LS10_WHALE_EXIT": 168,  # 7-day safety cap
     "LS10_CROSS": 72,
-    "WHALE_EXIT_FADE": 72,
+    "WHALE_FLIP": 4,
 }
 
 WAKEUP_VARIANTS = ("WAKEUP_LS10", "WAKEUP_LS10_4H", "WAKEUP_LS10_WHALE_EXIT")
@@ -145,7 +145,7 @@ async def run_alert_engine(snapshot_ts: datetime) -> None:
         {"ts": {"$gte": since}}, {"_id": 0}
     ).to_list(500)
     wakeups = [w for w in whale_docs if w["event_type"] == "WAKEUP"]
-    exits   = [w for w in whale_docs if w["event_type"] == "EXIT"]
+    flips   = [w for w in whale_docs if w["event_type"] == "FLIP"]
 
     # ── Rule 1: WAKEUP + L:S ≥ 10 (fires 3 exit-variants for comparison) ──
     for w in wakeups:
@@ -196,17 +196,16 @@ async def run_alert_engine(snapshot_ts: datetime) -> None:
             "prev_ls_ratio": round(prev_ls, 2),
         })
 
-    # ── Rule 3: Whale EXIT fade ──────────────────────────────────────────
-    for w in exits:
+    # ── Rule 3: Whale FLIP — follow the flip direction ───────────────────────
+    for w in flips:
         coin = w["coin"]
-        fade_side = "SHORT" if w["side"] == "LONG" else "LONG"
         px = await _current_price(db, coin)
         if not px:
             continue
-        await _fire(db, "WHALE_EXIT_FADE", coin, fade_side, px, now, {
+        await _fire(db, "WHALE_FLIP", coin, w["side"], px, now, {
             "whale_size_usd": w.get("size_usd", 0),
             "whale_address": w.get("address", ""),
-            "exited_side": w["side"],
+            "previous_side": "SHORT" if w["side"] == "LONG" else "LONG",
         })
 
     logger.info('"Alert engine complete"')

@@ -154,7 +154,7 @@ export type TradeStrategy =
   | "WAKEUP_LS10_4H"
   | "WAKEUP_LS10_WHALE_EXIT"
   | "LS10_CROSS"
-  | "WHALE_EXIT_FADE";
+  | "WHALE_FLIP";
 
 export interface TradeAlertStrategyMeta {
   label: string;

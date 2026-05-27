@@ -45,14 +45,14 @@ STRATEGY_META: dict[str, dict] = {
         "backtest_horizon_h": 72,
         "backtest_n": 43,
     },
-    "WHALE_EXIT_FADE": {
-        "label": "Whale Exit Fade",
-        "rule": "Q1 whale exits — enter opposite direction",
-        "hold_hours": 72,
-        "backtest_win_pct": 71.5,
-        "backtest_return_pct": 2.38,
-        "backtest_horizon_h": 72,
-        "backtest_n": 6602,
+    "WHALE_FLIP": {
+        "label": "Whale Flip",
+        "rule": "Q1 whale reverses their own position — follow the flip direction",
+        "hold_hours": 4,
+        "backtest_win_pct": 68.8,
+        "backtest_return_pct": 1.05,
+        "backtest_horizon_h": 4,
+        "backtest_n": 16,
     },
 }
 

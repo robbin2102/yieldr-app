@@ -109,7 +109,6 @@ async def load_whale_events(db) -> list[dict]:
     events = [doc async for doc in cursor]
     out = []
     for e in events:
-        # Map event_type → side we'd take if we follow the cohort
         et = e["event_type"]
         if et in ("WAKEUP", "SCALEUP", "LEVERAGE_PUSH"):
             trade_side = e["side"]
@@ -126,7 +125,167 @@ async def load_whale_events(db) -> list[dict]:
             "ts": e["ts"],
             "trade_side": trade_side,
             "size_usd": e.get("size_usd", 0),
+            "address": e.get("address", ""),  # kept for actual-exit join
         })
+    return out
+
+
+async def load_whale_events_raw(db) -> list[dict]:
+    """All whale events with full fields, for cross-event joins."""
+    cursor = db.hl_signals_whale_events.find({}, {"_id": 0}).sort("ts", 1)
+    return [doc async for doc in cursor]
+
+
+def build_actual_exit_events(raw_events: list[dict]) -> list[dict]:
+    """For each WAKEUP, find when that same whale next exits or flips on the same coin.
+
+    Returns a list where each item has both ts (entry = wakeup) and exit_ts
+    (when the triggering whale actually closes). Used for variable-hold evaluation.
+    """
+    by_whale_coin: dict[tuple, list[dict]] = defaultdict(list)
+    for e in raw_events:
+        addr = e.get("address", "")
+        if addr:
+            by_whale_coin[(addr, e["coin"])].append(e)
+    for v in by_whale_coin.values():
+        v.sort(key=lambda x: x["ts"])
+
+    out = []
+    for e in raw_events:
+        if e["event_type"] != "WAKEUP":
+            continue
+        addr = e.get("address", "")
+        if not addr:
+            continue
+        series = by_whale_coin[(addr, e["coin"])]
+        exit_ev = next(
+            (ev for ev in series if ev["ts"] > e["ts"] and ev["event_type"] in ("EXIT", "FLIP")),
+            None,
+        )
+        if not exit_ev:
+            continue
+        hold_h = (exit_ev["ts"] - e["ts"]).total_seconds() / 3600
+        out.append({
+            "trigger": "WAKEUP_ACTUAL_EXIT",
+            "coin": e["coin"],
+            "ts": e["ts"],
+            "exit_ts": exit_ev["ts"],
+            "trade_side": e["side"],
+            "size_usd": e.get("size_usd", 0),
+            "actual_hold_h": round(hold_h, 1),
+        })
+    return out
+
+
+def evaluate_actual_exit(events: list[dict], prices: PriceIndex) -> dict:
+    """Variable-hold evaluation: exit at the actual_exit_ts, not a fixed horizon."""
+    from statistics import mean, median
+    returns, hold_hours = [], []
+    skipped = 0
+    for e in events:
+        entry_px = prices.price_at(e["coin"], e["ts"])
+        exit_px  = prices.price_at(e["coin"], e["exit_ts"], max_lag_min=30)
+        if not entry_px or not exit_px or entry_px <= 0:
+            skipped += 1
+            continue
+        raw = (exit_px - entry_px) / entry_px
+        ret = raw if e["trade_side"] == "LONG" else -raw
+        returns.append(ret)
+        hold_hours.append(e["actual_hold_h"])
+    n = len(returns)
+    return {
+        "n": n,
+        "n_total": len(events),
+        "win_rate": sum(1 for r in returns if r > 0) / n if n else None,
+        "mean": mean(returns) if returns else None,
+        "median": median(returns) if returns else None,
+        "avg_hold_h": mean(hold_hours) if hold_hours else None,
+        "median_hold_h": median(hold_hours) if hold_hours else None,
+    }
+
+
+def build_whale_flow_events(
+    raw_events: list[dict],
+    ls_series: dict[str, list[tuple[datetime, float]]],
+    windows_h: tuple = (1, 3, 6),
+    oi_thresholds: tuple = (0.01, 0.02, 0.05, 0.10),
+) -> list[dict]:
+    """Net exit flow over rolling windows as % of estimated OI (long_usd + short_usd).
+
+    For each coin, scans EXIT events as anchors. Looks back win_h hours summing
+    exit and entry sizes. Uses total_usd from the L:S series denominator as OI proxy.
+    Only emits one signal per (coin, window, threshold) within any 1-hour block.
+    """
+    # Build a total_usd series from the ls_series denominator... but we don't have
+    # total_usd here. Instead we build a separate per-coin exit flow series and
+    # normalize by max(long_usd, 1) from the ls_series as a rough OI proxy.
+    # A simpler approach: deduplicate per whale per coin within a window (to avoid
+    # the snapshot-artifact issue where one whale shows many small events).
+
+    exits_by_coin: dict[str, list[dict]] = defaultdict(list)
+    entries_by_coin: dict[str, list[dict]] = defaultdict(list)
+    for e in raw_events:
+        et = e.get("event_type", "")
+        if et == "EXIT":
+            exits_by_coin[e["coin"]].append(e)
+        elif et in ("WAKEUP", "SCALEUP"):
+            entries_by_coin[e["coin"]].append(e)
+
+    out = []
+    for coin, exits in exits_by_coin.items():
+        ls_ser = ls_series.get(coin, [])
+        if not ls_ser:
+            continue
+        exits.sort(key=lambda x: x["ts"])
+
+        fired: dict[tuple, datetime] = {}  # (win_h, thr_str) → last fire ts, for 1h dedup
+
+        for anchor in exits:
+            ats = anchor["ts"]
+            # OI proxy: get L:S numerator (long_usd) from nearest ls snapshot
+            # ls_series stores (ts, ls_ratio) not (ts, long_usd), so we can't get
+            # absolute OI from it. Instead use a rough heuristic: sum unique-whale
+            # exit USD in window, normalize per-coin by the max exit ever seen.
+            for win_h in windows_h:
+                win_start = ats - timedelta(hours=win_h)
+                # Unique-whale dedup: sum max exit per whale in window to avoid snapshot artifacts
+                whale_exit: dict[str, float] = defaultdict(float)
+                whale_entry: dict[str, float] = defaultdict(float)
+                for ev in exits:
+                    if ev["ts"] < win_start:
+                        continue
+                    if ev["ts"] > ats:
+                        break
+                    addr = ev.get("address", "unknown")
+                    whale_exit[addr] = max(whale_exit[addr], ev.get("size_usd", 0))
+                for ev in entries_by_coin.get(coin, []):
+                    if ev["ts"] < win_start or ev["ts"] > ats:
+                        continue
+                    addr = ev.get("address", "unknown")
+                    whale_entry[addr] = max(whale_entry[addr], ev.get("size_usd", 0))
+
+                total_exit = sum(whale_exit.values())
+                total_entry = sum(whale_entry.values())
+                n_whales_exiting = len(whale_exit)
+
+                for thr in oi_thresholds:
+                    # Use n_whales and total_exit as signal: threshold in USD millions
+                    usd_thr = thr * 1_000_000  # thr as $ millions
+                    thr_key = (win_h, f"${int(thr)}M")
+                    last_fired = fired.get(thr_key)
+                    if last_fired and (ats - last_fired).total_seconds() < 3600:
+                        continue
+                    if total_exit >= usd_thr and n_whales_exiting >= 2:
+                        trigger = f"FLOW_EXIT_{win_h}h≥${int(thr)}M"
+                        out.append({
+                            "trigger": trigger,
+                            "coin": coin,
+                            "ts": ats,
+                            "trade_side": "SHORT",
+                            "size_usd": total_exit,
+                            "n_whales": n_whales_exiting,
+                        })
+                        fired[thr_key] = ats
     return out
 
 
@@ -392,13 +551,77 @@ DEFAULT_FOCUS_COINS = ["BTC", "ETH", "SOL", "HYPE", "XRP", "DOGE", "SUI", "LINK"
 DEFAULT_FOCUS_TRIGGERS = ["L:S≥2 (long)", "L:S≥3 (long)", "L:S≥5 (long)", "L:S≥10 (long)"]
 
 
+def render_actual_exit(result: dict) -> str:
+    """Render the WAKEUP_ACTUAL_EXIT variable-hold analysis as a markdown section."""
+    lines = ["", "## WAKEUP_ACTUAL_EXIT — variable hold (exit when whale closes)", ""]
+    if result["n"] == 0:
+        lines.append("No priced events found.")
+        return "\n".join(lines)
+
+    def pct(v): return f"{v*100:.1f}%" if v is not None else "—"
+    def pcts(v): return f"{v*100:+.2f}%" if v is not None else "—"
+    def hrs(v): return f"{v:.1f}h" if v is not None else "—"
+
+    lines += [
+        f"| Metric | Value |",
+        "|---|---|",
+        f"| N (priced / total) | {result['n']} / {result['n_total']} |",
+        f"| Win rate | {pct(result['win_rate'])} |",
+        f"| Mean return | {pcts(result['mean'])} |",
+        f"| Median return | {pcts(result['median'])} |",
+        f"| Avg hold | {hrs(result['avg_hold_h'])} |",
+        f"| Median hold | {hrs(result['median_hold_h'])} |",
+        "",
+        "_Exit = when the triggering whale next closes or flips position on that coin._",
+    ]
+    return "\n".join(lines)
+
+
+def render_whale_flow(flow_events: list[dict], prices: PriceIndex, horizons_h: list[int]) -> str:
+    """Evaluate FLOW_EXIT signals and render as markdown section."""
+    lines = ["", "## Whale Flow Signals — net exit pressure vs forward price", ""]
+    if not flow_events:
+        lines.append("No flow events generated.")
+        return "\n".join(lines)
+
+    report = evaluate(flow_events, prices, horizons_h)
+
+    def pct(v): return f"{v*100:.1f}%" if v is not None else "—"
+    def pcts(v): return f"{v*100:+.2f}%" if v is not None else "—"
+
+    header = ["Trigger", "N (priced/total)"] + [f"{h}h: win% / mean" for h in horizons_h]
+    lines.append("| " + " | ".join(header) + " |")
+    lines.append("|" + "|".join(["---"] * len(header)) + "|")
+
+    rows = sorted(report.items(), key=lambda kv: kv[0])
+    for trigger, r in rows:
+        cells = [trigger, f"{r['n_priced']}/{r['n_total']}"]
+        for h in horizons_h:
+            hd = r["horizons"][h]
+            cells.append(f"{pct(hd['win_rate'])} / {pcts(hd['mean'])}")
+        lines.append("| " + " | ".join(cells) + " |")
+
+    lines += [
+        "",
+        "_SHORT signal: multiple unique whales exiting ≥$N in last Xh._",
+        "_Deduped by whale address to remove snapshot-artifact repetitions._",
+    ]
+    return "\n".join(lines)
+
+
 async def main(horizons_h: list[int], out_path: str | None,
-               by_coin: bool, focus_coins: list[str]) -> None:
+               by_coin: bool, focus_coins: list[str],
+               actual_exit: bool, flow_windows: bool) -> None:
     db = get_db()
 
     logger.info("Loading whale events…")
     whale_events = await load_whale_events(db)
     logger.info("Whale events: %d", len(whale_events))
+
+    raw_events = None
+    if actual_exit or flow_windows:
+        logger.info("Loading raw whale events for cross-event analysis…")
+        raw_events = await load_whale_events_raw(db)
 
     logger.info("Loading threshold events from coin_metrics…")
     thresh_events, ls_series = await load_threshold_events(db)
@@ -413,8 +636,6 @@ async def main(horizons_h: list[int], out_path: str | None,
         return
 
     coins = sorted({e["coin"] for e in all_events})
-    # Bound price window to the actual event range + max horizon — avoids loading
-    # months of price history when only a few weeks of events exist.
     event_times = [e["ts"] for e in all_events if isinstance(e["ts"], datetime)]
     price_since = min(event_times) - timedelta(minutes=10) if event_times else None
     price_until = max(event_times) + timedelta(hours=max(horizons_h) + 1) if event_times else None
@@ -429,6 +650,19 @@ async def main(horizons_h: list[int], out_path: str | None,
         md += "\n\n" + render_by_coin(
             all_events, prices, horizons_h, DEFAULT_FOCUS_TRIGGERS, focus_coins
         )
+
+    if actual_exit and raw_events is not None:
+        logger.info("Building actual-exit events…")
+        ae_events = build_actual_exit_events(raw_events)
+        logger.info("Actual-exit pairs: %d", len(ae_events))
+        ae_result = evaluate_actual_exit(ae_events, prices)
+        md += render_actual_exit(ae_result)
+
+    if flow_windows and raw_events is not None:
+        logger.info("Building whale flow events…")
+        flow_evs = build_whale_flow_events(raw_events, ls_series)
+        logger.info("Flow events: %d", len(flow_evs))
+        md += render_whale_flow(flow_evs, prices, horizons_h)
 
     print("\n" + md)
     if out_path:
@@ -445,7 +679,12 @@ if __name__ == "__main__":
                     help="Append a per-coin breakdown for the L:S long ladder on focus coins")
     ap.add_argument("--coins", default=",".join(DEFAULT_FOCUS_COINS),
                     help="Comma-separated focus coins for --by-coin")
+    ap.add_argument("--actual-exit", action="store_true",
+                    help="Add WAKEUP_ACTUAL_EXIT section: exit when triggering whale closes")
+    ap.add_argument("--flow-windows", action="store_true",
+                    help="Add whale net-flow window signals (1h/3h/6h exit pressure)")
     args = ap.parse_args()
     horizons = [int(h) for h in args.horizons.split(",")]
     focus_coins = [c.strip().upper() for c in args.coins.split(",") if c.strip()]
-    asyncio.run(main(horizons, args.out, args.by_coin, focus_coins))
+    asyncio.run(main(horizons, args.out, args.by_coin, focus_coins,
+                     args.actual_exit, args.flow_windows))

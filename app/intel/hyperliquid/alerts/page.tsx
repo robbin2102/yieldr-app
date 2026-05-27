@@ -44,7 +44,7 @@ const STRATEGY_COLOR: Record<string, { badge: string; card: string }> = {
   WAKEUP_LS10:            { badge: "text-fuchsia-300 bg-fuchsia-950/60 border-fuchsia-800", card: "border-fuchsia-800/50 bg-fuchsia-950/20" },
   WAKEUP_LS10_WHALE_EXIT: { badge: "text-pink-300 bg-pink-950/60 border-pink-800",       card: "border-pink-800/50 bg-pink-950/20" },
   LS10_CROSS:             { badge: "text-sky-300 bg-sky-950/60 border-sky-800",          card: "border-sky-800/50 bg-sky-950/20" },
-  WHALE_EXIT_FADE:        { badge: "text-orange-300 bg-orange-950/60 border-orange-800", card: "border-orange-800/50 bg-orange-950/20" },
+  WHALE_FLIP:             { badge: "text-orange-300 bg-orange-950/60 border-orange-800", card: "border-orange-800/50 bg-orange-950/20" },
 };
 
 const STRATEGY_SHORT: Record<string, string> = {
@@ -52,7 +52,7 @@ const STRATEGY_SHORT: Record<string, string> = {
   WAKEUP_LS10:            "WAKE 24h",
   WAKEUP_LS10_WHALE_EXIT: "WAKE→exit",
   LS10_CROSS:             "L:S≥10",
-  WHALE_EXIT_FADE:        "EXIT↩",
+  WHALE_FLIP:             "FLIP",
 };
 
 function entryLs(a: TradeAlert): string {
