@@ -123,6 +123,16 @@ async def get_scorecard():
         )
         avg_win  = next((r["avg_ret"] for r in rows if r["_id"] == "WIN"),  None)
         avg_loss = next((r["avg_ret"] for r in rows if r["_id"] == "LOSS"), None)
+        # Net average across ALL closed trades — comparable to backtest mean().
+        if total > 0:
+            if avg_win is not None and avg_loss is not None:
+                net_avg = (avg_win * wins + avg_loss * losses) / total
+            elif avg_win is not None:
+                net_avg = avg_win
+            else:
+                net_avg = avg_loss
+        else:
+            net_avg = None
         result.append({
             "strategy": strategy,
             **meta,
@@ -133,5 +143,6 @@ async def get_scorecard():
             "live_win_pct": round(wins / total * 100, 1) if total > 0 else None,
             "live_avg_win_pct": round(avg_win, 2) if avg_win is not None else None,
             "live_avg_loss_pct": round(avg_loss, 2) if avg_loss is not None else None,
+            "live_avg_net_pct": round(net_avg, 2) if net_avg is not None else None,
         })
     return {"data": result}

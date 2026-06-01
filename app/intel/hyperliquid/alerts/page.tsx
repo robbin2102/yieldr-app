@@ -66,8 +66,6 @@ function ScoreCard({ s }: { s: TradeAlertScorecard }) {
   const liveWinPct = s.live_win_pct;
   const hasBacktest = s.backtest_win_pct != null;
   const holdLabel = s.hold_hours != null ? `${s.hold_hours}h hold` : "exit on whale close";
-  // Same-horizon comparison: live holds at s.hold_hours, backtest shown at s.backtest_horizon_h
-  // (set equal in STRATEGY_META) so the two numbers are directly comparable.
   const beating = hasBacktest && liveWinPct != null && liveTotal > 0 && liveWinPct >= (s.backtest_win_pct ?? 0);
   return (
     <div className={`border rounded p-4 space-y-3 ${col.card}`}>
@@ -88,10 +86,10 @@ function ScoreCard({ s }: { s: TradeAlertScorecard }) {
           {hasBacktest ? (
             <>
               <div className="text-zinc-100 font-bold text-sm">{s.backtest_win_pct}% win</div>
-              <div className="text-zinc-400 text-xs">+{s.backtest_return_pct}% avg · {s.backtest_n}n</div>
+              <div className="text-zinc-400 text-xs">{s.backtest_return_pct && s.backtest_return_pct > 0 ? "+" : ""}{s.backtest_return_pct}% net avg &middot; {s.backtest_n}n</div>
             </>
           ) : (
-            <div className="text-zinc-600 text-sm">variable hold —<br/>no fixed-horizon backtest</div>
+            <div className="text-zinc-600 text-sm">variable hold &mdash;<br/>no fixed-horizon backtest</div>
           )}
         </div>
         <div className="space-y-0.5">
@@ -99,8 +97,15 @@ function ScoreCard({ s }: { s: TradeAlertScorecard }) {
           <div className={`font-bold text-sm ${liveTotal === 0 ? "text-zinc-600" : liveWinPct != null && liveWinPct >= 60 ? "text-emerald-400" : "text-yellow-400"}`}>
             {liveTotal === 0 ? "—" : `${liveWinPct}% win`}
           </div>
-          {s.live_avg_win_pct != null && (
-            <div className="text-zinc-500 text-xs">+{s.live_avg_win_pct}% avg</div>
+          {s.live_avg_net_pct != null && (
+            <div className="text-zinc-400 text-xs">{fmtPct(s.live_avg_net_pct)} net avg</div>
+          )}
+          {(s.live_avg_win_pct != null || s.live_avg_loss_pct != null) && liveTotal > 0 && (
+            <div className="text-[10px] text-zinc-600">
+              {s.live_avg_win_pct != null && <span className="text-emerald-700">W {fmtPct(s.live_avg_win_pct)}</span>}
+              {s.live_avg_win_pct != null && s.live_avg_loss_pct != null && <span> &middot; </span>}
+              {s.live_avg_loss_pct != null && <span className="text-red-800">L {fmtPct(s.live_avg_loss_pct, false)}</span>}
+            </div>
           )}
           {hasBacktest && liveTotal > 0 && (
             <div className={`text-[10px] ${beating ? "text-emerald-500" : "text-yellow-600"}`}>
@@ -181,9 +186,6 @@ function HistoryRow({ a }: { a: TradeAlert }) {
         <span className={`text-xs font-bold px-2 py-0.5 rounded ${isWin ? "bg-emerald-900/60 text-emerald-300" : "bg-red-900/60 text-red-300"}`}>
           {a.status}
         </span>
-        {a.exit_reason === "whale_exit" && (
-          <span className="ml-1 text-[10px] text-pink-400" title="closed when whale exited">↩</span>
-        )}
       </td>
     </tr>
   );

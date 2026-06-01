@@ -200,6 +200,7 @@ export interface TradeAlertScorecard {
   live_win_pct: number | null;
   live_avg_win_pct: number | null;
   live_avg_loss_pct: number | null;
+  live_avg_net_pct: number | null;
 }
 
 export interface PositionChange {
