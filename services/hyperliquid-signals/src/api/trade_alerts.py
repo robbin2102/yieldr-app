@@ -36,15 +36,6 @@ STRATEGY_META: dict[str, dict] = {
         "backtest_horizon_h": 4,
         "backtest_n": 63,
     },
-    "LS10_CROSS": {
-        "label": "L:S≥10 Cross",
-        "rule": "Long/short ratio crosses above 10 for the first time",
-        "hold_hours": 72,
-        "backtest_win_pct": 73.1,
-        "backtest_return_pct": 10.63,
-        "backtest_horizon_h": 72,
-        "backtest_n": 43,
-    },
     "WHALE_FLIP": {
         "label": "Whale Flip",
         "rule": "Q1 whale reverses their own position — follow the flip direction",

@@ -4,7 +4,6 @@ Rules (from backtest results):
   WAKEUP_LS10  : Q1 whale WAKEUP while L:S ≥ 10 → hold 24h
   WAKEUP_LS10_4H : same trigger → hold 4h  (backtest edge peaks at 4h)
   WAKEUP_LS20  : Q1 whale WAKEUP while L:S ≥ 20 → hold 4h  (71.4%/+1.20%, n=63)
-  LS10_CROSS   : L:S crosses above 10 first time → hold 72h
   WHALE_FLIP   : Q1 whale reverses own position → follow flip direction → hold 4h
 """
 import logging
@@ -18,7 +17,6 @@ STRATEGY_HOLD: dict[str, int] = {
     "WAKEUP_LS10": 24,
     "WAKEUP_LS10_4H": 4,
     "WAKEUP_LS20": 4,
-    "LS10_CROSS": 72,
     "WHALE_FLIP": 4,
 }
 
@@ -138,33 +136,7 @@ async def run_alert_engine(snapshot_ts: datetime) -> None:
         if ls >= 20:
             await _fire(db, "WAKEUP_LS20", coin, w["side"], px, now, detail)
 
-    # ── Rule 2: L:S crosses above 10 ────────────────────────────────────
-    for coin, cm in metrics.items():
-        short_usd = cm.get("short_usd", 0)
-        if short_usd <= 0:
-            continue
-        ls = cm["long_usd"] / short_usd
-        if ls < 10:
-            continue
-        prev = await db.hl_signals_coin_metrics.find_one(
-            {"coin": coin, "snapshot_ts": {"$lt": latest_ts}},
-            sort=[("snapshot_ts", -1)],
-        )
-        if not prev:
-            continue
-        prev_s = prev.get("short_usd", 0)
-        prev_ls = prev["long_usd"] / prev_s if prev_s > 0 else float("inf")
-        if prev_ls >= 10:
-            continue  # not a fresh cross
-        px = await _current_price(db, coin)
-        if not px:
-            continue
-        await _fire(db, "LS10_CROSS", coin, "LONG", px, now, {
-            "ls_ratio": round(ls, 2),
-            "prev_ls_ratio": round(prev_ls, 2),
-        })
-
-    # ── Rule 3: Whale FLIP — follow the flip direction ───────────────────────
+    # ── Rule 2: Whale FLIP — follow the flip direction ───────────────────────
     for w in flips:
         coin = w["coin"]
         px = await _current_price(db, coin)
