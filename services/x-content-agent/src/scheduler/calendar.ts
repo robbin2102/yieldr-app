@@ -1,15 +1,12 @@
 /**
  * Content Calendar & Scheduler
  *
- * 5 posts/day on X, 3 posts/day on TG.
- * TG gets community-facing content; X gets everything.
+ * 2 posts/day, 10h+ gap between windows.
+ * Channels controlled by ENABLE_X and ENABLE_TG env vars.
  *
  * Schedule (IST → EDT):
- *   1. 7:30 PM / 10:00 AM — Project Primer        (X + TG)
- *   2. 10:00 PM / 12:30 PM — Vault Performance     (X + TG) — rotates daily: NBA → Soccer → Geo
- *   3. 12:00 AM / 2:30 PM — Community Prompt/Poll  (X + TG)
- *   4. 3:00 AM / 5:30 PM — High Conviction          (X only)
- *   5. 6:00 AM / 8:30 PM — Trader Profile            (X only)
+ *   1. 8:00 PM / 10:30 AM — Vault Performance (daily rotation: NBA → Soccer → Geo)
+ *   2. 6:00 AM / 8:30 PM — Trader Profile / High Conviction (alternating daily)
  */
 
 import * as cron from 'node-cron';
@@ -18,8 +15,6 @@ import {
   generateTraderAlpha,
   generateHighConvictionAlert,
   generateVaultPerformance,
-  generateProjectPrimer,
-  generateCommunityPrompt,
   GeneratedPost,
 } from '../content/generator';
 import { postTweet, postPoll, quoteTweet } from '../lib/x-client';
@@ -30,11 +25,10 @@ import { getDB, COLLECTIONS } from '../lib/db';
 type Channel = 'x' | 'tg';
 
 const VAULT_ROTATION = ['NBA Edge Vault', 'Soccer Alpha Vault', 'Geopolitics Vault'];
+const HC_CATEGORIES = ['NBA', 'Soccer', 'Politics'];
 
 const dailyCounts: Record<string, number> = {};
 let lastResetDate = '';
-
-const HC_CATEGORIES = ['NBA', 'Soccer', 'Politics'];
 let hcRotation = 0;
 
 function resetDailyCounts(): void {
@@ -48,21 +42,33 @@ function resetDailyCounts(): void {
   }
 }
 
+function todaysVault(): string {
+  const dayOfYear = Math.floor((Date.now() - new Date(new Date().getFullYear(), 0, 0).getTime()) / 86400000);
+  return VAULT_ROTATION[dayOfYear % VAULT_ROTATION.length];
+}
+
+function isTraderProfileDay(): boolean {
+  const dayOfYear = Math.floor((Date.now() - new Date(new Date().getFullYear(), 0, 0).getTime()) / 86400000);
+  return dayOfYear % 2 === 0;
+}
+
 function nextHcCategory(): string {
   const category = HC_CATEGORIES[hcRotation % HC_CATEGORIES.length];
   hcRotation++;
   return category;
 }
 
-function todaysVault(): string {
-  const dayOfYear = Math.floor((Date.now() - new Date(new Date().getFullYear(), 0, 0).getTime()) / 86400000);
-  return VAULT_ROTATION[dayOfYear % VAULT_ROTATION.length];
-}
-
 function canPost(category: string): boolean {
   resetDailyCounts();
   const limit = (CONFIG.DAILY_LIMITS as any)[category] || 999;
   return (dailyCounts[category] || 0) < limit;
+}
+
+function enabledChannels(): Channel[] {
+  const channels: Channel[] = [];
+  if (CONFIG.ENABLE_X) channels.push('x');
+  if (CONFIG.ENABLE_TG) channels.push('tg');
+  return channels;
 }
 
 function randomJitter(): number {
@@ -77,7 +83,6 @@ async function publishPost(post: GeneratedPost, channels: Channel[]): Promise<vo
     && !!post.tweet && /rough|loss|down|smoked|negative|red/i.test(post.tweet);
   const imagePath = getCategoryImage(post.category, isVaultLoss);
 
-  // 1. Post to X
   if (channels.includes('x')) {
     try {
       const tweetText = post.tweet;
@@ -93,17 +98,13 @@ async function publishPost(post: GeneratedPost, channels: Channel[]): Promise<vo
       }
 
       tweetId = tweetData.id;
-      console.log(`[Calendar] Published to X: ${post.category} (${tweetId})${post.metadata?.poll ? ' [poll]' : imagePath ? ' [with image]' : ''}`);
+      console.log(`[Calendar] Published to X: ${post.category} (${tweetId})${imagePath ? ' [with image]' : ''}`);
     } catch (error: any) {
       const detail = error.data?.detail || error.data?.errors?.[0]?.message || '';
       console.error(`[Calendar] X post failed for ${post.category}: ${error.message}${detail ? ' — ' + detail : ''}`);
-      if (error.code === 403 || error.message?.includes('403')) {
-        console.error(`[Calendar] 403 likely cause: duplicate content or tweet too long (${post.tweet?.length} chars)`);
-      }
     }
   }
 
-  // 2. Post to Telegram
   if (channels.includes('tg') && (post.telegram || post.metadata?.poll)) {
     try {
       let tgResult;
@@ -126,13 +127,12 @@ async function publishPost(post: GeneratedPost, channels: Channel[]): Promise<vo
         );
       }
       tgMessageId = tgResult.message_id;
-      console.log(`[Calendar] Published to TG: ${post.category} (msg ${tgMessageId})${post.metadata?.poll ? ' [poll]' : imagePath ? ' [with photo]' : ''}`);
+      console.log(`[Calendar] Published to TG: ${post.category} (msg ${tgMessageId})${imagePath ? ' [with photo]' : ''}`);
     } catch (error: any) {
       console.error(`[Calendar] TG post failed for ${post.category}:`, error.message);
     }
   }
 
-  // 3. Log to MongoDB
   try {
     const db = await getDB();
     await db.collection(COLLECTIONS.X_POSTS).insertOne({
@@ -158,6 +158,11 @@ async function executeWindow(
   channels: Channel[],
   windowOpts?: { hcCategory?: string; vaultName?: string },
 ): Promise<void> {
+  if (channels.length === 0) {
+    console.log(`[Calendar] Both X and TG disabled, skipping ${contentType}`);
+    return;
+  }
+
   if (!canPost(contentType)) {
     console.log(`[Calendar] Daily limit reached for ${contentType}, skipping`);
     return;
@@ -167,14 +172,8 @@ async function executeWindow(
     let post: GeneratedPost;
 
     switch (contentType) {
-      case 'PROJECT_PRIMER':
-        post = await generateProjectPrimer();
-        break;
       case 'VAULT_PERFORMANCE':
         post = await generateVaultPerformance(windowOpts?.vaultName);
-        break;
-      case 'COMMUNITY_PROMPT':
-        post = await generateCommunityPrompt();
         break;
       case 'HIGH_CONVICTION': {
         const category = windowOpts?.hcCategory || nextHcCategory();
@@ -199,33 +198,24 @@ async function executeWindow(
 export function startScheduler(): void {
   console.log('[Calendar] Starting content scheduler...');
 
-  // Window 1: 7:30 PM IST / 10:00 AM EDT — Project Primer (X + TG)
-  cron.schedule('30 19 * * *', () => {
-    setTimeout(() => executeWindow('PROJECT_PRIMER', ['x', 'tg']), randomJitter());
-  }, { timezone: 'Asia/Kolkata' });
+  const channels = enabledChannels();
+  console.log(`[Calendar] Channels enabled: ${channels.length > 0 ? channels.join(', ') : 'NONE (all posting disabled)'}`);
 
-  // Window 2: 10:00 PM IST / 12:30 PM EDT — Vault Performance (X + TG, daily rotation)
-  cron.schedule('0 22 * * *', () => {
+  // Window 1: 8:00 PM IST / 10:30 AM EDT — Vault Performance (daily rotation)
+  cron.schedule('0 20 * * *', () => {
     const vault = todaysVault();
     console.log(`[Calendar] Today's vault: ${vault}`);
-    setTimeout(() => executeWindow('VAULT_PERFORMANCE', ['x', 'tg'], { vaultName: vault }), randomJitter());
+    setTimeout(() => executeWindow('VAULT_PERFORMANCE', enabledChannels(), { vaultName: vault }), randomJitter());
   }, { timezone: 'Asia/Kolkata' });
 
-  // Window 3: 12:00 AM IST / 2:30 PM EDT — Community Prompt (X + TG, native polls)
-  cron.schedule('0 0 * * *', () => {
-    setTimeout(() => executeWindow('COMMUNITY_PROMPT', ['x', 'tg']), randomJitter());
-  }, { timezone: 'Asia/Kolkata' });
-
-  // Window 4: 3:00 AM IST / 5:30 PM EDT — High Conviction (X only)
-  cron.schedule('0 3 * * *', () => {
-    setTimeout(() => executeWindow('HIGH_CONVICTION', ['x']), randomJitter());
-  }, { timezone: 'Asia/Kolkata' });
-
-  // Window 5: 6:00 AM IST / 8:30 PM EDT — Trader Profile (X only)
+  // Window 2: 6:00 AM IST / 8:30 PM EDT — Trader Profile or HC (alternating daily)
   cron.schedule('0 6 * * *', () => {
-    setTimeout(() => executeWindow('TRADER_PROFILE', ['x']), randomJitter());
+    const contentType = isTraderProfileDay() ? 'TRADER_PROFILE' : 'HIGH_CONVICTION';
+    console.log(`[Calendar] Window 2: ${contentType}`);
+    setTimeout(() => executeWindow(contentType, enabledChannels()), randomJitter());
   }, { timezone: 'Asia/Kolkata' });
 
-  console.log('[Calendar] 5 posting windows scheduled (IST timezone)');
-  console.log('[Calendar] Daily: 5 posts on X, 3 posts on TG');
+  console.log('[Calendar] 2 posting windows scheduled (IST timezone, 10h gap)');
+  console.log('[Calendar] Window 1: 8:00 PM IST — Vault Performance');
+  console.log('[Calendar] Window 2: 6:00 AM IST — Trader Profile / HC (alternating)');
 }

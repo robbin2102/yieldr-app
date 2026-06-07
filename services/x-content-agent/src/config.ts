@@ -26,43 +26,41 @@ export const CONFIG = {
   TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN || '',
   TELEGRAM_CHANNEL_ID: process.env.TELEGRAM_CHANNEL_ID || '',
 
+  // Channel toggles (set via Railway env vars)
+  ENABLE_X: process.env.ENABLE_X !== 'false',
+  ENABLE_TG: process.env.ENABLE_TG !== 'false',
+
   // MCP Server (for fetching data)
   MCP_SERVER_URL: process.env.MCP_SERVER_URL || 'http://localhost:3001',
 
-  // Content calendar (IST times, 5 windows)
+  // Content calendar (IST times, 2 windows, 10h+ gap)
   POSTING_WINDOWS: [
-    { ist: '19:30', edt: '10:00', content: ['PROJECT_PRIMER'], channels: ['x', 'tg'] },
-    { ist: '22:00', edt: '12:30', content: ['VAULT_PERFORMANCE'], channels: ['x', 'tg'] },
-    { ist: '00:00', edt: '14:30', content: ['COMMUNITY_PROMPT'], channels: ['x', 'tg'] },
-    { ist: '03:00', edt: '17:30', content: ['HIGH_CONVICTION'], channels: ['x'] },
-    { ist: '06:00', edt: '20:30', content: ['TRADER_PROFILE'], channels: ['x'] },
+    { ist: '20:00', edt: '10:30', content: ['VAULT_PERFORMANCE'], channels: ['x', 'tg'] },
+    { ist: '06:00', edt: '20:30', content: ['TRADER_PROFILE', 'HIGH_CONVICTION'], channels: ['x', 'tg'] },
   ],
 
-  // Daily post limits (5 on X, 3 on TG)
+  // Daily post limits (2 posts/day)
   DAILY_LIMITS: {
-    PROJECT_PRIMER: 1,
     VAULT_PERFORMANCE: 1,
-    COMMUNITY_PROMPT: 1,
-    HIGH_CONVICTION: 1,
     TRADER_PROFILE: 1,
+    HIGH_CONVICTION: 1,
+    PROJECT_PRIMER: 0,
+    COMMUNITY_PROMPT: 0,
     MARKETS_ALPHA: 0,
     BASE_POSTING: 0,
-    BASE_REPLIES: 12,
-    PM_REPLIES: 8,
-    TOTAL: 5,
+    TOTAL: 2,
   },
 
-  // Reply monitoring (15min to reduce API costs — was 3min, causing 480 GET requests/day)
-  REPLY_POLL_INTERVAL_MS: 15 * 60 * 1000, // 15 minutes
-  MAX_REPLY_LATENCY_MS: 15 * 60 * 1000,  // 15 minutes
+  // Reply monitoring (15min to reduce API costs)
+  REPLY_POLL_INTERVAL_MS: 15 * 60 * 1000,
+  MAX_REPLY_LATENCY_MS: 15 * 60 * 1000,
 
   // Jitter range for posting (ms)
-  JITTER_MIN_MS: 15 * 60 * 1000, // 15 minutes
-  JITTER_MAX_MS: 30 * 60 * 1000, // 30 minutes
+  JITTER_MIN_MS: 15 * 60 * 1000,
+  JITTER_MAX_MS: 30 * 60 * 1000,
 
   // Top 20 Base accounts to monitor
   BASE_ACCOUNTS: [
-    // To be configured - example accounts
     'jessepollak',
     'base',
     'BuildOnBase',

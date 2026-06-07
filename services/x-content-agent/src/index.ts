@@ -110,6 +110,8 @@ async function main() {
   console.log(`  Health: http://localhost:${CONFIG.PORT}/health`);
   console.log(`  Status: http://localhost:${CONFIG.PORT}/status`);
   console.log(`  Model:  ${CONFIG.XAI_MODEL}`);
+  console.log(`  X:      ${CONFIG.ENABLE_X ? 'ENABLED' : 'DISABLED'}`);
+  console.log(`  TG:     ${CONFIG.ENABLE_TG ? 'ENABLED' : 'DISABLED'}`);
   console.log('================================================================');
   console.log('');
 }
