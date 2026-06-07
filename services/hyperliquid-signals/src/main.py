@@ -1,5 +1,4 @@
 import logging
-import json
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
@@ -29,12 +28,16 @@ async def lifespan(app: FastAPI):
     from .jobs.discovery import run_discovery
     from .jobs.snapshotter import run_snapshot
     from .jobs.price_logger import run_price_log
+    from .jobs.execution_bot import bot_close_expired
 
-    scheduler.add_job(run_discovery, CronTrigger(hour=0, minute=0), id="discovery", replace_existing=True)
-    scheduler.add_job(run_snapshot, IntervalTrigger(minutes=5), id="snapshotter", replace_existing=True)
-    scheduler.add_job(run_price_log, IntervalTrigger(minutes=5), id="price_logger", replace_existing=True)
+    interval_s = settings.snapshot_interval_s
+    scheduler.add_job(run_discovery,     CronTrigger(hour=0, minute=0),         id="discovery",    replace_existing=True)
+    scheduler.add_job(run_snapshot,      IntervalTrigger(seconds=interval_s),   id="snapshotter",  replace_existing=True)
+    scheduler.add_job(run_price_log,     IntervalTrigger(seconds=interval_s),   id="price_logger", replace_existing=True)
+    scheduler.add_job(bot_close_expired, IntervalTrigger(minutes=1),            id="bot_timer",    replace_existing=True)
     scheduler.start()
-    logger.info('"Scheduler started: discovery=daily@00:00UTC, snapshot=every5min, prices=every5min"')
+    logger.info('"Scheduler started: discovery=daily, snapshot=%ds, prices=%ds, bot_timer=1min"',
+                interval_s, interval_s)
 
     yield
 
@@ -53,20 +56,21 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Routers — imported after app is defined to avoid circular imports
 from .api.cohort import router as cohort_router
 from .api.signals import router as signals_router
 from .api.positions import router as positions_router
 from .api.coins import router as coins_router
 from .api.config import router as config_router
 from .api.trade_alerts import router as trade_alerts_router
+from .api.bot import router as bot_router
 
-app.include_router(cohort_router, prefix="/api")
-app.include_router(signals_router, prefix="/api")
-app.include_router(positions_router, prefix="/api")
-app.include_router(coins_router, prefix="/api")
-app.include_router(config_router, prefix="/api")
+app.include_router(cohort_router,       prefix="/api")
+app.include_router(signals_router,      prefix="/api")
+app.include_router(positions_router,    prefix="/api")
+app.include_router(coins_router,        prefix="/api")
+app.include_router(config_router,       prefix="/api")
 app.include_router(trade_alerts_router, prefix="/api")
+app.include_router(bot_router,          prefix="/api")
 
 
 @app.get("/health")
@@ -84,7 +88,7 @@ async def trigger_discovery():
     from .jobs.discovery import run_discovery
     import asyncio
     asyncio.create_task(run_discovery())
-    return {"ok": True, "msg": "Discovery started in background — watch logs"}
+    return {"ok": True, "msg": "Discovery started in background"}
 
 
 @app.post("/dev/trigger-snapshot")
@@ -92,4 +96,4 @@ async def trigger_snapshot():
     from .jobs.snapshotter import run_snapshot
     import asyncio
     asyncio.create_task(run_snapshot())
-    return {"ok": True, "msg": "Snapshot started in background — watch logs"}
+    return {"ok": True, "msg": "Snapshot started in background"}
