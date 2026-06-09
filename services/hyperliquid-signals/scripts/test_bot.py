@@ -184,13 +184,18 @@ async def close_hl_positions() -> None:
         print(f"  {coin}: IOC {'sell' if is_long else 'buy'} sz={sz_r} px={px_r} → {status}")
         if status == "ok":
             await asyncio.sleep(3)
-            filled, fill_px, fill_sz = await _get_fill_direct(
-                ex.extract_oid(result) or -1, coin
-            )
-            if fill_sz > 0:
-                print(f"  {coin}: confirmed fill @ {fill_px} sz={fill_sz}")
+            # IOC fills immediately — no resting oid, check recent fills by coin+time
+            import time as _time
+            since_ms = int(_time.time() * 1000) - 10_000
+            fills = await ex.get_user_fills(20)
+            recent = [f for f in fills
+                      if f.get("coin") == coin and int(f.get("time", 0)) >= since_ms]
+            if recent:
+                fill_px = sum(float(f["px"]) * float(f["sz"]) for f in recent) / sum(float(f["sz"]) for f in recent)
+                fill_sz = sum(float(f["sz"]) for f in recent)
+                print(f"  {coin}: confirmed fill @ {round(fill_px,2)} sz={round(fill_sz,6)}")
             else:
-                print(f"  {coin}: order accepted — verify on HL UI")
+                print(f"  {coin}: order sent (status=ok) — check HL UI to confirm close")
 
 
 async def _get_fill_direct(oid: int, coin: str) -> tuple[bool, float, float]:
