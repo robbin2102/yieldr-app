@@ -118,6 +118,95 @@ async def test_timer_exit() -> None:
     await bot_close_expired(now=datetime.now(timezone.utc))
 
 
+# ── Close HL positions directly (bypasses MongoDB) ───────────────────────────
+
+async def close_hl_positions() -> None:
+    """Fetch live positions from HL clearinghouse and close each with ALO at mid."""
+    import aiohttp
+    from src.lib import hl_exchange as ex
+
+    url = ("https://api.hyperliquid-testnet.xyz/info" if settings.bot_testnet
+           else "https://api.hyperliquid.xyz/info")
+
+    async with aiohttp.ClientSession() as session:
+        async with session.post(
+            url,
+            json={"type": "clearinghouseState", "user": settings.hl_wallet_address},
+            timeout=aiohttp.ClientTimeout(total=10),
+        ) as resp:
+            state = await resp.json()
+
+    positions = [
+        p for p in state.get("assetPositions", [])
+        if float(p["position"].get("szi", 0)) != 0
+    ]
+
+    if not positions:
+        print("[close-hl] No open positions found on HL")
+        return
+
+    print(f"[close-hl] Found {len(positions)} open HL position(s):\n")
+    for p in positions:
+        pos  = p["position"]
+        coin = pos["coin"]
+        szi  = float(pos["szi"])          # positive=long, negative=short
+        is_long = szi > 0
+        sz   = abs(szi)
+        entry_px = float(pos.get("entryPx") or 0)
+        print(f"  {coin}  {'LONG' if is_long else 'SHORT'}  sz={sz}  entry={entry_px}")
+
+    print()
+    for p in positions:
+        pos     = p["position"]
+        coin    = pos["coin"]
+        szi     = float(pos["szi"])
+        is_long = szi > 0
+        sz      = abs(szi)
+
+        book = await ex.get_l2_book(coin)
+        mid  = book["mid"]
+        result, px, _ = await ex.place_limit_order_close(coin, is_long, sz, mid)
+        oid = ex.extract_oid(result)
+        if oid is None:
+            print(f"  {coin}: order rejected — {result.get('status')}")
+            continue
+
+        print(f"  {coin}: ALO close placed oid={oid} px={px} sz={sz}")
+        await asyncio.sleep(30)
+        filled, fill_px, fill_sz = await _get_fill_direct(oid, coin)
+        if filled:
+            print(f"  {coin}: filled @ {fill_px} sz={fill_sz}")
+        else:
+            try:
+                await ex.cancel_order(coin, oid)
+            except Exception:
+                pass
+            # retry at updated mid
+            book2 = await ex.get_l2_book(coin)
+            result2, px2, _ = await ex.place_limit_order_close(coin, is_long, sz, book2["mid"])
+            oid2 = ex.extract_oid(result2)
+            if oid2:
+                print(f"  {coin}: retry placed oid={oid2} px={px2}")
+                await asyncio.sleep(30)
+                filled2, fill_px2, _ = await _get_fill_direct(oid2, coin)
+                if filled2:
+                    print(f"  {coin}: filled @ {fill_px2}")
+                else:
+                    await ex.cancel_order(coin, oid2)
+                    print(f"  {coin}: WARNING — not filled after 2 attempts, check HL UI")
+
+
+async def _get_fill_direct(oid: int, coin: str) -> tuple[bool, float, float]:
+    from src.lib import hl_exchange as ex
+    fills = await ex.get_user_fills(50)
+    matched = [f for f in fills if int(f.get("oid", -1)) == oid and f.get("coin") == coin]
+    if not matched:
+        return False, 0.0, 0.0
+    fill_px = sum(float(f["px"]) * float(f["sz"]) for f in matched) / sum(float(f["sz"]) for f in matched)
+    fill_sz = sum(float(f["sz"]) for f in matched)
+    return True, round(fill_px, 4), round(fill_sz, 6)
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 async def main() -> None:
@@ -149,6 +238,8 @@ async def main() -> None:
         print("[exit-all] closing all OPEN positions via IOC market order\n")
         result = await bot_manual_exit_all()
         print(f"Result: {result}")
+    elif "--close-hl" in flags:
+        await close_hl_positions()
     else:
         await test_order(coin, side, strategy)
 
