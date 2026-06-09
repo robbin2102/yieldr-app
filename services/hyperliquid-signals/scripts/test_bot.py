@@ -163,37 +163,32 @@ async def close_hl_positions() -> None:
         is_long = szi > 0
         sz      = abs(szi)
 
+        # IOC taker order — guaranteed fill or immediate cancel (cleanup utility only)
         book = await ex.get_l2_book(coin)
-        mid  = book["mid"]
-        result, px, _ = await ex.place_limit_order_close(coin, is_long, sz, mid)
-        oid = ex.extract_oid(result)
-        if oid is None:
-            print(f"  {coin}: order rejected — {result.get('status')}")
-            continue
+        is_buy = not is_long
+        px = book["best_bid"] * 0.999 if is_long else book["best_ask"] * 1.001
 
-        print(f"  {coin}: ALO close placed oid={oid} px={px} sz={sz}")
-        await asyncio.sleep(30)
-        filled, fill_px, fill_sz = await _get_fill_direct(oid, coin)
-        if filled:
-            print(f"  {coin}: filled @ {fill_px} sz={fill_sz}")
-        else:
-            try:
-                await ex.cancel_order(coin, oid)
-            except Exception:
-                pass
-            # retry at updated mid
-            book2 = await ex.get_l2_book(coin)
-            result2, px2, _ = await ex.place_limit_order_close(coin, is_long, sz, book2["mid"])
-            oid2 = ex.extract_oid(result2)
-            if oid2:
-                print(f"  {coin}: retry placed oid={oid2} px={px2}")
-                await asyncio.sleep(30)
-                filled2, fill_px2, _ = await _get_fill_direct(oid2, coin)
-                if filled2:
-                    print(f"  {coin}: filled @ {fill_px2}")
-                else:
-                    await ex.cancel_order(coin, oid2)
-                    print(f"  {coin}: WARNING — not filled after 2 attempts, check HL UI")
+        from src.lib.hl_exchange import round_px, round_sz, get_asset_meta, _make_exchange
+        meta = await get_asset_meta()
+        sz_dec = meta.get(coin, {}).get("szDecimals", 4)
+        px_r = round_px(px)
+        sz_r = round_sz(sz, sz_dec)
+
+        def _ioc():
+            return _make_exchange().order(coin, is_buy, sz_r, px_r,
+                                          {"limit": {"tif": "Ioc"}}, reduce_only=True)
+        result = await asyncio.to_thread(_ioc)
+        status = result.get("status", "?")
+        print(f"  {coin}: IOC {'sell' if is_long else 'buy'} sz={sz_r} px={px_r} → {status}")
+        if status == "ok":
+            await asyncio.sleep(3)
+            filled, fill_px, fill_sz = await _get_fill_direct(
+                ex.extract_oid(result) or -1, coin
+            )
+            if fill_sz > 0:
+                print(f"  {coin}: confirmed fill @ {fill_px} sz={fill_sz}")
+            else:
+                print(f"  {coin}: order accepted — verify on HL UI")
 
 
 async def _get_fill_direct(oid: int, coin: str) -> tuple[bool, float, float]:
