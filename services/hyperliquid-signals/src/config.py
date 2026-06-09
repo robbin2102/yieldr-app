@@ -89,6 +89,9 @@ class Settings(BaseSettings):
     # Comma-separated strategies to auto-execute; others only signal
     bot_strategies: str = Field(default="WAKEUP_LS10_4H,WHALE_FLIP", alias="BOT_STRATEGIES")
 
+    # Order retries — applies to both entry and close (ALO at mid, 30s wait each)
+    bot_order_retries: int = Field(default=5, alias="BOT_ORDER_RETRIES")
+
     def cors_origins_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
 

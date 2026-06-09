@@ -168,77 +168,60 @@ async def _run_entry(db, pos_id, strategy, coin, side, signal_px, now) -> None:
         return
 
     mid = book["mid"]
+    spread_at_entry = book["spread_bps"]
+    first_attempt = True
 
-    # ── Attempt 1 ────────────────────────────────────────────────────────────
-    result, px1, sz1 = await ex.place_limit_order(coin, is_buy, settings.bot_position_size_usdc, mid)
-    oid1 = ex.extract_oid(result)
-    if oid1 is None:
-        await _mark_skipped(db, pos_id, f"order_rejected:{result.get('status')}", now)
-        return
+    # ── Order placement loop (BOT_ORDER_RETRIES attempts, 30s wait each) ─────
+    for attempt in range(settings.bot_order_retries):
+        if not first_attempt:
+            try:
+                book = await ex.get_l2_book(coin)
+            except Exception:
+                await _mark_skipped(db, pos_id, "no_fill_book_error", datetime.now(timezone.utc))
+                return
+            mid = book["mid"]
+            if signal_px > 0:
+                drift = abs(mid - signal_px) / signal_px * 10_000
+                if drift > settings.drift_limit_bps:
+                    await _mark_skipped(db, pos_id, "price_drifted_on_retry",
+                                        datetime.now(timezone.utc), drift_bps=round(drift, 2))
+                    return
 
-    await db.bot_positions.update_one({"_id": pos_id}, {"$set": {
-        "status":            "PENDING_FILL",
-        "entry_order_id":   str(oid1),
-        "entry_limit_px":   px1,
-        "size_coin":         sz1,
-        "spread_at_entry":  book["spread_bps"],
-        "hold_until":        now + timedelta(hours=4),
-        "updated_at":        now,
-    }})
-
-    await asyncio.sleep(30)
-    filled1, actual_px1, actual_sz1 = await _get_fill(oid1, coin)
-    if filled1:
-        await _mark_open(db, pos_id, actual_px1, actual_sz1, datetime.now(timezone.utc))
-        return
-
-    # Cancel and retry once
-    try:
-        await ex.cancel_order(coin, oid1)
-    except Exception:
-        pass
-
-    # ── Attempt 2 (updated mid, fresh drift check) ───────────────────────
-    try:
-        book2 = await ex.get_l2_book(coin)
-    except Exception:
-        await _mark_skipped(db, pos_id, "no_fill_book_error", datetime.now(timezone.utc))
-        return
-
-    mid2 = book2["mid"]
-    if signal_px > 0:
-        drift2 = abs(mid2 - signal_px) / signal_px * 10_000
-        if drift2 > settings.drift_limit_bps:
-            await _mark_skipped(db, pos_id, "price_drifted_on_retry", datetime.now(timezone.utc),
-                                drift_bps=round(drift2, 2))
+        result, px, sz = await ex.place_limit_order(coin, is_buy, settings.bot_position_size_usdc, mid)
+        oid = ex.extract_oid(result)
+        if oid is None:
+            await _mark_skipped(db, pos_id, f"order_rejected:{result.get('status')}",
+                                datetime.now(timezone.utc))
             return
 
-    result2, px2, sz2 = await ex.place_limit_order(coin, is_buy, settings.bot_position_size_usdc, mid2)
-    oid2 = ex.extract_oid(result2)
-    if oid2 is None:
-        await _mark_skipped(db, pos_id, f"retry_rejected:{result2.get('status')}",
-                            datetime.now(timezone.utc))
-        return
+        await db.bot_positions.update_one({"_id": pos_id}, {"$set": {
+            "status":           "PENDING_FILL",
+            "entry_order_id":   str(oid),
+            "entry_limit_px":   px,
+            "size_coin":        sz,
+            "spread_at_entry":  spread_at_entry,
+            "hold_until":       now + timedelta(hours=4),
+            "updated_at":       datetime.now(timezone.utc),
+        }})
 
-    await db.bot_positions.update_one({"_id": pos_id}, {"$set": {
-        "entry_order_id": str(oid2),
-        "entry_limit_px": px2,
-        "size_coin":       sz2,
-        "updated_at":      datetime.now(timezone.utc),
-    }})
+        await asyncio.sleep(30)
+        filled, actual_px, actual_sz = await _get_fill(oid, coin)
+        if filled:
+            await _mark_open(db, pos_id, actual_px, actual_sz, datetime.now(timezone.utc))
+            return
 
-    await asyncio.sleep(30)
-    now3 = datetime.now(timezone.utc)
-    filled2, actual_px2, actual_sz2 = await _get_fill(oid2, coin)
-    if filled2:
-        await _mark_open(db, pos_id, actual_px2, actual_sz2, now3)
-    else:
         try:
-            await ex.cancel_order(coin, oid2)
+            await ex.cancel_order(coin, oid)
         except Exception:
             pass
-        await _mark_skipped(db, pos_id, "no_fill", now3)
-        logger.info("BOT: no fill after 2 attempts, skip %s %s", strategy, coin)
+
+        logger.info("BOT: attempt %d/%d no fill %s %s", attempt + 1,
+                    settings.bot_order_retries, strategy, coin)
+        first_attempt = False
+
+    await _mark_skipped(db, pos_id, "no_fill", datetime.now(timezone.utc))
+    logger.info("BOT: no fill after %d attempts, skip %s %s",
+                settings.bot_order_retries, strategy, coin)
 
 
 # ── Internal: close order (ALO at mid, same retry logic as entry) ────────────
@@ -249,41 +232,35 @@ async def _run_close(coin: str, is_long: bool, sz_coin: float) -> tuple[bool, fl
     """
     from ..lib import hl_exchange as ex
 
-    book = await ex.get_l2_book(coin)
-    result, px1, _ = await ex.place_limit_order_close(coin, is_long, sz_coin, book["mid"])
-    oid1 = ex.extract_oid(result)
-    if oid1 is None:
-        logger.warning("BOT: close order rejected %s — %s", coin, result.get("status"))
-        return False, 0.0
+    for attempt in range(settings.bot_order_retries):
+        try:
+            book = await ex.get_l2_book(coin)
+        except Exception as e:
+            logger.warning("BOT: close book error %s attempt %d: %s", coin, attempt + 1, e)
+            continue
 
-    await asyncio.sleep(30)
-    filled1, fill_px1, _ = await _get_fill(oid1, coin)
-    if filled1:
-        return True, fill_px1
+        result, px, _ = await ex.place_limit_order_close(coin, is_long, sz_coin, book["mid"])
+        oid = ex.extract_oid(result)
+        if oid is None:
+            logger.warning("BOT: close rejected %s attempt %d — %s",
+                           coin, attempt + 1, result.get("status"))
+            break
 
-    try:
-        await ex.cancel_order(coin, oid1)
-    except Exception:
-        pass
+        await asyncio.sleep(30)
+        filled, fill_px, _ = await _get_fill(oid, coin)
+        if filled:
+            return True, fill_px
 
-    book2 = await ex.get_l2_book(coin)
-    result2, px2, _ = await ex.place_limit_order_close(coin, is_long, sz_coin, book2["mid"])
-    oid2 = ex.extract_oid(result2)
-    if oid2 is None:
-        logger.warning("BOT: close retry rejected %s", coin)
-        return False, 0.0
+        try:
+            await ex.cancel_order(coin, oid)
+        except Exception:
+            pass
 
-    await asyncio.sleep(30)
-    filled2, fill_px2, _ = await _get_fill(oid2, coin)
-    if filled2:
-        return True, fill_px2
+        logger.info("BOT: close attempt %d/%d no fill %s",
+                    attempt + 1, settings.bot_order_retries, coin)
 
-    try:
-        await ex.cancel_order(coin, oid2)
-    except Exception:
-        pass
-
-    logger.warning("BOT: close did not fill %s after 2 attempts — position stays OPEN", coin)
+    logger.warning("BOT: close did not fill %s after %d attempts — position stays OPEN",
+                   coin, settings.bot_order_retries)
     return False, 0.0
 
 
