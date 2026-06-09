@@ -129,6 +129,12 @@ async def _run_entry(db, pos_id, strategy, coin, side, signal_px, now) -> None:
 
     is_buy = side == "LONG"
 
+    # Set leverage before any order (idempotent on HL side)
+    try:
+        await ex.set_leverage(coin, settings.bot_leverage)
+    except Exception as e:
+        logger.warning("BOT: set_leverage failed %s: %s — continuing", coin, e)
+
     # ── Spread + drift check loop ────────────────────────────────────────
     book = None
     for attempt in range(5):

@@ -134,6 +134,15 @@ def _make_info():
     return Info(api_url(), skip_ws=True)
 
 
+async def set_leverage(coin: str, leverage: int, is_cross: bool = True) -> dict:
+    """Set leverage for a coin. Call once before first order on that coin."""
+    def _set():
+        return _make_exchange().update_leverage(leverage, coin, is_cross)
+    result = await asyncio.to_thread(_set)
+    logger.info("leverage set %s %dx cross=%s → %s", coin, leverage, is_cross, result.get("status"))
+    return result
+
+
 async def place_limit_order(
     coin: str,
     is_buy: bool,
