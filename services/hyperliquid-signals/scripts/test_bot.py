@@ -34,10 +34,12 @@ from src.jobs.execution_bot import bot_execute
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 logging.basicConfig(
-    level=logging.DEBUG,
-    format="%(asctime)s %(levelname)-7s %(name)s — %(message)s",
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)-7s %(message)s",
     datefmt="%H:%M:%S",
 )
+for _noisy in ("pymongo", "asyncio", "aiohttp", "urllib3"):
+    logging.getLogger(_noisy).setLevel(logging.WARNING)
 
 
 def _print_settings() -> None:
