@@ -187,9 +187,9 @@ async def _run_entry(db, pos_id, strategy, coin, side, signal_px, now) -> None:
     }})
 
     await asyncio.sleep(30)
-    filled1 = await _is_filled(oid1)
+    filled1, actual_px1, actual_sz1 = await _get_fill(oid1, coin)
     if filled1:
-        await _mark_open(db, pos_id, px1, sz1, datetime.now(timezone.utc))
+        await _mark_open(db, pos_id, actual_px1, actual_sz1, datetime.now(timezone.utc))
         return
 
     # Cancel and retry once
@@ -229,9 +229,9 @@ async def _run_entry(db, pos_id, strategy, coin, side, signal_px, now) -> None:
 
     await asyncio.sleep(30)
     now3 = datetime.now(timezone.utc)
-    filled2 = await _is_filled(oid2)
+    filled2, actual_px2, actual_sz2 = await _get_fill(oid2, coin)
     if filled2:
-        await _mark_open(db, pos_id, px2, sz2, now3)
+        await _mark_open(db, pos_id, actual_px2, actual_sz2, now3)
     else:
         try:
             await ex.cancel_order(coin, oid2)
@@ -243,41 +243,48 @@ async def _run_entry(db, pos_id, strategy, coin, side, signal_px, now) -> None:
 
 # ── Internal: close order (ALO at mid, same retry logic as entry) ────────────
 
-async def _run_close(coin: str, is_long: bool, sz_coin: float, entry_px: float) -> float:
-    """Place ALO reduce-only limit at mid, retry once. Returns exit fill price."""
+async def _run_close(coin: str, is_long: bool, sz_coin: float) -> tuple[bool, float]:
+    """ALO reduce-only at mid, retry once. Returns (filled, exit_px).
+    Returns (False, 0) if neither attempt fills — caller keeps position OPEN.
+    """
     from ..lib import hl_exchange as ex
 
     book = await ex.get_l2_book(coin)
-    mid = book["mid"]
-    result, px1, _ = await ex.place_limit_order_close(coin, is_long, sz_coin, mid)
+    result, px1, _ = await ex.place_limit_order_close(coin, is_long, sz_coin, book["mid"])
     oid1 = ex.extract_oid(result)
     if oid1 is None:
         logger.warning("BOT: close order rejected %s — %s", coin, result.get("status"))
-        return entry_px
+        return False, 0.0
 
     await asyncio.sleep(30)
-    if await _is_filled(oid1):
-        fills = await ex.get_user_fills(10)
-        fill = next((f for f in fills if f.get("coin") == coin), None)
-        return float(fill["px"]) if fill else px1
+    filled1, fill_px1, _ = await _get_fill(oid1, coin)
+    if filled1:
+        return True, fill_px1
 
     try:
         await ex.cancel_order(coin, oid1)
     except Exception:
         pass
 
-    # Retry at updated mid
     book2 = await ex.get_l2_book(coin)
     result2, px2, _ = await ex.place_limit_order_close(coin, is_long, sz_coin, book2["mid"])
     oid2 = ex.extract_oid(result2)
     if oid2 is None:
         logger.warning("BOT: close retry rejected %s", coin)
-        return entry_px
+        return False, 0.0
 
     await asyncio.sleep(30)
-    fills = await ex.get_user_fills(10)
-    fill = next((f for f in fills if f.get("coin") == coin), None)
-    return float(fill["px"]) if fill else px2
+    filled2, fill_px2, _ = await _get_fill(oid2, coin)
+    if filled2:
+        return True, fill_px2
+
+    try:
+        await ex.cancel_order(coin, oid2)
+    except Exception:
+        pass
+
+    logger.warning("BOT: close did not fill %s after 2 attempts — position stays OPEN", coin)
+    return False, 0.0
 
 
 # ── Internal: position close ────────────────────────────────────────────────
@@ -294,13 +301,25 @@ async def _close_position(db, pos: dict, reason: str, now: datetime) -> None:
         {"_id": pos["_id"]}, {"$set": {"status": "CLOSING", "updated_at": now}}
     )
 
-    exit_px = entry_px  # fallback
+    filled = False
+    exit_px = entry_px
     if sz_coin > 0:
         is_long = side == "LONG"
         try:
-            exit_px = await _run_close(coin, is_long, sz_coin, entry_px)
+            filled, exit_px = await _run_close(coin, is_long, sz_coin)
         except Exception:
             logger.exception("BOT: close error %s", coin)
+    else:
+        filled = True  # sz=0 means already flat, mark closed
+
+    if not filled:
+        # Revert to OPEN — bot_close_expired will retry next minute
+        await db.bot_positions.update_one(
+            {"_id": pos["_id"]},
+            {"$set": {"status": "OPEN", "updated_at": datetime.now(timezone.utc)}},
+        )
+        logger.warning("BOT: close not filled %s — reverted to OPEN, will retry", coin)
+        return
 
     raw = (exit_px - entry_px) / entry_px if entry_px > 0 else 0.0
     ret = raw if side == "LONG" else -raw
@@ -321,15 +340,21 @@ async def _close_position(db, pos: dict, reason: str, now: datetime) -> None:
     await _update_daily_pnl(db, now, pnl)
 
 
-async def _is_filled(oid: int) -> bool:
-    """True if the order is no longer in open orders (= filled)."""
+async def _get_fill(oid: int, coin: str) -> tuple[bool, float, float]:
+    """Check fills API for a specific oid. Returns (filled, fill_px, fill_sz).
+    Using fills API (not open_orders) so cancelled orders are correctly detected as unfilled.
+    """
     from ..lib import hl_exchange as ex
     try:
-        open_orders = await ex.get_open_orders()
-        oids = {int(o.get("oid", -1)) for o in open_orders}
-        return oid not in oids
+        fills = await ex.get_user_fills(50)
+        matched = [f for f in fills if int(f.get("oid", -1)) == oid and f.get("coin") == coin]
+        if not matched:
+            return False, 0.0, 0.0
+        fill_px = sum(float(f["px"]) * float(f["sz"]) for f in matched) / sum(float(f["sz"]) for f in matched)
+        fill_sz = sum(float(f["sz"]) for f in matched)
+        return True, fill_px, fill_sz
     except Exception:
-        return False  # conservative: assume not filled if we can't check
+        return False, 0.0, 0.0
 
 
 async def _update_daily_pnl(db, now: datetime, pnl_usdc: float) -> None:
