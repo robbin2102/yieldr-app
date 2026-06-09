@@ -51,6 +51,7 @@ def _print_settings() -> None:
     print(f"  DRIFT_LIMIT_BPS      = {settings.drift_limit_bps}")
     print(f"  BOT_LEVERAGE         = {settings.bot_leverage}x")
     print(f"  BOT_ORDER_RETRIES    = {settings.bot_order_retries}")
+    print(f"  BOT_ORDER_WAIT_S     = {settings.bot_order_wait_s}s")
     print(f"  BOT_STRATEGIES       = {settings.bot_strategies}")
     print(f"  BOT_EXCLUDED_COINS   = {settings.bot_excluded_coins or '(none)'}")
     print("─────────────────────────────────────────────────────────────────\n")

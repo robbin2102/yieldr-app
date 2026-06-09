@@ -204,7 +204,7 @@ async def _run_entry(db, pos_id, strategy, coin, side, signal_px, now) -> None:
             "updated_at":       datetime.now(timezone.utc),
         }})
 
-        await asyncio.sleep(30)
+        await asyncio.sleep(settings.bot_order_wait_s)
         filled, actual_px, actual_sz = await _get_fill(oid, coin)
         if filled:
             await _mark_open(db, pos_id, actual_px, actual_sz, datetime.now(timezone.utc))
@@ -246,7 +246,7 @@ async def _run_close(coin: str, is_long: bool, sz_coin: float) -> tuple[bool, fl
                            coin, attempt + 1, result.get("status"))
             break
 
-        await asyncio.sleep(30)
+        await asyncio.sleep(settings.bot_order_wait_s)
         filled, fill_px, _ = await _get_fill(oid, coin)
         if filled:
             return True, fill_px
