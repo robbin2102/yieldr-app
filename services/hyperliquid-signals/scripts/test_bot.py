@@ -29,7 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from bson import ObjectId
 from src.config import settings
-from src.jobs.execution_bot import bot_execute, bot_close_expired
+from src.jobs.execution_bot import bot_execute, bot_close_expired, bot_manual_exit_all
 from src.db import get_db
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-7s %(message)s", datefmt="%H:%M:%S")
@@ -145,6 +145,10 @@ async def main() -> None:
         await test_drift(coin, side, strategy)
     elif "--test-timer-exit" in flags:
         await test_timer_exit()
+    elif "--exit-all" in flags:
+        print("[exit-all] closing all OPEN positions via IOC market order\n")
+        result = await bot_manual_exit_all()
+        print(f"Result: {result}")
     else:
         await test_order(coin, side, strategy)
 
