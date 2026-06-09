@@ -178,29 +178,32 @@ async def cancel_order(coin: str, oid: int) -> dict:
     return await asyncio.to_thread(_cancel)
 
 
-async def close_position_ioc(coin: str, is_long: bool, sz_coin: float) -> dict:
-    """IOC reduce-only close. is_long=True means we're selling to close a long."""
-    book = await get_l2_book(coin)
-    # Aggressive price to guarantee fill
-    if not is_long:  # closing long = sell → use bid * 0.99
-        px = round_px(book["best_bid"] * 0.99)
-        is_buy = False
-    else:            # closing short = buy → use ask * 1.01
-        px = round_px(book["best_ask"] * 1.01)
-        is_buy = True
-
+async def place_limit_order_close(
+    coin: str,
+    is_long: bool,
+    sz_coin: float,
+    limit_px: float,
+) -> tuple[dict, float, float]:
+    """ALO reduce-only limit order at limit_px to close a position.
+    is_long=True → selling (is_buy=False). is_long=False → buying (is_buy=True).
+    Returns (sdk_result, px_used, sz_used).
+    """
     meta = await get_asset_meta()
     sz_dec = meta.get(coin, {}).get("szDecimals", 4)
+    is_buy = not is_long  # sell to close long, buy to close short
+    px = round_px(limit_px)
     sz = round_sz(sz_coin, sz_dec)
+    if sz <= 0:
+        raise ValueError(f"computed sz={sz} for close {coin}")
 
-    def _close():
+    def _place():
         return _make_exchange().order(
-            coin, is_buy, sz, px, {"limit": {"tif": "Ioc"}}, reduce_only=True
+            coin, is_buy, sz, px, {"limit": {"tif": "Alo"}}, reduce_only=True
         )
-    result = await asyncio.to_thread(_close)
-    logger.info("IOC close %s is_buy=%s sz=%.6f px=%.6g → %s",
+    result = await asyncio.to_thread(_place)
+    logger.info("ALO close %s is_buy=%s sz=%.6f px=%.6g → %s",
                 coin, is_buy, sz, px, result.get("status"))
-    return result
+    return result, px, sz
 
 
 async def get_open_orders() -> list[dict]:

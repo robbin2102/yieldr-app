@@ -241,6 +241,45 @@ async def _run_entry(db, pos_id, strategy, coin, side, signal_px, now) -> None:
         logger.info("BOT: no fill after 2 attempts, skip %s %s", strategy, coin)
 
 
+# ── Internal: close order (ALO at mid, same retry logic as entry) ────────────
+
+async def _run_close(coin: str, is_long: bool, sz_coin: float, entry_px: float) -> float:
+    """Place ALO reduce-only limit at mid, retry once. Returns exit fill price."""
+    from ..lib import hl_exchange as ex
+
+    book = await ex.get_l2_book(coin)
+    mid = book["mid"]
+    result, px1, _ = await ex.place_limit_order_close(coin, is_long, sz_coin, mid)
+    oid1 = ex.extract_oid(result)
+    if oid1 is None:
+        logger.warning("BOT: close order rejected %s — %s", coin, result.get("status"))
+        return entry_px
+
+    await asyncio.sleep(30)
+    if await _is_filled(oid1):
+        fills = await ex.get_user_fills(10)
+        fill = next((f for f in fills if f.get("coin") == coin), None)
+        return float(fill["px"]) if fill else px1
+
+    try:
+        await ex.cancel_order(coin, oid1)
+    except Exception:
+        pass
+
+    # Retry at updated mid
+    book2 = await ex.get_l2_book(coin)
+    result2, px2, _ = await ex.place_limit_order_close(coin, is_long, sz_coin, book2["mid"])
+    oid2 = ex.extract_oid(result2)
+    if oid2 is None:
+        logger.warning("BOT: close retry rejected %s", coin)
+        return entry_px
+
+    await asyncio.sleep(30)
+    fills = await ex.get_user_fills(10)
+    fill = next((f for f in fills if f.get("coin") == coin), None)
+    return float(fill["px"]) if fill else px2
+
+
 # ── Internal: position close ────────────────────────────────────────────────
 
 async def _close_position(db, pos: dict, reason: str, now: datetime) -> None:
@@ -259,12 +298,7 @@ async def _close_position(db, pos: dict, reason: str, now: datetime) -> None:
     if sz_coin > 0:
         is_long = side == "LONG"
         try:
-            await ex.close_position_ioc(coin, is_long, sz_coin)
-            # Get fill price from most recent fill for this coin
-            fills = await ex.get_user_fills(10)
-            fill = next((f for f in fills if f.get("coin") == coin), None)
-            if fill:
-                exit_px = float(fill["px"])
+            exit_px = await _run_close(coin, is_long, sz_coin, entry_px)
         except Exception:
             logger.exception("BOT: close error %s", coin)
 
