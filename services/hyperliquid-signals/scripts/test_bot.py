@@ -123,9 +123,10 @@ async def test_timer_exit() -> None:
 # ── Close HL positions directly (bypasses MongoDB) ───────────────────────────
 
 async def close_hl_positions() -> None:
-    """Fetch live positions from HL clearinghouse and close each with ALO at mid."""
+    """Fetch live positions from HL clearinghouse and close with ALO at mid + retries."""
     import aiohttp
     from src.lib import hl_exchange as ex
+    from src.jobs.execution_bot import _run_close
 
     url = ("https://api.hyperliquid-testnet.xyz/info" if settings.bot_testnet
            else "https://api.hyperliquid.xyz/info")
@@ -149,11 +150,11 @@ async def close_hl_positions() -> None:
 
     print(f"[close-hl] Found {len(positions)} open HL position(s):\n")
     for p in positions:
-        pos  = p["position"]
-        coin = pos["coin"]
-        szi  = float(pos["szi"])          # positive=long, negative=short
+        pos     = p["position"]
+        coin    = pos["coin"]
+        szi     = float(pos["szi"])
         is_long = szi > 0
-        sz   = abs(szi)
+        sz      = abs(szi)
         entry_px = float(pos.get("entryPx") or 0)
         print(f"  {coin}  {'LONG' if is_long else 'SHORT'}  sz={sz}  entry={entry_px}")
 
@@ -164,49 +165,18 @@ async def close_hl_positions() -> None:
         szi     = float(pos["szi"])
         is_long = szi > 0
         sz      = abs(szi)
+        entry_px = float(pos.get("entryPx") or 0)
 
-        # IOC taker order — guaranteed fill or immediate cancel (cleanup utility only)
-        book = await ex.get_l2_book(coin)
-        is_buy = not is_long
-        px = book["best_bid"] * 0.999 if is_long else book["best_ask"] * 1.001
-
-        from src.lib.hl_exchange import round_px, round_sz, get_asset_meta, _make_exchange
-        meta = await get_asset_meta()
-        sz_dec = meta.get(coin, {}).get("szDecimals", 4)
-        px_r = round_px(px)
-        sz_r = round_sz(sz, sz_dec)
-
-        def _ioc():
-            return _make_exchange().order(coin, is_buy, sz_r, px_r,
-                                          {"limit": {"tif": "Ioc"}}, reduce_only=True)
-        result = await asyncio.to_thread(_ioc)
-        status = result.get("status", "?")
-        print(f"  {coin}: IOC {'sell' if is_long else 'buy'} sz={sz_r} px={px_r} → {status}")
-        if status == "ok":
-            await asyncio.sleep(3)
-            # IOC fills immediately — no resting oid, check recent fills by coin+time
-            import time as _time
-            since_ms = int(_time.time() * 1000) - 10_000
-            fills = await ex.get_user_fills(20)
-            recent = [f for f in fills
-                      if f.get("coin") == coin and int(f.get("time", 0)) >= since_ms]
-            if recent:
-                fill_px = sum(float(f["px"]) * float(f["sz"]) for f in recent) / sum(float(f["sz"]) for f in recent)
-                fill_sz = sum(float(f["sz"]) for f in recent)
-                print(f"  {coin}: confirmed fill @ {round(fill_px,2)} sz={round(fill_sz,6)}")
-            else:
-                print(f"  {coin}: order sent (status=ok) — check HL UI to confirm close")
-
-
-async def _get_fill_direct(oid: int, coin: str) -> tuple[bool, float, float]:
-    from src.lib import hl_exchange as ex
-    fills = await ex.get_user_fills(50)
-    matched = [f for f in fills if int(f.get("oid", -1)) == oid and f.get("coin") == coin]
-    if not matched:
-        return False, 0.0, 0.0
-    fill_px = sum(float(f["px"]) * float(f["sz"]) for f in matched) / sum(float(f["sz"]) for f in matched)
-    fill_sz = sum(float(f["sz"]) for f in matched)
-    return True, round(fill_px, 4), round(fill_sz, 6)
+        print(f"  {coin}: closing {sz} via ALO mid-price "
+              f"({settings.bot_order_retries} retries × {settings.bot_order_wait_s}s)...")
+        filled, fill_px = await _run_close(coin, is_long, sz)
+        if filled:
+            pnl = round((fill_px - entry_px) / entry_px * sz * entry_px *
+                        (1 if is_long else -1), 2) if entry_px > 0 else 0
+            print(f"  {coin}: filled @ {fill_px}  entry={entry_px}  pnl≈${pnl}")
+        else:
+            print(f"  {coin}: WARNING — not filled after {settings.bot_order_retries} attempts"
+                  f" — position still open on HL")
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
