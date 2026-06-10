@@ -193,12 +193,14 @@ async def _run_entry(db, pos_id, strategy, coin, side, signal_px, now) -> None:
         result, px, sz = await ex.place_limit_order(coin, is_buy, settings.bot_position_size_usdc, entry_px_quote)
         oid = ex.extract_oid(result)
         if oid is None:
-            # ALO would have crossed the book (price moved since mid was fetched) — transient,
-            # retry with a fresh price rather than aborting the whole entry.
+            # extract_oid found no "resting" status — log the raw response so we can
+            # tell whether this was a genuine rejection or an order that actually
+            # rested under a status shape extract_oid doesn't recognize.
+            logger.warning("BOT: entry oid not found, raw result: %s", result)
             logger.info("BOT: entry order not resting (status=%s), retry %d/%d %s %s",
                         result.get("status"), attempt + 1, settings.bot_order_retries, strategy, coin)
             first_attempt = False
-            await asyncio.sleep(1)
+            await asyncio.sleep(settings.bot_order_wait_s)
             continue
 
         await db.bot_positions.update_one({"_id": pos_id}, {"$set": {
@@ -253,11 +255,13 @@ async def _run_close(coin: str, is_long: bool, sz_coin: float) -> tuple[bool, fl
         result, px, _ = await ex.place_limit_order_close(coin, is_long, sz_coin, close_px)
         oid = ex.extract_oid(result)
         if oid is None:
-            # ALO would have crossed the book (price moved since mid was fetched) — transient,
-            # retry with a fresh price rather than aborting the whole close.
+            # extract_oid found no "resting" status — log the raw response so we can
+            # tell whether this was a genuine rejection or an order that actually
+            # rested under a status shape extract_oid doesn't recognize.
+            logger.warning("BOT: close oid not found, raw result: %s", result)
             logger.info("BOT: close order not resting (status=%s), retry %d/%d %s",
                         result.get("status"), attempt + 1, settings.bot_order_retries, coin)
-            await asyncio.sleep(1)
+            await asyncio.sleep(settings.bot_order_wait_s)
             continue
 
         await asyncio.sleep(settings.bot_order_wait_s)
