@@ -187,7 +187,10 @@ async def _run_entry(db, pos_id, strategy, coin, side, signal_px, now) -> None:
                                         datetime.now(timezone.utc), drift_bps=round(drift, 2))
                     return
 
-        result, px, sz = await ex.place_limit_order(coin, is_buy, settings.bot_position_size_usdc, mid)
+        # Quote at our own side's best level (not mid) — guarantees ALO can never
+        # cross the book regardless of price movement between fetch and placement.
+        entry_px_quote = book["best_bid"] if is_buy else book["best_ask"]
+        result, px, sz = await ex.place_limit_order(coin, is_buy, settings.bot_position_size_usdc, entry_px_quote)
         oid = ex.extract_oid(result)
         if oid is None:
             # ALO would have crossed the book (price moved since mid was fetched) — transient,
@@ -231,8 +234,8 @@ async def _run_entry(db, pos_id, strategy, coin, side, signal_px, now) -> None:
 # ── Internal: close order (ALO at mid, same retry logic as entry) ────────────
 
 async def _run_close(coin: str, is_long: bool, sz_coin: float) -> tuple[bool, float]:
-    """ALO reduce-only at mid, retry up to BOT_ORDER_RETRIES times. Returns (filled, exit_px).
-    Returns (False, 0) if no attempt fills — caller keeps position OPEN.
+    """ALO reduce-only at our own side's best level, retry up to BOT_ORDER_RETRIES times.
+    Returns (filled, exit_px). Returns (False, 0) if no attempt fills — caller keeps position OPEN.
     """
     from ..lib import hl_exchange as ex
 
@@ -243,7 +246,11 @@ async def _run_close(coin: str, is_long: bool, sz_coin: float) -> tuple[bool, fl
             logger.warning("BOT: close book error %s attempt %d: %s", coin, attempt + 1, e)
             continue
 
-        result, px, _ = await ex.place_limit_order_close(coin, is_long, sz_coin, book["mid"])
+        # Quote at our own side's best level (not mid) — guarantees ALO can never
+        # cross the book regardless of price movement between fetch and placement.
+        # Closing a long = sell -> quote at best_ask. Closing a short = buy -> quote at best_bid.
+        close_px = book["best_ask"] if is_long else book["best_bid"]
+        result, px, _ = await ex.place_limit_order_close(coin, is_long, sz_coin, close_px)
         oid = ex.extract_oid(result)
         if oid is None:
             # ALO would have crossed the book (price moved since mid was fetched) — transient,
