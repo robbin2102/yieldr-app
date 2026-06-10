@@ -190,9 +190,13 @@ async def _run_entry(db, pos_id, strategy, coin, side, signal_px, now) -> None:
         result, px, sz = await ex.place_limit_order(coin, is_buy, settings.bot_position_size_usdc, mid)
         oid = ex.extract_oid(result)
         if oid is None:
-            await _mark_skipped(db, pos_id, f"order_rejected:{result.get('status')}",
-                                datetime.now(timezone.utc))
-            return
+            # ALO would have crossed the book (price moved since mid was fetched) — transient,
+            # retry with a fresh price rather than aborting the whole entry.
+            logger.info("BOT: entry order not resting (status=%s), retry %d/%d %s %s",
+                        result.get("status"), attempt + 1, settings.bot_order_retries, strategy, coin)
+            first_attempt = False
+            await asyncio.sleep(1)
+            continue
 
         await db.bot_positions.update_one({"_id": pos_id}, {"$set": {
             "status":           "PENDING_FILL",
@@ -227,8 +231,8 @@ async def _run_entry(db, pos_id, strategy, coin, side, signal_px, now) -> None:
 # ── Internal: close order (ALO at mid, same retry logic as entry) ────────────
 
 async def _run_close(coin: str, is_long: bool, sz_coin: float) -> tuple[bool, float]:
-    """ALO reduce-only at mid, retry once. Returns (filled, exit_px).
-    Returns (False, 0) if neither attempt fills — caller keeps position OPEN.
+    """ALO reduce-only at mid, retry up to BOT_ORDER_RETRIES times. Returns (filled, exit_px).
+    Returns (False, 0) if no attempt fills — caller keeps position OPEN.
     """
     from ..lib import hl_exchange as ex
 
@@ -242,9 +246,12 @@ async def _run_close(coin: str, is_long: bool, sz_coin: float) -> tuple[bool, fl
         result, px, _ = await ex.place_limit_order_close(coin, is_long, sz_coin, book["mid"])
         oid = ex.extract_oid(result)
         if oid is None:
-            logger.warning("BOT: close rejected %s attempt %d — %s",
-                           coin, attempt + 1, result.get("status"))
-            break
+            # ALO would have crossed the book (price moved since mid was fetched) — transient,
+            # retry with a fresh price rather than aborting the whole close.
+            logger.info("BOT: close order not resting (status=%s), retry %d/%d %s",
+                        result.get("status"), attempt + 1, settings.bot_order_retries, coin)
+            await asyncio.sleep(1)
+            continue
 
         await asyncio.sleep(settings.bot_order_wait_s)
         filled, fill_px, _ = await _get_fill(oid, coin)
