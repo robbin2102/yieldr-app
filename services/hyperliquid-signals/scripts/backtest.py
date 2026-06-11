@@ -63,6 +63,22 @@ def ls_at(series: list[tuple[datetime, float]], ts: datetime) -> float | None:
     return series[idx][1]
 
 
+def oi_at(series: list[tuple[datetime, float, float]], ts: datetime) -> tuple[float, float] | None:
+    """Nearest (long_usd, short_usd) at or before ts."""
+    if not series:
+        return None
+    arr = [s[0] for s in series]
+    idx = bisect.bisect_right(arr, ts) - 1
+    if idx < 0:
+        return None
+    _, l, s = series[idx]
+    return l, s
+
+
+def pct(v): return f"{v*100:.1f}%" if v is not None else "—"
+def pcts(v): return f"{v*100:+.2f}%" if v is not None else "—"
+
+
 async def top_coins_by_volume(db, top_n: int) -> list[str]:
     """Top N coins by the cohort's total open notional at the latest snapshot."""
     latest = await db.hl_signals_coin_metrics.find().sort("snapshot_ts", -1).limit(1).to_list(1)
@@ -583,6 +599,78 @@ def composite_events(
     return out
 
 
+# ─── live-strategy mapping (mirrors src/jobs/alert_engine.py) ────────────────
+
+# strategy -> hold hours, must match STRATEGY_HOLD in alert_engine.py
+STRATEGY_HOLD_H: dict[str, int] = {
+    "WAKEUP_LS10_4H": 4,
+    "WAKEUP_LS10":    24,
+    "WAKEUP_LS20":    4,
+    "WHALE_FLIP":     4,
+}
+
+
+def strategy_events(
+    whale: list[dict],
+    oi_series: dict[str, list[tuple[datetime, float, float]]],
+) -> list[dict]:
+    """Re-derive exactly the alerts alert_engine.py would have fired.
+
+    Mirrors Rule 1 (WAKEUP while the cohort is >=10:1 crowded on either side,
+    same strategy names regardless of which side) and Rule 2 (WHALE_FLIP).
+    """
+    out = []
+    for w in whale:
+        if w["trigger"] == "WHALE_FLIP":
+            out.append({**w, "trigger": "WHALE_FLIP"})
+            continue
+        if w["trigger"] != "WHALE_WAKEUP":
+            continue
+
+        oi = oi_at(oi_series.get(w["coin"], []), w["ts"])
+        if oi is None:
+            continue
+        long_usd, short_usd = oi
+
+        ratio = None
+        if short_usd > 0 and long_usd / short_usd >= 10:
+            ratio = long_usd / short_usd
+        elif long_usd > 0 and short_usd / long_usd >= 10:
+            ratio = short_usd / long_usd
+        if ratio is None:
+            continue
+
+        out.append({**w, "trigger": "WAKEUP_LS10_4H"})
+        out.append({**w, "trigger": "WAKEUP_LS10"})
+        if ratio >= 20:
+            out.append({**w, "trigger": "WAKEUP_LS20"})
+
+    return out
+
+
+def render_by_strategy(strat_events: list[dict], prices: PriceIndex, horizons_h: list[int]) -> str:
+    """Per-strategy summary at each strategy's actual hold horizon."""
+    lines = ["", "## By live strategy (mirrors alert_engine.py rules)", ""]
+    report = evaluate(strat_events, prices, horizons_h)
+    header = ["Strategy", "Hold", "N (priced/total)", "Win%", "Net", "Avg Win", "Avg Loss"]
+    lines.append("| " + " | ".join(header) + " |")
+    lines.append("|" + "|".join(["---"] * len(header)) + "|")
+    for strat, hold_h in STRATEGY_HOLD_H.items():
+        r = report.get(strat)
+        if not r:
+            lines.append(f"| {strat} | {hold_h}h | 0/0 | — | — | — | — |")
+            continue
+        if hold_h not in r["horizons"]:
+            lines.append(f"| {strat} | {hold_h}h | {r['n_priced']}/{r['n_total']} | "
+                          f"_hold horizon {hold_h}h not in --horizons_ |  |  |  |")
+            continue
+        h = r["horizons"][hold_h]
+        cells = [strat, f"{hold_h}h", f"{r['n_priced']}/{r['n_total']}",
+                 pct(h["win_rate"]), pcts(h["mean"]), pcts(h["avg_win"]), pcts(h["avg_loss"])]
+        lines.append("| " + " | ".join(cells) + " |")
+    return "\n".join(lines)
+
+
 # ─── backtest driver ─────────────────────────────────────────────────────────
 
 
@@ -842,14 +930,18 @@ async def main(horizons_h: list[int], out_path: str | None,
     comp = composite_events(whale_events, thresh_events, ls_series)
     logger.info("Composite events: %d", len(comp))
 
+    strat_events = strategy_events(whale_events, oi_series)
+    logger.info("Live-strategy events: %d", len(strat_events))
+
     all_events = whale_events + thresh_events + comp
 
     if since or until:
+        def _in_range(e):
+            return (since is None or e["ts"] >= since) and (until is None or e["ts"] < until)
+
         before = len(all_events)
-        all_events = [
-            e for e in all_events
-            if (since is None or e["ts"] >= since) and (until is None or e["ts"] < until)
-        ]
+        all_events = [e for e in all_events if _in_range(e)]
+        strat_events = [e for e in strat_events if _in_range(e)]
         logger.info("Date filter %s → %s: %d → %d events", since, until, before, len(all_events))
 
     if not all_events:
@@ -866,6 +958,7 @@ async def main(horizons_h: list[int], out_path: str | None,
 
     report = evaluate(all_events, prices, horizons_h)
     md = render_markdown(report, horizons_h)
+    md += render_by_strategy(strat_events, prices, horizons_h)
 
     if by_coin:
         md += "\n\n" + render_by_coin(
