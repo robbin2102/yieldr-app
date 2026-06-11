@@ -10,8 +10,8 @@ router = APIRouter(tags=["trade-alerts"])
 # is an apples-to-apples comparison. Numbers from backtest_report.md (2026-05-24 run).
 STRATEGY_META: dict[str, dict] = {
     "WAKEUP_LS10_4H": {
-        "label": "WAKEUP + L:S≥10 · 4h",
-        "rule": "Q1 whale wakes up while L:S ≥ 10 — exit after 4h",
+        "label": "WAKEUP + 10:1 crowd · 4h",
+        "rule": "Q1 whale wakes up while the cohort is ≥10:1 crowded (either side) — exit after 4h",
         "hold_hours": 4,
         "backtest_win_pct": 91.7,
         "backtest_return_pct": 1.58,
@@ -19,8 +19,8 @@ STRATEGY_META: dict[str, dict] = {
         "backtest_n": 36,
     },
     "WAKEUP_LS10": {
-        "label": "WAKEUP + L:S≥10 · 24h",
-        "rule": "Q1 whale wakes up while L:S ≥ 10 — exit after 24h",
+        "label": "WAKEUP + 10:1 crowd · 24h",
+        "rule": "Q1 whale wakes up while the cohort is ≥10:1 crowded (either side) — exit after 24h",
         "hold_hours": 24,
         "backtest_win_pct": 60.6,
         "backtest_return_pct": 2.60,
@@ -28,8 +28,8 @@ STRATEGY_META: dict[str, dict] = {
         "backtest_n": 33,
     },
     "WAKEUP_LS20": {
-        "label": "WAKEUP + L:S≥20 · 4h",
-        "rule": "Q1 whale wakes up while L:S ≥ 20 — exit after 4h",
+        "label": "WAKEUP + 20:1 crowd · 4h",
+        "rule": "Q1 whale wakes up while the cohort is ≥20:1 crowded (either side) — exit after 4h",
         "hold_hours": 4,
         "backtest_win_pct": 71.4,
         "backtest_return_pct": 1.20,
@@ -44,36 +44,6 @@ STRATEGY_META: dict[str, dict] = {
         "backtest_return_pct": 1.05,
         "backtest_horizon_h": 4,
         "backtest_n": 16,
-    },
-    # WAKEUP_SS* are the short-crowded mirror of WAKEUP_LS* (gated on
-    # short_usd/long_usd instead of long_usd/short_usd). backtest_* fields are
-    # null pending a backtest run for "WAKEUP + S:L≥10" / band "≥10 (short)".
-    "WAKEUP_SS10_4H": {
-        "label": "WAKEUP + S:L≥10 · 4h",
-        "rule": "Q1 whale wakes up while S:L ≥ 10 (short-crowded) — exit after 4h",
-        "hold_hours": 4,
-        "backtest_win_pct": None,
-        "backtest_return_pct": None,
-        "backtest_horizon_h": 4,
-        "backtest_n": 0,
-    },
-    "WAKEUP_SS10": {
-        "label": "WAKEUP + S:L≥10 · 24h",
-        "rule": "Q1 whale wakes up while S:L ≥ 10 (short-crowded) — exit after 24h",
-        "hold_hours": 24,
-        "backtest_win_pct": None,
-        "backtest_return_pct": None,
-        "backtest_horizon_h": 24,
-        "backtest_n": 0,
-    },
-    "WAKEUP_SS20": {
-        "label": "WAKEUP + S:L≥20 · 4h",
-        "rule": "Q1 whale wakes up while S:L ≥ 20 (short-crowded) — exit after 4h",
-        "hold_hours": 4,
-        "backtest_win_pct": None,
-        "backtest_return_pct": None,
-        "backtest_horizon_h": 4,
-        "backtest_n": 0,
     },
 }
 

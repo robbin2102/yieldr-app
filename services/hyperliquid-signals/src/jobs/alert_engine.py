@@ -1,18 +1,17 @@
 """Alert engine — evaluates trading rules after each snapshot and resolves expired alerts.
 
 Rules (from backtest results):
-  WAKEUP_LS10    : Q1 whale WAKEUP while L:S ≥ 10 → hold 24h
+  WAKEUP_LS10    : Q1 whale WAKEUP while the cohort is ≥10:1 crowded on either
+                   side (L:S ≥ 10 or S:L ≥ 10) → hold 24h
   WAKEUP_LS10_4H : same trigger → hold 4h  (backtest edge peaks at 4h)
-  WAKEUP_LS20    : Q1 whale WAKEUP while L:S ≥ 20 → hold 4h  (71.4%/+1.20%, n=63)
-  WAKEUP_SS10    : Q1 whale WAKEUP while S:L ≥ 10 (short-crowded) → hold 24h
-  WAKEUP_SS10_4H : same trigger → hold 4h
-  WAKEUP_SS20    : Q1 whale WAKEUP while S:L ≥ 20 (short-crowded) → hold 4h
+  WAKEUP_LS20    : Q1 whale WAKEUP while the cohort is ≥20:1 crowded on either
+                   side → hold 4h  (71.4%/+1.20%, n=63 for the long-crowded case)
   WHALE_FLIP     : Q1 whale reverses own position → follow flip direction → hold 4h
 
-WAKEUP_SS* are the short-crowded mirror of WAKEUP_LS*: same hold times, but
-gated on short_usd/long_usd instead of long_usd/short_usd. Not yet validated
-against backtest — add to BOT_STRATEGIES only after reviewing
-scripts/backtest.py results for "WAKEUP + S:L≥10".
+The WAKEUP_LS* rules are symmetric: they fire whether the cohort is
+long-crowded (L:S ≥ threshold) or short-crowded (S:L ≥ threshold). The alert's
+side always follows the waking whale's own side, so the strategy name and hold
+time are the same regardless of which side the cohort is crowded on.
 """
 import asyncio
 import logging
@@ -26,14 +25,10 @@ STRATEGY_HOLD: dict[str, int] = {
     "WAKEUP_LS10":    24,
     "WAKEUP_LS10_4H": 4,
     "WAKEUP_LS20":    4,
-    "WAKEUP_SS10":    24,
-    "WAKEUP_SS10_4H": 4,
-    "WAKEUP_SS20":    4,
     "WHALE_FLIP":     4,
 }
 
 WAKEUP_LS10_VARIANTS = ("WAKEUP_LS10", "WAKEUP_LS10_4H")
-WAKEUP_SS10_VARIANTS = ("WAKEUP_SS10", "WAKEUP_SS10_4H")
 
 
 async def _current_price(db, coin: str) -> float | None:
@@ -128,7 +123,7 @@ async def run_alert_engine(snapshot_ts: datetime) -> None:
     wakeups = [w for w in whale_docs if w["event_type"] == "WAKEUP"]
     flips   = [w for w in whale_docs if w["event_type"] == "FLIP"]
 
-    # ── Rule 1: WAKEUP + L:S ≥ 10 (long-crowded cohort) ────────────────────────────
+    # ── Rule 1: WAKEUP + cohort crowded ≥10:1 on either side (symmetric) ───────────
     for w in wakeups:
         coin = w["coin"]
         cm   = metrics.get(coin)
@@ -140,43 +135,30 @@ async def run_alert_engine(snapshot_ts: datetime) -> None:
         if not px:
             continue
 
-        if short_usd > 0:
-            ls = long_usd / short_usd
-            if ls >= 10:
-                detail = {
-                    "ls_ratio":        round(ls, 2),
-                    "whale_size_usd":  w.get("size_usd", 0),
-                    "whale_address":   w.get("address", ""),
-                }
-                for variant in WAKEUP_LS10_VARIANTS:
-                    fired = await _fire(db, variant, coin, w["side"], px, now, detail)
-                    if fired:
-                        asyncio.create_task(_bot_execute(fired))
+        ratio = None
+        crowd_side = None
+        if short_usd > 0 and long_usd / short_usd >= 10:
+            ratio, crowd_side = long_usd / short_usd, "long"
+        elif long_usd > 0 and short_usd / long_usd >= 10:
+            ratio, crowd_side = short_usd / long_usd, "short"
 
-                # Rule 1b: WAKEUP + L:S ≥ 20
-                if ls >= 20:
-                    fired = await _fire(db, "WAKEUP_LS20", coin, w["side"], px, now, detail)
-                    if fired:
-                        asyncio.create_task(_bot_execute(fired))
+        if ratio is not None:
+            detail = {
+                "crowd_side":      crowd_side,
+                "crowd_ratio":     round(ratio, 2),
+                "whale_size_usd":  w.get("size_usd", 0),
+                "whale_address":   w.get("address", ""),
+            }
+            for variant in WAKEUP_LS10_VARIANTS:
+                fired = await _fire(db, variant, coin, w["side"], px, now, detail)
+                if fired:
+                    asyncio.create_task(_bot_execute(fired))
 
-        # ── Rule 1c: WAKEUP + S:L ≥ 10 (short-crowded cohort, mirror of Rule 1) ────
-        if long_usd > 0:
-            ss = short_usd / long_usd
-            if ss >= 10:
-                detail = {
-                    "ss_ratio":        round(ss, 2),
-                    "whale_size_usd":  w.get("size_usd", 0),
-                    "whale_address":   w.get("address", ""),
-                }
-                for variant in WAKEUP_SS10_VARIANTS:
-                    fired = await _fire(db, variant, coin, w["side"], px, now, detail)
-                    if fired:
-                        asyncio.create_task(_bot_execute(fired))
-
-                if ss >= 20:
-                    fired = await _fire(db, "WAKEUP_SS20", coin, w["side"], px, now, detail)
-                    if fired:
-                        asyncio.create_task(_bot_execute(fired))
+            # Rule 1b: cohort crowded ≥20:1 on either side
+            if ratio >= 20:
+                fired = await _fire(db, "WAKEUP_LS20", coin, w["side"], px, now, detail)
+                if fired:
+                    asyncio.create_task(_bot_execute(fired))
 
     # ── Rule 2: Whale FLIP ────────────────────────────────────────────────────────
     for w in flips:
