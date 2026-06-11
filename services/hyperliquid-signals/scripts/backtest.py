@@ -401,7 +401,10 @@ async def load_threshold_events(db) -> tuple[
     oi_series: dict[str, list[tuple[datetime, float, float]]] = {}
 
     coins = await db.hl_signals_coin_metrics.distinct("coin")
-    for coin in coins:
+    logger.info("Loading threshold events for %d coins…", len(coins))
+    for i, coin in enumerate(coins):
+        if i and i % 10 == 0:
+            logger.info("  …%d/%d coins (%d events so far)", i, len(coins), len(out))
         cursor = db.hl_signals_coin_metrics.find(
             {"coin": coin},
             {"_id": 0, "snapshot_ts": 1, "long_usd": 1, "short_usd": 1,
