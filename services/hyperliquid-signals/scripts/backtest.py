@@ -28,18 +28,28 @@ LS_THRESHOLDS = (2, 3, 4, 5, 7, 10, 15, 20)
 
 
 def ls_band_label(ls: float) -> str:
+    """Band label for L:S ratio. Bands below 1.0 mirror the bands above 1.0
+    (e.g. "2-3 (long)" vs "2-3 (short)") so WAKEUP composites can be evaluated
+    symmetrically for both LONG-crowded and SHORT-crowded cohorts."""
     for lo, hi, lbl in (
-        (20, float("inf"), "≥20"),
-        (10, 20, "10-20"),
-        (7, 10, "7-10"),
-        (5, 7, "5-7"),
-        (3, 5, "3-5"),
-        (2, 3, "2-3"),
-        (1, 2, "1-2"),
+        (20, float("inf"), "≥20 (long)"),
+        (10, 20, "10-20 (long)"),
+        (7, 10, "7-10 (long)"),
+        (5, 7, "5-7 (long)"),
+        (3, 5, "3-5 (long)"),
+        (2, 3, "2-3 (long)"),
+        (1, 2, "1-2 (long)"),
+        (0.5, 1, "1-2 (short)"),
+        (1 / 3, 0.5, "2-3 (short)"),
+        (0.2, 1 / 3, "3-5 (short)"),
+        (1 / 7, 0.2, "5-7 (short)"),
+        (0.1, 1 / 7, "7-10 (short)"),
+        (1 / 20, 0.1, "10-20 (short)"),
+        (0, 1 / 20, "≥20 (short)"),
     ):
         if lo <= ls < hi:
             return lbl
-    return "<1 (short-heavy)"
+    return "?"
 
 
 def ls_at(series: list[tuple[datetime, float]], ts: datetime) -> float | None:
@@ -530,13 +540,21 @@ def composite_events(
         if w["trigger"] != "WHALE_WAKEUP":
             continue
 
-        # 1. original ≥10 composite
-        relevant = [t for t in by_coin.get(w["coin"], [])
+        # 1. original ≥10 composite (long-crowded cohort, L:S ≥ 10)
+        relevant_long = [t for t in by_coin.get(w["coin"], [])
                     if "L:S≥" in t["trigger"]
                     and t["trade_side"] == w["trade_side"]
                     and timedelta(0) <= (w["ts"] - t["ts"]) <= timedelta(minutes=60)]
-        if relevant:
+        if relevant_long:
             out.append({**w, "trigger": "WAKEUP + L:S≥10"})
+
+        # 1b. symmetric composite (short-crowded cohort, S:L ≥ 10, i.e. L:S ≤ 1/10)
+        relevant_short = [t for t in by_coin.get(w["coin"], [])
+                    if "L:S≤1/" in t["trigger"]
+                    and t["trade_side"] == w["trade_side"]
+                    and timedelta(0) <= (w["ts"] - t["ts"]) <= timedelta(minutes=60)]
+        if relevant_short:
+            out.append({**w, "trigger": "WAKEUP + S:L≥10"})
 
         # 2. band-tagged wakeup
         cur_ls = ls_at(ls_series.get(w["coin"], []), w["ts"])
@@ -643,7 +661,11 @@ def render_by_coin(
 
 
 DEFAULT_FOCUS_COINS = ["BTC", "ETH", "SOL", "HYPE", "XRP", "DOGE", "SUI", "LINK", "AAVE", "NEAR"]
-DEFAULT_FOCUS_TRIGGERS = ["L:S≥2 (long)", "L:S≥3 (long)", "L:S≥5 (long)", "L:S≥10 (long)"]
+DEFAULT_FOCUS_TRIGGERS = [
+    "L:S≥2 (long)", "L:S≥3 (long)", "L:S≥5 (long)", "L:S≥10 (long)",
+    "L:S≤1/2 (short)", "L:S≤1/3 (short)", "L:S≤1/5 (short)", "L:S≤1/10 (short)",
+    "WAKEUP + L:S≥10", "WAKEUP + S:L≥10",
+]
 
 
 def render_actual_exit(result: dict) -> str:

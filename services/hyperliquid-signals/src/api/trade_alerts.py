@@ -45,6 +45,36 @@ STRATEGY_META: dict[str, dict] = {
         "backtest_horizon_h": 4,
         "backtest_n": 16,
     },
+    # WAKEUP_SS* are the short-crowded mirror of WAKEUP_LS* (gated on
+    # short_usd/long_usd instead of long_usd/short_usd). backtest_* fields are
+    # null pending a backtest run for "WAKEUP + S:L≥10" / band "≥10 (short)".
+    "WAKEUP_SS10_4H": {
+        "label": "WAKEUP + S:L≥10 · 4h",
+        "rule": "Q1 whale wakes up while S:L ≥ 10 (short-crowded) — exit after 4h",
+        "hold_hours": 4,
+        "backtest_win_pct": None,
+        "backtest_return_pct": None,
+        "backtest_horizon_h": 4,
+        "backtest_n": 0,
+    },
+    "WAKEUP_SS10": {
+        "label": "WAKEUP + S:L≥10 · 24h",
+        "rule": "Q1 whale wakes up while S:L ≥ 10 (short-crowded) — exit after 24h",
+        "hold_hours": 24,
+        "backtest_win_pct": None,
+        "backtest_return_pct": None,
+        "backtest_horizon_h": 24,
+        "backtest_n": 0,
+    },
+    "WAKEUP_SS20": {
+        "label": "WAKEUP + S:L≥20 · 4h",
+        "rule": "Q1 whale wakes up while S:L ≥ 20 (short-crowded) — exit after 4h",
+        "hold_hours": 4,
+        "backtest_win_pct": None,
+        "backtest_return_pct": None,
+        "backtest_horizon_h": 4,
+        "backtest_n": 0,
+    },
 }
 
 
