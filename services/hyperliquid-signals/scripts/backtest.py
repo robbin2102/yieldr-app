@@ -63,6 +63,19 @@ def ls_at(series: list[tuple[datetime, float]], ts: datetime) -> float | None:
     return series[idx][1]
 
 
+async def top_coins_by_volume(db, top_n: int) -> list[str]:
+    """Top N coins by the cohort's total open notional at the latest snapshot."""
+    latest = await db.hl_signals_coin_metrics.find().sort("snapshot_ts", -1).limit(1).to_list(1)
+    if not latest:
+        return []
+    ts = latest[0]["snapshot_ts"]
+    cursor = db.hl_signals_coin_metrics.find(
+        {"snapshot_ts": ts}, {"_id": 0, "coin": 1, "total_usd": 1}
+    ).sort("total_usd", -1).limit(top_n)
+    docs = await cursor.to_list(top_n)
+    return [d["coin"] for d in docs]
+
+
 # ─── price lookup ─────────────────────────────────────────────────────────────
 
 
@@ -113,9 +126,10 @@ class PriceIndex:
 # ─── event generation ────────────────────────────────────────────────────────
 
 
-async def load_whale_events(db) -> list[dict]:
+async def load_whale_events(db, coins_filter: list[str] | None = None) -> list[dict]:
     """Each whale event becomes one candidate trade trigger."""
-    cursor = db.hl_signals_whale_events.find({}, {"_id": 0}).sort("ts", 1)
+    filt: dict = {"coin": {"$in": coins_filter}} if coins_filter is not None else {}
+    cursor = db.hl_signals_whale_events.find(filt, {"_id": 0}).sort("ts", 1)
     events = [doc async for doc in cursor]
     out = []
     for e in events:
@@ -384,7 +398,7 @@ def build_oi_unwind_events(
     return out
 
 
-async def load_threshold_events(db) -> tuple[
+async def load_threshold_events(db, coins_filter: list[str] | None = None) -> tuple[
     list[dict],
     dict[str, list[tuple[datetime, float]]],
     dict[str, list[tuple[datetime, float, float]]],
@@ -401,6 +415,8 @@ async def load_threshold_events(db) -> tuple[
     oi_series: dict[str, list[tuple[datetime, float, float]]] = {}
 
     coins = await db.hl_signals_coin_metrics.distinct("coin")
+    if coins_filter is not None:
+        coins = [c for c in coins if c in coins_filter]
     logger.info("Loading threshold events for %d coins…", len(coins))
     for i, coin in enumerate(coins):
         if i and i % 10 == 0:
@@ -593,18 +609,22 @@ def evaluate(events: list[dict], prices: PriceIndex, horizons_h: list[int]) -> d
                 # Sign by trade direction: SHORT trade profits when price falls
                 ret = raw if e["trade_side"] == "LONG" else -raw
                 per_horizon[h].append(ret)
+        def _stats(rs):
+            wins = [r for r in rs if r > 0]
+            losses = [r for r in rs if r <= 0]
+            return {
+                "n": len(rs),
+                "win_rate": len(wins) / len(rs) if rs else None,
+                "mean": mean(rs) if rs else None,
+                "median": median(rs) if rs else None,
+                "avg_win": mean(wins) if wins else None,
+                "avg_loss": mean(losses) if losses else None,
+            }
+
         report[trigger] = {
             "n_total": len(items),
             "n_priced": len(items) - skipped,
-            "horizons": {
-                h: {
-                    "n": len(rs),
-                    "win_rate": sum(1 for r in rs if r > 0) / len(rs) if rs else None,
-                    "mean": mean(rs) if rs else None,
-                    "median": median(rs) if rs else None,
-                }
-                for h, rs in per_horizon.items()
-            },
+            "horizons": {h: _stats(rs) for h, rs in per_horizon.items()},
         }
     return report
 
@@ -613,7 +633,8 @@ def render_markdown(report: dict, horizons_h: list[int]) -> str:
     lines = ["# HL Signals Backtest Report", ""]
     lines.append(f"Generated: {datetime.utcnow().isoformat()}Z")
     lines.append("")
-    header = ["Trigger", "N (priced/total)"] + [f"{h}h: win% / mean / median" for h in horizons_h]
+    header = ["Trigger", "N (priced/total)"] + \
+             [f"{h}h: win% / net / avg-win / avg-loss" for h in horizons_h]
     lines.append("| " + " | ".join(header) + " |")
     lines.append("|" + "|".join(["---"] * len(header)) + "|")
 
@@ -625,7 +646,10 @@ def render_markdown(report: dict, horizons_h: list[int]) -> str:
         cells = [trigger, f"{r['n_priced']}/{r['n_total']}"]
         for h in horizons_h:
             h_data = r["horizons"][h]
-            cells.append(f"{pct(h_data['win_rate'])} / {pcts(h_data['mean'])} / {pcts(h_data['median'])}")
+            cells.append(
+                f"{pct(h_data['win_rate'])} / {pcts(h_data['mean'])} / "
+                f"{pcts(h_data['avg_win'])} / {pcts(h_data['avg_loss'])}"
+            )
         lines.append("| " + " | ".join(cells) + " |")
     return "\n".join(lines)
 
@@ -790,11 +814,20 @@ def render_oi_unwind(unwind_events: list[dict], prices: PriceIndex, horizons_h: 
 
 async def main(horizons_h: list[int], out_path: str | None,
                by_coin: bool, focus_coins: list[str],
-               actual_exit: bool, flow_windows: bool) -> None:
+               actual_exit: bool, flow_windows: bool,
+               top_coins: int | None = None,
+               since: datetime | None = None, until: datetime | None = None) -> None:
     db = get_db()
 
+    coins_filter: list[str] | None = None
+    if top_coins:
+        coins_filter = await top_coins_by_volume(db, top_coins)
+        logger.info("Restricting to top %d coins by volume: %s", top_coins, ", ".join(coins_filter))
+        if focus_coins == DEFAULT_FOCUS_COINS:
+            focus_coins = coins_filter
+
     logger.info("Loading whale events…")
-    whale_events = await load_whale_events(db)
+    whale_events = await load_whale_events(db, coins_filter)
     logger.info("Whale events: %d", len(whale_events))
 
     raw_events = None
@@ -803,13 +836,22 @@ async def main(horizons_h: list[int], out_path: str | None,
         raw_events = await load_whale_events_raw(db)
 
     logger.info("Loading threshold events from coin_metrics…")
-    thresh_events, ls_series, oi_series = await load_threshold_events(db)
+    thresh_events, ls_series, oi_series = await load_threshold_events(db, coins_filter)
     logger.info("Threshold events: %d", len(thresh_events))
 
     comp = composite_events(whale_events, thresh_events, ls_series)
     logger.info("Composite events: %d", len(comp))
 
     all_events = whale_events + thresh_events + comp
+
+    if since or until:
+        before = len(all_events)
+        all_events = [
+            e for e in all_events
+            if (since is None or e["ts"] >= since) and (until is None or e["ts"] < until)
+        ]
+        logger.info("Date filter %s → %s: %d → %d events", since, until, before, len(all_events))
+
     if not all_events:
         logger.error("No events generated — nothing to backtest")
         return
@@ -865,8 +907,14 @@ if __name__ == "__main__":
                     help="Add WAKEUP_ACTUAL_EXIT section: exit when triggering whale closes")
     ap.add_argument("--flow-windows", action="store_true",
                     help="Add position-unwind signals: cohort OI drops ≥X%% in 1h/3h/6h")
+    ap.add_argument("--top-coins", type=int, default=None,
+                    help="Restrict to the top N coins by cohort open notional (speeds up runs)")
+    ap.add_argument("--since", default=None, help="Only include events on/after this date (YYYY-MM-DD)")
+    ap.add_argument("--until", default=None, help="Only include events before this date (YYYY-MM-DD)")
     args = ap.parse_args()
     horizons = [int(h) for h in args.horizons.split(",")]
     focus_coins = [c.strip().upper() for c in args.coins.split(",") if c.strip()]
+    since = datetime.fromisoformat(args.since) if args.since else None
+    until = datetime.fromisoformat(args.until) if args.until else None
     asyncio.run(main(horizons, args.out, args.by_coin, focus_coins,
-                     args.actual_exit, args.flow_windows))
+                     args.actual_exit, args.flow_windows, args.top_coins, since, until))
