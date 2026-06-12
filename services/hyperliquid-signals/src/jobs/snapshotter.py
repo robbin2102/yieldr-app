@@ -80,7 +80,9 @@ async def _detect_changes(
         {"address": address, "snapshot_ts": prev_snapshot_ts},
         {"_id": 0},
     )
-    prev_positions = {doc["coin"]: doc async for doc in prev_cursor}
+    # Skip the "no open positions" sentinel doc (coin=None) — it only marks
+    # that the address was checked at that snapshot, not a real position.
+    prev_positions = {doc["coin"]: doc async for doc in prev_cursor if doc["coin"] is not None}
     current_map = {p["coin"]: p for p in current_positions}
 
     for coin, cur in current_map.items():
@@ -147,7 +149,12 @@ async def _detect_whale_events(
         cursor = db.hl_signals_positions.find(
             {"address": address, "snapshot_ts": prev_ts}, {"_id": 0}
         )
-        prev_map = {doc["coin"]: doc async for doc in cursor}
+        # Skip the "no open positions" sentinel doc (coin=None) — without it,
+        # an address that closed all positions would never get a doc written
+        # at that snapshot_ts, so prev_pos_doc would keep resolving to the
+        # last snapshot where it *did* have positions and EXIT would re-fire
+        # every snapshot forever.
+        prev_map = {doc["coin"]: doc async for doc in cursor if doc["coin"] is not None}
 
     # Batch-check dormancy for all new coins in one query
     new_coins = [coin for coin in current_map if coin not in prev_map
@@ -283,6 +290,14 @@ async def run_snapshot() -> None:
                 if parsed:
                     batch_positions.extend(parsed)
                     addr_positions[addr] = parsed
+                else:
+                    # Sentinel doc so prev-snapshot lookups for this address
+                    # see "checked, zero open positions" instead of skipping
+                    # back to the last snapshot that had real positions.
+                    batch_positions.append({
+                        "address": addr, "coin": None, "snapshot_ts": now,
+                        "side": None, "size_usd": 0,
+                    })
 
             del fetch_results  # HTTP response payloads no longer needed
 
@@ -334,7 +349,7 @@ async def run_snapshot() -> None:
 
     # ── Aggregate active position counts/sizes into trader docs ──────────────
     pos_pipeline = [
-        {"$match": {"snapshot_ts": now}},
+        {"$match": {"snapshot_ts": now, "coin": {"$ne": None}}},
         {"$group": {
             "_id": "$address",
             "active_positions_count": {"$sum": 1},

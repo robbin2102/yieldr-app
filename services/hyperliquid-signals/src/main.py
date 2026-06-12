@@ -20,8 +20,11 @@ logger = logging.getLogger(__name__)
 
 # APScheduler logs "Running job ..." / "... executed successfully" on every
 # tick (every 60s by default) — drop to WARNING to cut routine noise while
-# still surfacing job errors.
+# still surfacing job errors. The scheduler logger also logs one-time
+# "Adding job tentatively"/"Added job"/"Scheduler started" lines at startup —
+# silence those too; the "Scheduler started: ..." line logged below covers it.
 logging.getLogger("apscheduler.executors.default").setLevel(logging.WARNING)
+logging.getLogger("apscheduler.scheduler").setLevel(logging.WARNING)
 
 scheduler = AsyncIOScheduler(timezone="UTC")
 
@@ -58,6 +61,10 @@ async def lifespan(app: FastAPI):
 
     if ws_task:
         ws_task.cancel()
+        try:
+            await ws_task
+        except asyncio.CancelledError:
+            pass
     scheduler.shutdown(wait=False)
     await close()
     logger.info('"Service shutdown complete"')

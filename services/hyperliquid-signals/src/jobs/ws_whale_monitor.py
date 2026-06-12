@@ -239,20 +239,32 @@ async def run_ws_monitor() -> None:
     logger.info('"WS whale monitor starting"')
 
     backoff = _BACKOFF_INITIAL_S
-    while True:
-        started = time.monotonic()
-        try:
-            info = Info(api_url(), skip_ws=False)
-            await _run_session(info)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.exception("WS monitor: session ended, reconnecting")
+    info = None
+    try:
+        while True:
+            started = time.monotonic()
+            try:
+                info = Info(api_url(), skip_ws=False)
+                await _run_session(info)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("WS monitor: session ended, reconnecting")
 
-        if time.monotonic() - started >= _BACKOFF_RESET_AFTER_S:
-            backoff = _BACKOFF_INITIAL_S
-        else:
-            backoff = min(backoff * 2, _BACKOFF_MAX_S)
+            if time.monotonic() - started >= _BACKOFF_RESET_AFTER_S:
+                backoff = _BACKOFF_INITIAL_S
+            else:
+                backoff = min(backoff * 2, _BACKOFF_MAX_S)
 
-        logger.info('"WS monitor reconnecting in %ds"', backoff)
-        await asyncio.sleep(backoff)
+            logger.info('"WS monitor reconnecting in %ds"', backoff)
+            await asyncio.sleep(backoff)
+    except asyncio.CancelledError:
+        # Stop the SDK's background websocket thread on shutdown — otherwise
+        # it keeps running past interpreter exit and logs a spurious
+        # "Exception ignored in thread shutdown" traceback.
+        if info is not None:
+            try:
+                info.disconnect_websocket()
+            except Exception:
+                logger.exception("WS monitor: error closing websocket during shutdown")
+        raise
