@@ -1,68 +1,22 @@
 """Alert engine — evaluates trading rules after each snapshot and resolves expired alerts.
 
-Rules (from backtest results):
-  WAKEUP_LS10    : Q1 whale WAKEUP while the cohort is ≥10:1 crowded on either
-                   side (L:S ≥ 10 or S:L ≥ 10) → hold 24h
-  WAKEUP_LS10_4H : same trigger → hold 4h  (backtest edge peaks at 4h)
-  WHALE_FLIP     : Q1 whale reverses own position → follow flip direction → hold 4h
-
-The WAKEUP_LS* rules are symmetric: they fire whether the cohort is
-long-crowded (L:S ≥ threshold) or short-crowded (S:L ≥ threshold). The alert's
-side always follows the waking whale's own side, so the strategy name and hold
-time are the same regardless of which side the cohort is crowded on.
+Rule definitions and firing logic live in rules.py (shared with the realtime
+WS whale monitor). This module scans the last 10 minutes of whale_events
+recorded by the snapshot job and evaluates them against the latest
+coin_metrics snapshot.
 """
-import asyncio
 import logging
 from datetime import datetime, timedelta
 
 from ..db import get_db
+from .rules import evaluate_wakeup, evaluate_flip
 
 logger = logging.getLogger(__name__)
-
-STRATEGY_HOLD: dict[str, int] = {
-    "WAKEUP_LS10":    24,
-    "WAKEUP_LS10_4H": 4,
-    "WHALE_FLIP":     4,
-}
-
-WAKEUP_LS10_VARIANTS = ("WAKEUP_LS10", "WAKEUP_LS10_4H")
 
 
 async def _current_price(db, coin: str) -> float | None:
     doc = await db.hl_signals_prices.find_one({"coin": coin}, sort=[("ts", -1)])
     return float(doc["price"]) if doc else None
-
-
-async def _already_open(db, strategy: str, coin: str) -> bool:
-    return bool(await db.hl_signals_trade_alerts.find_one(
-        {"strategy": strategy, "coin": coin, "status": "OPEN"}
-    ))
-
-
-async def _fire(db, strategy: str, coin: str, side: str, entry_px: float,
-                now: datetime, detail: dict) -> dict | None:
-    """Insert a new trade alert. Returns the inserted doc (with _id), or None if skipped."""
-    if await _already_open(db, strategy, coin):
-        return None
-    hold_h = STRATEGY_HOLD[strategy]
-    doc = {
-        "strategy":     strategy,
-        "coin":         coin,
-        "side":         side,
-        "entry_px":     entry_px,
-        "fired_at":     now,
-        "hold_hours":   hold_h,
-        "hold_until":   now + timedelta(hours=hold_h),
-        "status":       "OPEN",
-        "exit_px":      None,
-        "return_pct":   None,
-        "trigger_detail": detail,
-    }
-    result = await db.hl_signals_trade_alerts.insert_one(doc)
-    doc["_id"] = result.inserted_id
-    logger.info('"alert fired" strategy="%s" coin="%s" side="%s" px=%.5g',
-                strategy, coin, side, entry_px)
-    return doc
 
 
 async def _close_alert(db, alert: dict, exit_px: float, exit_reason: str) -> None:
@@ -123,55 +77,23 @@ async def run_alert_engine(snapshot_ts: datetime) -> None:
     # ── Rule 1: WAKEUP + cohort crowded ≥10:1 on either side (symmetric) ───────────
     for w in wakeups:
         coin = w["coin"]
-        cm   = metrics.get(coin)
-        if not cm:
-            continue
-        long_usd  = cm.get("long_usd", 0)
-        short_usd = cm.get("short_usd", 0)
         px = await _current_price(db, coin)
         if not px:
             continue
-
-        ratio = None
-        crowd_side = None
-        if short_usd > 0 and long_usd / short_usd >= 10:
-            ratio, crowd_side = long_usd / short_usd, "long"
-        elif long_usd > 0 and short_usd / long_usd >= 10:
-            ratio, crowd_side = short_usd / long_usd, "short"
-
-        if ratio is not None:
-            detail = {
-                "crowd_side":      crowd_side,
-                "crowd_ratio":     round(ratio, 2),
-                "whale_size_usd":  w.get("size_usd", 0),
-                "whale_address":   w.get("address", ""),
-            }
-            for variant in WAKEUP_LS10_VARIANTS:
-                fired = await _fire(db, variant, coin, w["side"], px, now, detail)
-                if fired:
-                    asyncio.create_task(_bot_execute(fired))
+        await evaluate_wakeup(
+            db, coin, w["side"], w.get("size_usd", 0), w.get("address", ""),
+            metrics.get(coin), px, now, signal_ts=w["ts"],
+        )
 
     # ── Rule 2: Whale FLIP ────────────────────────────────────────────────────────
     for w in flips:
         coin = w["coin"]
-        px   = await _current_price(db, coin)
+        px = await _current_price(db, coin)
         if not px:
             continue
-        fired = await _fire(db, "WHALE_FLIP", coin, w["side"], px, now, {
-            "whale_size_usd":  w.get("size_usd", 0),
-            "whale_address":   w.get("address", ""),
-            "previous_side":   "SHORT" if w["side"] == "LONG" else "LONG",
-        })
-        if fired:
-            asyncio.create_task(_bot_execute(fired))
+        await evaluate_flip(
+            db, coin, w["side"], w.get("size_usd", 0), w.get("address", ""),
+            px, now, signal_ts=w["ts"],
+        )
 
     logger.info('"alert engine complete"')
-
-
-async def _bot_execute(alert: dict) -> None:
-    """Thin wrapper — catches all exceptions so bot errors never crash the engine."""
-    try:
-        from .execution_bot import bot_execute
-        await bot_execute(alert)
-    except Exception:
-        logger.exception("BOT: unhandled error in bot_execute")

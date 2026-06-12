@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -39,8 +40,16 @@ async def lifespan(app: FastAPI):
     logger.info('"Scheduler started: discovery=daily, snapshot=%ds, prices=%ds, bot_timer=1min"',
                 interval_s, interval_s)
 
+    ws_task = None
+    if settings.ws_monitor_enabled:
+        from .jobs.ws_whale_monitor import run_ws_monitor
+        ws_task = asyncio.create_task(run_ws_monitor())
+        logger.info('"WS whale monitor task started"')
+
     yield
 
+    if ws_task:
+        ws_task.cancel()
     scheduler.shutdown(wait=False)
     await close()
     logger.info('"Service shutdown complete"')

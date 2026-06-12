@@ -30,6 +30,7 @@ async def ensure_indexes() -> None:
 
     await db.hl_signals_traders.create_index("address", unique=True)
     await db.hl_signals_traders.create_index("cohort_status")
+    await db.hl_signals_traders.create_index([("cohort_status", 1), ("skill_quartile", 1)])
 
     await db.hl_signals_positions.create_index([("address", 1), ("snapshot_ts", -1)])
     await db.hl_signals_positions.create_index([("address", 1), ("coin", 1), ("snapshot_ts", -1)])

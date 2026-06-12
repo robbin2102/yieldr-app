@@ -170,6 +170,7 @@ export interface TradeAlert {
   side: "LONG" | "SHORT";
   entry_px: number;
   fired_at: string;
+  signal_ts?: string;
   hold_hours: number;
   hold_until: string;
   status: "OPEN" | "WIN" | "LOSS";

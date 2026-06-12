@@ -94,6 +94,14 @@ class Settings(BaseSettings):
     # Seconds to wait for fill before cancelling and re-quoting
     bot_order_wait_s: int = Field(default=15, alias="BOT_ORDER_WAIT_S")
 
+    # ── Realtime WS whale monitor ────────────────────────────────────────────────
+    # Opt-in: subscribes to userFills for Q1 cohort addresses + allMids over a
+    # single websocket, firing WAKEUP/FLIP alerts within ~1s of the whale's fill
+    # instead of waiting for the next snapshot. The snapshot job keeps running as
+    # the source of truth (cohort, coin_metrics, fallback whale-event detection).
+    ws_monitor_enabled: bool = Field(default=False, alias="WS_MONITOR_ENABLED")
+    ws_monitor_refresh_s: int = Field(default=300, alias="WS_MONITOR_REFRESH_S")
+
     def cors_origins_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
 
