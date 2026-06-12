@@ -5,6 +5,7 @@ import gc
 import logging
 import os
 import resource
+import sys
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
@@ -29,8 +30,11 @@ def _current_rss_mb() -> float:
                     return int(line.split()[1]) / 1024  # kB → MB
     except Exception:
         pass
-    # Fallback: ru_maxrss is historical peak (KB on Linux), not current, but better than nothing
-    return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
+    # Fallback: ru_maxrss is historical peak, not current, but better than nothing.
+    # Units differ by platform: KB on Linux, bytes on macOS.
+    ru_maxrss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    divisor = 1024 * 1024 if sys.platform == "darwin" else 1024
+    return ru_maxrss / divisor
 
 logger = logging.getLogger(__name__)
 
