@@ -76,19 +76,25 @@ async def get_asset_meta() -> dict[str, dict]:
 
 # ── Account equity (async) ────────────────────────────────────────────────────
 
-async def get_account_equity() -> float | None:
-    addr = settings.hl_wallet_address
-    if not addr:
-        return None
+async def get_clearinghouse_state(address: str) -> dict | None:
     async with aiohttp.ClientSession() as session:
         async with session.post(
             f"{api_url()}/info",
-            json={"type": "clearinghouseState", "user": addr},
+            json={"type": "clearinghouseState", "user": address},
             timeout=aiohttp.ClientTimeout(total=5),
         ) as resp:
             if not resp.ok:
                 return None
-            state = await resp.json()
+            return await resp.json()
+
+
+async def get_account_equity() -> float | None:
+    addr = settings.hl_wallet_address
+    if not addr:
+        return None
+    state = await get_clearinghouse_state(addr)
+    if state is None:
+        return None
     try:
         return float(state["crossMarginSummary"]["accountValue"])
     except (KeyError, TypeError):
@@ -132,6 +138,13 @@ def _make_exchange():
 def _make_info():
     from hyperliquid.info import Info
     return Info(api_url(), skip_ws=True)
+
+
+def signing_address() -> str:
+    """The address that HL_PRIVATE_KEY signs orders as — should match
+    HL_WALLET_ADDRESS unless that key belongs to an API/agent wallet."""
+    from eth_account import Account
+    return Account.from_key(settings.hl_private_key).address
 
 
 async def set_leverage(coin: str, leverage: int, is_cross: bool = True) -> dict:
@@ -206,14 +219,14 @@ async def place_limit_order_close(
     return result, px, sz
 
 
-async def get_open_orders() -> list[dict]:
+async def get_open_orders(address: str | None = None) -> list[dict]:
     def _fetch():
-        return _make_info().open_orders(settings.hl_wallet_address)
+        return _make_info().open_orders(address or settings.hl_wallet_address)
     return await asyncio.to_thread(_fetch) or []
 
 
-async def get_user_fills(limit: int = 50) -> list[dict]:
+async def get_user_fills(limit: int = 50, address: str | None = None) -> list[dict]:
     def _fetch():
-        return _make_info().user_fills(settings.hl_wallet_address)
+        return _make_info().user_fills(address or settings.hl_wallet_address)
     fills = await asyncio.to_thread(_fetch)
     return (fills or [])[:limit]

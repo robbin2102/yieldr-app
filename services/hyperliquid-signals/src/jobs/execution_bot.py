@@ -1,6 +1,7 @@
 """Execution bot — strategy-driven order execution on Hyperliquid (testnet first)."""
 import asyncio
 import logging
+import time
 from datetime import datetime, timezone, timedelta
 
 from bson import ObjectId
@@ -190,6 +191,7 @@ async def _run_entry(db, pos_id, strategy, coin, side, signal_px, now) -> None:
         # Quote at our own side's best level (not mid) — guarantees ALO can never
         # cross the book regardless of price movement between fetch and placement.
         entry_px_quote = book["best_bid"] if is_buy else book["best_ask"]
+        since_ms = int(time.time() * 1000)
         result, px, sz = await ex.place_limit_order(coin, is_buy, settings.bot_position_size_usdc, entry_px_quote)
         oid = ex.extract_oid(result)
         if oid is None:
@@ -214,7 +216,7 @@ async def _run_entry(db, pos_id, strategy, coin, side, signal_px, now) -> None:
         }})
 
         await asyncio.sleep(settings.bot_order_wait_s)
-        filled, actual_px, actual_sz = await _get_fill(oid, coin)
+        filled, actual_px, actual_sz = await _get_fill(oid, coin, since_ms)
         if filled:
             await _mark_open(db, pos_id, actual_px, actual_sz, datetime.now(timezone.utc))
             return
@@ -252,6 +254,7 @@ async def _run_close(coin: str, is_long: bool, sz_coin: float) -> tuple[bool, fl
         # cross the book regardless of price movement between fetch and placement.
         # Closing a long = sell -> quote at best_ask. Closing a short = buy -> quote at best_bid.
         close_px = book["best_ask"] if is_long else book["best_bid"]
+        since_ms = int(time.time() * 1000)
         result, px, _ = await ex.place_limit_order_close(coin, is_long, sz_coin, close_px)
         oid = ex.extract_oid(result)
         if oid is None:
@@ -265,7 +268,7 @@ async def _run_close(coin: str, is_long: bool, sz_coin: float) -> tuple[bool, fl
             continue
 
         await asyncio.sleep(settings.bot_order_wait_s)
-        filled, fill_px, _ = await _get_fill(oid, coin)
+        filled, fill_px, _ = await _get_fill(oid, coin, since_ms)
         if filled:
             return True, fill_px
 
@@ -335,14 +338,21 @@ async def _close_position(db, pos: dict, reason: str, now: datetime) -> None:
     await _update_daily_pnl(db, now, pnl)
 
 
-async def _get_fill(oid: int, coin: str) -> tuple[bool, float, float]:
+async def _get_fill(oid: int, coin: str, since_ms: int | None = None) -> tuple[bool, float, float]:
     """Check fills API for a specific oid. Returns (filled, fill_px, fill_sz).
     Using fills API (not open_orders) so cancelled orders are correctly detected as unfilled.
+
+    since_ms, if given, is the time (ms epoch) the order was placed. Fills with
+    f["time"] before that (minus a small clock-skew buffer) are ignored — guards
+    against matching a stale fill from a previous order that happened to reuse
+    this oid/coin pair.
     """
     from ..lib import hl_exchange as ex
     try:
         fills = await ex.get_user_fills(50)
         matched = [f for f in fills if int(f.get("oid", -1)) == oid and f.get("coin") == coin]
+        if since_ms is not None:
+            matched = [f for f in matched if int(f.get("time", 0)) >= since_ms - 2000]
         if not matched:
             return False, 0.0, 0.0
         fill_px = sum(float(f["px"]) * float(f["sz"]) for f in matched) / sum(float(f["sz"]) for f in matched)

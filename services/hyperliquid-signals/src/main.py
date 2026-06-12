@@ -123,6 +123,65 @@ async def trigger_snapshot():
     return {"ok": True, "msg": "Snapshot started in background"}
 
 
+@app.get("/dev/account-status")
+async def account_status():
+    """Surface the addresses the bot signs orders as vs. the address its
+    fill/position/order checks query — and what each address actually holds
+    on Hyperliquid. Use this to diagnose "order placed but no position
+    visible in HL UI" — a mismatch between HL_WALLET_ADDRESS and the
+    HL_PRIVATE_KEY-derived signing address means orders are placed for one
+    account while everything else is checked against the other.
+    """
+    from .lib import hl_exchange as ex
+
+    configured = settings.hl_wallet_address
+    signing = ex.signing_address() if settings.hl_private_key else None
+    match = bool(configured and signing and configured.lower() == signing.lower())
+
+    result = {
+        "api_url": ex.api_url(),
+        "bot_testnet": settings.bot_testnet,
+        "configured_wallet_address": configured,
+        "signing_address": signing,
+        "addresses_match": match,
+    }
+
+    seen = set()
+    for label, addr in (("configured", configured), ("signing", signing)):
+        if not addr or addr.lower() in seen:
+            continue
+        seen.add(addr.lower())
+
+        state = await ex.get_clearinghouse_state(addr)
+        equity = None
+        positions = []
+        if state:
+            try:
+                equity = float(state["crossMarginSummary"]["accountValue"])
+            except (KeyError, TypeError):
+                pass
+            for p in state.get("assetPositions", []):
+                pos = p.get("position", {})
+                if float(pos.get("szi", 0) or 0) != 0:
+                    positions.append({
+                        "coin": pos.get("coin"),
+                        "szi": pos.get("szi"),
+                        "entryPx": pos.get("entryPx"),
+                        "positionValue": pos.get("positionValue"),
+                        "unrealizedPnl": pos.get("unrealizedPnl"),
+                    })
+
+        result[f"{label}_account"] = {
+            "address": addr,
+            "equity": equity,
+            "open_positions": positions,
+            "open_orders": await ex.get_open_orders(addr),
+            "recent_fills": await ex.get_user_fills(10, addr),
+        }
+
+    return result
+
+
 @app.post("/dev/trigger-bot-test")
 async def trigger_bot_test(strategy: str, coin: str, side: str):
     """Fire a synthetic trade alert and run it through the real bot_execute
