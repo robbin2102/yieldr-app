@@ -120,4 +120,4 @@ async def run_alert_engine(snapshot_ts: datetime) -> None:
             px, now, signal_ts=w["ts"],
         )
 
-    logger.info('"alert engine complete"')
+    logger.debug('"alert engine complete"')

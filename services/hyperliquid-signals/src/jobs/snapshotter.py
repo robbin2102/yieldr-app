@@ -245,7 +245,7 @@ def _rss_mb() -> float:
 
 
 async def run_snapshot() -> None:
-    logger.info('"Starting position snapshot", "rss_mb": %.1f', _rss_mb())
+    logger.debug('"Starting position snapshot", "rss_mb": %.1f', _rss_mb())
     db = get_db()
     now = datetime.utcnow()
 
@@ -262,7 +262,7 @@ async def run_snapshot() -> None:
         logger.warning('"No active traders in cohort, skipping snapshot"')
         return
 
-    logger.info('"Fetching positions", "traders": %d, "batch_size": %d', len(addresses), BATCH_SIZE)
+    logger.debug('"Fetching positions", "traders": %d, "batch_size": %d', len(addresses), BATCH_SIZE)
 
     semaphore = asyncio.Semaphore(settings.snapshot_concurrency)
     # Limit concurrent MongoDB operations: each _detect_changes call opens 2 cursors.
@@ -346,7 +346,7 @@ async def run_snapshot() -> None:
             del addr_positions
             gc.collect()  # return cyclic-ref memory promptly between batches
 
-    logger.info(
+    logger.debug(
         '"Snapshot complete", "positions": %d, "changes": %d, "whale_events": %d, "errors": %d, "rss_mb": %.1f',
         total_positions, total_changes, total_whale_events, errors, _rss_mb(),
     )

@@ -36,4 +36,4 @@ async def run_price_log() -> None:
         if coin in active_coins
     ]
     await db.hl_signals_prices.insert_many(docs, ordered=False)
-    logger.info('"Price log complete", "coins": %d', len(docs))
+    logger.debug('"Price log complete", "coins": %d', len(docs))

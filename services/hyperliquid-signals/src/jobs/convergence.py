@@ -62,7 +62,7 @@ async def run_convergence(snapshot_ts: datetime) -> None:
     # Ensure naive UTC throughout — Motor stores naive datetimes, comparisons must match
     if snapshot_ts.tzinfo is not None:
         snapshot_ts = snapshot_ts.replace(tzinfo=None)
-    logger.info('"Starting convergence v2", "snapshot_ts": "%s"', snapshot_ts.isoformat())
+    logger.debug('"Starting convergence v2", "snapshot_ts": "%s"', snapshot_ts.isoformat())
     db = get_db()
 
     # ── 1. Load current positions ────────────────────────────────────────────
@@ -637,7 +637,7 @@ async def run_convergence(snapshot_ts: datetime) -> None:
             pass
 
     rss_mb = _current_rss_mb()
-    logger.info(
+    logger.debug(
         '"Convergence v2 complete", "coin_metrics": %d, "signals": %d, "rss_mb": %.1f, "breakdown": %s',
         n_metrics,
         n_signals,
