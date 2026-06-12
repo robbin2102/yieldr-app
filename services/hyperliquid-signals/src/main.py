@@ -121,3 +121,45 @@ async def trigger_snapshot():
     import asyncio
     asyncio.create_task(run_snapshot())
     return {"ok": True, "msg": "Snapshot started in background"}
+
+
+@app.post("/dev/trigger-bot-test")
+async def trigger_bot_test(strategy: str, coin: str, side: str):
+    """Fire a synthetic trade alert and run it through the real bot_execute
+    pipeline (preflight, order placement, fill tracking, timer exit) — for
+    end-to-end testing on testnet without waiting for an organic signal.
+
+    Only available when BOT_TESTNET=true, as a guard against accidental use
+    on a live mainnet deployment.
+    """
+    from fastapi import HTTPException
+    from .jobs.rules import fire, STRATEGY_HOLD
+    from .jobs.execution_bot import bot_execute
+    from .lib import hl_exchange as ex
+    from .db import get_db
+
+    if not settings.bot_testnet:
+        raise HTTPException(status_code=403, detail="Only available when BOT_TESTNET=true")
+    if strategy not in STRATEGY_HOLD:
+        raise HTTPException(status_code=400, detail=f"Unknown strategy {strategy!r}")
+    side = side.upper()
+    if side not in ("LONG", "SHORT"):
+        raise HTTPException(status_code=400, detail="side must be LONG or SHORT")
+
+    coin = coin.upper()
+    book = await ex.get_l2_book(coin)
+    now = datetime.now(timezone.utc)
+    db = get_db()
+
+    alert = await fire(db, strategy, coin, side, book["mid"], now,
+                        {"source": "dev_test_trigger"})
+    if alert is None:
+        return {"ok": False, "msg": f"already an OPEN alert for {strategy}/{coin}"}
+
+    asyncio.create_task(bot_execute(alert))
+    return {
+        "ok": True,
+        "alert_id": str(alert["_id"]),
+        "entry_px": book["mid"],
+        "bot_will_execute": strategy in {s.strip() for s in settings.bot_strategies.split(",")},
+    }
