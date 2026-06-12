@@ -11,12 +11,14 @@ from apscheduler.triggers.interval import IntervalTrigger
 
 from .config import settings
 from .db import ensure_indexes, ping, close
+from .lib import health_log
 
 logging.basicConfig(
     level=logging.INFO,
     format='{"time": "%(asctime)s", "level": "%(levelname)s", "logger": "%(name)s", "msg": %(message)s}',
 )
 logger = logging.getLogger(__name__)
+health_log.install()
 
 # APScheduler logs "Running job ..." / "... executed successfully" on every
 # tick (every 60s by default) — drop to WARNING to cut routine noise while

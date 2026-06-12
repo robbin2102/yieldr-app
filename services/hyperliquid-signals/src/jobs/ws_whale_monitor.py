@@ -37,6 +37,19 @@ _loop: asyncio.AbstractEventLoop | None = None
 # websocket (allMids should arrive roughly every second while connected).
 _last_mids_msg: float = 0.0
 
+# Status surfaced via /api/bot/health for the Agent dashboard.
+_status: dict = {
+    "connected": False,
+    "last_connected_at": None,
+    "last_disconnected_at": None,
+    "reconnect_count": 0,
+}
+
+
+def get_status() -> dict:
+    return dict(_status)
+
+
 # How long allMids can go silent before we treat the connection as dead.
 _STALE_AFTER_S = 30
 # How often to check for staleness while a session is running.
@@ -208,6 +221,9 @@ async def _run_session(info) -> None:
     _subscribed.clear()
     await _sync_subscriptions(info)
 
+    _status["connected"] = True
+    _status["last_connected_at"] = datetime.utcnow().isoformat()
+
     last_sync = time.monotonic()
     while True:
         await asyncio.sleep(_HEALTH_CHECK_INTERVAL_S)
@@ -250,6 +266,10 @@ async def run_ws_monitor() -> None:
                 raise
             except Exception:
                 logger.exception("WS monitor: session ended, reconnecting")
+
+            _status["connected"] = False
+            _status["last_disconnected_at"] = datetime.utcnow().isoformat()
+            _status["reconnect_count"] += 1
 
             if time.monotonic() - started >= _BACKOFF_RESET_AFTER_S:
                 backoff = _BACKOFF_INITIAL_S

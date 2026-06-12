@@ -399,6 +399,7 @@ async def _create_pending(db, strategy, coin, side, signal_px, alert_id, now):
         "status": "PENDING", "signal_px": signal_px, "alert_id": alert_id,
         "size_usdc": settings.bot_position_size_usdc, "size_coin": None,
         "leverage": settings.bot_leverage,
+        "env": "testnet" if settings.bot_testnet else "mainnet",
         "entry_order_id": None, "entry_px": None, "entry_ts": None,
         "hold_until": None, "exit_order_id": None, "exit_px": None,
         "exit_ts": None, "exit_reason": None, "return_pct": None,
