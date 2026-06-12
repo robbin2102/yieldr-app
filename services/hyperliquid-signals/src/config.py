@@ -5,7 +5,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field
 
 def _load_env_local() -> None:
-    for candidate in [Path(".env"), Path("../../.env.local")]:
+    for candidate in [Path(".env"), Path(".env.local"), Path("../../.env.local")]:
         if candidate.exists():
             for key, val in dotenv_values(candidate).items():
                 if key and val is not None and key not in os.environ:
