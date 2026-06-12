@@ -17,6 +17,24 @@ def api_url() -> str:
     return _HL_TESTNET if settings.bot_testnet else _HL_MAINNET
 
 
+async def get_all_mids() -> dict[str, float]:
+    """Return coin → current mid price, from the same network the bot trades on.
+
+    Unlike lib.hyperliquid.fetch_all_mids (always mainnet, used for cohort
+    signal detection), this respects BOT_TESTNET so mark prices for open bot
+    positions match the venue the position actually lives on.
+    """
+    async with aiohttp.ClientSession() as session:
+        async with session.post(
+            f"{api_url()}/info",
+            json={"type": "allMids"},
+            timeout=aiohttp.ClientTimeout(total=5),
+        ) as resp:
+            resp.raise_for_status()
+            data = await resp.json(content_type=None)
+    return {coin: float(px) for coin, px in data.items() if not coin.startswith("@")}
+
+
 # ── L2 book (async) ───────────────────────────────────────────────────────────
 
 async def get_l2_book(coin: str) -> dict:

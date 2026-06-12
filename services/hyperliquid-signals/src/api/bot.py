@@ -5,6 +5,7 @@ from fastapi import APIRouter, HTTPException
 from ..config import settings
 from ..db import get_db, ping
 from ..lib import health_log
+from ..lib import hl_exchange
 from .trade_alerts import STRATEGY_META
 
 router = APIRouter(tags=["bot"])
@@ -19,8 +20,20 @@ def _ser(doc: dict) -> dict:
 
 
 async def _mark_prices(db, coins: set[str]) -> dict[str, float]:
-    prices = {}
-    for coin in coins:
+    """Mark prices for open bot positions — fetched live from the network the
+    bot trades on (testnet/mainnet per BOT_TESTNET), since hl_signals_prices
+    is sourced from mainnet only and can diverge from testnet prices.
+    """
+    if not coins:
+        return {}
+    try:
+        mids = await hl_exchange.get_all_mids()
+    except Exception:
+        mids = {}
+    prices = {coin: mids[coin] for coin in coins if coin in mids}
+
+    missing = coins - prices.keys()
+    for coin in missing:
         doc = await db.hl_signals_prices.find_one({"coin": coin}, sort=[("ts", -1)])
         if doc:
             prices[coin] = float(doc["price"])
@@ -52,7 +65,9 @@ async def get_bot_positions(status: str | None = None, env: str | None = None):
             if entry_px > 0:
                 raw = (mark_px - entry_px) / entry_px
                 ret = raw if d["side"] == "LONG" else -raw
-                d["live_return_pct"] = round(ret * 100, 3)
+                leverage = d.get("leverage") or 1
+                # ROE % (return on margin), matching HL's position display.
+                d["live_return_pct"] = round(ret * leverage * 100, 3)
                 d["live_pnl_usdc"] = round(ret * (d.get("size_usdc") or 0), 2)
 
     return {"data": docs, "total": len(docs)}
