@@ -18,6 +18,7 @@ before enabling on a live deployment.
 """
 import asyncio
 import logging
+import time
 from datetime import datetime, timedelta
 
 from ..config import settings
@@ -32,8 +33,24 @@ _subscribed: set[str] = set()
 _mid_prices: dict[str, float] = {}
 _loop: asyncio.AbstractEventLoop | None = None
 
+# Monotonic timestamp of the last allMids message — used to detect a dead
+# websocket (allMids should arrive roughly every second while connected).
+_last_mids_msg: float = 0.0
+
+# How long allMids can go silent before we treat the connection as dead.
+_STALE_AFTER_S = 30
+# How often to check for staleness while a session is running.
+_HEALTH_CHECK_INTERVAL_S = 15
+# Reconnect backoff bounds.
+_BACKOFF_INITIAL_S = 5
+_BACKOFF_MAX_S = 60
+# A session has to survive this long before backoff resets to the initial delay.
+_BACKOFF_RESET_AFTER_S = 60
+
 
 def _on_all_mids(msg: dict) -> None:
+    global _last_mids_msg
+    _last_mids_msg = time.monotonic()
     try:
         for coin, px in msg["data"]["mids"].items():
             _mid_prices[coin] = float(px)
@@ -178,20 +195,62 @@ async def _sync_subscriptions(info) -> None:
                      len(addrs), len(new), len(_subscribed))
 
 
+async def _run_session(info) -> None:
+    """Run one websocket session until it goes stale or errors out."""
+    global _last_mids_msg
+    _last_mids_msg = time.monotonic()
+    info.subscribe({"type": "allMids"}, _on_all_mids)
+
+    # Fresh connection — drop any previous subscription bookkeeping so
+    # _sync_subscriptions re-subscribes every Q1 address on this socket.
+    _subscribed.clear()
+    await _sync_subscriptions(info)
+
+    last_sync = time.monotonic()
+    while True:
+        await asyncio.sleep(_HEALTH_CHECK_INTERVAL_S)
+
+        idle = time.monotonic() - _last_mids_msg
+        if idle > _STALE_AFTER_S:
+            raise ConnectionError(f"WS monitor: allMids stale for {idle:.0f}s — reconnecting")
+
+        if time.monotonic() - last_sync >= settings.ws_monitor_refresh_s:
+            try:
+                await _sync_subscriptions(info)
+            except Exception:
+                logger.exception("WS monitor: subscription sync failed")
+            last_sync = time.monotonic()
+
+
 async def run_ws_monitor() -> None:
-    """Background task — call only when settings.ws_monitor_enabled is True."""
+    """Background task — call only when settings.ws_monitor_enabled is True.
+
+    Reconnects with exponential backoff if the websocket dies or goes stale
+    (no allMids messages for _STALE_AFTER_S). Each new session resubscribes
+    allMids + userFills for all Q1 addresses from scratch.
+    """
     global _loop
     from hyperliquid.info import Info
     from ..lib.hl_exchange import api_url
 
     _loop = asyncio.get_running_loop()
-    info = Info(api_url(), skip_ws=False)
-    info.subscribe({"type": "allMids"}, _on_all_mids)
-
     logger.info('"WS whale monitor starting"')
+
+    backoff = _BACKOFF_INITIAL_S
     while True:
+        started = time.monotonic()
         try:
-            await _sync_subscriptions(info)
+            info = Info(api_url(), skip_ws=False)
+            await _run_session(info)
+        except asyncio.CancelledError:
+            raise
         except Exception:
-            logger.exception("WS monitor: subscription sync failed")
-        await asyncio.sleep(settings.ws_monitor_refresh_s)
+            logger.exception("WS monitor: session ended, reconnecting")
+
+        if time.monotonic() - started >= _BACKOFF_RESET_AFTER_S:
+            backoff = _BACKOFF_INITIAL_S
+        else:
+            backoff = min(backoff * 2, _BACKOFF_MAX_S)
+
+        logger.info('"WS monitor reconnecting in %ds"', backoff)
+        await asyncio.sleep(backoff)
