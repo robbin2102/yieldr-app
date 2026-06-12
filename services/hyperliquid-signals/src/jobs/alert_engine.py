@@ -4,8 +4,6 @@ Rules (from backtest results):
   WAKEUP_LS10    : Q1 whale WAKEUP while the cohort is ≥10:1 crowded on either
                    side (L:S ≥ 10 or S:L ≥ 10) → hold 24h
   WAKEUP_LS10_4H : same trigger → hold 4h  (backtest edge peaks at 4h)
-  WAKEUP_LS20    : Q1 whale WAKEUP while the cohort is ≥20:1 crowded on either
-                   side → hold 4h  (71.4%/+1.20%, n=63 for the long-crowded case)
   WHALE_FLIP     : Q1 whale reverses own position → follow flip direction → hold 4h
 
 The WAKEUP_LS* rules are symmetric: they fire whether the cohort is
@@ -24,7 +22,6 @@ logger = logging.getLogger(__name__)
 STRATEGY_HOLD: dict[str, int] = {
     "WAKEUP_LS10":    24,
     "WAKEUP_LS10_4H": 4,
-    "WAKEUP_LS20":    4,
     "WHALE_FLIP":     4,
 }
 
@@ -151,12 +148,6 @@ async def run_alert_engine(snapshot_ts: datetime) -> None:
             }
             for variant in WAKEUP_LS10_VARIANTS:
                 fired = await _fire(db, variant, coin, w["side"], px, now, detail)
-                if fired:
-                    asyncio.create_task(_bot_execute(fired))
-
-            # Rule 1b: cohort crowded ≥20:1 on either side
-            if ratio >= 20:
-                fired = await _fire(db, "WAKEUP_LS20", coin, w["side"], px, now, detail)
                 if fired:
                     asyncio.create_task(_bot_execute(fired))
 

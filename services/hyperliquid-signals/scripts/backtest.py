@@ -605,7 +605,6 @@ def composite_events(
 STRATEGY_HOLD_H: dict[str, int] = {
     "WAKEUP_LS10_4H": 4,
     "WAKEUP_LS10":    24,
-    "WAKEUP_LS20":    4,
     "WHALE_FLIP":     4,
 }
 
@@ -642,8 +641,6 @@ def strategy_events(
 
         out.append({**w, "trigger": "WAKEUP_LS10_4H"})
         out.append({**w, "trigger": "WAKEUP_LS10"})
-        if ratio >= 20:
-            out.append({**w, "trigger": "WAKEUP_LS20"})
 
     return out
 

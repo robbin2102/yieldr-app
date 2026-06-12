@@ -27,15 +27,6 @@ STRATEGY_META: dict[str, dict] = {
         "backtest_horizon_h": 24,
         "backtest_n": 33,
     },
-    "WAKEUP_LS20": {
-        "label": "WAKEUP + 20:1 crowd · 4h",
-        "rule": "Q1 whale wakes up while the cohort is ≥20:1 crowded (either side) — exit after 4h",
-        "hold_hours": 4,
-        "backtest_win_pct": 71.4,
-        "backtest_return_pct": 1.20,
-        "backtest_horizon_h": 4,
-        "backtest_n": 63,
-    },
     "WHALE_FLIP": {
         "label": "Whale Flip",
         "rule": "Q1 whale reverses their own position — follow the flip direction",
