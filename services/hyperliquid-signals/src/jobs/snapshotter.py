@@ -2,6 +2,7 @@ import asyncio
 import gc
 import logging
 import resource
+import sys
 from datetime import datetime, timedelta
 
 import aiohttp
@@ -234,10 +235,13 @@ def _rss_mb() -> float:
         with open("/proc/self/status") as f:
             for line in f:
                 if line.startswith("VmRSS:"):
-                    return int(line.split()[1]) / 1024
+                    return int(line.split()[1]) / 1024  # kB -> MB
     except Exception:
         pass
-    return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
+    # Fallback: ru_maxrss units differ by platform — KB on Linux, bytes on macOS.
+    ru_maxrss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    divisor = 1024 * 1024 if sys.platform == "darwin" else 1024
+    return ru_maxrss / divisor
 
 
 async def run_snapshot() -> None:
