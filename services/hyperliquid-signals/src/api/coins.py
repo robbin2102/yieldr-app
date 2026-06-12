@@ -87,8 +87,11 @@ async def get_trader(address: str):
     )
     positions = []
     if latest_pos:
+        # Excludes the "no open positions" sentinel doc (coin=None) written
+        # by the snapshotter for addresses with zero positions.
         cursor = db.hl_signals_positions.find(
-            {"address": addr, "snapshot_ts": latest_pos["snapshot_ts"]}, {"_id": 0}
+            {"address": addr, "snapshot_ts": latest_pos["snapshot_ts"], "coin": {"$ne": None}},
+            {"_id": 0},
         )
         positions = await cursor.to_list(100)
 

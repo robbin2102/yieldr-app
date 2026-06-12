@@ -66,8 +66,10 @@ async def run_convergence(snapshot_ts: datetime) -> None:
     db = get_db()
 
     # ── 1. Load current positions ────────────────────────────────────────────
+    # Excludes the "no open positions" sentinel docs (coin=None) written by
+    # the snapshotter for addresses with zero positions.
     positions = await db.hl_signals_positions.find(
-        {"snapshot_ts": snapshot_ts}
+        {"snapshot_ts": snapshot_ts, "coin": {"$ne": None}}
     ).to_list(None)
 
     if not positions:
