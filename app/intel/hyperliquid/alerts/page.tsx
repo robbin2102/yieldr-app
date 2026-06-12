@@ -41,15 +41,19 @@ function timeLeft(until: string) {
 }
 
 const STRATEGY_COLOR: Record<string, { badge: string; card: string }> = {
-  WAKEUP_LS10_4H: { badge: "text-violet-300 bg-violet-950/60 border-violet-800",  card: "border-violet-800/50 bg-violet-950/20" },
-  WAKEUP_LS10:    { badge: "text-fuchsia-300 bg-fuchsia-950/60 border-fuchsia-800", card: "border-fuchsia-800/50 bg-fuchsia-950/20" },
-  WHALE_FLIP:     { badge: "text-orange-300 bg-orange-950/60 border-orange-800",   card: "border-orange-800/50 bg-orange-950/20" },
+  WAKEUP_LS10_4H:     { badge: "text-violet-300 bg-violet-950/60 border-violet-800",  card: "border-violet-800/50 bg-violet-950/20" },
+  WAKEUP_LS10:        { badge: "text-fuchsia-300 bg-fuchsia-950/60 border-fuchsia-800", card: "border-fuchsia-800/50 bg-fuchsia-950/20" },
+  WHALE_FLIP:         { badge: "text-orange-300 bg-orange-950/60 border-orange-800",   card: "border-orange-800/50 bg-orange-950/20" },
+  WAKEUP_LS_LOW_24H:  { badge: "text-cyan-300 bg-cyan-950/60 border-cyan-800",        card: "border-cyan-800/50 bg-cyan-950/20" },
+  WHALE_SCALEUP_4H:   { badge: "text-amber-300 bg-amber-950/60 border-amber-800",     card: "border-amber-800/50 bg-amber-950/20" },
 };
 
 const STRATEGY_SHORT: Record<string, string> = {
-  WAKEUP_LS10_4H: "WAKE 4h",
-  WAKEUP_LS10:    "WAKE 24h",
-  WHALE_FLIP:     "FLIP",
+  WAKEUP_LS10_4H:     "WAKE 4h",
+  WAKEUP_LS10:        "WAKE 24h",
+  WHALE_FLIP:         "FLIP",
+  WAKEUP_LS_LOW_24H:  "WAKE-LO 24h",
+  WHALE_SCALEUP_4H:   "SCALE 4h",
 };
 
 function entryLs(a: TradeAlert): string {

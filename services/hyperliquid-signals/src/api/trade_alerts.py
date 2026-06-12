@@ -36,6 +36,25 @@ STRATEGY_META: dict[str, dict] = {
         "backtest_horizon_h": 4,
         "backtest_n": 16,
     },
+    # Signal-only — tracked for live data, not in BOT_STRATEGIES by default.
+    "WAKEUP_LS_LOW_24H": {
+        "label": "WAKEUP + mild long-crowd (1-2x) · 24h",
+        "rule": "Q1 whale wakes up while the cohort is only mildly long-crowded (1 <= L:S < 2) — exit after 24h. Signal-only.",
+        "hold_hours": 24,
+        "backtest_win_pct": 78.9,
+        "backtest_return_pct": 4.62,
+        "backtest_horizon_h": 24,
+        "backtest_n": 19,
+    },
+    "WHALE_SCALEUP_4H": {
+        "label": "Whale Scale-Up · 4h",
+        "rule": "Q1 whale scales up an existing position by >=50% — follow direction, exit after 4h. Signal-only.",
+        "hold_hours": 4,
+        "backtest_win_pct": 58.8,
+        "backtest_return_pct": 0.53,
+        "backtest_horizon_h": 4,
+        "backtest_n": 114,
+    },
 }
 
 

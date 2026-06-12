@@ -601,11 +601,13 @@ def composite_events(
 
 # ─── live-strategy mapping (mirrors src/jobs/alert_engine.py) ────────────────
 
-# strategy -> hold hours, must match STRATEGY_HOLD in alert_engine.py
+# strategy -> hold hours, must match STRATEGY_HOLD in rules.py
 STRATEGY_HOLD_H: dict[str, int] = {
-    "WAKEUP_LS10_4H": 4,
-    "WAKEUP_LS10":    24,
-    "WHALE_FLIP":     4,
+    "WAKEUP_LS10_4H":    4,
+    "WAKEUP_LS10":       24,
+    "WHALE_FLIP":        4,
+    "WAKEUP_LS_LOW_24H": 24,
+    "WHALE_SCALEUP_4H":  4,
 }
 
 
@@ -616,12 +618,16 @@ def strategy_events(
     """Re-derive exactly the alerts alert_engine.py would have fired.
 
     Mirrors Rule 1 (WAKEUP while the cohort is >=10:1 crowded on either side,
-    same strategy names regardless of which side) and Rule 2 (WHALE_FLIP).
+    same strategy names regardless of which side), Rule 2 (WHALE_FLIP), and
+    the signal-only WAKEUP_LS_LOW_24H / WHALE_SCALEUP_4H trackers.
     """
     out = []
     for w in whale:
         if w["trigger"] == "WHALE_FLIP":
             out.append({**w, "trigger": "WHALE_FLIP"})
+            continue
+        if w["trigger"] == "WHALE_SCALEUP":
+            out.append({**w, "trigger": "WHALE_SCALEUP_4H"})
             continue
         if w["trigger"] != "WHALE_WAKEUP":
             continue
@@ -636,11 +642,12 @@ def strategy_events(
             ratio = long_usd / short_usd
         elif long_usd > 0 and short_usd / long_usd >= 10:
             ratio = short_usd / long_usd
-        if ratio is None:
-            continue
+        if ratio is not None:
+            out.append({**w, "trigger": "WAKEUP_LS10_4H"})
+            out.append({**w, "trigger": "WAKEUP_LS10"})
 
-        out.append({**w, "trigger": "WAKEUP_LS10_4H"})
-        out.append({**w, "trigger": "WAKEUP_LS10"})
+        if short_usd > 0 and 1 <= long_usd / short_usd < 2:
+            out.append({**w, "trigger": "WAKEUP_LS_LOW_24H"})
 
     return out
 
