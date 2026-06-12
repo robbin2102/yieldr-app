@@ -46,6 +46,15 @@ STRATEGY_META: dict[str, dict] = {
         "backtest_horizon_h": 24,
         "backtest_n": 19,
     },
+    "WAKEUP_LS_LOW_SHORT_24H": {
+        "label": "WAKEUP + mild short-crowd (1-2x) · 24h",
+        "rule": "Q1 whale wakes up while the cohort is only mildly short-crowded (0.5 <= L:S < 1) — exit after 24h. Signal-only.",
+        "hold_hours": 24,
+        "backtest_win_pct": 47.1,
+        "backtest_return_pct": 2.22,
+        "backtest_horizon_h": 24,
+        "backtest_n": 17,
+    },
     "WHALE_SCALEUP_4H": {
         "label": "Whale Scale-Up · 4h",
         "rule": "Q1 whale scales up an existing position by >=50% — follow direction, exit after 4h. Signal-only.",

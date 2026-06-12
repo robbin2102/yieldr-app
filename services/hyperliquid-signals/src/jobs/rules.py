@@ -17,12 +17,16 @@ time are the same regardless of which side the cohort is crowded on.
 
 Signal-only (not in BOT_STRATEGIES by default — tracked for live data, not
 auto-executed):
-  WAKEUP_LS_LOW_24H : Q1 whale WAKEUP while the cohort is only mildly
-                      long-crowded (1 <= L:S < 2) → hold 24h
-                      (backtest: 78.9% win / +4.62% net, n=19)
-  WHALE_SCALEUP_4H  : Q1 whale scales up an existing position by
-                      >= WHALE_SCALEUP_THRESHOLD → follow direction → hold 4h
-                      (backtest: 58.8% win / +0.53% net, n=114)
+  WAKEUP_LS_LOW_24H       : Q1 whale WAKEUP while the cohort is only mildly
+                            long-crowded (1 <= L:S < 2) → hold 24h
+                            (backtest: 78.9% win / +4.62% net, n=19)
+  WAKEUP_LS_LOW_SHORT_24H : symmetric mirror — Q1 whale WAKEUP while the
+                            cohort is only mildly short-crowded
+                            (0.5 <= L:S < 1, i.e. 1 < S:L <= 2) → hold 24h
+                            (backtest: 47.1% win / +2.22% net, n=17)
+  WHALE_SCALEUP_4H        : Q1 whale scales up an existing position by
+                            >= WHALE_SCALEUP_THRESHOLD → follow direction → hold 4h
+                            (backtest: 58.8% win / +0.53% net, n=114)
 """
 import asyncio
 import logging
@@ -31,11 +35,12 @@ from datetime import datetime, timedelta
 logger = logging.getLogger(__name__)
 
 STRATEGY_HOLD: dict[str, int] = {
-    "WAKEUP_LS10":       24,
-    "WAKEUP_LS10_4H":    4,
-    "WHALE_FLIP":        4,
-    "WAKEUP_LS_LOW_24H": 24,
-    "WHALE_SCALEUP_4H":  4,
+    "WAKEUP_LS10":             24,
+    "WAKEUP_LS10_4H":          4,
+    "WHALE_FLIP":              4,
+    "WAKEUP_LS_LOW_24H":       24,
+    "WAKEUP_LS_LOW_SHORT_24H": 24,
+    "WHALE_SCALEUP_4H":        4,
 }
 
 WAKEUP_LS10_VARIANTS = ("WAKEUP_LS10", "WAKEUP_LS10_4H")
@@ -144,6 +149,27 @@ async def evaluate_wakeup_ls_low(db, coin: str, whale_side: str, whale_size_usd:
         "whale_address":  whale_address,
     }
     fired = await fire(db, "WAKEUP_LS_LOW_24H", coin, whale_side, px, now, detail, signal_ts)
+    if fired:
+        asyncio.create_task(bot_execute(fired))
+
+
+async def evaluate_wakeup_ls_low_short(db, coin: str, whale_side: str, whale_size_usd: float,
+                                        whale_address: str, coin_metrics: dict | None,
+                                        px: float, now: datetime, signal_ts: datetime | None = None) -> None:
+    """Signal-only: symmetric mirror of evaluate_wakeup_ls_low — WAKEUP while
+    the cohort is only mildly short-crowded (0.5 <= L:S < 1) → hold 24h."""
+    if not coin_metrics:
+        return
+    long_usd  = coin_metrics.get("long_usd", 0)
+    short_usd = coin_metrics.get("short_usd", 0)
+    if not ls_in_band(long_usd, short_usd, 0.5, 1):
+        return
+    detail = {
+        "ls_ratio":       round(long_usd / short_usd, 2) if short_usd > 0 else None,
+        "whale_size_usd": whale_size_usd,
+        "whale_address":  whale_address,
+    }
+    fired = await fire(db, "WAKEUP_LS_LOW_SHORT_24H", coin, whale_side, px, now, detail, signal_ts)
     if fired:
         asyncio.create_task(bot_execute(fired))
 

@@ -603,11 +603,12 @@ def composite_events(
 
 # strategy -> hold hours, must match STRATEGY_HOLD in rules.py
 STRATEGY_HOLD_H: dict[str, int] = {
-    "WAKEUP_LS10_4H":    4,
-    "WAKEUP_LS10":       24,
-    "WHALE_FLIP":        4,
-    "WAKEUP_LS_LOW_24H": 24,
-    "WHALE_SCALEUP_4H":  4,
+    "WAKEUP_LS10_4H":          4,
+    "WAKEUP_LS10":             24,
+    "WHALE_FLIP":              4,
+    "WAKEUP_LS_LOW_24H":       24,
+    "WAKEUP_LS_LOW_SHORT_24H": 24,
+    "WHALE_SCALEUP_4H":        4,
 }
 
 
@@ -619,7 +620,8 @@ def strategy_events(
 
     Mirrors Rule 1 (WAKEUP while the cohort is >=10:1 crowded on either side,
     same strategy names regardless of which side), Rule 2 (WHALE_FLIP), and
-    the signal-only WAKEUP_LS_LOW_24H / WHALE_SCALEUP_4H trackers.
+    the signal-only WAKEUP_LS_LOW_24H / WAKEUP_LS_LOW_SHORT_24H /
+    WHALE_SCALEUP_4H trackers.
     """
     out = []
     for w in whale:
@@ -648,6 +650,9 @@ def strategy_events(
 
         if short_usd > 0 and 1 <= long_usd / short_usd < 2:
             out.append({**w, "trigger": "WAKEUP_LS_LOW_24H"})
+
+        if short_usd > 0 and 0.5 <= long_usd / short_usd < 1:
+            out.append({**w, "trigger": "WAKEUP_LS_LOW_SHORT_24H"})
 
     return out
 

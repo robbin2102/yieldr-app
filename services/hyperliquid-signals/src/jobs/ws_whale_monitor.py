@@ -23,7 +23,7 @@ from datetime import datetime, timedelta
 
 from ..config import settings
 from ..db import get_db
-from .rules import evaluate_wakeup, evaluate_flip
+from .rules import evaluate_wakeup, evaluate_flip, evaluate_wakeup_ls_low, evaluate_wakeup_ls_low_short
 
 logger = logging.getLogger(__name__)
 
@@ -159,6 +159,8 @@ async def _on_wakeup(db, address: str, coin: str, side: str, size_usd: float,
         {"coin": coin}, sort=[("snapshot_ts", -1)], projection={"_id": 0}
     )
     await evaluate_wakeup(db, coin, side, size_usd, address, cm, px, now, signal_ts=fill_ts)
+    await evaluate_wakeup_ls_low(db, coin, side, size_usd, address, cm, px, now, signal_ts=fill_ts)
+    await evaluate_wakeup_ls_low_short(db, coin, side, size_usd, address, cm, px, now, signal_ts=fill_ts)
 
 
 async def _on_flip(db, address: str, coin: str, side: str, size_usd: float,

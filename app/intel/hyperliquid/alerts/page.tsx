@@ -41,19 +41,21 @@ function timeLeft(until: string) {
 }
 
 const STRATEGY_COLOR: Record<string, { badge: string; card: string }> = {
-  WAKEUP_LS10_4H:     { badge: "text-violet-300 bg-violet-950/60 border-violet-800",  card: "border-violet-800/50 bg-violet-950/20" },
-  WAKEUP_LS10:        { badge: "text-fuchsia-300 bg-fuchsia-950/60 border-fuchsia-800", card: "border-fuchsia-800/50 bg-fuchsia-950/20" },
-  WHALE_FLIP:         { badge: "text-orange-300 bg-orange-950/60 border-orange-800",   card: "border-orange-800/50 bg-orange-950/20" },
-  WAKEUP_LS_LOW_24H:  { badge: "text-cyan-300 bg-cyan-950/60 border-cyan-800",        card: "border-cyan-800/50 bg-cyan-950/20" },
-  WHALE_SCALEUP_4H:   { badge: "text-amber-300 bg-amber-950/60 border-amber-800",     card: "border-amber-800/50 bg-amber-950/20" },
+  WAKEUP_LS10_4H:           { badge: "text-violet-300 bg-violet-950/60 border-violet-800",  card: "border-violet-800/50 bg-violet-950/20" },
+  WAKEUP_LS10:              { badge: "text-fuchsia-300 bg-fuchsia-950/60 border-fuchsia-800", card: "border-fuchsia-800/50 bg-fuchsia-950/20" },
+  WHALE_FLIP:               { badge: "text-orange-300 bg-orange-950/60 border-orange-800",   card: "border-orange-800/50 bg-orange-950/20" },
+  WAKEUP_LS_LOW_24H:        { badge: "text-cyan-300 bg-cyan-950/60 border-cyan-800",        card: "border-cyan-800/50 bg-cyan-950/20" },
+  WAKEUP_LS_LOW_SHORT_24H:  { badge: "text-sky-300 bg-sky-950/60 border-sky-800",           card: "border-sky-800/50 bg-sky-950/20" },
+  WHALE_SCALEUP_4H:         { badge: "text-amber-300 bg-amber-950/60 border-amber-800",     card: "border-amber-800/50 bg-amber-950/20" },
 };
 
 const STRATEGY_SHORT: Record<string, string> = {
-  WAKEUP_LS10_4H:     "WAKE 4h",
-  WAKEUP_LS10:        "WAKE 24h",
-  WHALE_FLIP:         "FLIP",
-  WAKEUP_LS_LOW_24H:  "WAKE-LO 24h",
-  WHALE_SCALEUP_4H:   "SCALE 4h",
+  WAKEUP_LS10_4H:           "WAKE 4h",
+  WAKEUP_LS10:              "WAKE 24h",
+  WHALE_FLIP:               "FLIP",
+  WAKEUP_LS_LOW_24H:        "WAKE-LO 24h",
+  WAKEUP_LS_LOW_SHORT_24H:  "WAKE-LO-S 24h",
+  WHALE_SCALEUP_4H:         "SCALE 4h",
 };
 
 function entryLs(a: TradeAlert): string {
@@ -135,66 +137,87 @@ function CoinStatsTable({ trades }: { trades: TradeAlert[] }) {
   );
 }
 
-// ── Strategy scorecard card ───────────────────────────────────────────────────
-function ScoreCard({ s }: { s: TradeAlertScorecard }) {
-  const col = STRATEGY_COLOR[s.strategy] ?? { badge: "text-zinc-400 bg-zinc-900 border-zinc-700", card: "border-zinc-800 bg-zinc-900/30" };
+// ── Strategy scorecard table ──────────────────────────────────────────────────
+function ScorecardRow({ s }: { s: TradeAlertScorecard }) {
+  const col = STRATEGY_COLOR[s.strategy] ?? { badge: "text-zinc-400 bg-zinc-900 border-zinc-700", card: "" };
   const liveTotal  = s.live_total;
   const liveWinPct = s.live_win_pct;
   const hasBacktest = s.backtest_win_pct != null;
-  const holdLabel   = s.hold_hours != null ? `${s.hold_hours}h hold` : "exit on whale close";
+  const holdLabel   = s.hold_hours != null ? `${s.hold_hours}h` : "var";
   const beating     = hasBacktest && liveWinPct != null && liveTotal > 0 && liveWinPct >= (s.backtest_win_pct ?? 0);
   return (
-    <div className={`border rounded p-4 space-y-3 ${col.card}`}>
-      <div className="flex items-center justify-between">
-        <span className={`text-xs font-bold px-2 py-0.5 rounded border ${col.badge}`}>
+    <tr className="border-b border-zinc-800/50 hover:bg-zinc-800/40">
+      <td className="px-3 py-2">
+        <span className={`text-xs font-bold px-1.5 py-0.5 rounded border ${col.badge}`}>
           {STRATEGY_SHORT[s.strategy] ?? s.strategy}
         </span>
-        <span className="text-zinc-500 text-xs">{holdLabel}</span>
-      </div>
-      <div className="text-zinc-400 text-xs leading-relaxed">{s.rule}</div>
-      <div className="grid grid-cols-2 gap-3">
-        <div className="space-y-0.5">
-          <div className="text-zinc-600 text-[10px] uppercase tracking-widest">
-            {hasBacktest ? `Backtest ${s.backtest_horizon_h}h` : "Backtest"}
-          </div>
-          {hasBacktest ? (
-            <>
-              <div className="text-zinc-100 font-bold text-sm">{s.backtest_win_pct}% win</div>
-              <div className="text-zinc-400 text-xs">{s.backtest_return_pct && s.backtest_return_pct > 0 ? "+" : ""}{s.backtest_return_pct}% net avg &middot; {s.backtest_n}n</div>
-            </>
-          ) : (
-            <div className="text-zinc-600 text-sm">variable hold &mdash;<br/>no fixed-horizon backtest</div>
-          )}
-        </div>
-        <div className="space-y-0.5">
-          <div className="text-zinc-600 text-[10px] uppercase tracking-widest">Live ({liveTotal} closed)</div>
-          <div className={`font-bold text-sm ${
-            liveTotal === 0 ? "text-zinc-600" : liveWinPct != null && liveWinPct >= 60 ? "text-emerald-400" : "text-yellow-400"
-          }`}>
-            {liveTotal === 0 ? "—" : `${liveWinPct}% win`}
-          </div>
-          {s.live_avg_net_pct != null && (
-            <div className="text-zinc-400 text-xs">{fmtPct(s.live_avg_net_pct)} net avg</div>
-          )}
-          {(s.live_avg_win_pct != null || s.live_avg_loss_pct != null) && liveTotal > 0 && (
-            <div className="text-[10px] text-zinc-600">
-              {s.live_avg_win_pct  != null && <span className="text-emerald-700">W {fmtPct(s.live_avg_win_pct)}</span>}
-              {s.live_avg_win_pct  != null && s.live_avg_loss_pct != null && <span> &middot; </span>}
-              {s.live_avg_loss_pct != null && <span className="text-red-800">L {fmtPct(s.live_avg_loss_pct, false)}</span>}
-            </div>
-          )}
-          {hasBacktest && liveTotal > 0 && (
-            <div className={`text-[10px] ${beating ? "text-emerald-500" : "text-yellow-600"}`}>
-              {beating ? "▲ at/above backtest" : "▼ below backtest"}
-            </div>
-          )}
-        </div>
-      </div>
-      <div className="flex gap-4 text-xs pt-2 border-t border-zinc-800">
-        <span className="text-zinc-500">{s.open} open</span>
+      </td>
+      <td className="px-3 py-2 text-zinc-500 text-xs hidden lg:table-cell max-w-xs truncate" title={s.rule}>
+        {s.rule}
+      </td>
+      <td className="px-3 py-2 text-center text-zinc-400 text-xs">{holdLabel}</td>
+      <td className="px-3 py-2 text-right text-zinc-300 text-xs">
+        {hasBacktest ? `${s.backtest_win_pct}%` : "—"}
+      </td>
+      <td className={`px-3 py-2 text-right text-xs ${
+        hasBacktest && s.backtest_return_pct != null
+          ? (s.backtest_return_pct > 0 ? "text-emerald-500" : "text-red-500")
+          : "text-zinc-600"
+      }`}>
+        {hasBacktest ? fmtPct(s.backtest_return_pct) : "—"}
+      </td>
+      <td className="px-3 py-2 text-right text-zinc-600 text-xs">{hasBacktest ? s.backtest_n : "—"}</td>
+      <td className="px-3 py-2 text-right text-zinc-500 text-xs">{s.open}</td>
+      <td className="px-3 py-2 text-right text-xs">
         <span className="text-emerald-500">{s.live_wins}W</span>
+        <span className="text-zinc-700"> / </span>
         <span className="text-red-500">{s.live_losses}L</span>
-      </div>
+      </td>
+      <td className={`px-3 py-2 text-right font-bold text-xs ${
+        liveTotal === 0 ? "text-zinc-600" : liveWinPct != null && liveWinPct >= 60 ? "text-emerald-400" : "text-yellow-400"
+      }`}>
+        {liveTotal === 0 ? "—" : `${liveWinPct}%`}
+      </td>
+      <td className={`px-3 py-2 text-right text-xs ${
+        s.live_avg_net_pct != null && s.live_avg_net_pct > 0 ? "text-emerald-400" : s.live_avg_net_pct != null ? "text-red-400" : "text-zinc-600"
+      }`}>
+        {fmtPct(s.live_avg_net_pct)}
+      </td>
+      <td className="px-3 py-2 text-center text-xs">
+        {hasBacktest && liveTotal > 0 ? (
+          <span className={beating ? "text-emerald-500" : "text-yellow-600"}>{beating ? "▲" : "▼"}</span>
+        ) : (
+          <span className="text-zinc-700">—</span>
+        )}
+      </td>
+    </tr>
+  );
+}
+
+function ScorecardTable({ scorecard }: { scorecard: TradeAlertScorecard[] }) {
+  if (scorecard.length === 0) return null;
+  return (
+    <div className="bg-[#0D1117] border border-zinc-800 rounded overflow-auto">
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="text-zinc-500 border-b border-zinc-800 text-xs uppercase tracking-widest">
+            <th className="text-left  px-3 py-2.5">Strategy</th>
+            <th className="text-left  px-3 py-2.5 hidden lg:table-cell">Rule</th>
+            <th className="text-center px-3 py-2.5">Hold</th>
+            <th className="text-right px-3 py-2.5">BT Win%</th>
+            <th className="text-right px-3 py-2.5">BT Net</th>
+            <th className="text-right px-3 py-2.5">BT N</th>
+            <th className="text-right px-3 py-2.5">Open</th>
+            <th className="text-right px-3 py-2.5">Live W/L</th>
+            <th className="text-right px-3 py-2.5">Live Win%</th>
+            <th className="text-right px-3 py-2.5">Live Net</th>
+            <th className="text-center px-3 py-2.5">vs BT</th>
+          </tr>
+        </thead>
+        <tbody>
+          {scorecard.map(s => <ScorecardRow key={s.strategy} s={s} />)}
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -326,9 +349,7 @@ export default function AlertsPage() {
         {/* Strategy Scorecards */}
         <section>
           <div className="text-zinc-500 text-xs font-bold tracking-widest mb-3 uppercase">Strategy Performance</div>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            {scorecard.map(s => <ScoreCard key={s.strategy} s={s} />)}
-          </div>
+          <ScorecardTable scorecard={scorecard} />
         </section>
 
         {/* Active Alerts */}

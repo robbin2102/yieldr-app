@@ -9,7 +9,10 @@ import logging
 from datetime import datetime, timedelta
 
 from ..db import get_db
-from .rules import evaluate_wakeup, evaluate_flip, evaluate_wakeup_ls_low, evaluate_scaleup
+from .rules import (
+    evaluate_wakeup, evaluate_flip, evaluate_wakeup_ls_low,
+    evaluate_wakeup_ls_low_short, evaluate_scaleup,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +79,7 @@ async def run_alert_engine(snapshot_ts: datetime) -> None:
     scaleups = [w for w in whale_docs if w["event_type"] == "SCALEUP"]
 
     # ── Rule 1: WAKEUP + cohort crowded ≥10:1 on either side (symmetric) ───────────
-    # ── Signal-only: WAKEUP while only mildly long-crowded (1 <= L:S < 2) ──────────
+    # ── Signal-only: WAKEUP while only mildly long/short-crowded (1x-2x) ───────────
     for w in wakeups:
         coin = w["coin"]
         px = await _current_price(db, coin)
@@ -87,6 +90,10 @@ async def run_alert_engine(snapshot_ts: datetime) -> None:
             metrics.get(coin), px, now, signal_ts=w["ts"],
         )
         await evaluate_wakeup_ls_low(
+            db, coin, w["side"], w.get("size_usd", 0), w.get("address", ""),
+            metrics.get(coin), px, now, signal_ts=w["ts"],
+        )
+        await evaluate_wakeup_ls_low_short(
             db, coin, w["side"], w.get("size_usd", 0), w.get("address", ""),
             metrics.get(coin), px, now, signal_ts=w["ts"],
         )

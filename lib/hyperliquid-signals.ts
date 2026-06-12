@@ -154,6 +154,7 @@ export type TradeStrategy =
   | "WAKEUP_LS10_4H"
   | "WHALE_FLIP"
   | "WAKEUP_LS_LOW_24H"
+  | "WAKEUP_LS_LOW_SHORT_24H"
   | "WHALE_SCALEUP_4H";
 
 export interface TradeAlertStrategyMeta {
