@@ -18,6 +18,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# APScheduler logs "Running job ..." / "... executed successfully" on every
+# tick (every 60s by default) — drop to WARNING to cut routine noise while
+# still surfacing job errors.
+logging.getLogger("apscheduler.executors.default").setLevel(logging.WARNING)
+
 scheduler = AsyncIOScheduler(timezone="UTC")
 
 
@@ -39,6 +44,9 @@ async def lifespan(app: FastAPI):
     scheduler.start()
     logger.info('"Scheduler started: discovery=daily, snapshot=%ds, prices=%ds, bot_timer=1min"',
                 interval_s, interval_s)
+    logger.info('"Config: bot_enabled=%s, bot_testnet=%s, bot_strategies=%s, ws_monitor_enabled=%s, ws_monitor_refresh_s=%d"',
+                settings.bot_enabled, settings.bot_testnet, settings.bot_strategies,
+                settings.ws_monitor_enabled, settings.ws_monitor_refresh_s)
 
     ws_task = None
     if settings.ws_monitor_enabled:
