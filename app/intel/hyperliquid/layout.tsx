@@ -7,6 +7,7 @@ const TABS = [
   { label: "DASHBOARD", href: "/intel/hyperliquid" },
   { label: "COHORT",    href: "/intel/hyperliquid/cohort" },
   { label: "ALERTS",    href: "/intel/hyperliquid/alerts" },
+  { label: "AGENT",     href: "/intel/hyperliquid/agent" },
 ];
 
 export default function HyperliquidLayout({ children }: { children: React.ReactNode }) {

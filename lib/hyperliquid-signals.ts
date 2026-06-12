@@ -221,6 +221,91 @@ export interface CohortChange {
   ts: string;
 }
 
+export type BotEnv = "testnet" | "mainnet";
+
+export interface BotPosition {
+  id: string;
+  strategy: TradeStrategy;
+  coin: string;
+  side: "LONG" | "SHORT";
+  status: "PENDING" | "PENDING_FILL" | "OPEN" | "CLOSING" | "CLOSED" | "SKIPPED" | "FAILED";
+  env?: BotEnv;
+  signal_px: number;
+  entry_px: number | null;
+  entry_order_id: string | null;
+  entry_limit_px: number | null;
+  entry_ts: string | null;
+  size_usdc: number;
+  size_coin: number | null;
+  leverage: number;
+  spread_at_entry?: number;
+  hold_until: string | null;
+  exit_order_id: string | null;
+  exit_px: number | null;
+  exit_ts: string | null;
+  exit_reason: string | null;
+  return_pct: number | null;
+  pnl_usdc: number | null;
+  skip_reason: string | null;
+  mark_px?: number;
+  live_return_pct?: number;
+  live_pnl_usdc?: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface BotSummary {
+  open_positions: number;
+  capital_deployed_usdc: number;
+  max_capital_usdc: number;
+  all_time_closed: number;
+  all_time_wins: number;
+  all_time_pnl_usdc: number;
+  today: {
+    date: string;
+    pnl_usdc: number;
+    trades_closed: number;
+    halted: boolean;
+    loss_limit_usdc: number | null;
+  };
+}
+
+export interface BotStrategySummary extends TradeAlertStrategyMeta {
+  strategy: string;
+  open: number;
+  closed: number;
+  wins: number;
+  losses: number;
+  win_pct: number | null;
+  avg_return_pct: number | null;
+  total_pnl_usdc: number;
+}
+
+export interface BotActivityEvent {
+  ts: string;
+  strategy: string;
+  coin: string;
+  side: "LONG" | "SHORT";
+  action: "executed" | "skipped";
+  status: string | null;
+  skip_reason: string | null;
+}
+
+export interface BotHealth {
+  status: "ok" | "degraded";
+  db: string;
+  uptime_s: number;
+  bot_enabled: boolean;
+  bot_testnet: boolean;
+  ws_monitor: {
+    connected: boolean;
+    last_connected_at: string | null;
+    last_disconnected_at: string | null;
+    reconnect_count: number;
+  } | null;
+  recent_issues: { ts: string; level: string; logger: string; message: string }[];
+}
+
 export const hlSignals = {
   getCohort: (page = 1, limit = 50, sortBy = "month_roi", order: "asc" | "desc" = "desc") =>
     get<{ data: Trader[]; total: number; page: number }>(
@@ -313,4 +398,30 @@ export const hlSignals = {
     if (eventType) params.set("event_type", eventType);
     return get<{ data: WhaleEvent[]; total: number }>(`/api/signals/v2/whale-events?${params}`);
   },
+
+  // Agent (bot) endpoints
+  getBotPositions: (status?: string, env?: BotEnv) => {
+    const params = new URLSearchParams();
+    if (status) params.set("status", status);
+    if (env) params.set("env", env);
+    return get<{ data: BotPosition[]; total: number }>(`/api/bot/positions?${params}`);
+  },
+
+  getBotSummary: (env?: BotEnv) =>
+    get<BotSummary>(`/api/bot/summary${env ? `?env=${env}` : ""}`),
+
+  getBotStrategySummary: (env?: BotEnv) =>
+    get<{ data: BotStrategySummary[] }>(`/api/bot/strategy-summary${env ? `?env=${env}` : ""}`),
+
+  getBotActivity: (limit = 30, env?: BotEnv) => {
+    const params = new URLSearchParams({ limit: String(limit) });
+    if (env) params.set("env", env);
+    return get<{ data: BotActivityEvent[]; total: number }>(`/api/bot/activity?${params}`);
+  },
+
+  getBotHealth: () => get<BotHealth>("/api/bot/health"),
+
+  botExit: (id: string) => post<{ ok: boolean }>(`/api/bot/positions/${id}/exit`),
+
+  botExitAll: () => post<{ ok: boolean; closed: number }>("/api/bot/positions/exit-all"),
 };
