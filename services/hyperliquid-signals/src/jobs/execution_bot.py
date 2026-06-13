@@ -8,6 +8,7 @@ from bson import ObjectId
 
 from ..config import settings
 from ..db import get_db
+from ..api.trade_alerts import STRATEGY_META
 
 logger = logging.getLogger(__name__)
 
@@ -205,13 +206,14 @@ async def _run_entry(db, pos_id, strategy, coin, side, signal_px, now) -> None:
             await asyncio.sleep(settings.bot_order_wait_s)
             continue
 
+        hold_hours = STRATEGY_META.get(strategy, {}).get("hold_hours") or 4
         await db.bot_positions.update_one({"_id": pos_id}, {"$set": {
             "status":           "PENDING_FILL",
             "entry_order_id":   str(oid),
             "entry_limit_px":   px,
             "size_coin":        sz,
             "spread_at_entry":  spread_at_entry,
-            "hold_until":       now + timedelta(hours=4),
+            "hold_until":       now + timedelta(hours=hold_hours),
             "updated_at":       datetime.now(timezone.utc),
         }})
 
