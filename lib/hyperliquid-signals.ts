@@ -279,6 +279,9 @@ export interface BotStrategySummary extends TradeAlertStrategyMeta {
   win_pct: number | null;
   avg_return_pct: number | null;
   total_pnl_usdc: number;
+  signal_closed: number;
+  signal_total_roi_pct: number | null;
+  signal_avg_net_pct: number | null;
 }
 
 export interface BotActivityEvent {

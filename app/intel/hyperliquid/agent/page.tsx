@@ -204,6 +204,8 @@ function StrategyPerformanceTable({ rows }: { rows: BotStrategySummary[] }) {
             <th className="text-right px-3 py-2.5">Win%</th>
             <th className="text-right px-3 py-2.5">Avg Ret</th>
             <th className="text-right px-3 py-2.5">Total PnL</th>
+            <th className="text-right px-3 py-2.5" title="Sum of return_pct across every WIN/LOSS alert this strategy has fired (all envs)">Total ROI</th>
+            <th className="text-right px-3 py-2.5" title="Average return_pct per resolved alert — live signal performance vs backtest">Net Avg/Trade</th>
             <th className="text-right px-3 py-2.5">BT Win%</th>
             <th className="text-right px-3 py-2.5">BT Ret</th>
           </tr>
@@ -233,6 +235,16 @@ function StrategyPerformanceTable({ rows }: { rows: BotStrategySummary[] }) {
                 s.total_pnl_usdc > 0 ? "text-emerald-400" : s.total_pnl_usdc < 0 ? "text-red-400" : "text-zinc-500"
               }`}>
                 {fmtUsd(s.total_pnl_usdc)}
+              </td>
+              <td className={`px-3 py-2 text-right ${
+                s.signal_total_roi_pct != null && s.signal_total_roi_pct > 0 ? "text-emerald-400" : s.signal_total_roi_pct != null ? "text-red-400" : "text-zinc-600"
+              }`}>
+                {fmtPct(s.signal_total_roi_pct)}
+              </td>
+              <td className={`px-3 py-2 text-right ${
+                s.signal_avg_net_pct != null && s.signal_avg_net_pct > 0 ? "text-emerald-400" : s.signal_avg_net_pct != null ? "text-red-400" : "text-zinc-600"
+              }`}>
+                {fmtPct(s.signal_avg_net_pct)}
               </td>
               <td className="px-3 py-2 text-right text-zinc-500 text-xs">{s.backtest_win_pct != null ? `${s.backtest_win_pct}%` : "—"}</td>
               <td className="px-3 py-2 text-right text-zinc-500 text-xs">{fmtPct(s.backtest_return_pct)}</td>

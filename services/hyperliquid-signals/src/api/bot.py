@@ -153,6 +153,21 @@ async def get_strategy_summary(env: str | None = None):
         s = rows[0] if rows else {"total": 0, "wins": 0, "total_pnl": 0.0, "avg_ret": None}
         total = s["total"]
 
+        # Signal-level performance — every alert this strategy ever fired
+        # (hl_signals_trade_alerts), independent of whether the bot executed
+        # it or which env it ran on. Lets signal-only strategies (no
+        # bot_positions rows) still show real performance.
+        sig_rows = await db.hl_signals_trade_alerts.aggregate([
+            {"$match": {"strategy": strategy, "status": {"$in": ["WIN", "LOSS"]}}},
+            {"$group": {
+                "_id": None,
+                "total_roi": {"$sum": "$return_pct"},
+                "avg_roi":   {"$avg": "$return_pct"},
+                "n":         {"$sum": 1},
+            }},
+        ]).to_list(1)
+        sig = sig_rows[0] if sig_rows else {"total_roi": 0.0, "avg_roi": None, "n": 0}
+
         result.append({
             "strategy": strategy,
             **meta,
@@ -163,6 +178,9 @@ async def get_strategy_summary(env: str | None = None):
             "win_pct": round(s["wins"] / total * 100, 1) if total > 0 else None,
             "avg_return_pct": round(s["avg_ret"], 2) if s["avg_ret"] is not None else None,
             "total_pnl_usdc": round(s["total_pnl"], 2) if s["total_pnl"] else 0.0,
+            "signal_closed":        sig["n"],
+            "signal_total_roi_pct": round(sig["total_roi"], 2) if sig["n"] > 0 else None,
+            "signal_avg_net_pct":   round(sig["avg_roi"], 2) if sig["n"] > 0 else None,
         })
     return {"data": result}
 
