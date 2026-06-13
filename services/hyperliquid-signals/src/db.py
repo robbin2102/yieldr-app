@@ -10,7 +10,20 @@ _client: AsyncIOMotorClient | None = None
 def get_client() -> AsyncIOMotorClient:
     global _client
     if _client is None:
-        _client = AsyncIOMotorClient(settings.mongo_uri, maxPoolSize=20, minPoolSize=2)
+        # pymongo's socketTimeoutMS defaults to None (no timeout) — after the
+        # host sleeps/wakes, a pooled socket can be dead but not yet detected,
+        # and a query on it blocks forever. That permanently stalls whichever
+        # job holds the connection (e.g. run_snapshot, max_instances=1),
+        # which then "skips" on every subsequent tick. Same hang-class fix as
+        # the SDK HTTP timeout in lib/hl_exchange.py.
+        _client = AsyncIOMotorClient(
+            settings.mongo_uri,
+            maxPoolSize=20,
+            minPoolSize=2,
+            connectTimeoutMS=10_000,
+            serverSelectionTimeoutMS=10_000,
+            socketTimeoutMS=20_000,
+        )
     return _client
 
 

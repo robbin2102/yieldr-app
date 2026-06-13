@@ -5,11 +5,23 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field
 
 def _load_env_local() -> None:
+    # First file to set a given key wins (later files don't override). If an
+    # earlier file (e.g. a stale .env in this service dir) defines a key like
+    # BOT_ENABLED, it silences the same key in .env.local / repo-root
+    # .env.local without any error — print what was found so a startup
+    # config mismatch (e.g. "bot_enabled=false" when .env.local says true)
+    # can be traced to the right file.
+    found = []
     for candidate in [Path(".env"), Path(".env.local"), Path("../../.env.local")]:
         if candidate.exists():
+            found.append(str(candidate.resolve()))
             for key, val in dotenv_values(candidate).items():
                 if key and val is not None and key not in os.environ:
                     os.environ[key] = val
+    if found:
+        print(f'[config] env files loaded (first-set-wins, in order): {found}')
+    else:
+        print('[config] no .env/.env.local files found — using process env + defaults only')
 
 _load_env_local()
 
