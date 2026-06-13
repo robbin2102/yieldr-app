@@ -24,18 +24,29 @@ def _excluded_coins() -> set[str]:
 # ── Entry point (called from alert_engine after _fire) ─────────────────────────
 
 async def bot_execute(alert: dict) -> None:
-    if not settings.bot_enabled:
-        return
-    if not settings.hl_private_key or not settings.hl_wallet_address:
-        logger.warning("BOT: credentials missing, set HL_WALLET_ADDRESS + HL_PRIVATE_KEY")
-        return
-
     strategy  = alert["strategy"]
     coin      = alert["coin"]
     side      = alert["side"]
     signal_px = float(alert.get("entry_px") or 0)
     alert_id  = str(alert.get("_id", ""))
     now       = datetime.now(timezone.utc)
+
+    # Every alert that reaches here should produce either a bot_positions or
+    # bot_skipped_signals row, or an explicit guard log below — this line
+    # makes any "no record at all" case traceable to the exact guard hit.
+    logger.info(
+        "BOT: bot_execute entry strategy=%s coin=%s alert_id=%s "
+        "bot_enabled=%s has_credentials=%s in_strategies=%s excluded=%s",
+        strategy, coin, alert_id, settings.bot_enabled,
+        bool(settings.hl_private_key and settings.hl_wallet_address),
+        strategy in _bot_strategies(), coin in _excluded_coins(),
+    )
+
+    if not settings.bot_enabled:
+        return
+    if not settings.hl_private_key or not settings.hl_wallet_address:
+        logger.warning("BOT: credentials missing, set HL_WALLET_ADDRESS + HL_PRIVATE_KEY")
+        return
 
     if strategy not in _bot_strategies():
         return
