@@ -280,8 +280,30 @@ async def _run_close(coin: str, is_long: bool, sz_coin: float) -> tuple[bool, fl
         logger.info("BOT: close attempt %d/%d no fill %s",
                     attempt + 1, settings.bot_order_retries, coin)
 
-    logger.warning("BOT: close did not fill %s after %d attempts — position stays OPEN",
-                   coin, settings.bot_order_retries)
+    # ALO (maker-only) exits exhausted — cross the spread with an IOC taker
+    # order to guarantee the position closes rather than sitting OPEN past
+    # its hold time indefinitely.
+    logger.warning("BOT: ALO close did not fill %s after %d attempts, falling back to IOC taker",
+                    coin, settings.bot_order_retries)
+    try:
+        book = await ex.get_l2_book(coin)
+    except Exception as e:
+        logger.warning("BOT: close book error (IOC fallback) %s: %s", coin, e)
+        return False, 0.0
+
+    taker_px = book["best_bid"] if is_long else book["best_ask"]
+    try:
+        result, _, _ = await ex.place_limit_order_close(coin, is_long, sz_coin, taker_px, tif="Ioc")
+    except Exception:
+        logger.exception("BOT: IOC close error %s", coin)
+        return False, 0.0
+
+    filled, fill_px, _ = ex.extract_fill(result)
+    if filled:
+        logger.info("BOT: IOC close filled %s px=%.6g", coin, fill_px)
+        return True, fill_px
+
+    logger.warning("BOT: IOC close did not fill %s — position stays OPEN", coin)
     return False, 0.0
 
 

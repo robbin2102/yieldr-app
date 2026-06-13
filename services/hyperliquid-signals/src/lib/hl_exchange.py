@@ -1,5 +1,6 @@
 """Hyperliquid exchange client — L2 book, order placement, fills, account state."""
 import asyncio
+import functools
 import logging
 import math
 
@@ -12,9 +13,21 @@ logger = logging.getLogger(__name__)
 _HL_MAINNET = "https://api.hyperliquid.xyz"
 _HL_TESTNET = "https://api.hyperliquid-testnet.xyz"
 
+# requests (used by the hyperliquid SDK's Exchange/Info classes) has no
+# default timeout — a dead connection (e.g. after the host sleeps/wakes)
+# can hang a thread forever, permanently stalling the bot_close_expired
+# job (max_instances=1) and leaving expired positions OPEN. Patch every
+# SDK HTTP call to time out.
+_SDK_HTTP_TIMEOUT_S = 10
+
 
 def api_url() -> str:
     return _HL_TESTNET if settings.bot_testnet else _HL_MAINNET
+
+
+def _with_timeout(client):
+    client.session.request = functools.partial(client.session.request, timeout=_SDK_HTTP_TIMEOUT_S)
+    return client
 
 
 async def get_all_mids() -> dict[str, float]:
@@ -150,12 +163,12 @@ def extract_oid(sdk_result: dict) -> int | None:
 def _make_exchange():
     from eth_account import Account
     from hyperliquid.exchange import Exchange
-    return Exchange(Account.from_key(settings.hl_private_key), api_url())
+    return _with_timeout(Exchange(Account.from_key(settings.hl_private_key), api_url()))
 
 
 def _make_info():
     from hyperliquid.info import Info
-    return Info(api_url(), skip_ws=True)
+    return _with_timeout(Info(api_url(), skip_ws=True))
 
 
 def signing_address() -> str:
@@ -214,9 +227,12 @@ async def place_limit_order_close(
     is_long: bool,
     sz_coin: float,
     limit_px: float,
+    tif: str = "Alo",
 ) -> tuple[dict, float, float]:
-    """ALO reduce-only limit order at limit_px to close a position.
+    """Reduce-only limit order at limit_px to close a position.
     is_long=True → selling (is_buy=False). is_long=False → buying (is_buy=True).
+    tif="Alo" (default) posts maker-only; tif="Ioc" crosses the book as a
+    taker fallback to guarantee the exit fills.
     Returns (sdk_result, px_used, sz_used).
     """
     meta = await get_asset_meta()
@@ -229,12 +245,25 @@ async def place_limit_order_close(
 
     def _place():
         return _make_exchange().order(
-            coin, is_buy, sz, px, {"limit": {"tif": "Alo"}}, reduce_only=True
+            coin, is_buy, sz, px, {"limit": {"tif": tif}}, reduce_only=True
         )
     result = await asyncio.to_thread(_place)
-    logger.info("ALO close %s is_buy=%s sz=%.6f px=%.6g → %s",
-                coin, is_buy, sz, px, result.get("status"))
+    logger.info("%s close %s is_buy=%s sz=%.6f px=%.6g → %s",
+                tif, coin, is_buy, sz, px, result.get("status"))
     return result, px, sz
+
+
+def extract_fill(sdk_result: dict) -> tuple[bool, float, float]:
+    """Extract (filled, avg_px, sz) from an order response's "filled" status —
+    used for IOC taker orders, which fill immediately rather than resting."""
+    try:
+        for s in sdk_result["response"]["data"]["statuses"]:
+            if "filled" in s:
+                f = s["filled"]
+                return True, float(f["avgPx"]), float(f["totalSz"])
+    except (KeyError, TypeError, ValueError):
+        pass
+    return False, 0.0, 0.0
 
 
 async def get_open_orders(address: str | None = None) -> list[dict]:
