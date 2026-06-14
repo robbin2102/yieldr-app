@@ -1,11 +1,11 @@
 """Realtime whale-event monitor — WAKEUP/FLIP detection in ~1s via WebSocket.
 
 Subscribes to `userFills` for every Q1 cohort address (~150 wallets) plus
-`allMids`, all over a single Hyperliquid websocket connection. On each fill
-for a tracked address, classifies it as WAKEUP/FLIP using an in-memory
-position cache (seeded from the userFills snapshot at startup) and — if it
-matches Rule 1 (WAKEUP + cohort crowded >=10:1) or Rule 2 (WHALE_FLIP) —
-fires the alert immediately via rules.py, using the cached allMids price.
+`allMids`. On each fill for a tracked address, classifies it as WAKEUP/FLIP
+using an in-memory position cache (seeded from the userFills snapshot at
+startup) and — if it matches Rule 1 (WAKEUP + cohort crowded >=10:1) or
+Rule 2 (WHALE_FLIP) — fires the alert immediately via rules.py, using the
+cached allMids price.
 
 This is purely an additional, faster *first* detection path. The existing
 snapshot job (SNAPSHOT_INTERVAL_S) keeps running unchanged and remains the
@@ -13,11 +13,22 @@ source of truth for cohort membership, coin_metrics (crowd ratios), and
 whale-event detection as a fallback — `fire()`'s already-open check prevents
 duplicate alerts if both paths fire for the same event.
 
+Hyperliquid enforces "Cannot track more than 30 total users" *per websocket
+connection* (confirmed empirically via scripts/test_ws_sharding.py — two
+simultaneous connections from the same process/IP, 25 addresses each, both
+received all userFills snapshots and live allMids with no throttling). With
+~150-160 Q1 addresses, a single connection would blow past that limit, so
+addresses are sharded across multiple connections, each subscribing its own
+allMids + userFills set. Shard assignment is a stable hash of the address so
+membership changes never move an address to a different shard.
+
 Gated behind WS_MONITOR_ENABLED (default off) — needs testnet validation
 before enabling on a live deployment.
 """
 import asyncio
+import hashlib
 import logging
+import math
 import time
 from datetime import datetime, timedelta
 
@@ -29,25 +40,38 @@ logger = logging.getLogger(__name__)
 
 # address -> {coin: {"side": "LONG"|"SHORT", "size_usd": float}}
 _position_cache: dict[str, dict[str, dict]] = {}
-_subscribed: set[str] = set()
 _mid_prices: dict[str, float] = {}
 _loop: asyncio.AbstractEventLoop | None = None
 
-# Monotonic timestamp of the last allMids message — used to detect a dead
-# websocket (allMids should arrive roughly every second while connected).
-_last_mids_msg: float = 0.0
+# Target number of addresses per websocket connection — comfortably under
+# the confirmed-working 25/connection (and the "30 total users" limit).
+SHARD_TARGET_SIZE = 20
+
+# shard index -> set of subscribed addresses
+_subscribed: dict[int, set[str]] = {}
+# shard index -> monotonic timestamp of the last allMids message on that shard
+_last_mids_msg: dict[int, float] = {}
 
 # Status surfaced via /api/bot/health for the Agent dashboard.
 _status: dict = {
-    "connected": False,
-    "last_connected_at": None,
-    "last_disconnected_at": None,
-    "reconnect_count": 0,
+    "num_shards": 0,
+    "shards": {},
 }
 
 
 def get_status() -> dict:
-    return dict(_status)
+    shards: dict[int, dict] = _status.get("shards", {})
+    connected_ats = [s["last_connected_at"] for s in shards.values() if s.get("last_connected_at")]
+    disconnected_ats = [s["last_disconnected_at"] for s in shards.values() if s.get("last_disconnected_at")]
+    return {
+        "connected": bool(shards) and all(s.get("connected") for s in shards.values()),
+        "last_connected_at": max(connected_ats) if connected_ats else None,
+        "last_disconnected_at": max(disconnected_ats) if disconnected_ats else None,
+        "reconnect_count": sum(s.get("reconnect_count", 0) for s in shards.values()),
+        "num_shards": _status.get("num_shards", 0),
+        "total_subscribed": sum(len(addrs) for addrs in _subscribed.values()),
+        "shards": {str(k): dict(v) for k, v in shards.items()},
+    }
 
 
 # How long allMids can go silent before we treat the connection as dead.
@@ -61,9 +85,14 @@ _BACKOFF_MAX_S = 60
 _BACKOFF_RESET_AFTER_S = 60
 
 
-def _on_all_mids(msg: dict) -> None:
-    global _last_mids_msg
-    _last_mids_msg = time.monotonic()
+def _shard_for(address: str, num_shards: int) -> int:
+    """Stable hash-based shard assignment, so an address never moves shards
+    when the cohort membership changes (avoids resubscribe/unsubscribe)."""
+    return int(hashlib.sha256(address.encode()).hexdigest(), 16) % num_shards
+
+
+def _on_all_mids(shard: int, msg: dict) -> None:
+    _last_mids_msg[shard] = time.monotonic()
     try:
         for coin, px in msg["data"]["mids"].items():
             _mid_prices[coin] = float(px)
@@ -189,71 +218,65 @@ async def _on_flip(db, address: str, coin: str, side: str, size_usd: float,
     await evaluate_flip(db, coin, side, size_usd, address, px, now, signal_ts=fill_ts)
 
 
-async def _sync_subscriptions(info) -> None:
+async def _sync_subscriptions(shard: int, num_shards: int, info) -> None:
     db = get_db()
     cursor = db.hl_signals_traders.find(
         {"cohort_status": "active", "skill_quartile": 1}, {"address": 1}
     )
-    addrs = {doc["address"] async for doc in cursor}
+    addrs = {doc["address"] async for doc in cursor if _shard_for(doc["address"], num_shards) == shard}
 
-    new = addrs - _subscribed
+    subscribed = _subscribed.setdefault(shard, set())
+    new = addrs - subscribed
     for addr in new:
         try:
             info.subscribe({"type": "userFills", "user": addr},
                             lambda msg, a=addr: _on_user_fills(a, msg))
-            _subscribed.add(addr)
+            subscribed.add(addr)
         except Exception:
-            logger.exception("WS monitor: subscribe failed for %s", addr)
+            logger.exception("WS monitor: subscribe failed for %s (shard %d)", addr, shard)
 
     if new:
-        logger.info('"WS monitor subscriptions synced", "q1_count": %d, "added": %d, "total_subscribed": %d',
-                     len(addrs), len(new), len(_subscribed))
+        logger.info('"WS monitor subscriptions synced", "shard": %d, "shard_addrs": %d, '
+                     '"added": %d, "shard_subscribed": %d',
+                     shard, len(addrs), len(new), len(subscribed))
 
 
-async def _run_session(info) -> None:
-    """Run one websocket session until it goes stale or errors out."""
-    global _last_mids_msg
-    _last_mids_msg = time.monotonic()
-    info.subscribe({"type": "allMids"}, _on_all_mids)
+async def _run_session(shard: int, num_shards: int, info) -> None:
+    """Run one shard's websocket session until it goes stale or errors out."""
+    _last_mids_msg[shard] = time.monotonic()
+    info.subscribe({"type": "allMids"}, lambda msg: _on_all_mids(shard, msg))
 
     # Fresh connection — drop any previous subscription bookkeeping so
-    # _sync_subscriptions re-subscribes every Q1 address on this socket.
-    _subscribed.clear()
-    await _sync_subscriptions(info)
+    # _sync_subscriptions re-subscribes every address in this shard.
+    _subscribed[shard] = set()
+    await _sync_subscriptions(shard, num_shards, info)
 
-    _status["connected"] = True
-    _status["last_connected_at"] = datetime.utcnow().isoformat()
+    shard_status = _status["shards"][shard]
+    shard_status["connected"] = True
+    shard_status["last_connected_at"] = datetime.utcnow().isoformat()
 
     last_sync = time.monotonic()
     while True:
         await asyncio.sleep(_HEALTH_CHECK_INTERVAL_S)
 
-        idle = time.monotonic() - _last_mids_msg
+        idle = time.monotonic() - _last_mids_msg[shard]
         if idle > _STALE_AFTER_S:
-            raise ConnectionError(f"WS monitor: allMids stale for {idle:.0f}s — reconnecting")
+            raise ConnectionError(f"WS monitor shard {shard}: allMids stale for {idle:.0f}s — reconnecting")
 
         if time.monotonic() - last_sync >= settings.ws_monitor_refresh_s:
             try:
-                await _sync_subscriptions(info)
+                await _sync_subscriptions(shard, num_shards, info)
             except Exception:
-                logger.exception("WS monitor: subscription sync failed")
+                logger.exception("WS monitor: subscription sync failed (shard %d)", shard)
             last_sync = time.monotonic()
 
 
-async def run_ws_monitor() -> None:
-    """Background task — call only when settings.ws_monitor_enabled is True.
-
-    Reconnects with exponential backoff if the websocket dies or goes stale
-    (no allMids messages for _STALE_AFTER_S). Each new session resubscribes
-    allMids + userFills for all Q1 addresses from scratch.
-    """
-    global _loop
+async def _run_shard(shard: int, num_shards: int) -> None:
+    """Reconnect loop for one shard's websocket connection."""
     from hyperliquid.info import Info
     from ..lib.hl_exchange import api_url
 
-    _loop = asyncio.get_running_loop()
-    logger.info('"WS whale monitor starting"')
-
+    shard_status = _status["shards"][shard]
     backoff = _BACKOFF_INITIAL_S
     info = None
     try:
@@ -261,22 +284,22 @@ async def run_ws_monitor() -> None:
             started = time.monotonic()
             try:
                 info = Info(api_url(), skip_ws=False)
-                await _run_session(info)
+                await _run_session(shard, num_shards, info)
             except asyncio.CancelledError:
                 raise
             except Exception:
-                logger.exception("WS monitor: session ended, reconnecting")
+                logger.exception("WS monitor: shard %d session ended, reconnecting", shard)
 
-            _status["connected"] = False
-            _status["last_disconnected_at"] = datetime.utcnow().isoformat()
-            _status["reconnect_count"] += 1
+            shard_status["connected"] = False
+            shard_status["last_disconnected_at"] = datetime.utcnow().isoformat()
+            shard_status["reconnect_count"] += 1
 
             if time.monotonic() - started >= _BACKOFF_RESET_AFTER_S:
                 backoff = _BACKOFF_INITIAL_S
             else:
                 backoff = min(backoff * 2, _BACKOFF_MAX_S)
 
-            logger.info('"WS monitor reconnecting in %ds"', backoff)
+            logger.info('"WS monitor shard %d reconnecting in %ds"', shard, backoff)
             await asyncio.sleep(backoff)
     except asyncio.CancelledError:
         # Stop the SDK's background websocket thread on shutdown — otherwise
@@ -286,5 +309,41 @@ async def run_ws_monitor() -> None:
             try:
                 info.disconnect_websocket()
             except Exception:
-                logger.exception("WS monitor: error closing websocket during shutdown")
+                logger.exception("WS monitor: error closing websocket during shutdown (shard %d)", shard)
         raise
+
+
+async def run_ws_monitor() -> None:
+    """Background task — call only when settings.ws_monitor_enabled is True.
+
+    Shards Q1 cohort addresses across multiple websocket connections
+    (SHARD_TARGET_SIZE addresses each) to stay under Hyperliquid's
+    "Cannot track more than 30 total users" per-connection limit. Each shard
+    reconnects independently with its own exponential backoff if its
+    websocket dies or goes stale (no allMids messages for _STALE_AFTER_S).
+    """
+    global _loop
+    _loop = asyncio.get_running_loop()
+    logger.info('"WS whale monitor starting"')
+
+    db = get_db()
+    total = await db.hl_signals_traders.count_documents(
+        {"cohort_status": "active", "skill_quartile": 1}
+    )
+    num_shards = max(1, math.ceil(total / SHARD_TARGET_SIZE)) if total else 1
+
+    _status["num_shards"] = num_shards
+    _status["shards"] = {
+        i: {
+            "connected": False,
+            "last_connected_at": None,
+            "last_disconnected_at": None,
+            "reconnect_count": 0,
+        }
+        for i in range(num_shards)
+    }
+
+    logger.info('"WS monitor sharding", "total_addrs": %d, "num_shards": %d, "shard_target": %d',
+                 total, num_shards, SHARD_TARGET_SIZE)
+
+    await asyncio.gather(*(_run_shard(i, num_shards) for i in range(num_shards)))
