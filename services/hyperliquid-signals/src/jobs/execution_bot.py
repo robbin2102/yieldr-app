@@ -190,7 +190,21 @@ async def _run_entry(db, pos_id, strategy, coin, side, signal_px, now) -> None:
             try:
                 book = await ex.get_l2_book(coin)
             except Exception:
-                await _mark_skipped(db, pos_id, "no_fill_book_error", datetime.now(timezone.utc))
+                # Before giving up, re-check whether the previous attempt's
+                # order actually filled — a transient API error on that
+                # attempt's _get_fill call could have produced a false
+                # "not filled", leading us to cancel (no-op) an
+                # already-filled order and abandon it here.
+                try:
+                    filled, actual_px, actual_sz = await _get_fill(oid, coin, since_ms)
+                except Exception:
+                    logger.exception("BOT: book+fill check both failed, leaving PENDING_FILL %s %s oid=%s",
+                                      strategy, coin, oid)
+                    return
+                if filled:
+                    await _mark_open(db, pos_id, actual_px, actual_sz, datetime.now(timezone.utc))
+                else:
+                    await _mark_skipped(db, pos_id, "no_fill_book_error", datetime.now(timezone.utc))
                 return
             mid = book["mid"]
             if signal_px > 0:
@@ -229,7 +243,16 @@ async def _run_entry(db, pos_id, strategy, coin, side, signal_px, now) -> None:
         }})
 
         await asyncio.sleep(settings.bot_order_wait_s)
-        filled, actual_px, actual_sz = await _get_fill(oid, coin, since_ms)
+        try:
+            filled, actual_px, actual_sz = await _get_fill(oid, coin, since_ms)
+        except Exception:
+            # Fills API still erroring after retries — we can't tell whether
+            # this order filled. Leave it PENDING_FILL (entry_order_id is
+            # recorded) rather than guess: cancelling a filled order is a
+            # silent no-op, and a wrong "not filled" guess abandons a real
+            # open position untracked.
+            logger.exception("BOT: fill check failed, leaving PENDING_FILL %s %s oid=%s", strategy, coin, oid)
+            return
         if filled:
             await _mark_open(db, pos_id, actual_px, actual_sz, datetime.now(timezone.utc))
             return
@@ -373,7 +396,7 @@ async def _close_position(db, pos: dict, reason: str, now: datetime) -> None:
     await _update_daily_pnl(db, now, pnl)
 
 
-async def _get_fill(oid: int, coin: str, since_ms: int | None = None) -> tuple[bool, float, float]:
+async def _get_fill(oid: int, coin: str, since_ms: int | None = None, retries: int = 3) -> tuple[bool, float, float]:
     """Check fills API for a specific oid. Returns (filled, fill_px, fill_sz).
     Using fills API (not open_orders) so cancelled orders are correctly detected as unfilled.
 
@@ -381,10 +404,21 @@ async def _get_fill(oid: int, coin: str, since_ms: int | None = None) -> tuple[b
     f["time"] before that (minus a small clock-skew buffer) are ignored — guards
     against matching a stale fill from a previous order that happened to reuse
     this oid/coin pair.
+
+    Retries on API errors (e.g. transient rate limits) — an exception here must
+    NOT be treated as "not filled", since that can leave a genuinely filled
+    order unmanaged (caller cancels an already-filled order, which silently
+    no-ops, then gives up thinking nothing was ever placed).
     """
     from ..lib import hl_exchange as ex
-    try:
-        fills = await ex.get_user_fills(50)
+    for attempt in range(retries):
+        try:
+            fills = await ex.get_user_fills(50)
+        except Exception:
+            if attempt < retries - 1:
+                await asyncio.sleep(1)
+                continue
+            raise
         matched = [f for f in fills if int(f.get("oid", -1)) == oid and f.get("coin") == coin]
         if since_ms is not None:
             matched = [f for f in matched if int(f.get("time", 0)) >= since_ms - 2000]
@@ -393,8 +427,6 @@ async def _get_fill(oid: int, coin: str, since_ms: int | None = None) -> tuple[b
         fill_px = sum(float(f["px"]) * float(f["sz"]) for f in matched) / sum(float(f["sz"]) for f in matched)
         fill_sz = sum(float(f["sz"]) for f in matched)
         return True, fill_px, fill_sz
-    except Exception:
-        return False, 0.0, 0.0
 
 
 async def _update_daily_pnl(db, now: datetime, pnl_usdc: float) -> None:
