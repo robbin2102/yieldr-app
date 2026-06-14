@@ -1,5 +1,5 @@
 """Bot API — position status, manual exit, daily summary, agent dashboard data."""
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, HTTPException
 
 from ..config import settings
@@ -92,11 +92,18 @@ async def get_bot_summary(env: str | None = None):
         open_query["env"] = env
     open_n = await db.bot_positions.count_documents(open_query)
 
+    margin_expr = {"$divide": ["$size_usdc", {"$ifNull": ["$leverage", 1]}]}
+
     rows = await db.bot_positions.aggregate([
         {"$match": open_query},
-        {"$group": {"_id": None, "total": {"$sum": "$size_usdc"}}},
+        {"$group": {
+            "_id": None,
+            "total":  {"$sum": "$size_usdc"},
+            "margin": {"$sum": margin_expr},
+        }},
     ]).to_list(1)
-    deployed = round(rows[0]["total"], 2) if rows else 0.0
+    position_size = round(rows[0]["total"], 2) if rows else 0.0
+    margin_deployed = round(rows[0]["margin"], 2) if rows else 0.0
 
     closed_query: dict = {"status": "CLOSED"}
     if env:
@@ -108,20 +115,35 @@ async def get_bot_summary(env: str | None = None):
             "total":    {"$sum": 1},
             "wins":     {"$sum": {"$cond": [{"$gt": ["$pnl_usdc", 0]}, 1, 0]}},
             "total_pnl":{"$sum": "$pnl_usdc"},
+            "margin":   {"$sum": margin_expr},
         }},
     ]).to_list(1)
-    s = rows[0] if rows else {"total": 0, "wins": 0, "total_pnl": 0.0}
+    s = rows[0] if rows else {"total": 0, "wins": 0, "total_pnl": 0.0, "margin": 0.0}
+    all_time_margin = s.get("margin") or 0.0
+    all_time_pnl = round(s["total_pnl"], 2)
+
+    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    today_closed_query: dict = {**closed_query, "exit_ts": {"$gte": today_start, "$lt": today_start + timedelta(days=1)}}
+    rows = await db.bot_positions.aggregate([
+        {"$match": today_closed_query},
+        {"$group": {"_id": None, "margin": {"$sum": margin_expr}}},
+    ]).to_list(1)
+    today_margin = (rows[0]["margin"] if rows else 0.0) or 0.0
+    today_pnl = daily.get("pnl_usdc", 0.0) if daily else 0.0
 
     return {
-        "open_positions":      open_n,
-        "capital_deployed_usdc": deployed,
-        "max_capital_usdc":    settings.bot_max_capital_usdc,
-        "all_time_closed":     s["total"],
-        "all_time_wins":       s["wins"],
-        "all_time_pnl_usdc":   round(s["total_pnl"], 2),
+        "open_positions":        open_n,
+        "position_size_usdc":    position_size,
+        "margin_deployed_usdc":  margin_deployed,
+        "max_capital_usdc":      settings.bot_max_capital_usdc,
+        "all_time_closed":       s["total"],
+        "all_time_wins":         s["wins"],
+        "all_time_pnl_usdc":     all_time_pnl,
+        "all_time_pnl_pct":      round(all_time_pnl / all_time_margin * 100, 2) if all_time_margin else None,
         "today": {
             "date":             today,
-            "pnl_usdc":         daily.get("pnl_usdc", 0.0) if daily else 0.0,
+            "pnl_usdc":         today_pnl,
+            "pnl_pct":          round(today_pnl / today_margin * 100, 2) if today_margin else None,
             "trades_closed":    daily.get("trades_closed", 0) if daily else 0,
             "halted":           daily.get("halted", False) if daily else False,
             "loss_limit_usdc":  daily.get("loss_limit_usdc") if daily else None,

@@ -256,14 +256,17 @@ export interface BotPosition {
 
 export interface BotSummary {
   open_positions: number;
-  capital_deployed_usdc: number;
+  position_size_usdc: number;
+  margin_deployed_usdc: number;
   max_capital_usdc: number;
   all_time_closed: number;
   all_time_wins: number;
   all_time_pnl_usdc: number;
+  all_time_pnl_pct: number | null;
   today: {
     date: string;
     pnl_usdc: number;
+    pnl_pct: number | null;
     trades_closed: number;
     halted: boolean;
     loss_limit_usdc: number | null;

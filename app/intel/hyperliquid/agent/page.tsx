@@ -100,23 +100,34 @@ const STATUS_COLOR: Record<string, string> = {
 
 // ── Summary cards ────────────────────────────────────────────────────────────
 function SummaryCards({
-  open, deployed, maxCapital, todayPnl, allTimePnl, winPct, wins, losses,
-  signals24h, executed24h,
+  open, positionSize, marginDeployed, maxCapital, todayPnl, todayPnlPct,
+  allTimePnl, allTimePnlPct, winPct, wins, losses, signals24h, executed24h,
 }: {
-  open: number; deployed: number; maxCapital: number; todayPnl: number;
-  allTimePnl: number; winPct: number | null; wins: number; losses: number;
+  open: number; positionSize: number; marginDeployed: number; maxCapital: number;
+  todayPnl: number; todayPnlPct: number | null;
+  allTimePnl: number; allTimePnlPct: number | null;
+  winPct: number | null; wins: number; losses: number;
   signals24h: number; executed24h: number;
 }) {
   const cards = [
     { label: "OPEN POSITIONS", value: String(open) },
-    { label: "CAPITAL DEPLOYED", value: `${fmtUsd(deployed)} / ${fmtUsd(maxCapital)}` },
-    { label: "TODAY PNL", value: fmtUsd(todayPnl), color: todayPnl > 0 ? "text-emerald-400" : todayPnl < 0 ? "text-red-400" : undefined },
-    { label: "ALL-TIME PNL", value: fmtUsd(allTimePnl), color: allTimePnl > 0 ? "text-emerald-400" : allTimePnl < 0 ? "text-red-400" : undefined },
+    { label: "MARGIN DEPLOYED", value: `${fmtUsd(marginDeployed)} / ${fmtUsd(maxCapital)}` },
+    { label: "POSITION SIZE", value: fmtUsd(positionSize) },
+    {
+      label: "TODAY PNL",
+      value: `${fmtUsd(todayPnl)}${todayPnlPct == null ? "" : ` (${fmtPct(todayPnlPct)})`}`,
+      color: todayPnl > 0 ? "text-emerald-400" : todayPnl < 0 ? "text-red-400" : undefined,
+    },
+    {
+      label: "ALL-TIME PNL",
+      value: `${fmtUsd(allTimePnl)}${allTimePnlPct == null ? "" : ` (${fmtPct(allTimePnlPct)})`}`,
+      color: allTimePnl > 0 ? "text-emerald-400" : allTimePnl < 0 ? "text-red-400" : undefined,
+    },
     { label: "WIN RATE", value: winPct == null ? "—" : `${winPct}% (${wins}/${wins + losses})` },
     { label: "SIGNALS / EXEC (24h)", value: `${signals24h} / ${executed24h}` },
   ];
   return (
-    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2">
+    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-7 gap-2">
       {cards.map(c => (
         <div key={c.label} className="bg-[#0D1117] border border-zinc-800 rounded px-3 py-2.5">
           <div className="text-zinc-600 text-[10px] uppercase tracking-widest mb-1">{c.label}</div>
@@ -503,10 +514,13 @@ export default function AgentPage() {
       <div className="p-4 space-y-6">
         <SummaryCards
           open={summary?.open_positions ?? 0}
-          deployed={summary?.capital_deployed_usdc ?? 0}
+          positionSize={summary?.position_size_usdc ?? 0}
+          marginDeployed={summary?.margin_deployed_usdc ?? 0}
           maxCapital={summary?.max_capital_usdc ?? 0}
           todayPnl={summary?.today.pnl_usdc ?? 0}
+          todayPnlPct={summary?.today.pnl_pct ?? null}
           allTimePnl={summary?.all_time_pnl_usdc ?? 0}
+          allTimePnlPct={summary?.all_time_pnl_pct ?? null}
           winPct={winPct}
           wins={summary?.all_time_wins ?? 0}
           losses={(summary?.all_time_closed ?? 0) - (summary?.all_time_wins ?? 0)}
