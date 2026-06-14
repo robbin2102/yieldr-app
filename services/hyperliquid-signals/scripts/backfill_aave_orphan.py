@@ -34,7 +34,11 @@ COIN = "AAVE"
 
 async def main(apply: bool) -> None:
     db = get_db()
-    fills = await ex.get_user_fills(300)
+    # This orphan fill has been sitting unmanaged since before the earlier
+    # reconciliation pass — with WHALE_SCALEUP_4H firing across many coins,
+    # it can easily have scrolled past a 300-fill window. 2000 is the max
+    # the HL fills API returns.
+    fills = await ex.get_user_fills(2000)
     coin_fills = [f for f in fills if f.get("coin") == COIN]
 
     known_oids: set[int] = set()
