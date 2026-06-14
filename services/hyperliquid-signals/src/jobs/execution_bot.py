@@ -184,22 +184,30 @@ async def _run_entry(db, pos_id, strategy, coin, side, signal_px, now) -> None:
     spread_at_entry = book["spread_bps"]
     first_attempt = True
 
+    # All oids placed for this entry, across retry attempts. Fill checks must
+    # consider every oid here, not just the latest — otherwise a retry that
+    # races with a late fill on an earlier (cancelled) order can leave that
+    # earlier fill as an orphaned position with no bot_positions record (the
+    # entry_order_id field only ever held the LATEST attempt's oid).
+    placed_oids: list[int] = []
+    first_since_ms: int | None = None
+
     # ── Order placement loop (BOT_ORDER_RETRIES attempts, 30s wait each) ─────
     for attempt in range(settings.bot_order_retries):
         if not first_attempt:
             try:
                 book = await ex.get_l2_book(coin)
             except Exception:
-                # Before giving up, re-check whether the previous attempt's
+                # Before giving up, re-check whether any previous attempt's
                 # order actually filled — a transient API error on that
                 # attempt's _get_fill call could have produced a false
                 # "not filled", leading us to cancel (no-op) an
                 # already-filled order and abandon it here.
                 try:
-                    filled, actual_px, actual_sz = await _get_fill(oid, coin, since_ms)
+                    filled, actual_px, actual_sz = await _get_fill(placed_oids, coin, first_since_ms)
                 except Exception:
-                    logger.exception("BOT: book+fill check both failed, leaving PENDING_FILL %s %s oid=%s",
-                                      strategy, coin, oid)
+                    logger.exception("BOT: book+fill check both failed, leaving PENDING_FILL %s %s oids=%s",
+                                      strategy, coin, placed_oids)
                     return
                 if filled:
                     await _mark_open(db, pos_id, actual_px, actual_sz, datetime.now(timezone.utc))
@@ -210,14 +218,25 @@ async def _run_entry(db, pos_id, strategy, coin, side, signal_px, now) -> None:
             if signal_px > 0:
                 drift = abs(mid - signal_px) / signal_px * 10_000
                 if drift > settings.drift_limit_bps:
-                    await _mark_skipped(db, pos_id, "price_drifted_on_retry",
-                                        datetime.now(timezone.utc), drift_bps=round(drift, 2))
+                    # Last check before giving up on drift: a previous
+                    # attempt may have filled late.
+                    try:
+                        filled, actual_px, actual_sz = await _get_fill(placed_oids, coin, first_since_ms)
+                    except Exception:
+                        filled = False
+                    if filled:
+                        await _mark_open(db, pos_id, actual_px, actual_sz, datetime.now(timezone.utc))
+                    else:
+                        await _mark_skipped(db, pos_id, "price_drifted_on_retry",
+                                            datetime.now(timezone.utc), drift_bps=round(drift, 2))
                     return
 
         # Quote at our own side's best level (not mid) — guarantees ALO can never
         # cross the book regardless of price movement between fetch and placement.
         entry_px_quote = book["best_bid"] if is_buy else book["best_ask"]
         since_ms = int(time.time() * 1000)
+        if first_since_ms is None:
+            first_since_ms = since_ms
         result, px, sz = await ex.place_limit_order(coin, is_buy, settings.bot_position_size_usdc, entry_px_quote)
         oid = ex.extract_oid(result)
         if oid is None:
@@ -231,10 +250,12 @@ async def _run_entry(db, pos_id, strategy, coin, side, signal_px, now) -> None:
             await asyncio.sleep(settings.bot_order_wait_s)
             continue
 
+        placed_oids.append(oid)
         hold_hours = STRATEGY_META.get(strategy, {}).get("hold_hours") or 4
         await db.bot_positions.update_one({"_id": pos_id}, {"$set": {
             "status":           "PENDING_FILL",
             "entry_order_id":   str(oid),
+            "entry_order_ids":  [str(o) for o in placed_oids],
             "entry_limit_px":   px,
             "size_coin":        sz,
             "spread_at_entry":  spread_at_entry,
@@ -244,14 +265,14 @@ async def _run_entry(db, pos_id, strategy, coin, side, signal_px, now) -> None:
 
         await asyncio.sleep(settings.bot_order_wait_s)
         try:
-            filled, actual_px, actual_sz = await _get_fill(oid, coin, since_ms)
+            filled, actual_px, actual_sz = await _get_fill(placed_oids, coin, first_since_ms)
         except Exception:
             # Fills API still erroring after retries — we can't tell whether
             # this order filled. Leave it PENDING_FILL (entry_order_id is
             # recorded) rather than guess: cancelling a filled order is a
             # silent no-op, and a wrong "not filled" guess abandons a real
             # open position untracked.
-            logger.exception("BOT: fill check failed, leaving PENDING_FILL %s %s oid=%s", strategy, coin, oid)
+            logger.exception("BOT: fill check failed, leaving PENDING_FILL %s %s oids=%s", strategy, coin, placed_oids)
             return
         if filled:
             await _mark_open(db, pos_id, actual_px, actual_sz, datetime.now(timezone.utc))
@@ -265,6 +286,17 @@ async def _run_entry(db, pos_id, strategy, coin, side, signal_px, now) -> None:
         logger.info("BOT: attempt %d/%d no fill %s %s", attempt + 1,
                     settings.bot_order_retries, strategy, coin)
         first_attempt = False
+
+    # Final safety check: the last attempt's order may fill late, just after
+    # we saw "no fill" and issued a (possibly no-op) cancel.
+    try:
+        filled, actual_px, actual_sz = await _get_fill(placed_oids, coin, first_since_ms)
+    except Exception:
+        filled = False
+    if filled:
+        await _mark_open(db, pos_id, actual_px, actual_sz, datetime.now(timezone.utc))
+        logger.warning("BOT: late fill detected after retries exhausted %s %s", strategy, coin)
+        return
 
     await _mark_skipped(db, pos_id, "no_fill", datetime.now(timezone.utc))
     logger.info("BOT: no fill after %d attempts, skip %s %s",
@@ -304,7 +336,7 @@ async def _run_close(coin: str, is_long: bool, sz_coin: float) -> tuple[bool, fl
             continue
 
         await asyncio.sleep(settings.bot_order_wait_s)
-        filled, fill_px, _ = await _get_fill(oid, coin, since_ms)
+        filled, fill_px, _ = await _get_fill([oid], coin, since_ms)
         if filled:
             return True, fill_px
 
@@ -396,14 +428,21 @@ async def _close_position(db, pos: dict, reason: str, now: datetime) -> None:
     await _update_daily_pnl(db, now, pnl)
 
 
-async def _get_fill(oid: int, coin: str, since_ms: int | None = None, retries: int = 3) -> tuple[bool, float, float]:
-    """Check fills API for a specific oid. Returns (filled, fill_px, fill_sz).
+async def _get_fill(oids: list[int], coin: str, since_ms: int | None = None, retries: int = 3) -> tuple[bool, float, float]:
+    """Check fills API for any of the given oids. Returns (filled, fill_px, fill_sz),
+    combining fills across all matched oids (weighted-avg px, summed sz).
     Using fills API (not open_orders) so cancelled orders are correctly detected as unfilled.
 
-    since_ms, if given, is the time (ms epoch) the order was placed. Fills with
+    Checking ALL oids placed for this entry (not just the latest) matters
+    because a "no fill -> cancel -> place new order" retry can race with the
+    exchange: if the earlier order actually fills just after we cancel it,
+    that fill must still be picked up here, otherwise it becomes an orphaned
+    position with no bot_positions record (the bug fixed alongside this).
+
+    since_ms, if given, is the time (ms epoch) the first order was placed. Fills with
     f["time"] before that (minus a small clock-skew buffer) are ignored — guards
     against matching a stale fill from a previous order that happened to reuse
-    this oid/coin pair.
+    one of these oid/coin pairs.
 
     Retries on API errors (e.g. transient rate limits) — an exception here must
     NOT be treated as "not filled", since that can leave a genuinely filled
@@ -411,6 +450,7 @@ async def _get_fill(oid: int, coin: str, since_ms: int | None = None, retries: i
     no-ops, then gives up thinking nothing was ever placed).
     """
     from ..lib import hl_exchange as ex
+    oid_set = set(oids)
     for attempt in range(retries):
         try:
             fills = await ex.get_user_fills(50)
@@ -419,7 +459,7 @@ async def _get_fill(oid: int, coin: str, since_ms: int | None = None, retries: i
                 await asyncio.sleep(1)
                 continue
             raise
-        matched = [f for f in fills if int(f.get("oid", -1)) == oid and f.get("coin") == coin]
+        matched = [f for f in fills if int(f.get("oid", -1)) in oid_set and f.get("coin") == coin]
         if since_ms is not None:
             matched = [f for f in matched if int(f.get("time", 0)) >= since_ms - 2000]
         if not matched:
@@ -467,7 +507,7 @@ async def _create_pending(db, strategy, coin, side, signal_px, alert_id, now):
         "size_usdc": settings.bot_position_size_usdc, "size_coin": None,
         "leverage": settings.bot_leverage,
         "env": "testnet" if settings.bot_testnet else "mainnet",
-        "entry_order_id": None, "entry_px": None, "entry_ts": None,
+        "entry_order_id": None, "entry_order_ids": [], "entry_px": None, "entry_ts": None,
         "hold_until": None, "exit_order_id": None, "exit_px": None,
         "exit_ts": None, "exit_reason": None, "return_pct": None,
         "pnl_usdc": None, "fees_usdc": None, "skip_reason": None,
