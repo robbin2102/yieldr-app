@@ -89,6 +89,13 @@ class Settings(BaseSettings):
     # Capital management
     bot_position_size_usdc: float = Field(default=100.0, alias="BOT_POSITION_SIZE_USDC")
     bot_max_capital_usdc: float = Field(default=500.0, alias="BOT_MAX_CAPITAL_USDC")
+
+    # Per-strategy capital caps — comma-separated "STRATEGY:CAP_USDC" pairs
+    # (e.g. "WHALE_SCALEUP_4H:1000,WAKEUP_LS10:200"). Strategies not listed
+    # fall back to bot_strategy_cap_default_usdc. Prevents a high-frequency
+    # strategy from monopolizing bot_max_capital_usdc and starving others.
+    bot_strategy_caps_usdc: str = Field(default="", alias="BOT_STRATEGY_CAPS_USDC")
+    bot_strategy_cap_default_usdc: float = Field(default=200.0, alias="BOT_STRATEGY_CAP_DEFAULT_USDC")
     bot_leverage: int = Field(default=1, alias="BOT_LEVERAGE")
     daily_loss_limit_pct: float = Field(default=0.05, alias="DAILY_LOSS_LIMIT_PCT")
 

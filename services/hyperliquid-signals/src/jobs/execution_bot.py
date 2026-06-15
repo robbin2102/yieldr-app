@@ -21,6 +21,24 @@ def _excluded_coins() -> set[str]:
     return {c.strip().upper() for c in settings.bot_excluded_coins.split(",") if c.strip()}
 
 
+def _strategy_caps() -> dict[str, float]:
+    caps: dict[str, float] = {}
+    for pair in settings.bot_strategy_caps_usdc.split(","):
+        pair = pair.strip()
+        if not pair:
+            continue
+        name, _, val = pair.partition(":")
+        try:
+            caps[name.strip()] = float(val)
+        except ValueError:
+            logger.warning("BOT: bad BOT_STRATEGY_CAPS_USDC entry %r — ignoring", pair)
+    return caps
+
+
+def _strategy_cap(strategy: str) -> float:
+    return _strategy_caps().get(strategy, settings.bot_strategy_cap_default_usdc)
+
+
 # ── Entry point (called from alert_engine after _fire) ─────────────────────────
 
 async def bot_execute(alert: dict) -> None:
@@ -116,7 +134,7 @@ async def _preflight(db, strategy, coin, side, signal_px, alert_id, now) -> bool
         logger.warning("BOT: daily loss limit halted, skip %s %s", strategy, coin)
         return True
 
-    # Capital cap
+    # Global capital cap
     rows = await db.bot_positions.aggregate([
         {"$match": {"status": "OPEN"}},
         {"$group": {"_id": None, "total": {"$sum": "$size_usdc"}}},
@@ -125,6 +143,20 @@ async def _preflight(db, strategy, coin, side, signal_px, alert_id, now) -> bool
     if deployed + settings.bot_position_size_usdc > settings.bot_max_capital_usdc:
         await _log_skip(db, strategy, coin, side, signal_px, alert_id, "cap_exceeded", now)
         logger.info("BOT: cap exceeded (%.0f deployed), skip %s %s", deployed, strategy, coin)
+        return True
+
+    # Per-strategy capital cap — keeps a high-frequency strategy from
+    # monopolizing bot_max_capital_usdc and starving lower-frequency ones
+    strat_rows = await db.bot_positions.aggregate([
+        {"$match": {"status": "OPEN", "strategy": strategy}},
+        {"$group": {"_id": None, "total": {"$sum": "$size_usdc"}}},
+    ]).to_list(1)
+    strat_deployed = strat_rows[0]["total"] if strat_rows else 0.0
+    strat_cap = _strategy_cap(strategy)
+    if strat_deployed + settings.bot_position_size_usdc > strat_cap:
+        await _log_skip(db, strategy, coin, side, signal_px, alert_id, "strategy_cap_exceeded", now)
+        logger.info("BOT: strategy cap exceeded (%.0f/%.0f deployed) for %s, skip %s",
+                     strat_deployed, strat_cap, strategy, coin)
         return True
 
     # Duplicate open position
