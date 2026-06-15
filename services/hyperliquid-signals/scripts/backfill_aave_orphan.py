@@ -1,5 +1,5 @@
-"""One-off backfill for the orphaned AAVE leg (~0.16, entry ~67.006) that was
-never written to ANY bot_positions document.
+"""One-off backfill for the orphaned AAVE leg (entry ~67.036, size 0.16 SHORT)
+that was never written to ANY bot_positions document.
 
 Root cause (fixed alongside this script in execution_bot.py): the entry
 order-retry loop only ever stored the LATEST attempt's oid in
@@ -7,13 +7,16 @@ entry_order_id, overwriting earlier attempts. If an earlier attempt's order
 filled "late" — after _get_fill reported "not filled" and we issued a (no-op)
 cancel — that fill's oid was lost entirely. backfill_positions.py matches by
 entry_order_id, so it could only recover the leg whose oid happened to be the
-one left in the doc (the ~67.066 leg); this ~67.006 leg has no oid recorded
-anywhere.
+one left in the doc; this leg's oid was never recorded anywhere.
 
-This script finds that orphan directly: an "Open Short"/"Open Long" AAVE fill
-whose oid is not referenced by ANY existing AAVE bot_positions doc, and
-inserts a new OPEN row for it, copying strategy/leverage/size_usdc/env from
-the sibling AAVE position that *was* tracked.
+Fill-based recovery (matching by oid against userFills, even at the 2000-fill
+API max) couldn't find this fill — WHALE_SCALEUP_4H's signal volume has
+scrolled it out of the available window. Instead, this script reads the
+position directly from HL's ground-truth clearinghouseState (entry_px, size,
+side, leverage, unrealized_pnl) and inserts a matching OPEN row, copying
+strategy/size_usdc/env from the sibling AAVE position that *was* tracked.
+Since the true entry time is unknown, hold_until is set to "now" so the bot's
+normal timer-exit picks this leg up and closes it on the next tick.
 
 Usage:
     python -m scripts.backfill_aave_orphan [--apply]
@@ -21,89 +24,91 @@ Usage:
 """
 import asyncio
 import sys
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 
 sys.path.insert(0, ".")
 from src.config import settings  # noqa: E402
 from src.db import get_db  # noqa: E402
-from src.lib import hl_exchange as ex  # noqa: E402
-from src.api.trade_alerts import STRATEGY_META  # noqa: E402
+from src.lib.hl_exchange import get_clearinghouse_state  # noqa: E402
 
 COIN = "AAVE"
 
 
 async def main(apply: bool) -> None:
     db = get_db()
-    # This orphan fill has been sitting unmanaged since before the earlier
-    # reconciliation pass — with WHALE_SCALEUP_4H firing across many coins,
-    # it can easily have scrolled past a 300-fill window. 2000 is the max
-    # the HL fills API returns.
-    fills = await ex.get_user_fills(2000)
-    coin_fills = [f for f in fills if f.get("coin") == COIN]
+    addr = settings.hl_wallet_address
+    if not addr:
+        print("HL_WALLET_ADDRESS not set")
+        return
 
-    known_oids: set[int] = set()
+    state = await get_clearinghouse_state(addr)
+    if state is None:
+        print("Failed to fetch clearinghouseState")
+        return
+
+    hl_pos = None
+    for ap in state.get("assetPositions", []):
+        pos = ap.get("position", {})
+        if pos.get("coin") != COIN:
+            continue
+        szi = float(pos.get("szi", "0"))
+        if abs(szi) < 1e-12:
+            continue
+        hl_pos = {
+            "side": "LONG" if szi > 0 else "SHORT",
+            "size": abs(szi),
+            "entry_px": float(pos.get("entryPx", "0")),
+            "leverage": pos.get("leverage", {}).get("value"),
+        }
+
+    if hl_pos is None:
+        print(f"No open {COIN} position on HL — nothing to backfill.")
+        return
+
+    env = "testnet" if settings.bot_testnet else "mainnet"
+    existing = await db.bot_positions.find_one({"coin": COIN, "status": "OPEN", "env": env})
+    if existing:
+        print(f"{COIN} already has an OPEN row in DB (_id={existing['_id']}) — nothing to backfill.")
+        return
+
     sibling = None
     async for pos in db.bot_positions.find({"coin": COIN}):
-        oids = pos.get("entry_order_ids") or []
-        if pos.get("entry_order_id"):
-            oids = [*oids, pos["entry_order_id"]]
-        for oid in oids:
-            try:
-                known_oids.add(int(oid))
-            except (TypeError, ValueError):
-                pass
-        if sibling is None and pos.get("status") in ("OPEN", "CLOSED"):
+        if pos.get("status") in ("OPEN", "CLOSED"):
             sibling = pos
+            break
 
-    print(f"Known AAVE oids in bot_positions: {known_oids}")
     if sibling:
         print(f"Sibling AAVE doc: _id={sibling['_id']} status={sibling['status']} "
               f"strategy={sibling.get('strategy')} entry_px={sibling.get('entry_px')}")
 
-    opens = [f for f in coin_fills if str(f.get("dir", "")).startswith("Open")]
-    orphans = [f for f in opens if int(f.get("oid", -1)) not in known_oids]
+    strategy = sibling.get("strategy") if sibling else "WHALE_SCALEUP_4H"
+    leverage = hl_pos["leverage"] or (sibling.get("leverage") if sibling else 10)
+    size_usdc = sibling.get("size_usdc") if sibling else round(hl_pos["entry_px"] * hl_pos["size"], 2)
 
-    if not orphans:
-        print("No orphan AAVE 'Open' fills found — nothing to backfill.")
-        return
+    now = datetime.now(timezone.utc)
+    doc = {
+        "strategy": strategy, "coin": COIN, "side": hl_pos["side"],
+        "status": "OPEN", "signal_px": hl_pos["entry_px"], "alert_id": None,
+        "size_usdc": size_usdc, "size_coin": hl_pos["size"],
+        "leverage": leverage, "env": env,
+        "entry_order_id": None, "entry_order_ids": [],
+        "entry_px": hl_pos["entry_px"], "entry_ts": now,
+        "hold_until": now, "exit_order_id": None, "exit_px": None,
+        "exit_ts": None, "exit_reason": None, "return_pct": None,
+        "pnl_usdc": None, "fees_usdc": None,
+        "skip_reason": "backfilled_orphan_leg",
+        "agent_call_id": None, "created_at": now, "updated_at": now,
+    }
 
-    for f in orphans:
-        side = "SHORT" if str(f["dir"]).endswith("Short") else "LONG"
-        entry_px = float(f["px"])
-        size_coin = float(f["sz"])
-        entry_ts = datetime.utcfromtimestamp(int(f["time"]) / 1000)
-        oid = int(f["oid"])
+    print(f"\nHL {COIN} position: side={hl_pos['side']} size={hl_pos['size']} "
+          f"entry_px={hl_pos['entry_px']} leverage={hl_pos['leverage']}")
+    print(f"  -> insert OPEN strategy={strategy} size_usdc={size_usdc} env={env} "
+          f"hold_until=now (picked up by bot_close_expired on next tick)")
 
-        strategy = sibling.get("strategy") if sibling else "WHALE_SCALEUP_4H"
-        leverage = sibling.get("leverage") if sibling else 10
-        size_usdc = sibling.get("size_usdc") if sibling else round(entry_px * size_coin, 2)
-        env = sibling.get("env") if sibling else ("testnet" if settings.bot_testnet else "mainnet")
-        hold_hours = STRATEGY_META.get(strategy, {}).get("hold_hours") or 4
-        hold_until = entry_ts + timedelta(hours=hold_hours)
-
-        print(f"\nOrphan fill: oid={oid} dir={f['dir']} side={side} entry_px={entry_px} "
-              f"size_coin={size_coin} entry_ts={entry_ts}")
-        print(f"  -> insert OPEN strategy={strategy} leverage={leverage} "
-              f"size_usdc={size_usdc} env={env} hold_until={hold_until}")
-
-        if apply:
-            now = datetime.now(timezone.utc)
-            await db.bot_positions.insert_one({
-                "strategy": strategy, "coin": COIN, "side": side,
-                "status": "OPEN", "signal_px": entry_px, "alert_id": None,
-                "size_usdc": size_usdc, "size_coin": size_coin,
-                "leverage": leverage, "env": env,
-                "entry_order_id": str(oid), "entry_order_ids": [str(oid)],
-                "entry_px": entry_px, "entry_ts": entry_ts,
-                "hold_until": hold_until, "exit_order_id": None, "exit_px": None,
-                "exit_ts": None, "exit_reason": None, "return_pct": None,
-                "pnl_usdc": None, "fees_usdc": None,
-                "skip_reason": "backfilled_orphan_leg",
-                "agent_call_id": None, "created_at": now, "updated_at": now,
-            })
-            print("  -> inserted OPEN")
-
-    if not apply:
+    if apply:
+        await db.bot_positions.insert_one(doc)
+        print("  -> inserted OPEN")
+    else:
         print("\n(dry run — re-run with --apply to write these changes)")
 
 
