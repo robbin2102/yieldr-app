@@ -51,7 +51,13 @@ async def acquire(db) -> bool:
     now = datetime.now(timezone.utc)
     existing = await db.bot_instance_lock.find_one({"_id": "lock"})
     if existing and existing.get("instance_id") != _INSTANCE_ID:
-        age_s = (now - existing["heartbeat_at"]).total_seconds()
+        heartbeat_at = existing["heartbeat_at"]
+        if heartbeat_at.tzinfo is None:
+            # Motor/PyMongo returns naive datetimes (values are stored as
+            # UTC but tzinfo is dropped on read) — reattach UTC so this is
+            # comparable to datetime.now(timezone.utc).
+            heartbeat_at = heartbeat_at.replace(tzinfo=timezone.utc)
+        age_s = (now - heartbeat_at).total_seconds()
         if age_s < _STALE_AFTER.total_seconds():
             logger.error(
                 '"Another bot instance appears active (instance_id=%s pid=%s, heartbeat %ds ago) '
