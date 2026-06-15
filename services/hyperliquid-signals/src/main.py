@@ -33,6 +33,23 @@ scheduler = AsyncIOScheduler(timezone="UTC")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # The Railway-hosted Mongo proxy occasionally needs a moment to wake up /
+    # re-establish a route after being idle, and ensure_indexes() immediately
+    # fires ~40 sequential index ops — if the very first one hits a cold
+    # connection, serverSelectionTimeoutMS (10s) can trip and crash startup
+    # entirely. Retry a simple ping with backoff first so transient blips
+    # don't take down the whole service, and log what's happening.
+    for attempt in range(1, 6):
+        if await ping():
+            if attempt > 1:
+                logger.info('"MongoDB reachable on startup attempt %d/5"', attempt)
+            break
+        wait_s = min(2 ** attempt, 16)
+        logger.warning('"MongoDB not reachable on startup attempt %d/5, retrying in %ds"', attempt, wait_s)
+        await asyncio.sleep(wait_s)
+    else:
+        logger.error('"MongoDB still unreachable after 5 startup attempts — proceeding anyway"')
+
     await ensure_indexes()
     logger.info('"Service starting, indexes ensured"')
 
