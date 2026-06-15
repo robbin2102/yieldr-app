@@ -134,28 +134,29 @@ async def _preflight(db, strategy, coin, side, signal_px, alert_id, now) -> bool
         logger.warning("BOT: daily loss limit halted, skip %s %s", strategy, coin)
         return True
 
-    # Global capital cap
+    # Global capital cap (margin basis — size_usdc/leverage)
+    margin_expr = {"$divide": ["$size_usdc", {"$ifNull": ["$leverage", 1]}]}
     rows = await db.bot_positions.aggregate([
         {"$match": {"status": "OPEN"}},
-        {"$group": {"_id": None, "total": {"$sum": "$size_usdc"}}},
+        {"$group": {"_id": None, "total": {"$sum": margin_expr}}},
     ]).to_list(1)
     deployed = rows[0]["total"] if rows else 0.0
-    if deployed + settings.bot_position_size_usdc > settings.bot_max_capital_usdc:
+    if deployed + settings.bot_position_margin_usdc > settings.bot_max_capital_usdc:
         await _log_skip(db, strategy, coin, side, signal_px, alert_id, "cap_exceeded", now)
-        logger.info("BOT: cap exceeded (%.0f deployed), skip %s %s", deployed, strategy, coin)
+        logger.info("BOT: cap exceeded (%.2f margin deployed), skip %s %s", deployed, strategy, coin)
         return True
 
-    # Per-strategy capital cap — keeps a high-frequency strategy from
-    # monopolizing bot_max_capital_usdc and starving lower-frequency ones
+    # Per-strategy capital cap (margin basis) — keeps a high-frequency strategy
+    # from monopolizing bot_max_capital_usdc and starving lower-frequency ones
     strat_rows = await db.bot_positions.aggregate([
         {"$match": {"status": "OPEN", "strategy": strategy}},
-        {"$group": {"_id": None, "total": {"$sum": "$size_usdc"}}},
+        {"$group": {"_id": None, "total": {"$sum": margin_expr}}},
     ]).to_list(1)
     strat_deployed = strat_rows[0]["total"] if strat_rows else 0.0
     strat_cap = _strategy_cap(strategy)
-    if strat_deployed + settings.bot_position_size_usdc > strat_cap:
+    if strat_deployed + settings.bot_position_margin_usdc > strat_cap:
         await _log_skip(db, strategy, coin, side, signal_px, alert_id, "strategy_cap_exceeded", now)
-        logger.info("BOT: strategy cap exceeded (%.0f/%.0f deployed) for %s, skip %s",
+        logger.info("BOT: strategy cap exceeded (%.2f/%.2f margin deployed) for %s, skip %s",
                      strat_deployed, strat_cap, strategy, coin)
         return True
 
@@ -269,7 +270,8 @@ async def _run_entry(db, pos_id, strategy, coin, side, signal_px, now) -> None:
         since_ms = int(time.time() * 1000)
         if first_since_ms is None:
             first_since_ms = since_ms
-        result, px, sz = await ex.place_limit_order(coin, is_buy, settings.bot_position_size_usdc, entry_px_quote)
+        notional_usdc = settings.bot_position_margin_usdc * settings.bot_leverage
+        result, px, sz = await ex.place_limit_order(coin, is_buy, notional_usdc, entry_px_quote)
         oid = ex.extract_oid(result)
         if oid is None:
             # extract_oid found no "resting" status — log the raw response so we can
@@ -443,7 +445,8 @@ async def _close_position(db, pos: dict, reason: str, now: datetime) -> None:
 
     raw = (exit_px - entry_px) / entry_px if entry_px > 0 else 0.0
     ret = raw if side == "LONG" else -raw
-    pnl = round(ret * (pos.get("size_usdc") or settings.bot_position_size_usdc), 2)
+    fallback_notional = settings.bot_position_margin_usdc * settings.bot_leverage
+    pnl = round(ret * (pos.get("size_usdc") or fallback_notional), 2)
 
     await db.bot_positions.update_one({"_id": pos["_id"]}, {"$set": {
         "status":      "CLOSED",
@@ -536,7 +539,7 @@ async def _create_pending(db, strategy, coin, side, signal_px, alert_id, now):
     r = await db.bot_positions.insert_one({
         "strategy": strategy, "coin": coin, "side": side,
         "status": "PENDING", "signal_px": signal_px, "alert_id": alert_id,
-        "size_usdc": settings.bot_position_size_usdc, "size_coin": None,
+        "size_usdc": settings.bot_position_margin_usdc * settings.bot_leverage, "size_coin": None,
         "leverage": settings.bot_leverage,
         "env": "testnet" if settings.bot_testnet else "mainnet",
         "entry_order_id": None, "entry_order_ids": [], "entry_px": None, "entry_ts": None,
