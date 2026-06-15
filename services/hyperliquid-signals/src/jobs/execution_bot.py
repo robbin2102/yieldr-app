@@ -9,6 +9,7 @@ from bson import ObjectId
 from ..config import settings
 from ..db import get_db
 from ..api.trade_alerts import STRATEGY_META
+from . import instance_lock
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +63,9 @@ async def bot_execute(alert: dict) -> None:
 
     if not settings.bot_enabled:
         return
+    if not instance_lock.is_active():
+        logger.warning("BOT: this instance does not hold the bot lock, skip %s %s", strategy, coin)
+        return
     if not settings.hl_private_key or not settings.hl_wallet_address:
         logger.warning("BOT: credentials missing, set HL_WALLET_ADDRESS + HL_PRIVATE_KEY")
         return
@@ -92,6 +96,8 @@ async def bot_execute(alert: dict) -> None:
 
 async def bot_close_expired(now: datetime | None = None) -> None:
     if not settings.bot_enabled:
+        return
+    if not instance_lock.is_active():
         return
     now = now or datetime.now(timezone.utc)
     db = get_db()
@@ -160,8 +166,14 @@ async def _preflight(db, strategy, coin, side, signal_px, alert_id, now) -> bool
                      strat_deployed, strat_cap, strategy, coin)
         return True
 
-    # Duplicate open position
-    if await db.bot_positions.find_one({"strategy": strategy, "coin": coin, "status": "OPEN"}):
+    # Duplicate open/in-flight position — covers PENDING/PENDING_FILL too, not
+    # just OPEN, so a second entry for the same coin+strategy can't slip
+    # through preflight while the first is still placing/awaiting its order
+    # (the race that produced the orphaned INJ leg).
+    if await db.bot_positions.find_one({
+        "strategy": strategy, "coin": coin,
+        "status": {"$in": ["OPEN", "PENDING", "PENDING_FILL"]},
+    }):
         await _log_skip(db, strategy, coin, side, signal_px, alert_id, "dupe", now)
         return True
 

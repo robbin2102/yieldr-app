@@ -10,7 +10,7 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 from .config import settings
-from .db import ensure_indexes, ping, close
+from .db import ensure_indexes, ping, close, get_db
 from .lib import health_log
 
 logging.basicConfig(
@@ -57,12 +57,21 @@ async def lifespan(app: FastAPI):
     from .jobs.snapshotter import run_snapshot
     from .jobs.price_logger import run_price_log
     from .jobs.execution_bot import bot_close_expired
+    from .jobs import instance_lock
 
     interval_s = settings.snapshot_interval_s
     scheduler.add_job(run_discovery,     CronTrigger(hour=0, minute=0),         id="discovery",    replace_existing=True)
     scheduler.add_job(run_snapshot,      IntervalTrigger(seconds=interval_s),   id="snapshotter",  replace_existing=True)
     scheduler.add_job(run_price_log,     IntervalTrigger(seconds=interval_s),   id="price_logger", replace_existing=True)
     scheduler.add_job(bot_close_expired, IntervalTrigger(minutes=1),            id="bot_timer",    replace_existing=True)
+
+    if settings.bot_enabled:
+        bot_active = await instance_lock.acquire(get_db())
+        logger.info('"Bot instance lock: active=%s instance_id=%s"',
+                     bot_active, instance_lock.instance_id())
+        scheduler.add_job(instance_lock.heartbeat_job, IntervalTrigger(seconds=60),
+                           id="bot_instance_heartbeat", replace_existing=True)
+
     scheduler.start()
     logger.info('"Scheduler started: discovery=daily, snapshot=%ds, prices=%ds, bot_timer=1min"',
                 interval_s, interval_s)
