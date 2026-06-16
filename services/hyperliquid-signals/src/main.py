@@ -31,6 +31,25 @@ logging.getLogger("apscheduler.scheduler").setLevel(logging.WARNING)
 scheduler = AsyncIOScheduler(timezone="UTC")
 
 
+async def _retry_acquire_lock() -> None:
+    """Background retry for the bot instance lock after a Railway rolling deploy.
+
+    On a rolling deploy the new container starts while the old one's last
+    heartbeat is still within the 150s stale window, so acquire() returns
+    False. The old container is already dead — its heartbeat will never
+    refresh — so we just need to wait out the stale window and try again.
+    """
+    from .jobs import instance_lock
+    stale_s = 160  # _STALE_AFTER (150s) + small buffer
+    logger.info('"Bot lock retry scheduled in %ds (waiting for old instance heartbeat to go stale)"', stale_s)
+    await asyncio.sleep(stale_s)
+    acquired = await instance_lock.acquire(get_db())
+    if acquired:
+        logger.info('"Bot instance lock acquired on retry — bot execution now active"')
+    else:
+        logger.error('"Bot instance lock retry failed — bot execution remains disabled"')
+
+
 async def _recover_closing_positions() -> None:
     """On startup, fix positions left in CLOSING by a previous crash.
 
@@ -133,6 +152,13 @@ async def lifespan(app: FastAPI):
         bot_active = await instance_lock.acquire(get_db())
         logger.info('"Bot instance lock: active=%s instance_id=%s"',
                      bot_active, instance_lock.instance_id())
+        if not bot_active:
+            # Another instance's heartbeat was still fresh at startup (common on
+            # Railway rolling deploys where the old container is killed but its
+            # last heartbeat is <150s old). Schedule a retry after the stale
+            # window passes — the old instance is already dead, so its heartbeat
+            # will not refresh and the lock will be ours on the next attempt.
+            asyncio.create_task(_retry_acquire_lock())
         scheduler.add_job(instance_lock.heartbeat_job, IntervalTrigger(seconds=60),
                            id="bot_instance_heartbeat", replace_existing=True)
 

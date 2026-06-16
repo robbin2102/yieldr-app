@@ -544,6 +544,8 @@ export default function AgentPage() {
       </div>
 
       <div className="p-4 space-y-6">
+        <ServiceHealthPanel />
+
         <SummaryCards
           open={summary?.open_positions ?? 0}
           positionSize={summary?.position_size_usdc ?? 0}
@@ -588,12 +590,6 @@ export default function AgentPage() {
           <ActivityFeed events={activity} />
         </section>
 
-        <section>
-          <div className="text-zinc-500 text-xs font-bold tracking-widest mb-2 uppercase">
-            Service Status
-          </div>
-          <ServiceHealthPanel />
-        </section>
       </div>
     </div>
   );
