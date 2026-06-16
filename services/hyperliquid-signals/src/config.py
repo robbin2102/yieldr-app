@@ -2,7 +2,7 @@ import os
 from pathlib import Path
 from dotenv import dotenv_values
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import Field
+from pydantic import Field, model_validator
 
 def _load_env_local() -> None:
     # First file to set a given key wins (later files don't override). If an
@@ -83,8 +83,29 @@ class Settings(BaseSettings):
     # ── Execution bot ──────────────────────────────────────────────────────────
     bot_enabled: bool = Field(default=False, alias="BOT_ENABLED")
     bot_testnet: bool = Field(default=True, alias="BOT_TESTNET")
+
+    # Network-specific credentials (preferred over HL_WALLET_ADDRESS /
+    # HL_PRIVATE_KEY when set). BOT_TESTNET selects which pair is used —
+    # store all four in Railway and flip BOT_TESTNET to switch networks.
+    hl_wallet_address_testnet: str = Field(default="", alias="HL_WALLET_ADDRESS_TESTNET")
+    hl_private_key_testnet: str = Field(default="", alias="HL_PRIVATE_KEY_TESTNET")
+    hl_wallet_address_mainnet: str = Field(default="", alias="HL_WALLET_ADDRESS_MAINNET")
+    hl_private_key_mainnet: str = Field(default="", alias="HL_PRIVATE_KEY_MAINNET")
+
+    # Effective credentials — set directly via HL_WALLET_ADDRESS / HL_PRIVATE_KEY
+    # OR resolved automatically from the network-specific vars above.
     hl_wallet_address: str = Field(default="", alias="HL_WALLET_ADDRESS")
     hl_private_key: str = Field(default="", alias="HL_PRIVATE_KEY")
+
+    @model_validator(mode="after")
+    def _resolve_hl_credentials(self) -> "Settings":
+        if self.bot_testnet and self.hl_wallet_address_testnet:
+            self.hl_wallet_address = self.hl_wallet_address_testnet
+            self.hl_private_key = self.hl_private_key_testnet
+        elif not self.bot_testnet and self.hl_wallet_address_mainnet:
+            self.hl_wallet_address = self.hl_wallet_address_mainnet
+            self.hl_private_key = self.hl_private_key_mainnet
+        return self
 
     # Capital management — all caps below are MARGIN (capital actually
     # committed), not notional position size. Notional = margin * bot_leverage,
