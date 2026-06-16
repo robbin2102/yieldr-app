@@ -50,8 +50,10 @@ function timeLeft(until: string | null) {
 
 function timeAgo(ts: string | null) {
   if (!ts) return "—";
-  const diff = Date.now() - new Date(ts.endsWith("Z") ? ts : ts + "Z").getTime();
-  if (diff < 0) return "now";
+  // Python isoformat() uses +00:00 suffix; Date() needs Z or no offset
+  const normalized = ts.replace(/\+00:00$/, "Z");
+  const diff = Date.now() - new Date(normalized).getTime();
+  if (isNaN(diff) || diff < 0) return "now";
   const s = Math.floor(diff / 1000);
   if (s < 60) return `${s}s ago`;
   const m = Math.floor(s / 60);

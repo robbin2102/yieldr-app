@@ -287,8 +287,15 @@ async def _run_shard(shard: int, num_shards: int) -> None:
                 await _run_session(shard, num_shards, info)
             except asyncio.CancelledError:
                 raise
-            except Exception:
-                logger.exception("WS monitor: shard %d session ended, reconnecting", shard)
+            except ConnectionError as e:
+                # Expected: allMids stale timeout or HL server sent close frame ("Expired")
+                logger.warning('"WS monitor: shard %d session ended, reconnecting: %s"', shard, e)
+            except Exception as e:
+                msg = str(e)
+                if "Expired" in msg or "opcode=8" in msg or "ConnectionClosed" in type(e).__name__:
+                    logger.warning('"WS monitor: shard %d connection expired, reconnecting"', shard)
+                else:
+                    logger.exception("WS monitor: shard %d session ended, reconnecting", shard)
 
             shard_status["connected"] = False
             shard_status["last_disconnected_at"] = datetime.utcnow().isoformat()
