@@ -31,6 +31,67 @@ logging.getLogger("apscheduler.scheduler").setLevel(logging.WARNING)
 scheduler = AsyncIOScheduler(timezone="UTC")
 
 
+async def _recover_closing_positions() -> None:
+    """On startup, fix positions left in CLOSING by a previous crash.
+
+    CLOSING is a transient state set at the start of _close_position(). If the
+    process dies between setting CLOSING and writing the OPEN/CLOSED result,
+    that doc is stuck forever because bot_close_expired only queries OPEN.
+
+    Resolution: check HL ground truth.
+    - Still open on HL → reset to OPEN so bot_close_expired closes it.
+    - Not on HL → mark CLOSED (was already closed externally or before crash).
+    Only operates on the current env (testnet vs mainnet).
+    """
+    from .lib import hl_exchange as ex
+
+    env = "testnet" if settings.bot_testnet else "mainnet"
+    db = get_db()
+    closing = await db.bot_positions.find({"status": "CLOSING", "env": env}).to_list(None)
+    if not closing:
+        return
+
+    logger.warning('"Recovery: %d CLOSING position(s) found for env=%s — reconciling against HL"',
+                   len(closing), env)
+
+    hl_coins: set[str] = set()
+    try:
+        state = await ex.get_clearinghouse_state(settings.hl_wallet_address)
+        if state:
+            for ap in state.get("assetPositions", []):
+                pos = ap.get("position", {})
+                if abs(float(pos.get("szi", "0"))) > 1e-12:
+                    hl_coins.add(pos.get("coin"))
+    except Exception:
+        logger.exception('"Recovery: HL unreachable, resetting all CLOSING -> OPEN to retry"')
+        await db.bot_positions.update_many(
+            {"status": "CLOSING", "env": env},
+            {"$set": {"status": "OPEN", "updated_at": datetime.now(timezone.utc)}},
+        )
+        return
+
+    now = datetime.now(timezone.utc)
+    for pos in closing:
+        coin = pos["coin"]
+        if coin in hl_coins:
+            await db.bot_positions.update_one(
+                {"_id": pos["_id"]},
+                {"$set": {"status": "OPEN", "updated_at": now}},
+            )
+            logger.warning('"Recovery: %s still open on HL, reset CLOSING -> OPEN"', coin)
+        else:
+            entry_px = pos.get("entry_px") or 0.0
+            await db.bot_positions.update_one(
+                {"_id": pos["_id"]},
+                {"$set": {
+                    "status": "CLOSED", "exit_reason": "closed_externally_or_crash",
+                    "exit_px": entry_px, "return_pct": 0.0, "pnl_usdc": 0.0,
+                    "exit_ts": now, "updated_at": now,
+                }},
+            )
+            logger.warning('"Recovery: %s not on HL, marked CLOSED (closed_externally_or_crash)"', coin)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # The Railway-hosted Mongo proxy occasionally needs a moment to wake up /
@@ -52,6 +113,9 @@ async def lifespan(app: FastAPI):
 
     await ensure_indexes()
     logger.info('"Service starting, indexes ensured"')
+
+    if settings.bot_enabled:
+        await _recover_closing_positions()
 
     from .jobs.discovery import run_discovery
     from .jobs.snapshotter import run_snapshot
