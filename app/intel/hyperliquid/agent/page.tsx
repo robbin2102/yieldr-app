@@ -460,12 +460,13 @@ function ServiceHealthPanel() {
           <div className="text-zinc-600 text-[10px] uppercase tracking-widest mb-1.5">Recent Issues</div>
           <div className="space-y-1 max-h-40 overflow-auto">
             {issues.map((iss, i) => (
-              <div key={i} className="text-xs flex gap-2">
-                <span className="text-zinc-600 shrink-0">{timeAgo(iss.ts)}</span>
-                <span className={`shrink-0 font-bold ${iss.level === "ERROR" ? "text-red-400" : "text-yellow-400"}`}>
-                  {iss.level}
+              <div key={i} className="text-xs flex gap-2 items-start">
+                <span className="text-zinc-600 shrink-0 w-14">{timeAgo(iss.ts)}</span>
+                <span className={`shrink-0 font-bold w-5 ${iss.level === "ERROR" ? "text-red-400" : "text-yellow-400"}`}>
+                  {iss.level === "ERROR" ? "✕" : "!"}
                 </span>
-                <span className="text-zinc-500 truncate">{iss.logger}: {iss.message}</span>
+                <span className="text-zinc-400 shrink-0 font-mono">[{iss.logger}]</span>
+                <span className="text-zinc-500 truncate">{iss.message}</span>
               </div>
             ))}
           </div>
