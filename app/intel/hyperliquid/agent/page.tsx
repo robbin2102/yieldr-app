@@ -384,7 +384,8 @@ function fmtUptime(s: number) {
 }
 
 function ServiceHealthPanel() {
-  const { data, isError } = useQuery({
+  const [toggling, setToggling] = useState(false);
+  const { data, isError, refetch } = useQuery({
     queryKey: ["bot-health"],
     queryFn: () => hlSignals.getBotHealth(),
     refetchInterval: 15_000,
@@ -400,6 +401,21 @@ function ServiceHealthPanel() {
 
   const ws = data.ws_monitor;
   const issues = data.recent_issues ?? [];
+  const paused = data.paused;
+
+  const handleTogglePause = async () => {
+    setToggling(true);
+    try {
+      if (paused) {
+        await hlSignals.botResume();
+      } else {
+        await hlSignals.botPause();
+      }
+      await refetch();
+    } finally {
+      setToggling(false);
+    }
+  };
 
   return (
     <div className="bg-[#0D1117] border border-zinc-800 rounded px-4 py-3 space-y-3">
@@ -409,6 +425,11 @@ function ServiceHealthPanel() {
         }`}>
           {data.status === "ok" ? "● RUNNING" : "● DEGRADED"}
         </span>
+        {paused && (
+          <span className="font-bold px-2 py-0.5 rounded text-xs bg-yellow-900/60 text-yellow-300">
+            ⏸ PAUSED
+          </span>
+        )}
         <span className="text-zinc-500 text-xs">uptime {fmtUptime(data.uptime_s)}</span>
         <span className="text-zinc-500 text-xs">db: {data.db}</span>
         <span className="text-zinc-500 text-xs">bot: {data.bot_enabled ? "enabled" : "disabled"} ({data.bot_testnet ? "testnet" : "mainnet"})</span>
@@ -419,6 +440,17 @@ function ServiceHealthPanel() {
             WS {ws.connected ? "LIVE" : "RECONNECTING"}{ws.reconnect_count > 0 ? ` · ${ws.reconnect_count} reconnects` : ""}
           </span>
         )}
+        <button
+          onClick={handleTogglePause}
+          disabled={toggling || !data.bot_enabled}
+          className={`ml-auto text-xs px-3 py-1 rounded border font-bold uppercase tracking-widest transition-colors disabled:opacity-40 ${
+            paused
+              ? "text-emerald-400 border-emerald-800 bg-emerald-950/40 hover:bg-emerald-900/40"
+              : "text-yellow-400 border-yellow-800 bg-yellow-950/40 hover:bg-yellow-900/40"
+          }`}
+        >
+          {toggling ? "…" : paused ? "▶ Resume" : "⏸ Pause"}
+        </button>
       </div>
 
       {issues.length > 0 && (

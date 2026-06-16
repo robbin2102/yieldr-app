@@ -251,15 +251,41 @@ async def get_bot_health():
     from ..jobs import ws_whale_monitor
 
     db_ok = await ping()
+    db = get_db()
+    cfg = await db.bot_runtime_config.find_one({"_id": "bot"})
+    paused = bool(cfg and cfg.get("paused"))
     return {
         "status": "ok" if db_ok else "degraded",
         "db": "connected" if db_ok else "unreachable",
         "uptime_s": round(health_log.get_uptime_s(), 1),
         "bot_enabled": settings.bot_enabled,
         "bot_testnet": settings.bot_testnet,
+        "paused": paused,
         "ws_monitor": ws_whale_monitor.get_status() if settings.ws_monitor_enabled else None,
         "recent_issues": health_log.get_recent_issues(),
     }
+
+
+@router.post("/bot/pause")
+async def bot_pause():
+    db = get_db()
+    await db.bot_runtime_config.update_one(
+        {"_id": "bot"},
+        {"$set": {"paused": True, "paused_at": datetime.now(timezone.utc)}},
+        upsert=True,
+    )
+    return {"ok": True, "paused": True}
+
+
+@router.post("/bot/resume")
+async def bot_resume():
+    db = get_db()
+    await db.bot_runtime_config.update_one(
+        {"_id": "bot"},
+        {"$set": {"paused": False, "paused_at": None}},
+        upsert=True,
+    )
+    return {"ok": True, "paused": False}
 
 
 @router.post("/bot/positions/{position_id}/exit")

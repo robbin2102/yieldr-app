@@ -303,6 +303,7 @@ export interface BotHealth {
   uptime_s: number;
   bot_enabled: boolean;
   bot_testnet: boolean;
+  paused: boolean;
   ws_monitor: {
     connected: boolean;
     last_connected_at: string | null;
@@ -426,6 +427,10 @@ export const hlSignals = {
   },
 
   getBotHealth: () => get<BotHealth>("/api/bot/health"),
+
+  botPause: () => post<{ ok: boolean; paused: boolean }>("/api/bot/pause"),
+
+  botResume: () => post<{ ok: boolean; paused: boolean }>("/api/bot/resume"),
 
   botExit: (id: string) => post<{ ok: boolean }>(`/api/bot/positions/${id}/exit`),
 

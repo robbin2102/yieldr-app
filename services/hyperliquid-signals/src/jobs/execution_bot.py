@@ -40,6 +40,11 @@ def _strategy_cap(strategy: str) -> float:
     return _strategy_caps().get(strategy, settings.bot_strategy_cap_default_usdc)
 
 
+async def _is_paused(db) -> bool:
+    doc = await db.bot_runtime_config.find_one({"_id": "bot"})
+    return bool(doc and doc.get("paused"))
+
+
 # ── Entry point (called from alert_engine after _fire) ─────────────────────────
 
 async def bot_execute(alert: dict) -> None:
@@ -66,6 +71,10 @@ async def bot_execute(alert: dict) -> None:
     if not instance_lock.is_active():
         logger.warning("BOT: this instance does not hold the bot lock, skip %s %s", strategy, coin)
         return
+    db = get_db()
+    if await _is_paused(db):
+        logger.info("BOT: paused, skip %s %s", strategy, coin)
+        return
     if not settings.hl_private_key or not settings.hl_wallet_address:
         logger.warning("BOT: credentials missing, set HL_WALLET_ADDRESS + HL_PRIVATE_KEY")
         return
@@ -75,8 +84,6 @@ async def bot_execute(alert: dict) -> None:
     if coin in _excluded_coins():
         logger.info("BOT: %s excluded by BOT_EXCLUDED_COINS", coin)
         return
-
-    db = get_db()
     if await _preflight(db, strategy, coin, side, signal_px, alert_id, now):
         return  # preflight logged the skip
 
@@ -101,6 +108,8 @@ async def bot_close_expired(now: datetime | None = None) -> None:
         return
     now = now or datetime.now(timezone.utc)
     db = get_db()
+    if await _is_paused(db):
+        return
     async for pos in db.bot_positions.find({"status": "OPEN", "hold_until": {"$lte": now}}):
         logger.info("BOT: timer exit %s %s", pos["strategy"], pos["coin"])
         await _close_position(db, pos, "timer", now)
