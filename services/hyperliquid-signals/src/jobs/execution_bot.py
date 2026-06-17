@@ -196,9 +196,23 @@ async def _run_entry(db, pos_id, strategy, coin, side, signal_px, now) -> None:
 
     is_buy = side == "LONG"
 
+    # HL enforces a per-asset max leverage that can be lower than our global
+    # default (settings.bot_leverage) — set_leverage() doesn't raise in that
+    # case, it just silently applies less than requested. Storing the
+    # requested-but-not-actually-applied value here previously corrupted
+    # three things downstream: the dashboard's Lev column, its leveraged
+    # %-return calc, and _preflight's capital-cap margin math (size_usdc /
+    # leverage) — all three must use what HL actually accepted.
+    try:
+        meta = await ex.get_asset_meta()
+    except Exception:
+        meta = {}
+    leverage = min(settings.bot_leverage, meta.get(coin, {}).get("maxLeverage", settings.bot_leverage))
+    await db.bot_positions.update_one({"_id": pos_id}, {"$set": {"leverage": leverage}})
+
     # Set leverage before any order (idempotent on HL side)
     try:
-        await ex.set_leverage(coin, settings.bot_leverage)
+        await ex.set_leverage(coin, leverage)
     except Exception as e:
         logger.warning("BOT: set_leverage failed %s: %s — continuing", coin, e)
 
@@ -305,7 +319,7 @@ async def _run_entry(db, pos_id, strategy, coin, side, signal_px, now) -> None:
         since_ms = int(time.time() * 1000)
         if first_since_ms is None:
             first_since_ms = since_ms
-        notional_usdc = settings.bot_position_margin_usdc * settings.bot_leverage
+        notional_usdc = settings.bot_position_margin_usdc * leverage
         result, px, sz = await ex.place_limit_order(coin, is_buy, notional_usdc, entry_px_quote)
         oid = ex.extract_oid(result)
         if oid is None:
