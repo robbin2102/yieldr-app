@@ -344,6 +344,24 @@ async def _run_entry(db, pos_id, strategy, coin, side, signal_px, now) -> None:
             logger.exception("BOT: fill check failed, leaving PENDING_FILL %s %s oids=%s", strategy, coin, placed_oids)
             return
         if filled:
+            # _get_fill only requires SOME non-zero matched fill, not a full
+            # fill of this order's size — if it was only partially filled at
+            # this instant, the unfilled remainder keeps resting on HL's book
+            # and can fill further after we stop checking it here, leaving
+            # bot_positions frozen at the smaller partial size while the real
+            # HL position keeps growing untracked. Cancel the remainder (a
+            # no-op if it was actually fully filled), then re-check fills once
+            # more to pick up anything that landed in the gap before cancel.
+            try:
+                await ex.cancel_order(coin, oid)
+            except Exception:
+                pass
+            try:
+                refilled, refill_px, refill_sz = await _get_fill(placed_oids, coin, first_since_ms)
+                if refilled:
+                    actual_px, actual_sz = refill_px, refill_sz
+            except Exception:
+                pass
             await _mark_open(db, pos_id, actual_px, actual_sz, datetime.now(timezone.utc))
             return
 
