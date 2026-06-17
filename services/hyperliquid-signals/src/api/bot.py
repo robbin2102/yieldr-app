@@ -81,6 +81,30 @@ async def get_bot_skipped(limit: int = 100):
     return {"data": docs, "total": len(docs)}
 
 
+async def _open_positions_unrealized_pnl(db, open_query: dict) -> float:
+    """Live unrealized PnL across currently open positions, using the same
+    mark-price + ret*size_usdc calc as get_bot_positions' live_pnl_usdc —
+    so today/all-time PnL reflect the book as it stands, not just closed
+    trades."""
+    docs = await db.bot_positions.find(
+        open_query, {"coin": 1, "side": 1, "entry_px": 1, "size_usdc": 1},
+    ).to_list(None)
+    if not docs:
+        return 0.0
+    coins = {d["coin"] for d in docs}
+    prices = await _mark_prices(db, coins)
+    total = 0.0
+    for d in docs:
+        mark_px = prices.get(d["coin"])
+        entry_px = d.get("entry_px") or 0.0
+        if mark_px is None or entry_px <= 0:
+            continue
+        raw = (mark_px - entry_px) / entry_px
+        ret = raw if d["side"] == "LONG" else -raw
+        total += ret * (d.get("size_usdc") or 0.0)
+    return total
+
+
 @router.get("/bot/summary")
 async def get_bot_summary(env: str | None = None):
     db = get_db()
@@ -105,6 +129,8 @@ async def get_bot_summary(env: str | None = None):
     position_size = round(rows[0]["total"], 2) if rows else 0.0
     margin_deployed = round(rows[0]["margin"], 2) if rows else 0.0
 
+    unrealized_pnl = await _open_positions_unrealized_pnl(db, open_query)
+
     closed_query: dict = {"status": "CLOSED"}
     if env:
         closed_query["env"] = env
@@ -119,8 +145,10 @@ async def get_bot_summary(env: str | None = None):
         }},
     ]).to_list(1)
     s = rows[0] if rows else {"total": 0, "wins": 0, "total_pnl": 0.0, "margin": 0.0}
-    all_time_margin = s.get("margin") or 0.0
-    all_time_pnl = round(s["total_pnl"], 2)
+    # Open margin folded into the denominator alongside the open positions'
+    # unrealized PnL in the numerator, so the % figures stay consistent.
+    all_time_margin = (s.get("margin") or 0.0) + margin_deployed
+    all_time_pnl = round(s["total_pnl"] + unrealized_pnl, 2)
 
     today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
     today_closed_query: dict = {**closed_query, "exit_ts": {"$gte": today_start, "$lt": today_start + timedelta(days=1)}}
@@ -128,8 +156,8 @@ async def get_bot_summary(env: str | None = None):
         {"$match": today_closed_query},
         {"$group": {"_id": None, "margin": {"$sum": margin_expr}}},
     ]).to_list(1)
-    today_margin = (rows[0]["margin"] if rows else 0.0) or 0.0
-    today_pnl = daily.get("pnl_usdc", 0.0) if daily else 0.0
+    today_margin = ((rows[0]["margin"] if rows else 0.0) or 0.0) + margin_deployed
+    today_pnl = round((daily.get("pnl_usdc", 0.0) if daily else 0.0) + unrealized_pnl, 2)
 
     return {
         "open_positions":        open_n,
