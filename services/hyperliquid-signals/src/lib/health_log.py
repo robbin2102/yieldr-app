@@ -18,6 +18,9 @@ _SUPPRESS: list[tuple[str, str]] = [
     ("WARNING", "instance_lock"),    # rolling-deploy lock handover
     ("WARNING", "ws_whale_monitor"), # HL WS expiry every ~10 min (auto-reconnects)
     ("ERROR",   "instance_lock"),    # new instance refused lock during deploy window
+    ("ERROR",   "websocket"),        # websocket-client's own "goodbye" log for the
+    ("WARNING", "websocket"),        # same expected HL close, already surfaced (and
+                                      # downgraded to WARNING) via ws_whale_monitor above
 ]
 
 # Short friendly labels shown in the UI instead of the raw logger path
