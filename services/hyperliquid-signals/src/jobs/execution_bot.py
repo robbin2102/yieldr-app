@@ -392,11 +392,20 @@ async def _run_entry(db, pos_id, strategy, coin, side, signal_px, now) -> None:
 
 # ── Internal: close order (ALO at mid, same retry logic as entry) ────────────
 
-async def _run_close(coin: str, is_long: bool, sz_coin: float) -> tuple[bool, float]:
+async def _run_close(coin: str, is_long: bool, sz_coin: float) -> tuple[bool, float, float]:
     """ALO reduce-only at our own side's best level, retry up to BOT_ORDER_RETRIES times.
-    Returns (filled, exit_px). Returns (False, 0) if no attempt fills — caller keeps position OPEN.
+    Returns (filled, exit_px, filled_sz). Returns (False, 0, 0) if no attempt fills —
+    caller keeps position OPEN. filled_sz can be LESS than sz_coin on a partial close —
+    callers must reduce the position by filled_sz, not assume the whole thing closed.
     """
     from ..lib import hl_exchange as ex
+
+    # All oids placed for this close, across retry attempts — mirrors _run_entry's
+    # placed_oids so a "no fill -> cancel -> place new order" retry that races with
+    # a late fill on the earlier (cancelled) order still picks that fill up here.
+    placed_oids: list[int] = []
+    first_since_ms: int | None = None
+    first_attempt = True
 
     for attempt in range(settings.bot_order_retries):
         try:
@@ -405,11 +414,27 @@ async def _run_close(coin: str, is_long: bool, sz_coin: float) -> tuple[bool, fl
             logger.warning("BOT: close book error %s attempt %d: %s", coin, attempt + 1, e)
             continue
 
+        if not first_attempt and placed_oids:
+            # A previous attempt's "no fill" cancel can race with a late fill
+            # on the exchange (cancelling a resting order doesn't undo a fill
+            # already in flight). Re-check accumulated fills before placing
+            # another full-size close order here — otherwise both the late
+            # fill on the cancelled order AND this new order can end up
+            # filled, over-closing past the position's actual remaining size.
+            try:
+                filled, fill_px, fill_sz = await _get_fill(placed_oids, coin, first_since_ms)
+            except Exception:
+                filled = False
+            if filled:
+                return True, fill_px, fill_sz
+
         # Quote at our own side's best level (not mid) — guarantees ALO can never
         # cross the book regardless of price movement between fetch and placement.
         # Closing a long = sell -> quote at best_ask. Closing a short = buy -> quote at best_bid.
         close_px = book["best_ask"] if is_long else book["best_bid"]
         since_ms = int(time.time() * 1000)
+        if first_since_ms is None:
+            first_since_ms = since_ms
         result, px, _ = await ex.place_limit_order_close(coin, is_long, sz_coin, close_px)
         oid = ex.extract_oid(result)
         if oid is None:
@@ -419,13 +444,32 @@ async def _run_close(coin: str, is_long: bool, sz_coin: float) -> tuple[bool, fl
             logger.warning("BOT: close oid not found, raw result: %s", result)
             logger.info("BOT: close order not resting (status=%s), retry %d/%d %s",
                         result.get("status"), attempt + 1, settings.bot_order_retries, coin)
+            first_attempt = False
             await asyncio.sleep(settings.bot_order_wait_s)
             continue
 
+        placed_oids.append(oid)
         await asyncio.sleep(settings.bot_order_wait_s)
-        filled, fill_px, _ = await _get_fill([oid], coin, since_ms)
+        filled, fill_px, fill_sz = await _get_fill(placed_oids, coin, first_since_ms)
         if filled:
-            return True, fill_px
+            # _get_fill reports filled=True on ANY non-zero matched fill, not
+            # necessarily the full sz_coin. Cancel the remainder (a no-op if it
+            # was actually fully filled) before accepting this as final, then
+            # re-check once more to pick up anything that landed in the gap
+            # before the cancel — otherwise a partially-filled close order
+            # keeps resting on HL's book and fills further afterward while
+            # we've already told the caller the position is closed.
+            try:
+                await ex.cancel_order(coin, oid)
+            except Exception:
+                pass
+            try:
+                refilled, refill_px, refill_sz = await _get_fill(placed_oids, coin, first_since_ms)
+                if refilled:
+                    fill_px, fill_sz = refill_px, refill_sz
+            except Exception:
+                pass
+            return True, fill_px, fill_sz
 
         try:
             await ex.cancel_order(coin, oid)
@@ -434,6 +478,18 @@ async def _run_close(coin: str, is_long: bool, sz_coin: float) -> tuple[bool, fl
 
         logger.info("BOT: close attempt %d/%d no fill %s",
                     attempt + 1, settings.bot_order_retries, coin)
+        first_attempt = False
+
+    # Final safety check: the last attempt's order may fill late, just after
+    # we saw "no fill" and issued a (possibly no-op) cancel.
+    if placed_oids:
+        try:
+            filled, fill_px, fill_sz = await _get_fill(placed_oids, coin, first_since_ms)
+        except Exception:
+            filled = False
+        if filled:
+            logger.warning("BOT: late close fill detected after retries exhausted %s", coin)
+            return True, fill_px, fill_sz
 
     # ALO (maker-only) exits exhausted — cross the spread with an IOC taker
     # order to guarantee the position closes rather than sitting OPEN past
@@ -444,22 +500,22 @@ async def _run_close(coin: str, is_long: bool, sz_coin: float) -> tuple[bool, fl
         book = await ex.get_l2_book(coin)
     except Exception as e:
         logger.warning("BOT: close book error (IOC fallback) %s: %s", coin, e)
-        return False, 0.0
+        return False, 0.0, 0.0
 
     taker_px = book["best_bid"] if is_long else book["best_ask"]
     try:
         result, _, _ = await ex.place_limit_order_close(coin, is_long, sz_coin, taker_px, tif="Ioc")
     except Exception:
         logger.exception("BOT: IOC close error %s", coin)
-        return False, 0.0
+        return False, 0.0, 0.0
 
-    filled, fill_px, _ = ex.extract_fill(result)
+    filled, fill_px, fill_sz = ex.extract_fill(result)
     if filled:
-        logger.info("BOT: IOC close filled %s px=%.6g", coin, fill_px)
-        return True, fill_px
+        logger.info("BOT: IOC close filled %s px=%.6g sz=%.6f", coin, fill_px, fill_sz)
+        return True, fill_px, fill_sz
 
     logger.warning("BOT: IOC close did not fill %s — position stays OPEN", coin)
-    return False, 0.0
+    return False, 0.0, 0.0
 
 
 # ── Internal: position close ────────────────────────────────────────────────
@@ -478,10 +534,11 @@ async def _close_position(db, pos: dict, reason: str, now: datetime) -> None:
 
     filled = False
     exit_px = entry_px
+    filled_sz = 0.0
     if sz_coin > 0:
         is_long = side == "LONG"
         try:
-            filled, exit_px = await _run_close(coin, is_long, sz_coin)
+            filled, exit_px, filled_sz = await _run_close(coin, is_long, sz_coin)
         except Exception:
             logger.exception("BOT: close error %s", coin)
     else:
@@ -498,22 +555,43 @@ async def _close_position(db, pos: dict, reason: str, now: datetime) -> None:
 
     raw = (exit_px - entry_px) / entry_px if entry_px > 0 else 0.0
     ret = raw if side == "LONG" else -raw
+
+    # filled_sz (from _run_close) can be less than sz_coin on a partial close —
+    # only realize pnl for the portion that actually closed on HL, and leave
+    # the remainder OPEN so bot_close_expired retries closing it next cycle,
+    # instead of declaring the whole position closed on a partial fill.
+    closed_fraction = min(filled_sz / sz_coin, 1.0) if sz_coin > 0 else 1.0
     fallback_notional = settings.bot_position_margin_usdc * settings.bot_leverage
-    pnl = round(ret * (pos.get("size_usdc") or fallback_notional), 2)
+    full_size_usdc = pos.get("size_usdc") or fallback_notional
+    chunk_pnl = round(ret * full_size_usdc * closed_fraction, 2)
+    realized_pnl = round((pos.get("realized_pnl_usdc") or 0.0) + chunk_pnl, 2)
 
+    if closed_fraction >= 0.999 or sz_coin <= 0:
+        await db.bot_positions.update_one({"_id": pos["_id"]}, {"$set": {
+            "status":      "CLOSED",
+            "exit_px":     exit_px,
+            "exit_ts":     now,
+            "exit_reason": reason,
+            "return_pct":  round(ret * 100, 3),
+            "pnl_usdc":    realized_pnl,
+            "updated_at":  now,
+        }})
+        logger.info("BOT: closed %s %s ret=%.2f%% pnl=%.2f USDC (%s)",
+                    coin, side, ret * 100, realized_pnl, reason)
+        await _update_daily_pnl(db, now, chunk_pnl)
+        return
+
+    remaining_sz = sz_coin - filled_sz
     await db.bot_positions.update_one({"_id": pos["_id"]}, {"$set": {
-        "status":      "CLOSED",
-        "exit_px":     exit_px,
-        "exit_ts":     now,
-        "exit_reason": reason,
-        "return_pct":  round(ret * 100, 3),
-        "pnl_usdc":    pnl,
-        "updated_at":  now,
+        "status":            "OPEN",
+        "size_coin":         remaining_sz,
+        "size_usdc":         entry_px * remaining_sz,
+        "realized_pnl_usdc": realized_pnl,
+        "updated_at":        now,
     }})
-    logger.info("BOT: closed %s %s ret=%.2f%% pnl=%.2f USDC (%s)",
-                coin, side, ret * 100, pnl, reason)
-
-    await _update_daily_pnl(db, now, pnl)
+    await _update_daily_pnl(db, now, chunk_pnl)
+    logger.warning("BOT: partial close %s %s — closed %.6f/%.6f sz, %.6f remains OPEN (%s)",
+                    coin, side, filled_sz, sz_coin, remaining_sz, reason)
 
 
 async def _get_fill(oids: list[int], coin: str, since_ms: int | None = None, retries: int = 3) -> tuple[bool, float, float]:

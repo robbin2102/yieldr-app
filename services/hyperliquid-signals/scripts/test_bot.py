@@ -169,11 +169,11 @@ async def close_hl_positions() -> None:
 
         print(f"  {coin}: closing {sz} via ALO mid-price "
               f"({settings.bot_order_retries} retries × {settings.bot_order_wait_s}s)...")
-        filled, fill_px = await _run_close(coin, is_long, sz)
+        filled, fill_px, fill_sz = await _run_close(coin, is_long, sz)
         if filled:
-            pnl = round((fill_px - entry_px) / entry_px * sz * entry_px *
+            pnl = round((fill_px - entry_px) / entry_px * fill_sz * entry_px *
                         (1 if is_long else -1), 2) if entry_px > 0 else 0
-            print(f"  {coin}: filled @ {fill_px}  entry={entry_px}  pnl≈${pnl}")
+            print(f"  {coin}: filled {fill_sz}/{sz} @ {fill_px}  entry={entry_px}  pnl≈${pnl}")
         else:
             print(f"  {coin}: WARNING — not filled after {settings.bot_order_retries} attempts"
                   f" — position still open on HL")
