@@ -45,7 +45,11 @@ _loop: asyncio.AbstractEventLoop | None = None
 
 # Target number of addresses per websocket connection — comfortably under
 # the confirmed-working 25/connection (and the "30 total users" limit).
-SHARD_TARGET_SIZE = 20
+# Kept well below that ceiling because stable-hash assignment across a
+# small number of shards has real variance: with ~150 addresses over 8
+# shards (target 20), an unlucky shard can land 8-10 addresses above the
+# mean, putting it close to the hard limit. A lower target buys margin.
+SHARD_TARGET_SIZE = 15
 
 # shard index -> set of subscribed addresses
 _subscribed: dict[int, set[str]] = {}
@@ -320,6 +324,30 @@ async def _run_shard(shard: int, num_shards: int) -> None:
         raise
 
 
+async def _count_shards_needed() -> tuple[int, int]:
+    db = get_db()
+    total = await db.hl_signals_traders.count_documents(
+        {"cohort_status": "active", "skill_quartile": 1}
+    )
+    num_shards = max(1, math.ceil(total / SHARD_TARGET_SIZE)) if total else 1
+    return num_shards, total
+
+
+async def _watch_for_resize(num_shards: int) -> None:
+    """Polls the Q1 cohort size and returns once it has grown/shrunk enough
+    to need a different shard count, so run_ws_monitor can restart every
+    connection with a freshly computed (and correctly hash-distributed)
+    shard count. _sync_subscriptions alone can't fix this — it only adds new
+    addresses to their pre-assigned shard, never adds shards."""
+    while True:
+        await asyncio.sleep(settings.ws_monitor_refresh_s)
+        new_num_shards, total = await _count_shards_needed()
+        if new_num_shards != num_shards:
+            logger.info('"WS monitor: cohort size changed (total_addrs=%d), resharding %d -> %d connections"',
+                         total, num_shards, new_num_shards)
+            return
+
+
 async def run_ws_monitor() -> None:
     """Background task — call only when settings.ws_monitor_enabled is True.
 
@@ -328,29 +356,39 @@ async def run_ws_monitor() -> None:
     "Cannot track more than 30 total users" per-connection limit. Each shard
     reconnects independently with its own exponential backoff if its
     websocket dies or goes stale (no allMids messages for _STALE_AFTER_S).
+
+    The shard count is re-evaluated periodically (every ws_monitor_refresh_s)
+    against the current cohort size — if it needs to change, every shard
+    connection is torn down and restarted with the new count.
     """
     global _loop
     _loop = asyncio.get_running_loop()
     logger.info('"WS whale monitor starting"')
 
-    db = get_db()
-    total = await db.hl_signals_traders.count_documents(
-        {"cohort_status": "active", "skill_quartile": 1}
-    )
-    num_shards = max(1, math.ceil(total / SHARD_TARGET_SIZE)) if total else 1
+    while True:
+        num_shards, total = await _count_shards_needed()
 
-    _status["num_shards"] = num_shards
-    _status["shards"] = {
-        i: {
-            "connected": False,
-            "last_connected_at": None,
-            "last_disconnected_at": None,
-            "reconnect_count": 0,
+        _subscribed.clear()
+        _status["num_shards"] = num_shards
+        _status["shards"] = {
+            i: {
+                "connected": False,
+                "last_connected_at": None,
+                "last_disconnected_at": None,
+                "reconnect_count": 0,
+            }
+            for i in range(num_shards)
         }
-        for i in range(num_shards)
-    }
 
-    logger.info('"WS monitor sharding", "total_addrs": %d, "num_shards": %d, "shard_target": %d',
-                 total, num_shards, SHARD_TARGET_SIZE)
+        logger.info('"WS monitor sharding", "total_addrs": %d, "num_shards": %d, "shard_target": %d',
+                     total, num_shards, SHARD_TARGET_SIZE)
 
-    await asyncio.gather(*(_run_shard(i, num_shards) for i in range(num_shards)))
+        shard_tasks = [asyncio.create_task(_run_shard(i, num_shards)) for i in range(num_shards)]
+        resize_task = asyncio.create_task(_watch_for_resize(num_shards))
+        try:
+            await asyncio.wait([resize_task, *shard_tasks], return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            pending = [*shard_tasks, resize_task]
+            for t in pending:
+                t.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
