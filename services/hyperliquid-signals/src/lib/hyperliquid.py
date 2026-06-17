@@ -35,20 +35,34 @@ async def fetch_positions(
     session: aiohttp.ClientSession,
     address: str,
     semaphore: asyncio.Semaphore,
-) -> list[dict]:
+    retries: int = 3,
+) -> list[dict] | None:
+    """Returns None (not []) on any failure — callers must treat that as
+    "couldn't check this address this cycle" and skip it, not as "confirmed
+    zero positions". Conflating the two previously meant a transient 429
+    silently got written as a sentinel "trader is flat" snapshot doc."""
     async with semaphore:
-        try:
-            async with session.post(
-                INFO_URL,
-                json={"type": "clearinghouseState", "user": address},
-                timeout=_POSITION_TIMEOUT,
-            ) as resp:
-                resp.raise_for_status()
-                data = await resp.json(content_type=None)
-            return data.get("assetPositions", [])
-        except Exception as e:
-            logger.warning('"fetch_positions error", "address": "%s", "error": "%s"', address, e)
-            return []
+        for attempt in range(1, retries + 1):
+            try:
+                async with session.post(
+                    INFO_URL,
+                    json={"type": "clearinghouseState", "user": address},
+                    timeout=_POSITION_TIMEOUT,
+                ) as resp:
+                    if resp.status == 429:
+                        wait = 2 ** attempt
+                        logger.warning('"fetch_positions 429", "address": "%s", "attempt": %d, "sleep": %d',
+                                       address, attempt, wait)
+                        await asyncio.sleep(wait)
+                        continue
+                    resp.raise_for_status()
+                    data = await resp.json(content_type=None)
+                return data.get("assetPositions", [])
+            except Exception as e:
+                logger.warning('"fetch_positions error", "address": "%s", "error": "%s"', address, e)
+                return None
+        logger.warning('"fetch_positions giving up after %d retries (429)", "address": "%s"', retries, address)
+        return None
 
 
 async def fetch_funding_rates(session: aiohttp.ClientSession) -> dict[str, float]:

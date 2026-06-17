@@ -88,6 +88,13 @@ _BACKOFF_MAX_S = 60
 # A session has to survive this long before backoff resets to the initial delay.
 _BACKOFF_RESET_AFTER_S = 60
 
+# Gap between starting consecutive shards (initial startup and resize restarts).
+# Without this, all shards' Info() construction + WS handshake + userFills
+# subscribe land in the same instant, which can burst past Hyperliquid's
+# rate limit for the whole process/IP — including unrelated REST calls like
+# the snapshotter's fetch_positions, causing collateral 429s there too.
+_SHARD_STARTUP_STAGGER_S = 1.0
+
 
 def _shard_for(address: str, num_shards: int) -> int:
     """Stable hash-based shard assignment, so an address never moves shards
@@ -383,7 +390,11 @@ async def run_ws_monitor() -> None:
         logger.info('"WS monitor sharding", "total_addrs": %d, "num_shards": %d, "shard_target": %d',
                      total, num_shards, SHARD_TARGET_SIZE)
 
-        shard_tasks = [asyncio.create_task(_run_shard(i, num_shards)) for i in range(num_shards)]
+        shard_tasks: list[asyncio.Task] = []
+        for i in range(num_shards):
+            shard_tasks.append(asyncio.create_task(_run_shard(i, num_shards)))
+            if i < num_shards - 1:
+                await asyncio.sleep(_SHARD_STARTUP_STAGGER_S)
         resize_task = asyncio.create_task(_watch_for_resize(num_shards))
         try:
             await asyncio.wait([resize_task, *shard_tasks], return_when=asyncio.FIRST_COMPLETED)
