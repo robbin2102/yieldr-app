@@ -285,6 +285,20 @@ async def _run_entry(db, pos_id, strategy, coin, side, signal_px, now) -> None:
                                             datetime.now(timezone.utc), drift_bps=round(drift, 2))
                     return
 
+            # A previous attempt's "no fill" cancel can race with a late fill
+            # on the exchange (cancelling a resting order doesn't undo a fill
+            # already in flight). Re-check accumulated fills before placing
+            # another full-notional order here — otherwise both the late
+            # fill on the cancelled order AND this new order can end up
+            # filled, overfilling the position well past the intended size.
+            try:
+                filled, actual_px, actual_sz = await _get_fill(placed_oids, coin, first_since_ms)
+            except Exception:
+                filled = False
+            if filled:
+                await _mark_open(db, pos_id, actual_px, actual_sz, datetime.now(timezone.utc))
+                return
+
         # Quote at our own side's best level (not mid) — guarantees ALO can never
         # cross the book regardless of price movement between fetch and placement.
         entry_px_quote = book["best_bid"] if is_buy else book["best_ask"]
@@ -575,6 +589,7 @@ async def _create_pending(db, strategy, coin, side, signal_px, alert_id, now):
 async def _mark_open(db, pos_id, fill_px, sz_coin, now):
     await db.bot_positions.update_one({"_id": pos_id}, {"$set": {
         "status": "OPEN", "entry_px": fill_px, "size_coin": sz_coin,
+        "size_usdc": fill_px * sz_coin,
         "entry_ts": now, "updated_at": now,
     }})
     logger.info("BOT: OPEN id=%s px=%.6g sz=%.6f", pos_id, fill_px, sz_coin)
