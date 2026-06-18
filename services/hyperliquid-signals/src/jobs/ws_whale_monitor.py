@@ -243,8 +243,18 @@ async def _sync_subscriptions(shard: int, num_shards: int, info) -> None:
             info.subscribe({"type": "userFills", "user": addr},
                             lambda msg, a=addr: _on_user_fills(a, msg))
             subscribed.add(addr)
-        except Exception:
-            logger.exception("WS monitor: subscribe failed for %s (shard %d)", addr, shard)
+        except Exception as e:
+            # subscribe() only raises once the socket is already open — it
+            # calls ws.send() directly — so a failure here means the
+            # connection itself just died mid-loop, not that this one
+            # address is special. Every other address still left in this
+            # loop would fail the same way. Treat it as connection-dead and
+            # let _run_shard reconnect immediately, instead of limping along
+            # on a broken socket until the next allMids staleness timeout
+            # (up to _STALE_AFTER_S later) notices.
+            raise ConnectionError(
+                f"WS monitor shard {shard}: subscribe failed for {addr}, connection likely dead"
+            ) from e
 
     if new:
         logger.info('"WS monitor subscriptions synced", "shard": %d, "shard_addrs": %d, '
@@ -275,10 +285,10 @@ async def _run_session(shard: int, num_shards: int, info) -> None:
             raise ConnectionError(f"WS monitor shard {shard}: allMids stale for {idle:.0f}s — reconnecting")
 
         if time.monotonic() - last_sync >= settings.ws_monitor_refresh_s:
-            try:
-                await _sync_subscriptions(shard, num_shards, info)
-            except Exception:
-                logger.exception("WS monitor: subscription sync failed (shard %d)", shard)
+            # Let ConnectionError propagate so _run_shard reconnects right
+            # away instead of leaving the rest of this shard's addresses
+            # subscribed to a dead socket until the staleness check fires.
+            await _sync_subscriptions(shard, num_shards, info)
             last_sync = time.monotonic()
 
 
