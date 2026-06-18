@@ -300,11 +300,22 @@ async def _run_shard(shard: int, num_shards: int) -> None:
     shard_status = _status["shards"][shard]
     backoff = _BACKOFF_INITIAL_S
     info = None
+    loop = asyncio.get_running_loop()
     try:
         while True:
             started = time.monotonic()
             try:
-                info = Info(api_url(), skip_ws=False)
+                # Info() makes blocking REST calls (spot_meta + meta) via the
+                # `requests` library *before* opening the websocket, with no
+                # timeout — on an HL/CloudFront blip these can hang or 504,
+                # and since they're synchronous, running them on the event
+                # loop directly would stall every other task in the process
+                # (the bot job, snapshotter, API server) for as long as they
+                # take. Bound them with a timeout and push them to a thread
+                # so a slow/erroring HL response only delays this one shard.
+                info = await loop.run_in_executor(
+                    None, lambda: Info(api_url(), skip_ws=False, timeout=10)
+                )
                 await _run_session(shard, num_shards, info)
             except asyncio.CancelledError:
                 raise
@@ -315,6 +326,11 @@ async def _run_shard(shard: int, num_shards: int) -> None:
                 msg = str(e)
                 if "Expired" in msg or "opcode=8" in msg or "ConnectionClosed" in type(e).__name__:
                     logger.warning('"WS monitor: shard %d connection expired, reconnecting"', shard)
+                elif type(e).__name__ == "ServerError":
+                    # HL-side 5xx (often CloudFront fronting an overloaded
+                    # backend) on the pre-connect meta fetch — transient and
+                    # expected, not a bug in our code. Backoff below handles it.
+                    logger.warning('"WS monitor: shard %d meta fetch failed (%s), reconnecting"', shard, e)
                 else:
                     logger.exception("WS monitor: shard %d session ended, reconnecting", shard)
 
