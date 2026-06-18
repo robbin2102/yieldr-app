@@ -45,11 +45,22 @@ class RingBufferHandler(logging.Handler):
                 if record.levelname == level and logger_substr in record.name:
                     return
             label = _LOGGER_LABELS.get(record.name, record.name.split(".")[-1])
+            message = record.getMessage().strip('"')
+            # logger.exception() attaches the traceback to the record but the
+            # bare message (e.g. "session ended, reconnecting") doesn't include
+            # it — without this, an *unexpected* exception type (the only case
+            # that reaches this branch; known/expected ones are caught and
+            # logged with their reason inline) shows up here with no way to
+            # tell what it actually was short of pulling raw process logs.
+            if record.exc_info:
+                exc_type, exc_val, _ = record.exc_info
+                if exc_type is not None:
+                    message = f"{message} — {exc_type.__name__}: {exc_val}"
             _events.append({
                 "ts": datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(),
                 "level": record.levelname,
                 "logger": label,
-                "message": record.getMessage().strip('"'),
+                "message": message,
             })
         except Exception:
             pass
