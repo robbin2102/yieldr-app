@@ -67,11 +67,16 @@ def get_status() -> dict:
     shards: dict[int, dict] = _status.get("shards", {})
     connected_ats = [s["last_connected_at"] for s in shards.values() if s.get("last_connected_at")]
     disconnected_ats = [s["last_disconnected_at"] for s in shards.values() if s.get("last_disconnected_at")]
+    reconnect_reasons: dict[str, int] = {}
+    for s in shards.values():
+        for reason, count in s.get("reconnect_reasons", {}).items():
+            reconnect_reasons[reason] = reconnect_reasons.get(reason, 0) + count
     return {
         "connected": bool(shards) and all(s.get("connected") for s in shards.values()),
         "last_connected_at": max(connected_ats) if connected_ats else None,
         "last_disconnected_at": max(disconnected_ats) if disconnected_ats else None,
         "reconnect_count": sum(s.get("reconnect_count", 0) for s in shards.values()),
+        "reconnect_reasons": reconnect_reasons,
         "num_shards": _status.get("num_shards", 0),
         "total_subscribed": sum(len(addrs) for addrs in _subscribed.values()),
         "shards": {str(k): dict(v) for k, v in shards.items()},
@@ -94,6 +99,17 @@ _BACKOFF_RESET_AFTER_S = 60
 # rate limit for the whole process/IP — including unrelated REST calls like
 # the snapshotter's fetch_positions, causing collateral 429s there too.
 _SHARD_STARTUP_STAGGER_S = 1.0
+
+
+class _WSReconnect(ConnectionError):
+    """Raised for the two cases we detect ourselves (vs. exceptions the SDK/
+    websocket-client throws at us) — tagged with `reason` so _run_shard can
+    record *why* each reconnect happened instead of guessing from message
+    text, which is what let the 130-reconnects-in-2h question go
+    unanswerable last time."""
+    def __init__(self, msg: str, reason: str):
+        super().__init__(msg)
+        self.reason = reason
 
 
 def _shard_for(address: str, num_shards: int) -> int:
@@ -252,8 +268,9 @@ async def _sync_subscriptions(shard: int, num_shards: int, info) -> None:
             # let _run_shard reconnect immediately, instead of limping along
             # on a broken socket until the next allMids staleness timeout
             # (up to _STALE_AFTER_S later) notices.
-            raise ConnectionError(
-                f"WS monitor shard {shard}: subscribe failed for {addr}, connection likely dead"
+            raise _WSReconnect(
+                f"WS monitor shard {shard}: subscribe failed for {addr}, connection likely dead",
+                reason="subscribe_failed",
             ) from e
 
     if new:
@@ -282,7 +299,10 @@ async def _run_session(shard: int, num_shards: int, info) -> None:
 
         idle = time.monotonic() - _last_mids_msg[shard]
         if idle > _STALE_AFTER_S:
-            raise ConnectionError(f"WS monitor shard {shard}: allMids stale for {idle:.0f}s — reconnecting")
+            raise _WSReconnect(
+                f"WS monitor shard {shard}: allMids stale for {idle:.0f}s — reconnecting",
+                reason="stale",
+            )
 
         if time.monotonic() - last_sync >= settings.ws_monitor_refresh_s:
             # Let ConnectionError propagate so _run_shard reconnects right
@@ -319,24 +339,30 @@ async def _run_shard(shard: int, num_shards: int) -> None:
                 await _run_session(shard, num_shards, info)
             except asyncio.CancelledError:
                 raise
-            except ConnectionError as e:
-                # Expected: allMids stale timeout or HL server sent close frame ("Expired")
+            except _WSReconnect as e:
+                # Cases we detect ourselves — reason already tagged.
+                reason = e.reason
                 logger.warning('"WS monitor: shard %d session ended, reconnecting: %s"', shard, e)
             except Exception as e:
                 msg = str(e)
                 if "Expired" in msg or "opcode=8" in msg or "ConnectionClosed" in type(e).__name__:
+                    reason = "hl_closed"
                     logger.warning('"WS monitor: shard %d connection expired, reconnecting"', shard)
                 elif type(e).__name__ == "ServerError":
                     # HL-side 5xx (often CloudFront fronting an overloaded
                     # backend) on the pre-connect meta fetch — transient and
                     # expected, not a bug in our code. Backoff below handles it.
+                    reason = "server_error"
                     logger.warning('"WS monitor: shard %d meta fetch failed (%s), reconnecting"', shard, e)
                 else:
+                    reason = "unknown"
                     logger.exception("WS monitor: shard %d session ended, reconnecting", shard)
 
             shard_status["connected"] = False
             shard_status["last_disconnected_at"] = datetime.utcnow().isoformat()
             shard_status["reconnect_count"] += 1
+            reasons = shard_status.setdefault("reconnect_reasons", {})
+            reasons[reason] = reasons.get(reason, 0) + 1
 
             if time.monotonic() - started >= _BACKOFF_RESET_AFTER_S:
                 backoff = _BACKOFF_INITIAL_S
