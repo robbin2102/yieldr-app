@@ -379,6 +379,19 @@ async def _run_shard(shard: int, num_shards: int) -> None:
         while True:
             started = time.monotonic()
             try:
+                # Every previous Info() left a WebsocketManager background
+                # thread + live socket running (Info() never stops the old
+                # one for us). Without this, every single reconnect — and
+                # there were 1100+ of them — leaked one of these instead of
+                # replacing it, which is consistent with steady memory
+                # growth ending in an OOM kill over enough hours/reconnects.
+                if info is not None:
+                    try:
+                        info.disconnect_websocket()
+                    except Exception:
+                        logger.exception("WS monitor: error closing previous websocket (shard %d)", shard)
+                    info = None
+
                 # Passing cached meta/spot_meta makes Info() skip its own
                 # internal REST calls entirely (see _get_cached_meta) — all
                 # that's left here is opening the websocket itself. Still
