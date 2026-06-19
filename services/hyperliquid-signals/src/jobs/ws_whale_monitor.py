@@ -62,6 +62,55 @@ _status: dict = {
     "shards": {},
 }
 
+# HL perp+spot metadata, fetched once and reused by every shard's Info()
+# construction — see _get_cached_meta() below for why this exists.
+_meta_cache: dict | None = None
+_spot_meta_cache: dict | None = None
+
+
+async def _get_cached_meta() -> tuple[dict, dict]:
+    """Fetch HL's `meta` + `spotMeta` once per process and reuse them for
+    every shard's Info() construction, instead of letting the SDK refetch
+    both on every single reconnect of every shard.
+
+    Info.__init__ always builds asset-lookup tables our WS-only usage
+    (allMids + userFills subscriptions) never even needs, and normally does
+    so via two blocking, synchronous `requests` calls. With ~13 shards each
+    reconnecting independently, that meant dozens of redundant REST round
+    trips to HL per hour just to construct objects we only used for their
+    websocket. Every transport failure we chased on this — 504s, then
+    ChunkedEncodingError/IncompleteRead — was a different way that same
+    avoidable REST call could break; fixing the exception handling one
+    error type at a time was never going to end, because the call itself
+    didn't need to happen on every reconnect at all. Passing cached
+    `meta=`/`spot_meta=` into Info() makes it skip both REST calls entirely.
+    Refetched only if it's never been populated — asset listings change on
+    the order of weeks, not worth refreshing per-reconnect.
+    """
+    global _meta_cache, _spot_meta_cache
+    if _meta_cache is not None and _spot_meta_cache is not None:
+        return _meta_cache, _spot_meta_cache
+
+    import aiohttp
+    from ..lib.hl_exchange import api_url
+
+    async with aiohttp.ClientSession() as session:
+        async with session.post(
+            f"{api_url()}/info", json={"type": "meta"},
+            timeout=aiohttp.ClientTimeout(total=10),
+        ) as resp:
+            resp.raise_for_status()
+            meta = await resp.json()
+        async with session.post(
+            f"{api_url()}/info", json={"type": "spotMeta"},
+            timeout=aiohttp.ClientTimeout(total=10),
+        ) as resp:
+            resp.raise_for_status()
+            spot_meta = await resp.json()
+
+    _meta_cache, _spot_meta_cache = meta, spot_meta
+    return meta, spot_meta
+
 
 def get_status() -> dict:
     shards: dict[int, dict] = _status.get("shards", {})
@@ -82,6 +131,11 @@ def get_status() -> dict:
         "shards": {str(k): dict(v) for k, v in shards.items()},
     }
 
+
+# Top-level package of any exception raised by the HTTP/websocket transport
+# libraries we depend on — used to classify a failure as transient network
+# noise by *where it came from* rather than by its specific class name.
+_TRANSIENT_NETWORK_MODULES = {"requests", "urllib3", "aiohttp", "websocket", "socket", "ssl", "http"}
 
 # How long allMids can go silent before we treat the connection as dead.
 _STALE_AFTER_S = 30
@@ -325,16 +379,17 @@ async def _run_shard(shard: int, num_shards: int) -> None:
         while True:
             started = time.monotonic()
             try:
-                # Info() makes blocking REST calls (spot_meta + meta) via the
-                # `requests` library *before* opening the websocket, with no
-                # timeout — on an HL/CloudFront blip these can hang or 504,
-                # and since they're synchronous, running them on the event
-                # loop directly would stall every other task in the process
-                # (the bot job, snapshotter, API server) for as long as they
-                # take. Bound them with a timeout and push them to a thread
-                # so a slow/erroring HL response only delays this one shard.
+                # Passing cached meta/spot_meta makes Info() skip its own
+                # internal REST calls entirely (see _get_cached_meta) — all
+                # that's left here is opening the websocket itself. Still
+                # run in a thread with a timeout: constructing Info() also
+                # starts the SDK's background WS thread, which can briefly
+                # block on the handshake.
+                meta, spot_meta = await _get_cached_meta()
                 info = await loop.run_in_executor(
-                    None, lambda: Info(api_url(), skip_ws=False, timeout=10)
+                    None,
+                    lambda: Info(api_url(), skip_ws=False, timeout=10,
+                                 meta=meta, spot_meta=spot_meta),
                 )
                 await _run_session(shard, num_shards, info)
             except asyncio.CancelledError:
@@ -345,15 +400,23 @@ async def _run_shard(shard: int, num_shards: int) -> None:
                 logger.warning('"WS monitor: shard %d session ended, reconnecting: %s"', shard, e)
             except Exception as e:
                 msg = str(e)
+                exc_module = type(e).__module__.split(".")[0]
                 if "Expired" in msg or "opcode=8" in msg or "ConnectionClosed" in type(e).__name__:
                     reason = "hl_closed"
                     logger.warning('"WS monitor: shard %d connection expired, reconnecting"', shard)
-                elif type(e).__name__ == "ServerError":
-                    # HL-side 5xx (often CloudFront fronting an overloaded
-                    # backend) on the pre-connect meta fetch — transient and
-                    # expected, not a bug in our code. Backoff below handles it.
-                    reason = "server_error"
-                    logger.warning('"WS monitor: shard %d meta fetch failed (%s), reconnecting"', shard, e)
+                elif exc_module in _TRANSIENT_NETWORK_MODULES:
+                    # Any exception raised by the HTTP/websocket transport
+                    # libraries themselves (timeouts, dropped/incomplete
+                    # responses, 5xx, etc.) is transient network noise, not
+                    # a bug in our code — classifying by *origin* instead of
+                    # enumerating every specific exception class (we'd
+                    # chased ServerError, then ChunkedEncodingError, and the
+                    # next one would always be something new) so new
+                    # transport failure types don't need a code change to
+                    # be recognized as expected. Backoff below handles it.
+                    reason = "network_error"
+                    logger.warning('"WS monitor: shard %d transport error (%s: %s), reconnecting"',
+                                    shard, type(e).__name__, e)
                 else:
                     reason = "unknown"
                     logger.exception("WS monitor: shard %d session ended, reconnecting", shard)
