@@ -38,6 +38,29 @@ async def _drop_index_if_exists(collection, name: str) -> None:
         pass
 
 
+async def _ensure_ttl_index(collection, key: str, expire_after_s: int, name: str) -> None:
+    """create_index() is a no-op when an index with this name already has the
+    same spec, but a TTL index's expireAfterSeconds is part of that spec — so
+    if it's ever wrong, drop+recreate is needed to fix it. That drop+recreate
+    forces a full collection scan + index rebuild, which previously ran
+    unconditionally on every single app startup (a leftover from one-time
+    migrations that renamed/changed these indexes and was never removed).
+    Now it only runs when the stored value actually differs from the target.
+    """
+    try:
+        existing = await collection.index_information()
+    except Exception:
+        existing = {}
+
+    spec = existing.get(name)
+    if spec is not None and spec.get("expireAfterSeconds") == expire_after_s:
+        return
+
+    if spec is not None:
+        await _drop_index_if_exists(collection, name)
+    await collection.create_index(key, expireAfterSeconds=expire_after_s, name=name)
+
+
 async def ensure_indexes() -> None:
     db = get_db()
 
@@ -71,33 +94,19 @@ async def ensure_indexes() -> None:
     await db.hl_signals_signals.create_index([("signal_type", 1), ("snapshot_ts", -1)])
     await db.hl_signals_signals.create_index([("coin", 1), ("snapshot_ts", -1)])
 
-    await _drop_index_if_exists(db.hl_signals_positions, "positions_ttl")
+    # One-time cleanup of indexes from older migrations that these TTL
+    # indexes replaced — drop_index() on a name that doesn't exist is a no-op
+    # (caught by _drop_index_if_exists), so this is harmless once gone.
     await _drop_index_if_exists(db.hl_signals_positions, "snapshot_ts_1")
-    await db.hl_signals_positions.create_index(
-        "snapshot_ts", expireAfterSeconds=1 * 24 * 3600, name="positions_ttl"
-    )
-
-    await _drop_index_if_exists(db.hl_signals_convergence, "snapshot_ts_1")
-    await db.hl_signals_convergence.create_index(
-        "snapshot_ts", expireAfterSeconds=7 * 24 * 3600, name="convergence_ttl"
-    )
-
-    await _drop_index_if_exists(db.hl_signals_signals, "signals_ttl")
-    await db.hl_signals_signals.create_index(
-        "snapshot_ts", expireAfterSeconds=48 * 3600, name="signals_ttl"
-    )
-
-    await _drop_index_if_exists(db.hl_signals_coin_metrics, "coin_metrics_ttl")
     await _drop_index_if_exists(db.hl_signals_coin_metrics, "snapshot_ts_1")
-    await db.hl_signals_coin_metrics.create_index(
-        "snapshot_ts", expireAfterSeconds=30 * 24 * 3600, name="coin_metrics_ttl"
-    )
+
+    await _ensure_ttl_index(db.hl_signals_positions, "snapshot_ts", 1 * 24 * 3600, "positions_ttl")
+    await _ensure_ttl_index(db.hl_signals_convergence, "snapshot_ts", 7 * 24 * 3600, "convergence_ttl")
+    await _ensure_ttl_index(db.hl_signals_signals, "snapshot_ts", 48 * 3600, "signals_ttl")
+    await _ensure_ttl_index(db.hl_signals_coin_metrics, "snapshot_ts", 30 * 24 * 3600, "coin_metrics_ttl")
 
     await db.hl_signals_prices.create_index([("coin", 1), ("ts", -1)])
-    await _drop_index_if_exists(db.hl_signals_prices, "prices_ttl")
-    await db.hl_signals_prices.create_index(
-        "ts", expireAfterSeconds=30 * 24 * 3600, name="prices_ttl"
-    )
+    await _ensure_ttl_index(db.hl_signals_prices, "ts", 30 * 24 * 3600, "prices_ttl")
 
     await db.hl_signals_position_changes.create_index(
         "ts", expireAfterSeconds=30 * 24 * 3600, name="position_changes_ttl"
