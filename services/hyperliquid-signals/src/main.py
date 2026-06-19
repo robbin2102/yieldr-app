@@ -130,7 +130,23 @@ async def lifespan(app: FastAPI):
     else:
         logger.error('"MongoDB still unreachable after 5 startup attempts — proceeding anyway"')
 
-    await ensure_indexes()
+    # ensure_indexes() fires ~40 sequential index ops — createIndexes isn't a
+    # retryable-write op in pymongo's eyes, so a single transient disconnect
+    # mid-sequence (the same Railway Mongo-proxy blip the ping loop above
+    # already guards against) raises AutoReconnect uncaught and crashes the
+    # whole container, rather than just failing the one operation. create_index
+    # is idempotent, so retrying the whole function on failure is safe.
+    for attempt in range(1, 4):
+        try:
+            await ensure_indexes()
+            break
+        except Exception as e:
+            if attempt == 3:
+                raise
+            wait_s = 2 ** attempt
+            logger.warning('"ensure_indexes failed on attempt %d/3 (%s), retrying in %ds"',
+                            attempt, e, wait_s)
+            await asyncio.sleep(wait_s)
     logger.info('"Service starting, indexes ensured"')
 
     if settings.bot_enabled:
