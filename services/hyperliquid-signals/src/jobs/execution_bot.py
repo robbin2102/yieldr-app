@@ -566,7 +566,15 @@ async def _close_position(db, pos: dict, reason: str, now: datetime) -> None:
                 "dust, marking closed without an order", coin, sz_dec, sz_coin,
             )
             filled = True
-            filled_sz = 0.0
+            # closed_fraction below is filled_sz/sz_coin — setting filled_sz
+            # to sz_coin (not 0) is what actually makes closed_fraction hit
+            # 1.0 and take the CLOSED branch. Leaving this at 0 (as a prior
+            # version of this fix did) computed closed_fraction=0, which fed
+            # straight into the partial-close branch and re-saved the
+            # position OPEN with the same unchanged dust size_coin — the
+            # exact same infinite loop, just relabeled as "partial close"
+            # instead of the original ValueError.
+            filled_sz = sz_coin
         else:
             is_long = side == "LONG"
             try:
