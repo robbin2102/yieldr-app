@@ -550,11 +550,29 @@ async def _close_position(db, pos: dict, reason: str, now: datetime) -> None:
     exit_px = entry_px
     filled_sz = 0.0
     if sz_coin > 0:
-        is_long = side == "LONG"
-        try:
-            filled, exit_px, filled_sz = await _run_close(coin, is_long, sz_coin)
-        except Exception:
-            logger.exception("BOT: close error %s", coin)
+        # HL rejects (and place_limit_order_close raises ValueError) any order
+        # whose size rounds to 0 at this coin's szDecimals — e.g. a leftover
+        # dust remainder below the minimum tick after partial fills. sz_coin
+        # is fixed on the position doc, so retrying that order is guaranteed
+        # to raise the same ValueError every time bot_close_expired calls
+        # this again next minute, forever. Check the rounded size up front
+        # and treat dust as already-flat instead of looping on an
+        # unplaceable order.
+        meta = await ex.get_asset_meta()
+        sz_dec = meta.get(coin, {}).get("szDecimals", 4)
+        if ex.round_sz(sz_coin, sz_dec) <= 0:
+            logger.warning(
+                "BOT: close size for %s rounds to 0 at szDecimals=%d (sz_coin=%.10f) — "
+                "dust, marking closed without an order", coin, sz_dec, sz_coin,
+            )
+            filled = True
+            filled_sz = 0.0
+        else:
+            is_long = side == "LONG"
+            try:
+                filled, exit_px, filled_sz = await _run_close(coin, is_long, sz_coin)
+            except Exception:
+                logger.exception("BOT: close error %s", coin)
     else:
         filled = True  # sz=0 means already flat, mark closed
 
