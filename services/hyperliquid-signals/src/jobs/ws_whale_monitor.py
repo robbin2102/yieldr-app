@@ -139,8 +139,14 @@ _TRANSIENT_NETWORK_MODULES = {"requests", "urllib3", "aiohttp", "websocket", "so
 
 # How long allMids can go silent before we treat the connection as dead.
 _STALE_AFTER_S = 30
-# How often to check for staleness while a session is running.
-_HEALTH_CHECK_INTERVAL_S = 15
+# How often to check for staleness/thread-death while a session is running.
+# Kept short because the dead-thread check below is the common case in
+# practice (Hyperliquid expires every WS session after ~10min, server-side,
+# via a close frame) — at 15s, each shard sat blind for up to ~45s waiting
+# on the allMids staleness timer before noticing. The SDK exposes no
+# on_close hook, so polling thread liveness this often is the only way to
+# catch the close promptly without patching the SDK.
+_HEALTH_CHECK_INTERVAL_S = 3
 # Reconnect backoff bounds.
 _BACKOFF_INITIAL_S = 5
 _BACKOFF_MAX_S = 60
@@ -350,6 +356,20 @@ async def _run_session(shard: int, num_shards: int, info) -> None:
     last_sync = time.monotonic()
     while True:
         await asyncio.sleep(_HEALTH_CHECK_INTERVAL_S)
+
+        # Hyperliquid closes every WS session server-side after ~10min (a
+        # close frame, not a socket error) and the SDK registers no
+        # on_close callback, so nothing here gets notified — the background
+        # WebsocketManager thread just quietly exits run_forever() and
+        # dies. Checking is_alive() catches that within one health-check
+        # tick instead of waiting on the slower allMids staleness fallback
+        # below, which stays as a safety net for sockets that go silent
+        # without actually closing.
+        if not info.ws_manager.is_alive():
+            raise _WSReconnect(
+                f"WS monitor shard {shard}: websocket thread died — reconnecting",
+                reason="hl_closed",
+            )
 
         idle = time.monotonic() - _last_mids_msg[shard]
         if idle > _STALE_AFTER_S:
