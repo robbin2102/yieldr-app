@@ -61,7 +61,11 @@ async def get_l2_book(coin: str) -> dict:
             resp.raise_for_status()
             book = await resp.json()
 
-    levels = book.get("levels", [])
+    # HL occasionally returns a JSON `null` body instead of a book on
+    # testnet — book.get(...) on None raised an opaque "'NoneType' object
+    # has no attribute 'get'" instead of the ValueError callers already
+    # retry on below.
+    levels = (book or {}).get("levels", [])
     if len(levels) < 2 or not levels[0] or not levels[1]:
         raise ValueError(f"Empty orderbook for {coin}")
 
