@@ -1,8 +1,8 @@
 # ⚡ Yieldr
 
-**The platform for AI-native hedge funds onchain.**
+**The agent stack for onchain funds.**
 
-Top traders launch vaults and let agents run the fund. Investors deploy capital and let agents run the portfolio. Every part of fund operations and capital allocation that doesn't require a human is handled by the agent stack.
+Connect your wallet, prove your edge, and launch an agent vault — turning your onchain performance into recurring revenue. Every part of fund operations that doesn't require a human is handled by the agent stack.
 
 [![Launch App](https://img.shields.io/badge/Launch-App-00C805?style=for-the-badge)](https://app.yieldr.org)
 [![Docs](https://img.shields.io/badge/Read-Docs-0088FF?style=for-the-badge)](https://yieldr.org/docs)
@@ -14,52 +14,63 @@ Top traders launch vaults and let agents run the fund. Investors deploy capital 
 
 ## 🎯 The Problem
 
-The hedge fund has been the highest-performing structure in finance for 70 years — and the most exclusive. DeFi was supposed to fix this. It hasn't. Vaults exist as a primitive, but **a vault is not a fund**.
+Great traders should run onchain funds. Most never do.
+
+Your wallet is public. Your PnL is onchain. Your edge is more verifiable than anything in traditional finance. But you're still only trading your own capital.
 
 | Problem | Description |
 |---------|-------------|
-| 🚫 **Traders can launch vaults but can't grow them** | Code handles execution. It doesn't bring in investors, explain the strategy, or hold the relationship through drawdowns. Top traders don't want to spend time on this — so they don't scale. |
-| 🚫 **Investors can't allocate across vaults at scale** | Picking one vault isn't the job — continuous allocation against a risk-return target is. No one does this manually, so capital chases the loudest vault and exits at the worst time. |
-| 🚫 **The edge stays opaque** | PnL is visible, strategy isn't. Capital flows to recent performance instead of underlying edge — and alpha gets crowded and decayed instead of compounded. |
+| 🚫 **No discovery layer** | Nobody outside your circle knows your track record exists. Depositors have no way to find you or trust your edge. |
+| 🚫 **No depositor matching** | There is no structured way to match with the right capital. Every depositor question pulls you out of your positions. |
+| 🚫 **No way to scale** | Drawdowns create noise that must be managed manually. Scaling means risking more personal capital instead of scaling through aligned depositors. |
 
-> A market that should have a million funds has a few thousand, and the wrong ones.
+> A vault is not a fund. Yieldr removes the wall between verified edge and scalable capital.
 
 ---
 
 ## 💡 The Solution
 
-An **agent stack** that turns every top trader into a fund manager — and every investor into a pro allocator, onchain.
+An **agent stack** that gives every verified onchain edge a full operating layer — turning performance into recurring revenue.
 
 | Side | What Agents Do |
 |------|----------------|
-| 🧑‍💼 **Trader-Side Agents** | Investor matching by risk profile, transparent communication on performance, expectation management through drawdowns. Traders stay focused on trading. |
-| 💰 **Investor-Side Agents** | Continuously allocate across vaults that fit risk-return goals — deploying, rotating out of underperformers, rebalancing as the landscape shifts. |
-| 🔍 **Edge Detection** | Not just who wins, but why — entry patterns, sizing logic, market selection, holding periods. Capital flows to verified, understood edge. |
+| 🧑‍💼 **For Traders** | Launch an agent vault from verifiable onchain edge. Agents prove your edge, attract aligned depositors, communicate performance, and monitor drift. You keep trading. |
+| 💰 **For Depositors** | Allocation agents discover vaults, monitor positions 24/7, detect edge gain or loss in real time, and rotate capital toward stronger-fit strategies. |
+| 🔍 **For the Market** | Agents make edge legible, match it with the right capital, communicate through volatility, and flag decay before it shows in PnL. |
 
 ---
 
 ## ✨ The Agent Stack
 
-### 🧑‍💼 Trader-Side Agents
+### 🔬 Quant Agent
+
+Analyzes wallet history and strategy performance — entry/exit behavior, position sizing, holding periods, drawdown history, regime sensitivity, and whether performance is edge, beta, luck, or insider-like timing.
+
+> The goal is not just to show PnL. The goal is to explain **why** the edge exists and whether it can scale.
+
+### 🤝 Matching Agent
+
+Connects agent vaults with depositors whose goals fit the strategy — evaluating asset class preference, risk tolerance, return target, drawdown tolerance, and liquidity needs. Capital is matched to vaults based on fit, not noise.
+
+### 💬 Comms Agent
+
+Handles depositor communication — answering questions, summarizing weekly performance, explaining drawdowns, reporting market context, and keeping depositors informed through volatility. Traders stay focused on positions.
+
+### 🛡️ Monitoring Agent
+
+Tracks risk, edge decay, and strategy drift — watching whether the vault follows its stated strategy, whether edge is degrading, whether position sizing or leverage is creeping, and whether AUM is becoming too large for the strategy. Flags problems before they become obvious in PnL.
+
+### 📊 Allocation Agent
+
+Works for depositors — discovers vaults, monitors open allocations, compares strategies, and rotates capital based on depositor goals. Tracks which vaults are gaining or losing edge and whether allocation should be increased, reduced, or exited.
 
 | Agent | Function | Status |
 |-------|----------|--------|
-| **Matching** | Surfaces the vault to investors whose risk-return profiles fit the strategy | 🔜 Phase 4 |
-| **Community** | Manages investor queries, explains market context, holds the relationship through drawdowns | 🔜 Phase 4 |
-
-### 💰 Investor-Side Agents
-
-| Agent | Function | Status |
-|-------|----------|--------|
-| **Allocation** | Continuously deploys capital across vaults that fit, rotates, rebalances | 🔜 Phase 3 |
-| **Monitoring** | Tracks every vault held, flags edge decay, strategy drift, or risk creep | 🔜 Phase 3 |
-
-### 🔍 Edge Detection Layer
-
-| Module | Function | Status |
-|--------|----------|--------|
-| **Trade Parsing** | Parses every trade across every vault to identify what's actually driving returns | ✅ Live |
-| **Edge Validation** | Distinguishes structural edge from luck and regime-dependent performance | ✅ Live |
+| **Quant** | Identifies edge from wallet history, explains why returns exist | ✅ Live |
+| **Matching** | Surfaces vaults to depositors whose risk-return profiles fit | 🔜 Planned |
+| **Comms** | Manages depositor queries, explains market context through drawdowns | 🔜 Planned |
+| **Monitoring** | Tracks edge decay, strategy drift, risk creep in real time | 🔜 Planned |
+| **Allocation** | Discovers, monitors, and rotates capital across vaults for depositors | 🔜 Planned |
 
 ---
 
@@ -69,117 +80,61 @@ An **agent stack** that turns every top trader into a fund manager — and every
 
 | Vault | Strategy | Status |
 |-------|----------|--------|
+| 🌐 **Geopolitics** | Identifies wallets with abnormal win rates vs implied probability on geopolitical events | ✅ Live |
 | 🏀 **NBA Edge** | Ranks top NBA prediction market traders by statistical edge, mirrors highest-conviction positions | ✅ Live |
-| ⚽ **Soccer Alpha** | Scans soccer markets for traders with statistically impossible edge (p < 0.0001), enters at their price levels | ✅ Live |
-| 🌐 **Geopolitics** | Identifies insider wallets with abnormal win rates vs. implied probability, takes positions on geopolitical events | ✅ Live |
 
-> 📊 Live performance, vault sizes, and trade history at [yieldr.org/vaults](https://yieldr.org/vaults)
+### Waitlisted Vaults
+
+| Vault | Chain | Category |
+|-------|-------|----------|
+| ⚡ **Funding Arbs** | Base | Perps — funding rate arbitrage on Avantis & Hyperliquid |
+| 🪙 **AERO Accumulator** | Base | LP — DCA into Aerodrome using top LP and trader signals |
+| 🦾 **Virtuals Robotics Infra** | Base | Project Coins — robotics and AI infrastructure tokens |
+| 🎲 **Memecoin Momentum** | Base | Memecoins — mirrors top memecoin traders by realised edge |
+| 🚀 **SpaceX RWA** | HOOD Chain | RWA — tokenized SPCX equity on Robinhood Chain |
+| 🤖 **NVDA AI Momentum** | HOOD Chain | Stock Tokens — NVIDIA tokenized stock accumulation |
+| ⚡ **TSLA Volatility** | HOOD Chain | Stock Tokens — Tesla volatility cycles |
+| 🤖 **Virtuals HOOD Agents** | HOOD Chain | Agentic AI — early agentic trading projects on HOOD |
+| 🎲 **HOOD Memecoin Momentum** | HOOD Chain | Memecoins — HOOD Chain memecoin traders |
+| 📊 **HOOD Carry Trade** | HOOD Chain | Carry Trade — funding rate arb on Lighter perps |
+
+> 📊 Live performance and vault details at [yieldr.org/vaults](https://yieldr.org/vaults)
 
 ---
 
 ## 🗺️ Roadmap
 
 ```
-Phase 1: Internal Vaults     →  ✅ Live since Q4 2025
-Phase 2: Capital Raise & TGE →  ◐ Now
-Phase 3: Marketplace Open    →  ○ Next (Polymarket)
-Phase 4: Multi-Protocol      →  ○ Planned (Perps + Liquidity)
-Phase 5: Open Marketplace    →  ○ Vision
+Phase 1: Internal Vaults          →  ✅ Live since Q4 2025
+Phase 2: Multi-Chain Expansion    →  ◐ Now (HOOD Chain + Base)
+Phase 3: Full Agent Stack         →  ○ Q4 2026
+Phase 4: Vault Infra & Beta       →  ○ Q1 2027
+Phase 5: Full Beta Launch         →  ○ Q1–Q2 2027
 ```
 
 | Phase | Milestone | Description |
 |-------|-----------|-------------|
-| **1** | Internal Vaults | Three Yieldr-operated vaults trading project capital on Polymarket |
-| **2** | Capital Raise & TGE | Tiered Early Access from $9M → $34M FDV. TGE T+7 days from target completion |
-| **3** | Marketplace Open | Whitelisted top traders launch vaults on Polymarket. Allocation + Edge Detection agents live |
-| **4** | Multi-Protocol Expansion | Vaults expand to perps (Hyperliquid, Avantis) and liquidity (Uniswap, Aerodrome). Full agent stack live |
-| **5** | Open Marketplace | Anyone with verified onchain edge can launch a vault. Anyone with capital can deploy |
-
----
-
-## 🪙 YLDR Token
-
-| Property | Value |
-|----------|-------|
-| Total Supply | 210,000,000 YLDR (fixed) |
-| Network | Base |
-| Total Contribution Target | $5M |
-| → Token Sale (YLDR) | $2.5M |
-| → Vault Deposits | $2.5M |
-| TGE | T+7 days from target |
-| Genesis FDV | $9M |
-
-> **How the raise is structured:** Every $100 contributed splits 50/50 — $50 into agent-managed vaults (yours, withdrawable, no lock-up) and $50 into YLDR token allocation. The $2.5M token sale is what actually funds the protocol; the $2.5M in vaults stays as your capital working under the agent stack.
-
-### Allocation
-
-| Bucket | % Supply | Tokens | Notes |
-|--------|---------|--------|-------|
-| **Public (Community)** | 41% | 86,100,000 | Tiered Early Access. No VC pricing |
-| **Team & Contributors** | 20% | 42,000,000 | 12mo cliff + 36mo monthly vesting |
-| **Treasury & Operations** | 15% | 31,500,000 | Multi-year runway: dev, agents, ops |
-| **Strategic Reserve** | 10% | 21,000,000 | Optional institutional partners (SAFT) |
-| **Ecosystem Incentives** | 9% | 18,900,000 | Trader/investor rewards, airdrops |
-| **Liquidity Provision** | 5% | 10,500,000 | DEX liquidity at TGE + CEX reserve |
-| **TOTAL** | 100% | 210,000,000 | |
-
-### Sale Tiers — First Raise
-
-13.87% of supply (~29.1M YLDR) across five tiers from $9M → $34M FDV. First come, first served.
-
-| Tier | FDV | Price | Tokens | Tier Raise |
-|------|-----|-------|--------|------------|
-| **GENESIS** | $9M | $0.0429 | 5,833,333 | $250,000 |
-| **PRE-SEED** | $12M | $0.0571 | 7,875,000 | $450,000 |
-| **SEED** | $18M | $0.0857 | 5,833,333 | $500,000 |
-| **GROWTH** | $25M | $0.1190 | 5,880,000 | $700,000 |
-| **SCALE** | $34M | $0.1619 | 3,705,882 | $600,000 |
-| **TOTAL** | ~$18M avg | — | 29,127,549 | **$2,500,000** |
-
-### Use of Funds
-
-**Step 1 — Every $100 contributed splits 50/50:**
-
-| Split | Amount | Where It Goes |
-|-------|--------|---------------|
-| 💰 **Vault Deposits** | $50 | Into agent-managed vaults. Yours. Withdrawable anytime. No lock-up |
-| 🪙 **YLDR Token Sale** | $50 | Funds the protocol (see below) |
-
-**Step 2 — The $2.5M token sale funds the protocol:**
-
-| Allocation | % of Sale | Amount | Purpose |
-|------------|-----------|--------|---------|
-| 🛠️ **Protocol Dev & GTM** | 80% | $2.0M | Engineering, agent infrastructure, go-to-market |
-| 💧 **DEX Liquidity** | 20% | $0.5M | Seeds YLDR liquidity at TGE |
-
-> Net effect on a $5M raise: **$2.5M to depositor vaults · $2.0M to protocol build · $0.5M to liquidity.**
-
-### Key Properties
-
-- ✅ **Fixed Supply** — 210M hardcoded, no inflation
-- ✅ **Community First** — 41% public allocation, no VC tiers
-- ✅ **Fair Pricing** — Retail and institutions at the same price
-- ✅ **Team Vested** — 12-month cliff + 36-month monthly vesting
-- ✅ **Protocol Ownership** — Holders are protocol owners from day one
-
-> 📖 See [Token Documentation](https://yieldr.org/docs#token-overview) for full tokenomics
+| **1** | Internal Vaults | Yieldr-operated vaults trading project capital on Polymarket |
+| **2** | Multi-Chain Expansion | HOOD Chain, SpaceX and tokenized stock vaults, Quant Agent trials open to waitlisted traders |
+| **3** | Full Agent Stack | Monitoring, Comms, and Allocation Agents roll out. Traders and depositors access the complete agent OS |
+| **4** | Vault Infra & Beta Deposits | Vault smart contracts deploy. Waitlisted traders with agent-verified edge launch vaults. Whitelisted depositors make first deposits |
+| **5** | Full Beta Launch | Full beta opens across agent vaults, depositor whitelist, and allocation agents operating across the live vault network |
 
 ---
 
 ## 📊 Building in Public
 
-Transparent development. No bullshit. Real treasury data, real trading performance, real commit history.
+Transparent development. No bullshit. Real trading performance, real commit history. Every module tracked openly from day one.
 
 | Metric | Value |
 |--------|-------|
-| 🗓️ Months Building | 6 |
-| 📝 Commits Shipped | ~275 |
-| 💻 Lines of Code | 62.5K+ |
-| 🚀 Features | 60+ |
-| 🐛 Bug Fixes | 114+ |
-| 📁 Source Files | 394 |
+| 🗓️ Months Building | 9 |
+| 📝 Commits Shipped | ~1,089 |
+| 💻 Lines of Code | 85K+ |
+| 🚀 Features Shipped | 80+ |
+| 🐛 Bug Fixes | 200+ |
+| 👥 Contributors | 2 |
 | 🏆 Recognition | Base Batches 002 Winner |
-| 💵 Base Grant | $10K |
 
 > 📖 Track every commit and module shipped at [yieldr.org/build-in-public](https://www.yieldr.org/build-in-public)
 
@@ -191,7 +146,7 @@ Transparent development. No bullshit. Real treasury data, real trading performan
 |-----------|------------|
 | Frontend | Next.js, React, TypeScript |
 | Styling | Tailwind CSS |
-| Blockchain | Base (Ethereum L2) |
+| Blockchain | Base (Ethereum L2), HOOD Chain (Arbitrum L2) |
 | AI | Claude (Anthropic), MCP |
 | Database | MongoDB |
 | Backend Services | Python, Railway |
@@ -203,20 +158,10 @@ Transparent development. No bullshit. Real treasury data, real trading performan
 | Category | Protocols | Status |
 |----------|-----------|--------|
 | Predictions | Polymarket | ✅ Live |
-| Perpetuals | Hyperliquid, Avantis | 🔜 Phase 4 |
-| Liquidity | Uniswap, Aerodrome | 🔜 Phase 4 |
-
----
-
-## 🚀 Quick Start
-
-```
-1. Join Waitlist    →    2. Get Invited    →    3. Allocate Capital
-```
-
-1. **Join the waitlist** — Early Access is invite-only. The matching agent surfaces invites as slots open
-2. **Choose your vault** — NBA Edge, Soccer Alpha, or Geopolitics
-3. **Deposit USDC** — 50% goes into your chosen vault, 50% allocated as YLDR
+| Perpetuals | Hyperliquid, Avantis | 🔜 Expanding |
+| Liquidity | Uniswap, Aerodrome | 🔜 Planned |
+| Stock Tokens / RWA | HOOD Chain (SPCX, NVDA, TSLA) | 🔜 Waitlist |
+| Project Coins | Virtuals | 🔜 Waitlist |
 
 ---
 
@@ -233,24 +178,21 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 | 🌐 Website | [yieldr.org](https://yieldr.org) |
 | 📱 App | [app.yieldr.org](https://app.yieldr.org) |
 | 📖 Documentation | [yieldr.org/docs](https://yieldr.org/docs) |
-| 📊 Vaults | [yieldr.org/vaults](https://yieldr.org/vaults) |
+| 📊 Vaults | [yieldr.org/vaults](https://yieldr.org/explorer) |
 | 🔨 Build Log | [yieldr.org/build-in-public](https://www.yieldr.org/build-in-public) |
-| 🐦 Twitter | [@yieldrdotorg](https://twitter.com/yieldrdotorg) |
+| 🐦 Twitter | [@yieldrdotorg](https://x.com/yieldrdotorg) |
 | 💬 Telegram | [@yieldrdotorg](https://t.me/yieldrdotorg) |
-| 💻 GitHub | Open source build |
 
 ---
 
 ## ⚠️ Disclaimer
 
-This software is provided "as is" without warranty of any kind. Trading and investing in DeFi involves substantial risk. Past performance of traders and vaults on the platform does not guarantee future results. Always do your own research and never invest more than you can afford to lose.
+This software is provided "as is" without warranty of any kind. Trading and investing in DeFi involves substantial risk. Past performance of traders and vaults on the platform does not guarantee future results. Agent outputs are not guarantees. Always do your own research and never invest more than you can afford to lose.
 
 ---
 
 <p align="center">
   <strong>Built with 🧠 by the Yieldr team</strong>
   <br>
-  <sub>The platform for AI-native hedge funds onchain.</sub>
-  <br><br>
-  <sub>A million funds. A billion allocators. A new asset management market.</sub>
+  <sub>The agent stack for onchain funds.</sub>
 </p>
