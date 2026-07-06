@@ -181,7 +181,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 | 📊 Vaults | [yieldr.org/vaults](https://yieldr.org/explorer) |
 | 🔨 Build Log | [yieldr.org/build-in-public](https://www.yieldr.org/build-in-public) |
 | 🐦 Twitter | [@yieldrdotorg](https://x.com/yieldrdotorg) |
-| 💬 Telegram | [@yieldrdotorg](https://t.me/yieldrdotorg) |
+
 
 ---
 
