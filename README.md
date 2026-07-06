@@ -105,7 +105,7 @@ Works for depositors — discovers vaults, monitors open allocations, compares s
 ## 🗺️ Roadmap
 
 ```
-Phase 1: Internal Vaults          →  ✅ Live since Q4 2025
+Phase 1: Internal Vaults          →  ✅ Live since Q1 2026
 Phase 2: Multi-Chain Expansion    →  ◐ Now (HOOD Chain + Base)
 Phase 3: Full Agent Stack         →  ○ Q4 2026
 Phase 4: Vault Infra & Beta       →  ○ Q1 2027
