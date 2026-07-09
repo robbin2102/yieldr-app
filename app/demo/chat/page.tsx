@@ -118,7 +118,6 @@ function normaliseSymbol(raw: string): string {
 }
 
 const FREE_CREDITS_LIMIT = 500000;
-const YLDR_PRICE = 9_000_000 / 210_000_000; // ~$0.04286
 
 function formatCreditsDisplay(used: number) {
   const usedK = used >= 1000 ? `${(used / 1000).toFixed(1)}k` : used.toString();
@@ -212,7 +211,6 @@ export default function ChatPage() {
   const [expandedCards, setExpandedCards] = useState<Set<string>>(new Set());
   const [activeNavTab, setActiveNavTab] = useState<'terminal' | 'agents'>('terminal');
   const [showYldrModal, setShowYldrModal] = useState(false);
-  const [yldrInput, setYldrInput] = useState(100);
   const [mobPanelHidden, setMobPanelHidden] = useState(false);
 
   // Funds modal state
@@ -1039,7 +1037,6 @@ export default function ChatPage() {
 
   const agentInitials = agentName.slice(0, 2).toUpperCase();
   const displayTraders = pickDisplayTraders(followedTraders);
-  const yldrTokens = Math.floor(yldrInput / YLDR_PRICE);
   const creditsFormatted = formatCreditsDisplay(creditsUsed);
   const monitoringCount = perpPositions.length + pmPositions.length;
 
@@ -2069,82 +2066,48 @@ export default function ChatPage() {
           <div className={s.modal}>
             <div className={s.modalHdr}>
               <div>
-                <div className={s.modalTitle}>Get YLDR Tokens</div>
-                <div className={s.modalSub}>YLDR provides AI credits and powers your agent's training.</div>
+                <div className={s.modalTitle}>Free tier → $YLDR</div>
+                <div className={s.modalSub}>You've used your 100K free compute credits. Hold $YLDR to unlock the full agent OS.</div>
               </div>
               <button className={s.modalClose} onClick={() => setShowYldrModal(false)}>✕</button>
             </div>
             <div className={s.modalBody}>
-              <div className={s.tierBlock}>
-                <div className={s.tierRow1}>
-                  <span className={s.tierLabel}>Tier 1</span>
-                  <span className={s.tierName}>Early Access</span>
-                  <span className={s.tierFdv}>$9M FDV</span>
+              <div className={s.tierCompare}>
+                <div className={s.tierCompareCol}>
+                  <div className={s.tierCompareHead}>Free Tier</div>
+                  <div className={s.tierCompareItem}><span className={s.tierCompareCheck}>✓</span>100K agent query credits</div>
+                  <div className={s.tierCompareItem}><span className={s.tierCompareCheck}>✓</span>Vault explorer &amp; whitelist</div>
+                  <div className={s.tierCompareItem}><span className={s.tierCompareDash}>—</span>Full agent stack access</div>
+                  <div className={s.tierCompareItem}><span className={s.tierCompareDash}>—</span>Quant edge analysis</div>
+                  <div className={s.tierCompareItem}><span className={s.tierCompareDash}>—</span>Agent vault launch</div>
                 </div>
-                <div className={s.fillBarWrap}>
-                  <div className={s.fillBarTrack}><div className={s.fillBarFill}></div></div>
-                  <div className={s.fillBarLabels}>
-                    <span className="used">35% filled</span>
-                    <span className="rem">650K YLDR left at this price</span>
-                  </div>
-                </div>
-                <div className={s.tierNext}>Next tier <strong>$14M FDV (+56%)</strong> — buy now to lock in current price</div>
-              </div>
-
-              <div className={s.amountBlock}>
-                <div className={s.amountLabel}>Amount</div>
-                <div className={s.amountInputWrap}>
-                  <input
-                    className={s.amountInput}
-                    type="number"
-                    value={yldrInput}
-                    min={1}
-                    onChange={e => setYldrInput(parseFloat(e.target.value) || 0)}
-                  />
-                  <span className={s.amountCurrency}>USDC</span>
+                <div className={`${s.tierCompareCol} ${s.tierCompareHolder}`}>
+                  <div className={s.tierCompareBadge}>TGE JUL 2026</div>
+                  <div className={s.tierCompareHead}>$YLDR Holder</div>
+                  <div className={s.tierCompareItem}><span className={s.tierCompareCheck}>✓</span>Unlimited agent inference</div>
+                  <div className={s.tierCompareItem}><span className={s.tierCompareCheck}>✓</span>Quant Agent · edge analysis</div>
+                  <div className={s.tierCompareItem}><span className={s.tierCompareCheck}>✓</span>Comms · Monitoring · Allocation agents</div>
+                  <div className={s.tierCompareItem}><span className={s.tierCompareCheck}>✓</span>Launch agent vaults</div>
+                  <div className={s.tierCompareItem}><span className={s.tierCompareCheck}>✓</span>Fee share &amp; protocol governance</div>
                 </div>
               </div>
 
-              <div className={s.receiveRow}>
-                <div>
-                  <div className={s.receiveLbl}>You Receive</div>
-                  <div className={s.receiveVal}>{yldrTokens.toLocaleString()} YLDR</div>
-                </div>
-                <div>
-                  <div className={s.receiveSubLbl}>YLDR Price</div>
-                  <div className={s.receiveSubVal}>$0.043 / YLDR</div>
-                </div>
-              </div>
-
-              <div className={s.whyBlock}>
-                <div className={s.whyTitle}>Why Buy Now</div>
-                {[
-                  'AI chat credits for trading insights & analysis',
-                  'Train agent to unlock personalized signals',
-                  'Deflationary 🔥 — YLDR is burned on every AI action. Fixed supply of 210M.',
-                  'Early access to Trading Agents',
-                ].map((item, i) => (
-                  <div key={i} className={s.whyItem}><span className={s.whyCheck}>✓</span><span>{item}</span></div>
-                ))}
-              </div>
-
-              <div className={s.roiBlock}>
-                <div className={s.roiTitle}>ROI Scenarios at TGE ({yldrInput > 0 ? `$${yldrInput.toLocaleString()} USDC` : '—'})</div>
-                <div className={s.roiScenarios}>
+              <div className={s.roadmapBlock}>
+                <div className={s.roiTitle}>Build Roadmap</div>
+                <div className={s.roadmap}>
                   {[
-                    { fdv: '$150M', multiple: 150 / 9 },
-                    { fdv: '$300M', multiple: 300 / 9 },
-                    { fdv: '$500M', multiple: 500 / 9 },
-                  ].map(({ fdv, multiple }) => {
-                    const roi = yldrInput > 0 ? yldrInput * multiple : 0;
-                    return (
-                      <div key={fdv} className={s.roiScenario}>
-                        <div className={s.roiFdv}>{fdv} FDV</div>
-                        <div className={s.roiValue}>{yldrInput > 0 ? `$${Math.round(roi).toLocaleString()}` : '—'}</div>
-                        <div className={s.roiMultiple}>{multiple.toFixed(1)}×</div>
-                      </div>
-                    );
-                  })}
+                    { date: "Jul '26", label: '$YLDR TGE' },
+                    { date: "Aug '26", label: 'Edge Detector' },
+                    { date: "Sep '26", label: 'Full Quant Agent' },
+                    { date: "Dec '26", label: 'Vault Infra' },
+                    { date: "Q1 '27", label: 'Full Beta' },
+                  ].map((step, i) => (
+                    <div key={i} className={s.roadmapStep}>
+                      <div className={s.roadmapDot}></div>
+                      <div className={s.roadmapDate}>{step.date}</div>
+                      <div className={s.roadmapLabel}>{step.label}</div>
+                    </div>
+                  ))}
                 </div>
               </div>
 
