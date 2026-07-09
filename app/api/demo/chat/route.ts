@@ -19,6 +19,13 @@ const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY || '',
 });
 
+// Deep-dive prompts can trigger multiple agentic-loop iterations with sequential
+// tool calls (each doing MongoDB queries + external API fetches); without this,
+// the route runs on Vercel's default Node function timeout (10-15s) and gets
+// killed mid-stream, which the browser surfaces as net::ERR_HTTP2_PING_FAILED.
+// Requires Vercel Pro (or higher) plan for values above the Hobby 10s cap.
+export const maxDuration = 300;
+
 // Ensure service URLs always carry a protocol (handles Railway/Render URLs without https://)
 function normalizeUrl(url: string): string {
   if (!url.startsWith('http://') && !url.startsWith('https://')) return `https://${url}`;
@@ -118,12 +125,13 @@ async function fetchWithRetry(
   url: string,
   options: RequestInit,
   maxRetries = 3,
-  baseDelay = 500
+  baseDelay = 500,
+  timeoutMs = 15_000
 ): Promise<Response> {
   let lastError: Error | null = null;
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     try {
-      const res = await fetch(url, options);
+      const res = await fetch(url, { ...options, signal: options.signal ?? AbortSignal.timeout(timeoutMs) });
       if (res.ok) return res;
       // Retry on 5xx errors
       if (res.status >= 500) {
@@ -1004,7 +1012,7 @@ async function executeTool(name: string, input: any, wallet?: string, agentCtxId
         const allPositions: any[] = [];
         let offset = 0;
         while (true) {
-          const res = await fetch(`${POLYMARKET_API_BASE}/positions?user=${walletAddress}&limit=500&offset=${offset}`);
+          const res = await fetch(`${POLYMARKET_API_BASE}/positions?user=${walletAddress}&limit=500&offset=${offset}`, { signal: AbortSignal.timeout(15_000) });
           if (!res.ok) throw new Error(`PM API error: ${res.status}`);
           const data = await res.json();
           if (!Array.isArray(data) || data.length === 0) break;
@@ -1038,6 +1046,7 @@ async function executeTool(name: string, input: any, wallet?: string, agentCtxId
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ type: 'userFillsByTime', user: input.walletAddress, startTime, endTime }),
+          signal: AbortSignal.timeout(15_000),
         });
         if (!res.ok) throw new Error(`HL API error: ${res.status}`);
         const fills = await res.json();
@@ -1050,7 +1059,7 @@ async function executeTool(name: string, input: any, wallet?: string, agentCtxId
         });
       }
       case 'get_pm_closed_positions': {
-        const res = await fetch(`${POLYMARKET_API_BASE}/positions?user=${input.walletAddress}&limit=${input.limit || 10}&offset=0`);
+        const res = await fetch(`${POLYMARKET_API_BASE}/positions?user=${input.walletAddress}&limit=${input.limit || 10}&offset=0`, { signal: AbortSignal.timeout(15_000) });
         if (!res.ok) throw new Error(`PM API error: ${res.status}`);
         const data = await res.json();
         const closed = (Array.isArray(data) ? data : []).filter((p: any) => {
@@ -1113,6 +1122,7 @@ async function executeTool(name: string, input: any, wallet?: string, agentCtxId
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ type: 'clearinghouseState', user: input.walletAddress }),
+          signal: AbortSignal.timeout(15_000),
         });
         if (!res.ok) throw new Error(`HL API error: ${res.status}`);
         const data = await res.json();
@@ -1184,6 +1194,7 @@ async function executeTool(name: string, input: any, wallet?: string, agentCtxId
               secret: apiKey,
               construct: { exchange: 'binancefutures', symbol: `${symbol.toUpperCase()}/USDT`, interval: timeframe, indicators: chunk },
             }),
+            signal: AbortSignal.timeout(15_000),
           });
           if (!res.ok) throw new Error(`TAAPI error ${res.status}: ${await res.text()}`);
           const data = await res.json() as { data?: any[] };
@@ -2329,7 +2340,18 @@ export async function POST(request: NextRequest) {
                   // Execute the tool (emitToStream lets tools push special events to the frontend)
                   const emitToStream = (event: any) => controller.enqueue(encoder.encode(JSON.stringify(event) + '\n'));
                   const isTradeApproved = /TRADE_APPROVED:/i.test(lastMsgText);
-                  const rawToolResult = await executeTool(currentToolName, parsedInput, walletLower, agentId, agentWalletAddress, emitToStream, isTradeApproved);
+                  // Keep the HTTP/2 stream alive during slow tool calls (e.g. Bankr polling can take
+                  // up to 2 minutes) — without periodic bytes, idle connections get dropped by
+                  // intermediary proxies/browsers (net::ERR_HTTP2_PING_FAILED).
+                  const heartbeat = setInterval(() => {
+                    controller.enqueue(encoder.encode(JSON.stringify({ type: 'heartbeat' }) + '\n'));
+                  }, 10_000);
+                  let rawToolResult: string;
+                  try {
+                    rawToolResult = await executeTool(currentToolName, parsedInput, walletLower, agentId, agentWalletAddress, emitToStream, isTradeApproved);
+                  } finally {
+                    clearInterval(heartbeat);
+                  }
 
                   // Classify execution tool results — Claude receives the classified message,
                   // never the raw JSON. Non-execution tools pass through unchanged.

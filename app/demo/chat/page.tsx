@@ -771,7 +771,12 @@ export default function ChatPage() {
       .filter(m => m.content.trim() && m.role !== 'action')
       .map(m => ({ role: m.role, content: m.content }));
 
-    try {
+    // Tracks whether any real content has streamed yet — used to decide whether a
+    // transport-level failure (dropped HTTP/2 connection, etc.) is safe to silently
+    // retry, versus one that happened mid-response where a retry could duplicate content.
+    let receivedAnyContent = false;
+
+    const attemptStream = async () => {
       const res = await fetch('/api/demo/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -781,7 +786,6 @@ export default function ChatPage() {
       if (!res.ok || !res.body) {
         const errData = await res.json().catch(() => ({ error: 'Unknown error' }));
         setMessages(prev => prev.map(m => m.id === agentMsgId ? { ...m, content: `Error: ${errData.error || 'Failed to get response'}` } : m));
-        setIsStreaming(false);
         return;
       }
 
@@ -798,7 +802,10 @@ export default function ChatPage() {
           if (!line.trim()) continue;
           try {
             const parsed = JSON.parse(line);
-            if (parsed.type === 'text') {
+            if (parsed.type === 'heartbeat') {
+              // Keep-alive ping from the server during slow tool calls — no UI action needed.
+            } else if (parsed.type === 'text') {
+              receivedAnyContent = true;
               setToolStatus(null);
               setMessages(prev => prev.map(m => m.id === agentMsgId ? { ...m, content: m.content + parsed.text } : m));
             } else if (parsed.type === 'hallucination_correction') {
@@ -853,8 +860,23 @@ export default function ChatPage() {
           } catch {}
         }
       }
+    };
+
+    try {
+      await attemptStream();
     } catch (err: any) {
-      setMessages(prev => prev.map(m => m.id === agentMsgId ? { ...m, content: `Connection error: ${err.message}` } : m));
+      if (!receivedAnyContent) {
+        // Connection dropped before any content arrived (e.g. a killed/stalled HTTP/2
+        // stream) — safe to silently retry once since nothing has been shown yet.
+        setToolStatus('Reconnecting...');
+        try {
+          await attemptStream();
+        } catch (retryErr: any) {
+          setMessages(prev => prev.map(m => m.id === agentMsgId ? { ...m, content: `Connection error: ${retryErr.message}. Please try again.` } : m));
+        }
+      } else {
+        setMessages(prev => prev.map(m => m.id === agentMsgId ? { ...m, content: m.content + `\n\n_Connection lost: ${err.message}. Please try again._` } : m));
+      }
     }
 
     setIsStreaming(false);
