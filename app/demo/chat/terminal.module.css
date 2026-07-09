@@ -165,8 +165,8 @@
 
 /* ═══ LEFT PANEL ═══ */
 .leftPanel {
-  width: 370px;
-  min-width: 370px;
+  width: 300px;
+  min-width: 300px;
   background: var(--bg1);
   border-right: 1px solid var(--border);
   display: flex;
