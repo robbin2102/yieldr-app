@@ -22,8 +22,16 @@ const POOL_MANAGER_BY_CHAIN: Partial<Record<EdgeChainId, string>> = {
   hood: '0x8366a39cc670b4001a1121b8f6a443a643e40951', // Doppler DEX on Robinhood Chain
   base: '0x498581ff718922c3f8e6a244956af099b2652b2b', // Uniswap V4 on Base
 };
-const SWAP_TOPIC = '0x40e9cecb9f5f1f1c5b9c97dec2917b7ee92e57ba5563708daca94dd84ad7112f';
+const SWAP_TOPIC    = '0x40e9cecb9f5f1f1c5b9c97dec2917b7ee92e57ba5563708daca94dd84ad7112f'; // Uniswap V4
+const V2_SWAP_TOPIC = '0xd78ad95fa46c994b6551d0da85fc275fe613ce37657fb8d5e3d130840159d822'; // Uniswap V2 / Virtuals FPair
 const TRANSFER_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
+
+// Virtuals Protocol bonding curve entry point on Base.
+// FFactory and FRouter are public vars on Bonding — fetch via:
+//   cast call 0x1A540088125d00dD3990f9dA45CA0859af4d3B01 "factory()(address)" --rpc-url https://mainnet.base.org
+//   cast call 0x1A540088125d00dD3990f9dA45CA0859af4d3B01 "router()(address)"  --rpc-url https://mainnet.base.org
+// (BaseScan readContract tab also works — no wallet required)
+const VIRTUALS_BONDING_BASE = '0x1a540088125d00dd3990f9da45ca0859af4d3b01';
 
 // Non-18-decimal tokens that may appear as reference legs.
 const KNOWN_DECIMALS: Record<string, number> = {
@@ -246,10 +254,77 @@ async function enrichUniswapV4Legs(
         }
       }
 
-      if (!enriched && swapLogs.length > 0) {
-        console.log(
-          `[edge:fetchTrades] ${chain} V4 ${candidate.direction} hash=${candidate.hash.slice(0, 10)} — ${swapLogs.length} Swap event(s) found but no amount matched (multi-hop or unsupported pool)`
+      // ── Fallback: Virtuals Protocol FPair (Uniswap V2-style) ────────────
+      // Virtuals FPair is a V2 clone where token0 = VIRTUAL, token1 = agent
+      // token. The relay bridge may buy/sell the agent token via FPair without
+      // touching the Uniswap V4 PoolManager, so the V4 Swap check above finds
+      // nothing. Detect via the V2 Swap event on any contract in the receipt.
+      if (!enriched && chain === 'base') {
+        const v2Logs = (receipt.logs ?? []).filter(
+          (log: any) => log.topics?.[0] === V2_SWAP_TOPIC
         );
+
+        for (const v2Log of v2Logs) {
+          if (enriched) break;
+          const d = (v2Log.data as string).slice(2);
+          const a0In  = BigInt('0x' + d.slice(0,   64));
+          const a1In  = BigInt('0x' + d.slice(64,  128));
+          const a0Out = BigInt('0x' + d.slice(128, 192));
+          const a1Out = BigInt('0x' + d.slice(192, 256));
+
+          const { direction, leg } = candidate;
+          if (leg.rawQty === BigInt(0)) continue;
+
+          if (direction === 'sell') {
+            for (const [soldAmt, rcvdAmt] of [[a0In, a0Out], [a0In, a1Out], [a1In, a0Out], [a1In, a1Out]] as [bigint, bigint][]) {
+              if (soldAmt === BigInt(0) || rcvdAmt === BigInt(0)) continue;
+              const diff = soldAmt > leg.rawQty ? soldAmt - leg.rawQty : leg.rawQty - soldAmt;
+              if (diff > leg.rawQty / BigInt(500)) continue; // 0.2%
+
+              const found = findReferenceTokenTransfer(receipt, leg.tokenAddress, rcvdAmt);
+              const refAddr = found?.tokenAddress ?? wethAddress;
+              if (!refAddr) break;
+              const refRawQty = found?.rawQty ?? rcvdAmt;
+              const refDecimals = found?.decimals ?? 18;
+              const refQty = Number(refRawQty) / 10 ** refDecimals;
+
+              synthetic.push({ hash: candidate.hash, from: poolManager, to: wallet, tokenAddress: refAddr, qty: refQty, rawQty: refRawQty, ts: leg.ts, blockNumber: leg.blockNumber });
+              console.log(`[edge:fetchTrades] ${chain} V2/Virtuals sell hash=${candidate.hash.slice(0, 10)} sold=${leg.qty.toFixed(4)} rcvd=${refQty.toFixed(8)} ${refAddr.slice(0, 10)}`);
+              enriched = true;
+              break;
+            }
+          } else {
+            // relay-buy: agent token received; VIRTUAL was paid cross-chain
+            // V2 Swap: amount_X_Out = agent token out (FPair → relay → wallet)
+            // Relay takes ~1% fee so wallet receives slightly less than FPair outputs.
+            for (const [boughtAmt, paidAmt] of [[a0Out, a0In], [a0Out, a1In], [a1Out, a0In], [a1Out, a1In]] as [bigint, bigint][]) {
+              if (boughtAmt === BigInt(0) || paidAmt === BigInt(0)) continue;
+              const diff = boughtAmt > leg.rawQty ? boughtAmt - leg.rawQty : leg.rawQty - boughtAmt;
+              if (diff > (leg.rawQty * BigInt(150)) / BigInt(10000)) continue; // 1.5%
+
+              const found = findReferenceTokenTransfer(receipt, leg.tokenAddress, paidAmt);
+              const refAddr = found?.tokenAddress ?? wethAddress;
+              if (!refAddr) break;
+              const refRawQty = found?.rawQty ?? paidAmt;
+              const refDecimals = found?.decimals ?? 18;
+              const refQty = Number(refRawQty) / 10 ** refDecimals;
+
+              synthetic.push({ hash: candidate.hash, from: wallet, to: poolManager, tokenAddress: refAddr, qty: refQty, rawQty: refRawQty, ts: leg.ts, blockNumber: leg.blockNumber });
+              console.log(`[edge:fetchTrades] ${chain} V2/Virtuals relay-buy hash=${candidate.hash.slice(0, 10)} rcvd=${leg.qty.toFixed(4)} paid=${refQty.toFixed(8)} ${refAddr.slice(0, 10)}`);
+              enriched = true;
+              break;
+            }
+          }
+        }
+      }
+
+      if (!enriched) {
+        const totalSwaps = swapLogs.length + (receipt.logs ?? []).filter((l: any) => l.topics?.[0] === V2_SWAP_TOPIC).length;
+        if (totalSwaps > 0) {
+          console.log(
+            `[edge:fetchTrades] ${chain} ${candidate.direction} hash=${candidate.hash.slice(0, 10)} — ${totalSwaps} Swap event(s) found but no amount matched`
+          );
+        }
       }
     }
   }

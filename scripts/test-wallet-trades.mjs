@@ -28,7 +28,8 @@ try {
 } catch { /* no .env.local — rely on shell env */ }
 
 const WALLET = (process.argv[2] || '0xCcC88a9d1B4ED6b0EABA998850414b24f1c315bE').toLowerCase();
-const SWAP_TOPIC = '0x40e9cecb9f5f1f1c5b9c97dec2917b7ee92e57ba5563708daca94dd84ad7112f';
+const SWAP_TOPIC    = '0x40e9cecb9f5f1f1c5b9c97dec2917b7ee92e57ba5563708daca94dd84ad7112f'; // Uniswap V4
+const V2_SWAP_TOPIC = '0xd78ad95fa46c994b6551d0da85fc275fe613ce37657fb8d5e3d130840159d822'; // Uniswap V2 / Virtuals FPair
 const BIT255 = 2n ** 255n;
 const TWO256 = 2n ** 256n;
 
@@ -158,12 +159,11 @@ async function trySwapEnrich(rpcUrl, poolManager, hash, tradeToken, tokenRawQty,
   const receipt = await rpc(rpcUrl, 'eth_getTransactionReceipt', [hash]).catch(() => null);
   if (!receipt) return { found: false, reason: 'receipt fetch failed', swapCount: 0 };
 
-  const swapLogs = receipt.logs.filter(
+  // ── Uniswap V4 PoolManager swap ────────────────────────────────────────────
+  const v4Logs = receipt.logs.filter(
     log => log.address?.toLowerCase() === poolManager && log.topics?.[0] === SWAP_TOPIC
   );
-  if (swapLogs.length === 0) return { found: false, reason: 'no Swap events from PoolManager', swapCount: 0 };
-
-  for (const log of swapLogs) {
+  for (const log of v4Logs) {
     const data = log.data.slice(2);
     const a0 = abiSigned('0x' + data.slice(0,  64));
     const a1 = abiSigned('0x' + data.slice(64, 128));
@@ -175,22 +175,53 @@ async function trySwapEnrich(rpcUrl, poolManager, hash, tradeToken, tokenRawQty,
         const diff = abs > tokenRawQty ? abs - tokenRawQty : tokenRawQty - abs;
         if (diff <= tokenRawQty / 500n) {
           const found = findRefTransfer(receipt, tradeToken, other);
-          return { found: true, refAmount: found?.rawQty ?? other, refToken: found?.tokenAddress ?? null };
+          return { found: true, refAmount: found?.rawQty ?? other, refToken: found?.tokenAddress ?? null, via: 'V4' };
         }
       } else {
-        // relay-buy: token received = positive amount
         if (check <= 0n || other >= 0n) continue;
         const diff = check > tokenRawQty ? check - tokenRawQty : tokenRawQty - check;
         if (diff <= tokenRawQty / 100n) {
           const refPaid = -other;
           const found = findRefTransfer(receipt, tradeToken, refPaid);
-          return { found: true, refAmount: found?.rawQty ?? refPaid, refToken: found?.tokenAddress ?? null };
+          return { found: true, refAmount: found?.rawQty ?? refPaid, refToken: found?.tokenAddress ?? null, via: 'V4' };
         }
       }
     }
   }
 
-  return { found: false, reason: `${swapLogs.length} Swap event(s) found, no amount match`, swapCount: swapLogs.length };
+  // ── Uniswap V2 / Virtuals FPair swap ──────────────────────────────────────
+  const v2Logs = receipt.logs.filter(log => log.topics?.[0] === V2_SWAP_TOPIC);
+  for (const log of v2Logs) {
+    const d = log.data.slice(2);
+    const a0In  = BigInt('0x' + d.slice(0,   64));
+    const a1In  = BigInt('0x' + d.slice(64,  128));
+    const a0Out = BigInt('0x' + d.slice(128, 192));
+    const a1Out = BigInt('0x' + d.slice(192, 256));
+
+    if (direction === 'sell') {
+      for (const [soldAmt, rcvdAmt] of [[a0In, a0Out],[a0In,a1Out],[a1In,a0Out],[a1In,a1Out]]) {
+        if (!soldAmt || !rcvdAmt) continue;
+        const diff = soldAmt > tokenRawQty ? soldAmt - tokenRawQty : tokenRawQty - soldAmt;
+        if (diff <= tokenRawQty / 500n) {
+          const found = findRefTransfer(receipt, tradeToken, rcvdAmt);
+          return { found: true, refAmount: found?.rawQty ?? rcvdAmt, refToken: found?.tokenAddress ?? null, via: 'V2/Virtuals' };
+        }
+      }
+    } else {
+      // relay-buy: 1.5% tolerance for relay fee on output
+      for (const [boughtAmt, paidAmt] of [[a0Out,a0In],[a0Out,a1In],[a1Out,a0In],[a1Out,a1In]]) {
+        if (!boughtAmt || !paidAmt) continue;
+        const diff = boughtAmt > tokenRawQty ? boughtAmt - tokenRawQty : tokenRawQty - boughtAmt;
+        if (diff <= tokenRawQty * 150n / 10000n) {
+          const found = findRefTransfer(receipt, tradeToken, paidAmt);
+          return { found: true, refAmount: found?.rawQty ?? paidAmt, refToken: found?.tokenAddress ?? null, via: 'V2/Virtuals' };
+        }
+      }
+    }
+  }
+
+  const total = v4Logs.length + v2Logs.length;
+  return { found: false, reason: total ? `${total} Swap event(s) found, no amount match` : 'no V4/V2 Swap events', swapCount: total };
 }
 
 // ─── per-chain analysis ───────────────────────────────────────────────────────
@@ -267,7 +298,7 @@ async function analyzeChain(chain, wallet) {
         matched++;
         const refAmt  = fmtEth(result.refAmount);
         const refLabel = result.refToken ? result.refToken.slice(0, 10) : chain.wethSymbol;
-        console.log(`  MATCH  ${hash.slice(0, 12)}  sold ${leg.qty.toFixed(6).padStart(16)} ${leg.symbol.padEnd(10)} → rcvd ${refAmt} ${refLabel}`);
+        console.log(`  MATCH[${result.via}]  ${hash.slice(0, 12)}  sold ${leg.qty.toFixed(6).padStart(16)} ${leg.symbol.padEnd(10)} → rcvd ${refAmt} ${refLabel}`);
       } else {
         unmatched++;
         console.log(`  MISS   ${hash.slice(0, 12)}  sold ${leg.qty.toFixed(6).padStart(16)} ${leg.symbol.padEnd(10)}   (${result.reason})`);
@@ -288,7 +319,7 @@ async function analyzeChain(chain, wallet) {
         matched++;
         const refAmt  = fmtEth(result.refAmount);
         const refLabel = result.refToken ? result.refToken.slice(0, 10) : chain.wethSymbol;
-        console.log(`  MATCH  ${hash.slice(0, 12)}  rcvd ${leg.qty.toFixed(6).padStart(16)} ${leg.symbol.padEnd(10)} ← paid ${refAmt} ${refLabel}`);
+        console.log(`  MATCH[${result.via}]  ${hash.slice(0, 12)}  rcvd ${leg.qty.toFixed(6).padStart(16)} ${leg.symbol.padEnd(10)} ← paid ${refAmt} ${refLabel}`);
       } else {
         unmatched++;
         console.log(`  MISS   ${hash.slice(0, 12)}  rcvd ${leg.qty.toFixed(6).padStart(16)} ${leg.symbol.padEnd(10)}   (${result.reason})`);
