@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useAccount } from 'wagmi';
 import { ConnectButton } from '@rainbow-me/rainbowkit';
 import { useRouter } from 'next/navigation';
@@ -15,6 +15,12 @@ const MARKETS: Array<{ id: MarketId; icon: string; name: string; disabled?: bool
 ];
 
 export default function LandingPage() {
+  // WalletConnect/RainbowKit touch localStorage during setup, which doesn't
+  // exist during Next's server-side render - gate all wallet-dependent
+  // rendering until after client mount, same pattern as app/demo/page.tsx.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+
   const { address, isConnected } = useAccount();
   const router = useRouter();
   const [selected, setSelected] = useState<MarketId[]>(['base', 'hood']);
@@ -25,6 +31,8 @@ export default function LandingPage() {
   };
 
   const canLaunch = selected.length > 0;
+
+  if (!mounted) return null;
 
   return (
     <div className={styles.page}>

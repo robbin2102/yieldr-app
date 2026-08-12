@@ -1,6 +1,6 @@
 import { getPublicClient, CHAINS, ChainNotSupportedError, effectiveLookbackDays, type EdgeChainId } from './chains';
 import { resolveBlockRangeForWindow } from './blockRange';
-import { getReferenceToken, hasReferenceTokens, REFERENCE_TOKENS } from './referenceTokens';
+import { getReferenceToken, hasReferenceTokens, REFERENCE_TOKENS, NATIVE_PSEUDO_ADDRESS } from './referenceTokens';
 import { getReferencePriceUsd, recordObservedTradePrice } from './priceService';
 import { scanTransfersViaLogs, getDecimals, getBlockTimestamp } from './logScanFallback';
 import type { TradeLeg } from './types';
@@ -35,7 +35,10 @@ async function fetchViaAlchemyEnhancedApi(
       const params: Record<string, unknown> = {
         fromBlock: fromBlockHex,
         toBlock: toBlockHex,
-        category: ['erc20'],
+        // 'external' = native ETH moved as tx.value, not an ERC20 Transfer log.
+        // Swap frontends routinely let a user trade "ETH" directly rather than
+        // WETH, so without this category, that leg of the swap is invisible.
+        category: ['erc20', 'external'],
         withMetadata: true,
         excludeZeroValue: true,
         maxCount: '0x3e8',
@@ -52,7 +55,8 @@ async function fetchViaAlchemyEnhancedApi(
       });
 
       for (const t of res?.transfers ?? []) {
-        const tokenAddress = t.rawContract?.address?.toLowerCase();
+        const isNative = t.category === 'external';
+        const tokenAddress = isNative ? NATIVE_PSEUDO_ADDRESS : t.rawContract?.address?.toLowerCase();
         if (!tokenAddress) continue;
         results.push({
           hash: t.hash,
@@ -102,6 +106,8 @@ async function fetchViaLogScan(
 export interface ExcludedTradeReason {
   count: number;
   reason: string;
+  /** A few example tx hashes for this reason, so it's checkable against a block explorer instead of taken on faith. */
+  sampleTxHashes: string[];
 }
 
 export interface FetchTradesResult {
@@ -148,7 +154,15 @@ export async function fetchWalletSwapLegs(chain: EdgeChainId, wallet: string): P
 
   const legsByToken = new Map<string, TradeLeg[]>();
   const excludedCounts = new Map<string, number>();
-  const bump = (reason: string) => excludedCounts.set(reason, (excludedCounts.get(reason) ?? 0) + 1);
+  const excludedSamples = new Map<string, string[]>();
+  const bump = (reason: string, hash?: string) => {
+    excludedCounts.set(reason, (excludedCounts.get(reason) ?? 0) + 1);
+    if (hash) {
+      const samples = excludedSamples.get(reason) ?? [];
+      if (samples.length < 5) samples.push(hash);
+      excludedSamples.set(reason, samples);
+    }
+  };
 
   const wethAddr = REFERENCE_TOKENS[chain].find((t) => t.symbol === 'WETH')?.address;
 
@@ -157,7 +171,10 @@ export async function fetchWalletSwapLegs(chain: EdgeChainId, wallet: string): P
   } else {
     for (const [hash, group] of byHash) {
       if (group.out.length !== 1 || group.in.length !== 1) {
-        bump('multi-leg swap not decoded (MVP handles single in/out swaps only)');
+        bump(
+          `unbalanced swap not decoded (${group.out.length} out-leg(s), ${group.in.length} in-leg(s) - MVP handles single in/out swaps only)`,
+          hash
+        );
         continue;
       }
       const out = group.out[0];
@@ -166,11 +183,11 @@ export async function fetchWalletSwapLegs(chain: EdgeChainId, wallet: string): P
       const inRef = getReferenceToken(chain, inn.tokenAddress);
 
       if (!outRef && !inRef) {
-        bump('token-to-token swap with no ETH/USDC leg - not priced');
+        bump('token-to-token swap with no ETH/USDC leg - not priced', hash);
         continue;
       }
       if (outRef && inRef) {
-        bump('reference-to-reference transfer (not a token trade)');
+        bump('reference-to-reference transfer (not a token trade)', hash);
         continue;
       }
 
@@ -179,13 +196,13 @@ export async function fetchWalletSwapLegs(chain: EdgeChainId, wallet: string): P
       const tokenLeg = outRef ? inn : out;
 
       if (refLeg.qty <= 0 || tokenLeg.qty <= 0) {
-        bump('zero-value leg');
+        bump('zero-value leg', hash);
         continue;
       }
 
       const refPriceUsd = await getReferencePriceUsd(chain, refToken.symbol, refLeg.ts, wethAddr);
       if (refPriceUsd <= 0) {
-        bump('could not price the reference-token leg');
+        bump('could not price the reference-token leg', hash);
         continue;
       }
 
@@ -210,7 +227,11 @@ export async function fetchWalletSwapLegs(chain: EdgeChainId, wallet: string): P
     }
   }
 
-  const excluded: ExcludedTradeReason[] = Array.from(excludedCounts, ([reason, count]) => ({ reason, count }));
+  const excluded: ExcludedTradeReason[] = Array.from(excludedCounts, ([reason, count]) => ({
+    reason,
+    count,
+    sampleTxHashes: excludedSamples.get(reason) ?? [],
+  }));
   for (const legs of legsByToken.values()) legs.sort((a, b) => a.ts.getTime() - b.ts.getTime());
 
   return { legsByToken, excluded, windowDays };

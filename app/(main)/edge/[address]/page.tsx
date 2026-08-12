@@ -19,7 +19,8 @@ interface PortfolioStage {
   winRate: number;
   tradeCount: number;
   roiPct: number;
-  excludedTrades: { count: number; reason: string }[];
+  excludedTrades: { count: number; reason: string; sampleTxHashes: string[] }[];
+  tokensTraded: { chain: string; address: string; symbol: string; legCount: number }[];
 }
 
 interface EntryBucket {
@@ -189,9 +190,23 @@ export default function EdgePage() {
         const p = evt.data as PortfolioStage;
         setPortfolio(p);
         pushFeed({ kind: 'log', tag: 'MATCH', text: `Realized ${fmtUsd(p.realizedPnlUsd)}, ${fmtPct(p.winRate * 100)} win rate, ${p.tradeCount} closed trades.` });
+        if (p.tokensTraded.length > 0) {
+          pushFeed({
+            kind: 'log',
+            tag: 'MATCH',
+            text: `Tokens seen: ${p.tokensTraded.map((t) => `${t.symbol} (${t.legCount} legs)`).join(', ')}`,
+          });
+        }
         if (p.excludedTrades.length > 0) {
           const total = p.excludedTrades.reduce((s, e) => s + e.count, 0);
-          pushFeed({ kind: 'log', tag: 'FLAG', text: `${total} trade(s) excluded: ${p.excludedTrades.map((e) => e.reason).join('; ')}` });
+          pushFeed({ kind: 'log', tag: 'FLAG', text: `${total} trade(s) excluded:` });
+          for (const e of p.excludedTrades) {
+            pushFeed({
+              kind: 'log',
+              tag: 'FLAG',
+              text: `  ${e.count}x ${e.reason}${e.sampleTxHashes.length ? ` — e.g. ${e.sampleTxHashes[0]}` : ''}`,
+            });
+          }
         }
         pushFeed({
           kind: 'bubble',

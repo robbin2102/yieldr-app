@@ -10,6 +10,8 @@ import { computeSizingCategory } from './sizingEngine';
 import { computeCompositeScore } from './compositeScore';
 import { buildConfidenceBlock } from './stats';
 import type { EdgeReport, ReconstructedPosition } from './types';
+import type { ExcludedTradeReason } from './fetchTrades';
+import type { TokenTraded } from './reconstruct';
 
 export type AnalysisStage = 'scan_start' | 'portfolio' | 'entry' | 'exit' | 'sizing' | 'composite' | 'done';
 export type StageCallback = (stage: AnalysisStage, data: unknown) => void;
@@ -40,6 +42,7 @@ export async function analyzeWallet(wallet: string, onStage?: StageCallback): Pr
   const allPositions = portfolios.flatMap((p) => p.positions);
   const excludedTrades = mergeExcluded(portfolios.flatMap((p) => p.excludedTrades));
   const currentHoldingsUsd = portfolios.reduce((s, p) => s + p.currentHoldingsUsd, 0);
+  const tokensTraded = portfolios.flatMap((p) => p.tokensTraded);
 
   const closedRaw = allPositions.filter((p) => !p.isOpen && !p.isDust && p.realizedPnlUsd !== null);
   const realizedPnlUsd = closedRaw.reduce((s, p) => s + (p.realizedPnlUsd ?? 0), 0);
@@ -55,6 +58,7 @@ export async function analyzeWallet(wallet: string, onStage?: StageCallback): Pr
     tradeCount: closedRaw.length,
     roiPct,
     excludedTrades,
+    tokensTraded,
   });
 
   // Enrichment does real IO (launch time, OHLC, point-in-time liquidity reads) per
@@ -111,10 +115,14 @@ export async function analyzeWallet(wallet: string, onStage?: StageCallback): Pr
   return report;
 }
 
-function mergeExcluded(items: { count: number; reason: string }[]): { count: number; reason: string }[] {
+function mergeExcluded(items: ExcludedTradeReason[]): ExcludedTradeReason[] {
   const counts = new Map<string, number>();
-  for (const i of items) counts.set(i.reason, (counts.get(i.reason) ?? 0) + i.count);
-  return Array.from(counts, ([reason, count]) => ({ reason, count }));
+  const samples = new Map<string, string[]>();
+  for (const i of items) {
+    counts.set(i.reason, (counts.get(i.reason) ?? 0) + i.count);
+    samples.set(i.reason, [...(samples.get(i.reason) ?? []), ...i.sampleTxHashes].slice(0, 5));
+  }
+  return Array.from(counts, ([reason, count]) => ({ reason, count, sampleTxHashes: samples.get(reason) ?? [] }));
 }
 
 async function persistReport(report: EdgeReport) {

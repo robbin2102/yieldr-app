@@ -128,7 +128,7 @@ export interface EdgeReport {
   wallet: string;
   chains: EdgeChainId[];
   analysisWindow: { start: Date; end: Date; tradesAnalyzed: number };
-  excludedTrades: { count: number; reason: string }[];
+  excludedTrades: { count: number; reason: string; sampleTxHashes: string[] }[];
   edgeScore: number;
   confidence: ConfidenceBlock;
   performance: {

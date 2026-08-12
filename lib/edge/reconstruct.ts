@@ -23,7 +23,13 @@ function reconstructPositionsForToken(
 ): { positions: ReconstructedPosition[]; excluded: ExcludedTradeReason[] } {
   const positions: ReconstructedPosition[] = [];
   const excludedCounts = new Map<string, number>();
-  const bump = (reason: string) => excludedCounts.set(reason, (excludedCounts.get(reason) ?? 0) + 1);
+  const excludedSamples = new Map<string, string[]>();
+  const bump = (reason: string, hash: string) => {
+    excludedCounts.set(reason, (excludedCounts.get(reason) ?? 0) + 1);
+    const samples = excludedSamples.get(reason) ?? [];
+    if (samples.length < 5) samples.push(hash);
+    excludedSamples.set(reason, samples);
+  };
 
   let currentLegs: TradeLeg[] = [];
   let heldQty = 0;
@@ -43,12 +49,12 @@ function reconstructPositionsForToken(
     }
 
     if (currentLegs.length === 0 || heldQty <= DUST_QTY_EPSILON) {
-      bump('sell with no matching buy (airdrop or transfer-in) - excluded from entry/exit analysis');
+      bump('sell with no matching buy (airdrop or transfer-in) - excluded from entry/exit analysis', leg.txHash);
       continue;
     }
 
     if (leg.qty > heldQty * 1.0001) {
-      bump('sold more than tracked buy quantity (partial airdrop/transfer-in) - size clipped to tracked amount');
+      bump('sold more than tracked buy quantity (partial airdrop/transfer-in) - size clipped to tracked amount', leg.txHash);
     }
     const sellQty = Math.min(leg.qty, heldQty);
     currentLegs.push({ ...leg, qty: sellQty, usd: sellQty * leg.priceUsd });
@@ -57,7 +63,14 @@ function reconstructPositionsForToken(
 
   closeOut(heldQty > DUST_QTY_EPSILON);
 
-  return { positions, excluded: Array.from(excludedCounts, ([reason, count]) => ({ reason, count })) };
+  return {
+    positions,
+    excluded: Array.from(excludedCounts, ([reason, count]) => ({
+      reason,
+      count,
+      sampleTxHashes: excludedSamples.get(reason) ?? [],
+    })),
+  };
 }
 
 function buildPosition(
@@ -103,11 +116,20 @@ function buildPosition(
   };
 }
 
+export interface TokenTraded {
+  chain: EdgeChainId;
+  address: string;
+  symbol: string;
+  legCount: number;
+}
+
 export interface WalletPortfolio {
   chain: EdgeChainId;
   positions: ReconstructedPosition[];
   excludedTrades: ExcludedTradeReason[];
   currentHoldingsUsd: number;
+  /** Every token that produced at least one priced leg - the answer to "which tokens were traded". */
+  tokensTraded: TokenTraded[];
 }
 
 /** Full pipeline for one chain: fetch legs -> classify per token -> FIFO reconstruct -> value open positions. */
@@ -116,22 +138,33 @@ export async function reconstructWalletPortfolio(chain: EdgeChainId, wallet: str
 
   const positions: ReconstructedPosition[] = [];
   const excludedCounts = new Map<string, number>();
-  for (const e of fetchExcluded) excludedCounts.set(e.reason, e.count);
-  const bump = (reason: string, count: number) =>
+  const excludedSamples = new Map<string, string[]>();
+  for (const e of fetchExcluded) {
+    excludedCounts.set(e.reason, e.count);
+    excludedSamples.set(e.reason, e.sampleTxHashes);
+  }
+  const bump = (reason: string, count: number, hashes: string[]) => {
     excludedCounts.set(reason, (excludedCounts.get(reason) ?? 0) + count);
+    const samples = excludedSamples.get(reason) ?? [];
+    excludedSamples.set(reason, [...samples, ...hashes].slice(0, 5));
+  };
 
   let currentHoldingsUsd = 0;
+  const tokensTraded: TokenTraded[] = [];
 
   for (const [tokenAddress, legs] of legsByToken) {
     const meta = await getTokenMetadata(chain, tokenAddress);
+    const symbol = meta?.symbol || tokenAddress.slice(0, 6);
+    tokensTraded.push({ chain, address: tokenAddress, symbol, legCount: legs.length });
+
     const { positions: tokenPositions, excluded } = reconstructPositionsForToken(
       chain,
       tokenAddress,
-      meta?.symbol || tokenAddress.slice(0, 6),
+      symbol,
       meta?.poolAddress ?? null,
       legs
     );
-    for (const e of excluded) bump(e.reason, e.count);
+    for (const e of excluded) bump(e.reason, e.count, e.sampleTxHashes);
 
     for (const pos of tokenPositions) {
       positions.push(pos);
@@ -148,7 +181,8 @@ export async function reconstructWalletPortfolio(chain: EdgeChainId, wallet: str
   const excludedTrades: ExcludedTradeReason[] = Array.from(excludedCounts, ([reason, count]) => ({
     reason,
     count,
+    sampleTxHashes: excludedSamples.get(reason) ?? [],
   }));
 
-  return { chain, positions, excludedTrades, currentHoldingsUsd };
+  return { chain, positions, excludedTrades, currentHoldingsUsd, tokensTraded };
 }

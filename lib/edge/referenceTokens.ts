@@ -18,8 +18,17 @@ export interface ReferenceToken {
   isStable: boolean;
 }
 
+/**
+ * Sentinel address for native ETH movements (sent as tx.value, not an
+ * ERC20 Transfer log) - many swap frontends let you trade "ETH" directly
+ * rather than WETH, so without this, that side of the swap is invisible
+ * to a Transfer-log-only scan and the whole trade looks unbalanced.
+ */
+export const NATIVE_PSEUDO_ADDRESS = '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee';
+
 export const REFERENCE_TOKENS: Record<EdgeChainId, ReferenceToken[]> = {
   base: [
+    { address: NATIVE_PSEUDO_ADDRESS, symbol: 'ETH', isStable: false },
     { address: '0x4200000000000000000000000000000000000006', symbol: 'WETH', isStable: false },
     { address: '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913', symbol: 'USDC', isStable: true },
   ],
@@ -28,8 +37,6 @@ export const REFERENCE_TOKENS: Record<EdgeChainId, ReferenceToken[]> = {
   ],
   solana: [],
 };
-
-export const NATIVE_PSEUDO_ADDRESS = '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee';
 
 export function getReferenceToken(chain: EdgeChainId, address: string): ReferenceToken | null {
   const lower = address.toLowerCase();

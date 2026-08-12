@@ -100,7 +100,7 @@ const EdgeReportSchema = new Schema(
       tradesAnalyzed: { type: Number, required: true },
     },
     excludedTrades: {
-      type: [{ count: Number, reason: String, _id: false }],
+      type: [{ count: Number, reason: String, sampleTxHashes: [String], _id: false }],
       default: [],
     },
     edgeScore: { type: Number, required: true },
