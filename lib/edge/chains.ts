@@ -85,7 +85,13 @@ export function getPublicClient(chain: EdgeChainId): PublicClient {
   }
   const cached = clientCache.get(chain);
   if (cached) return cached;
-  const client = createPublicClient({ chain: cfg.viemChain, transport: http(cfg.rpcUrl) });
+  // retryCount/retryDelay covers transient 429s from a fresh/low-tier Alchemy
+  // app - every call site (getBlock, getLogs, readContract, ...) benefits
+  // since they all go through this one transport.
+  const client = createPublicClient({
+    chain: cfg.viemChain,
+    transport: http(cfg.rpcUrl, { retryCount: 5, retryDelay: 1000 }),
+  });
   clientCache.set(chain, client);
   return client;
 }
