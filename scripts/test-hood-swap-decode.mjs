@@ -52,11 +52,11 @@ function hex2dec(hex) {
   return BigInt(hex);
 }
 
-function toSigned128(hex) {
-  // int128 from hex data field (padded to 32 bytes)
+function toSignedInt(hex) {
+  // ABI encodes int128 sign-extended into a 32-byte (256-bit) slot.
+  // Must check the 256-bit sign bit, not the 128-bit one.
   const u = BigInt(hex);
-  const MAX_INT128 = 2n ** 127n;
-  return u >= MAX_INT128 ? u - 2n ** 128n : u;
+  return u >= 2n ** 255n ? u - 2n ** 256n : u;
 }
 
 function fmt(bigint, decimals) {
@@ -118,52 +118,72 @@ async function main() {
   );
 
   console.log(`\n=== PoolManager Swap events (${swaps.length} found) ===`);
+  let matched = false;
   for (const log of swaps) {
     const poolId = log.topics[1];
     const sender = '0x' + log.topics[2].slice(26);
 
     // data = amount0 (int128, 32 bytes) | amount1 (int128, 32 bytes) | sqrtPrice | liquidity | tick | fee
+    // ABI sign-extends int128 into a 256-bit slot — use toSignedInt (not 128-bit threshold).
     const data = log.data.slice(2); // remove 0x
-    const amount0 = toSigned128('0x' + data.slice(0, 64));
-    const amount1 = toSigned128('0x' + data.slice(64, 128));
+    const amount0 = toSignedInt('0x' + data.slice(0, 64));
+    const amount1 = toSignedInt('0x' + data.slice(64, 128));
 
-    // WETH is token0 (smaller address), so amount0 = WETH, amount1 = token
-    const wethAmount = amount0;    // positive = pool received WETH, negative = pool sent WETH
-    const tokenAmount = amount1;   // positive = pool received token, negative = pool sent token
+    // In V4 Swap events (from caller/sender perspective):
+    //   positive amount = caller RECEIVES this token from pool
+    //   negative amount = caller PAYS this token to pool
+    // For a SELL of tokenX for WETH: amount_tokenX < 0, amount_WETH > 0
 
     console.log(`\n  Pool: ${poolId.slice(0, 10)}...`);
     console.log(`  Sender: ${sender}`);
-    console.log(`  amount0 (WETH):  ${fmt(wethAmount, 18)} WETH`);
-    console.log(`  amount1 (token): ${fmt(tokenAmount, 18)} (raw units, adjust for token decimals)`);
+    console.log(`  amount0: ${fmt(amount0, 18)} (raw, 18-decimal display)`);
+    console.log(`  amount1: ${fmt(amount1, 18)} (raw, 18-decimal display)`);
 
-    // Match against outgoing transfers
-    const absToken = tokenAmount < 0n ? -tokenAmount : tokenAmount;
-    const matchedOut = outgoing.find(t => {
-      const outAmt = hex2dec(t.data);
-      const diff = outAmt > absToken ? outAmt - absToken : absToken - outAmt;
-      return diff < outAmt / 1000n; // within 0.1%
-    });
+    // Try to match either amount against outgoing wallet transfers.
+    // Negative amounts = tokens the caller paid to pool = candidate for "wallet sold X"
+    for (const [amtLabel, amt, wethAmt] of [
+      ['amount1', amount1, amount0],
+      ['amount0', amount0, amount1],
+    ]) {
+      if (amt >= 0n) continue; // we want the negative (paid) side
+      const absPaid = -amt;
+      const absWeth = wethAmt < 0n ? -wethAmt : wethAmt;
 
-    if (matchedOut) {
-      const tokenAddr = matchedOut.address.toLowerCase();
-      const absWeth = wethAmount < 0n ? -wethAmount : wethAmount;
-      console.log(`\n  *** MATCH: This Swap corresponds to wallet's outgoing transfer of token ${tokenAddr}`);
-      console.log(`  Wallet sold:     ${fmt(tokenAmount < 0n ? -tokenAmount : tokenAmount, 18)} units of ${tokenAddr.slice(0,10)}...`);
-      console.log(`  WETH exchanged:  ${fmt(absWeth, 18)} WETH (gross, before fees)`);
-      const usdEstimate = Number(absWeth) / 1e18 * 1888;
-      console.log(`  USD estimate:    ~$${usdEstimate.toFixed(4)} (at $1888/ETH)`);
-    } else {
-      console.log('  (no match with outgoing wallet transfers)');
+      const matchedOut = outgoing.find(t => {
+        const outAmt = hex2dec(t.data);
+        if (outAmt === 0n) return false;
+        const diff = outAmt > absPaid ? outAmt - absPaid : absPaid - outAmt;
+        return diff <= outAmt / 500n; // within 0.2%
+      });
+
+      if (matchedOut) {
+        matched = true;
+        const tokenAddr = matchedOut.address.toLowerCase();
+        const isWethToken0 = amtLabel === 'amount1'; // if we matched amount1 as sold, WETH is amount0
+        console.log(`\n  *** MATCH (${amtLabel} = sold token) ***`);
+        console.log(`  Token sold:   ${tokenAddr}  amount=${absPaid}`);
+        console.log(`  WETH side:    ${fmt(wethAmt, 18)} WETH (positive = wallet receives)`);
+        console.log(`  WETH in ETH:  ${(Number(absWeth) / 1e18).toFixed(8)} ETH`);
+        const ethPrice = 1888;
+        console.log(`  USD estimate: ~$${(Number(absWeth) / 1e18 * ethPrice).toFixed(4)} (at $${ethPrice}/ETH)`);
+        console.log(`  Implied price per token unit: ${(Number(absWeth) / Number(absPaid)).toExponential(4)} WETH/unit`);
+      }
+    }
+    if (!matched) {
+      console.log('  (no match with outgoing wallet transfers for this Swap event)');
     }
   }
 
   // 5. Summary
   console.log('\n=== SUMMARY ===');
-  if (outgoing.length > 0 && swaps.length > 0) {
-    console.log('Approach: Swap event decoding CAN reconstruct this trade.');
-    console.log('Next step: implement PoolManager Swap event scanning for HOOD.');
+  if (matched) {
+    console.log('SUCCESS: PoolManager Swap event decoding CAN reconstruct this HOOD trade.');
+    console.log('The outgoing Transfer + Swap event together give us tokenOut, amountOut, WETHreceived, and USD value.');
+    console.log('Next: implement this in fetchTrades.ts for HOOD wallets.');
+  } else if (outgoing.length > 0 && swaps.length > 0) {
+    console.log('Swap events found but no amount match — check token decimals or matching tolerance.');
   } else if (outgoing.length > 0 && swaps.length === 0) {
-    console.log('Outgoing visible but no Swap events found — check PoolManager address.');
+    console.log('Outgoing visible but no Swap events from PoolManager — check POOL_MANAGER address.');
   } else {
     console.log('Could not extract trade data from this approach.');
   }
