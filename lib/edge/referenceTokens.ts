@@ -7,14 +7,20 @@ import type { EdgeChainId } from './chains';
  * token<->ETH or token<->stable, so this covers the overwhelming majority
  * of trades without needing a full multi-hop router decoder.
  *
- * HOOD's DEX ecosystem (router/pool factory, wrapped-native + stable
- * addresses) is not yet known to this codebase - the empty list below
- * means HOOD swaps land in `excludedTrades` with a clear reason until
- * those addresses are supplied, rather than silently mis-pricing them.
+ * HOOD's wrapped-native (WETH) and stable (USDG) addresses are wired in
+ * below. Note this only gets HOOD swaps *classified* as trades - actually
+ * pricing a WETH-denominated one still depends on GeckoTerminal indexing
+ * HOOD's DEX pools, which it does not yet (see geckoterminal.ts). USDG
+ * trades price immediately since stables short-circuit to $1 without
+ * needing any pool lookup - that's the one HOOD path that's fully live
+ * today. WETH-denominated HOOD trades will surface as "could not price
+ * the reference-token leg" until GeckoTerminal (or another source) adds
+ * HOOD support - an honest, specific exclusion instead of a blanket
+ * "not configured" one.
  */
 export interface ReferenceToken {
   address: string; // lowercase
-  symbol: 'ETH' | 'WETH' | 'USDC';
+  symbol: 'ETH' | 'WETH' | 'USDC' | 'USDG';
   isStable: boolean;
 }
 
@@ -33,7 +39,9 @@ export const REFERENCE_TOKENS: Record<EdgeChainId, ReferenceToken[]> = {
     { address: '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913', symbol: 'USDC', isStable: true },
   ],
   hood: [
-    // TBD - needs Robinhood Chain's wrapped-native + stable token addresses.
+    { address: NATIVE_PSEUDO_ADDRESS, symbol: 'ETH', isStable: false },
+    { address: '0x0bd7d308f8e1639fab988df18a8011f41eacad73', symbol: 'WETH', isStable: false },
+    { address: '0x5fc5360d0400a0fd4f2af552add042d716f1d168', symbol: 'USDG', isStable: true },
   ],
   solana: [],
 };

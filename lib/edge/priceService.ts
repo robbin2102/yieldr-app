@@ -183,11 +183,11 @@ export function peakPriceInWindow(candles: Candle[], fallback: number | null): n
  */
 export async function getReferencePriceUsd(
   chain: EdgeChainId,
-  symbol: 'ETH' | 'WETH' | 'USDC',
+  symbol: 'ETH' | 'WETH' | 'USDC' | 'USDG',
   at: Date,
   wethAddress?: string
 ): Promise<number> {
-  if (symbol === 'USDC') return 1;
+  if (symbol === 'USDC' || symbol === 'USDG') return 1;
   if (!wethAddress) return 0;
 
   const meta = await getTokenMetadata(chain, wethAddress);

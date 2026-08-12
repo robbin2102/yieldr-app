@@ -37,10 +37,15 @@ async function fetchViaAlchemyEnhancedApi(
       const params: Record<string, unknown> = {
         fromBlock: fromBlockHex,
         toBlock: toBlockHex,
-        // 'external' = native ETH moved as tx.value, not an ERC20 Transfer log.
-        // Swap frontends routinely let a user trade "ETH" directly rather than
-        // WETH, so without this category, that leg of the swap is invisible.
-        category: ['erc20', 'external'],
+        // 'external' = native ETH moved as tx.value (wallet paying a router
+        // directly). 'internal' = native ETH moved via an internal contract
+        // call within the tx trace - e.g. a router unwrapping WETH and
+        // sending ETH back to the wallet on a sell. A swap frontend can
+        // return ETH either way; requesting only 'external' made every
+        // sell-for-ETH (or buy-with-ETH routed through an intermediate
+        // contract) look like a lone unbalanced leg, since the ETH side
+        // never showed up at all.
+        category: ['erc20', 'external', 'internal'],
         withMetadata: true,
         excludeZeroValue: true,
         maxCount: '0x3e8',
@@ -58,7 +63,7 @@ async function fetchViaAlchemyEnhancedApi(
 
       let skippedNoAddress = 0;
       for (const t of res?.transfers ?? []) {
-        const isNative = t.category === 'external';
+        const isNative = t.category === 'external' || t.category === 'internal';
         const tokenAddress = isNative ? NATIVE_PSEUDO_ADDRESS : t.rawContract?.address?.toLowerCase();
         if (!tokenAddress) {
           skippedNoAddress++;
