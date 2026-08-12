@@ -11,14 +11,149 @@ interface NormalizedTransfer {
   to: string;
   tokenAddress: string;
   qty: number;
+  /** Raw on-chain token units (before decimal division). Used for exact Swap-event matching on HOOD. */
+  rawQty: bigint;
   ts: Date;
   blockNumber: bigint;
 }
 
+// HOOD/Doppler DEX constants for Swap event decoding
+const HOOD_POOL_MANAGER = '0x8366a39cc670b4001a1121b8f6a443a643e40951';
+const SWAP_TOPIC = '0x40e9cecb9f5f1f1c5b9c97dec2917b7ee92e57ba5563708daca94dd84ad7112f';
+
+const _BIT255 = BigInt(2) ** BigInt(255);
+const _TWO256 = BigInt(2) ** BigInt(256);
+
+/**
+ * Decode a 32-byte ABI-encoded int128/int256 slot. ABI sign-extends int128
+ * into a full 256-bit slot, so the sign bit is bit 255, not bit 127.
+ */
+function abiSignedInt(hex: string): bigint {
+  const u = BigInt(hex);
+  return u >= _BIT255 ? u - _TWO256 : u;
+}
+
+/**
+ * On HOOD, Doppler DEX routes swaps through RobinHoodSettler which never
+ * sends tokens back to the wallet address directly. The only on-chain record
+ * of the WETH received is in the PoolManager's Swap event. This function:
+ *  1. Identifies txs with an outgoing transfer but no incoming transfer (the
+ *     Doppler trade pattern).
+ *  2. Fetches the tx receipt for each such tx.
+ *  3. Finds the PoolManager Swap event where one signed amount matches the
+ *     outgoing raw token amount (within 0.2%).
+ *  4. Returns synthetic NormalizedTransfer records for the WETH "in" leg so
+ *     the existing 1-out + 1-in matching logic can price the trade normally.
+ */
+async function enrichHoodDopplerLegs(
+  client: any,
+  wallet: string,
+  transfers: NormalizedTransfer[]
+): Promise<NormalizedTransfer[]> {
+  const wethAddress = REFERENCE_TOKENS['hood'].find((t) => t.symbol === 'WETH')?.address;
+  if (!wethAddress) return [];
+
+  // Index by hash to find 1-out-0-in pattern
+  const byHash = new Map<string, { out: NormalizedTransfer[]; in: NormalizedTransfer[] }>();
+  for (const t of transfers) {
+    const g = byHash.get(t.hash) ?? { out: [], in: [] };
+    if (t.from === wallet) g.out.push(t);
+    if (t.to === wallet) g.in.push(t);
+    byHash.set(t.hash, g);
+  }
+
+  const candidates = Array.from(byHash.entries())
+    .filter(([, g]) => g.out.length === 1 && g.in.length === 0)
+    .map(([hash, g]) => ({ hash, out: g.out[0] }));
+
+  if (candidates.length === 0) return [];
+
+  console.log(`[edge:fetchTrades] hood enriching ${candidates.length} Doppler trade(s) via PoolManager Swap events`);
+
+  // Fetch receipts in parallel (capped to avoid overwhelming RPC)
+  const BATCH = 10;
+  const synthetic: NormalizedTransfer[] = [];
+
+  for (let i = 0; i < candidates.length; i += BATCH) {
+    const batch = candidates.slice(i, i + BATCH);
+    const receipts = await Promise.all(
+      batch.map(({ hash }) =>
+        client.request({ method: 'eth_getTransactionReceipt', params: [hash] }).catch(() => null)
+      )
+    );
+
+    for (let j = 0; j < batch.length; j++) {
+      const { hash, out } = batch[j];
+      const receipt: any = receipts[j];
+      if (!receipt) continue;
+
+      const swapLogs = (receipt.logs ?? []).filter(
+        (log: any) =>
+          log.address?.toLowerCase() === HOOD_POOL_MANAGER && log.topics?.[0] === SWAP_TOPIC
+      );
+
+      let enriched = false;
+      for (const swapLog of swapLogs) {
+        if (enriched) break;
+        const data = (swapLog.data as string).slice(2);
+        const amount0 = abiSignedInt('0x' + data.slice(0, 64));
+        const amount1 = abiSignedInt('0x' + data.slice(64, 128));
+
+        // The settler "pays" the sold token to the pool (negative) and
+        // "receives" WETH from the pool (positive). Try both orderings.
+        for (const [paidAmt, receivedAmt] of [
+          [amount0, amount1],
+          [amount1, amount0],
+        ] as [bigint, bigint][]) {
+          if (paidAmt >= BigInt(0) || receivedAmt <= BigInt(0)) continue;
+          const absPaid = -paidAmt;
+          if (out.rawQty === BigInt(0)) continue;
+
+          // Match within 0.2%
+          const diff = absPaid > out.rawQty ? absPaid - out.rawQty : out.rawQty - absPaid;
+          if (diff > out.rawQty / BigInt(500)) continue;
+
+          const wethQty = Number(receivedAmt) / 1e18;
+          synthetic.push({
+            hash,
+            from: HOOD_POOL_MANAGER,
+            to: wallet,
+            tokenAddress: wethAddress,
+            qty: wethQty,
+            rawQty: receivedAmt,
+            ts: out.ts,
+            blockNumber: out.blockNumber,
+          });
+          console.log(
+            `[edge:fetchTrades] hood Doppler trade decoded hash=${hash.slice(0, 10)} sold=${out.qty.toFixed(4)} ${
+              out.tokenAddress.slice(0, 10)
+            } received=${wethQty.toFixed(8)} WETH`
+          );
+          enriched = true;
+          break;
+        }
+      }
+
+      if (!enriched) {
+        console.log(
+          `[edge:fetchTrades] hood Doppler trade hash=${hash.slice(0, 10)} has no matching Swap event (hook-only or unsupported pattern)`
+        );
+      }
+    }
+  }
+
+  return synthetic;
+}
+
 /**
  * Alchemy's enhanced `alchemy_getAssetTransfers` - indexed, paginated,
- * decimal-adjusted, one call per direction. Only available on chains
- * Alchemy has fully onboarded; not assumed to work on HOOD.
+ * decimal-adjusted, one call per direction.
+ *
+ * Note: HOOD (robinhood-mainnet.g.alchemy.com) does not support the
+ * 'internal' category - using it returns a hard error. Only 'erc20' and
+ * 'external' are requested for HOOD; 'internal' is used on Base where it
+ * catches ETH returned via internal contract calls (e.g. router unwrapping
+ * WETH on a sell).
  */
 async function fetchViaAlchemyEnhancedApi(
   chain: EdgeChainId,
@@ -29,6 +164,9 @@ async function fetchViaAlchemyEnhancedApi(
   const client = getPublicClient(chain);
   const results: NormalizedTransfer[] = [];
 
+  // HOOD doesn't support 'internal' transfers in alchemy_getAssetTransfers
+  const category = chain === 'hood' ? ['erc20', 'external'] : ['erc20', 'external', 'internal'];
+
   for (const direction of ['from', 'to'] as const) {
     let pageKey: string | undefined;
     let pages = 0;
@@ -37,15 +175,7 @@ async function fetchViaAlchemyEnhancedApi(
       const params: Record<string, unknown> = {
         fromBlock: fromBlockHex,
         toBlock: toBlockHex,
-        // 'external' = native ETH moved as tx.value (wallet paying a router
-        // directly). 'internal' = native ETH moved via an internal contract
-        // call within the tx trace - e.g. a router unwrapping WETH and
-        // sending ETH back to the wallet on a sell. A swap frontend can
-        // return ETH either way; requesting only 'external' made every
-        // sell-for-ETH (or buy-with-ETH routed through an intermediate
-        // contract) look like a lone unbalanced leg, since the ETH side
-        // never showed up at all.
-        category: ['erc20', 'external', 'internal'],
+        category,
         withMetadata: true,
         excludeZeroValue: true,
         maxCount: '0x3e8',
@@ -54,8 +184,6 @@ async function fetchViaAlchemyEnhancedApi(
       };
       if (pageKey) params.pageKey = pageKey;
 
-      // alchemy_getAssetTransfers is an Alchemy-specific extension, not part
-      // of viem's typed RPC surface - cast is required to call it.
       const res: any = await (client as any).request({
         method: 'alchemy_getAssetTransfers',
         params: [params],
@@ -69,12 +197,21 @@ async function fetchViaAlchemyEnhancedApi(
           skippedNoAddress++;
           continue;
         }
+        // rawContract.value is the raw hex token amount before decimal adjustment.
+        // For native transfers Alchemy doesn't populate rawContract, so fall back
+        // to converting the decimal value to wei.
+        const rawHex: string | undefined = t.rawContract?.value;
+        const rawQty = rawHex
+          ? BigInt(rawHex)
+          : BigInt(Math.round((Number(t.value ?? 0)) * 1e18));
+
         results.push({
           hash: t.hash,
           from: t.from?.toLowerCase(),
           to: t.to?.toLowerCase(),
           tokenAddress,
           qty: Number(t.value ?? 0),
+          rawQty,
           ts: t.metadata?.blockTimestamp ? new Date(t.metadata.blockTimestamp) : new Date(),
           blockNumber: BigInt(t.blockNum ?? '0x0'),
         });
@@ -106,12 +243,14 @@ async function fetchViaLogScan(
     all.map(async (t) => {
       const decimals = await getDecimals(client, t.tokenAddress as `0x${string}`);
       const ts = await getBlockTimestamp(client, t.blockNumber);
+      const rawQty = BigInt(t.rawValue ?? 0);
       return {
         hash: t.hash,
         from: t.from,
         to: t.to,
         tokenAddress: t.tokenAddress,
-        qty: Number(t.rawValue) / 10 ** decimals,
+        qty: Number(rawQty) / 10 ** decimals,
+        rawQty,
         ts,
         blockNumber: t.blockNumber,
       };
@@ -160,12 +299,6 @@ export async function fetchWalletSwapLegs(chain: EdgeChainId, wallet: string): P
     );
     fetchPath = 'alchemy-enhanced';
   } catch (err) {
-    // This fallback has NO native-ETH support (see fetchViaLogScan) - any
-    // swap where ETH moved as tx.value rather than a WETH Transfer will end
-    // up as a lone unbalanced leg once we get here. Logging the real error
-    // (previously swallowed) so a silent Alchemy failure - wrong method,
-    // rate limit, non-Alchemy RPC URL - is visible instead of looking like
-    // a data problem with the wallet itself.
     console.error(
       `[edge:fetchTrades] ${chain} alchemy_getAssetTransfers FAILED, falling back to log-scan (NO native-ETH support): ${
         err instanceof Error ? err.message : String(err)
@@ -181,6 +314,15 @@ export async function fetchWalletSwapLegs(chain: EdgeChainId, wallet: string): P
       transfers.length - nativeCount
     }`
   );
+
+  // HOOD/Doppler trades settle WETH into RobinHoodSettler, never back to the
+  // wallet address directly. The PoolManager's Swap event is the only on-chain
+  // record of what WETH was received. Inject synthetic WETH in-legs so the
+  // standard 1-out + 1-in matching below can price these trades normally.
+  if (chain === 'hood') {
+    const enriched = await enrichHoodDopplerLegs(client, walletLower, transfers);
+    if (enriched.length > 0) transfers = [...transfers, ...enriched];
+  }
 
   const byHash = new Map<string, { out: NormalizedTransfer[]; in: NormalizedTransfer[] }>();
   for (const t of transfers) {
