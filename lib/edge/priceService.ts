@@ -183,21 +183,21 @@ export function peakPriceInWindow(candles: Candle[], fallback: number | null): n
  */
 export async function getReferencePriceUsd(
   chain: EdgeChainId,
-  symbol: 'ETH' | 'WETH' | 'USDC' | 'USDG',
+  symbol: 'ETH' | 'WETH' | 'USDC' | 'USDG' | 'VIRTUAL',
   at: Date,
-  wethAddress?: string
+  refAddress?: string
 ): Promise<number> {
   if (symbol === 'USDC' || symbol === 'USDG') return 1;
-  if (!wethAddress) return 0;
+  if (!refAddress) return 0;
 
-  const meta = await getTokenMetadata(chain, wethAddress);
+  const meta = await getTokenMetadata(chain, refAddress);
   if (!meta?.poolAddress) return 0;
 
   const windowStart = new Date(at.getTime() - 20 * 60 * 1000);
   const windowEnd = new Date(at.getTime() + 20 * 60 * 1000);
   const { candles } = await getOhlcWindow(chain, meta.poolAddress, windowStart, windowEnd);
   if (candles.length === 0) {
-    const live = await getCurrentPriceUsd(chain, wethAddress);
+    const live = await getCurrentPriceUsd(chain, refAddress);
     return live.priceUsd ?? 0;
   }
 

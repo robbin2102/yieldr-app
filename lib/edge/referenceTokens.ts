@@ -20,7 +20,7 @@ import type { EdgeChainId } from './chains';
  */
 export interface ReferenceToken {
   address: string; // lowercase
-  symbol: 'ETH' | 'WETH' | 'USDC' | 'USDG';
+  symbol: 'ETH' | 'WETH' | 'USDC' | 'USDG' | 'VIRTUAL';
   isStable: boolean;
 }
 
@@ -37,6 +37,7 @@ export const REFERENCE_TOKENS: Record<EdgeChainId, ReferenceToken[]> = {
     { address: NATIVE_PSEUDO_ADDRESS, symbol: 'ETH', isStable: false },
     { address: '0x4200000000000000000000000000000000000006', symbol: 'WETH', isStable: false },
     { address: '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913', symbol: 'USDC', isStable: true },
+    { address: '0x0b3e328455c4059eeb9e3f84b5543f74e24e7e1b', symbol: 'VIRTUAL', isStable: false },
   ],
   hood: [
     { address: NATIVE_PSEUDO_ADDRESS, symbol: 'ETH', isStable: false },

@@ -120,6 +120,29 @@ async function fetchTransfers(chainName, rpcUrl, wallet, fromHex, toHex, categor
 
 // ─── Swap event matching ──────────────────────────────────────────────────────
 
+const TRANSFER_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
+
+/**
+ * Find the ERC20 Transfer event in the receipt whose amount is closest to
+ * expectedRawQty (within 2%), excluding the known trade token. Returns the
+ * token address and amount, or null if no match.
+ */
+function findRefTransfer(receipt, excludeToken, expectedRawQty) {
+  const exclude = excludeToken.toLowerCase();
+  let best = null;
+  for (const log of receipt.logs) {
+    if (log.topics?.[0] !== TRANSFER_TOPIC) continue;
+    const tokenAddr = log.address?.toLowerCase();
+    if (!tokenAddr || tokenAddr === exclude) continue;
+    const amt = BigInt(log.data);
+    if (amt <= 0n) continue;
+    const diff = amt > expectedRawQty ? amt - expectedRawQty : expectedRawQty - amt;
+    if (diff > expectedRawQty * 200n / 10000n) continue; // 2% tolerance
+    if (!best || diff < best.diff) best = { tokenAddress: tokenAddr, rawQty: amt, diff };
+  }
+  return best ? { tokenAddress: best.tokenAddress, rawQty: best.rawQty } : null;
+}
+
 /**
  * Fetch the tx receipt and try to find a PoolManager Swap event whose signed
  * amount matches tokenRawQty.
@@ -128,10 +151,10 @@ async function fetchTransfers(chainName, rpcUrl, wallet, fromHex, toHex, categor
  * direction = 'buy'   → token was received from pool (positive amount), match within 1%
  *                        (relay bridge takes a fee, so tolerance is wider)
  *
- * Returns: { found: true, wethAmount: bigint (always positive) }
+ * Returns: { found: true, refAmount: bigint (always positive), refToken: string|null }
  *        | { found: false, reason: string, swapCount: number }
  */
-async function trySwapEnrich(rpcUrl, poolManager, hash, tokenRawQty, direction) {
+async function trySwapEnrich(rpcUrl, poolManager, hash, tradeToken, tokenRawQty, direction) {
   const receipt = await rpc(rpcUrl, 'eth_getTransactionReceipt', [hash]).catch(() => null);
   if (!receipt) return { found: false, reason: 'receipt fetch failed', swapCount: 0 };
 
@@ -150,12 +173,19 @@ async function trySwapEnrich(rpcUrl, poolManager, hash, tokenRawQty, direction) 
         if (check >= 0n || other <= 0n) continue;
         const abs  = -check;
         const diff = abs > tokenRawQty ? abs - tokenRawQty : tokenRawQty - abs;
-        if (diff <= tokenRawQty / 500n) return { found: true, wethAmount: other };
+        if (diff <= tokenRawQty / 500n) {
+          const found = findRefTransfer(receipt, tradeToken, other);
+          return { found: true, refAmount: found?.rawQty ?? other, refToken: found?.tokenAddress ?? null };
+        }
       } else {
         // relay-buy: token received = positive amount
         if (check <= 0n || other >= 0n) continue;
         const diff = check > tokenRawQty ? check - tokenRawQty : tokenRawQty - check;
-        if (diff <= tokenRawQty / 100n) return { found: true, wethAmount: -other };
+        if (diff <= tokenRawQty / 100n) {
+          const refPaid = -other;
+          const found = findRefTransfer(receipt, tradeToken, refPaid);
+          return { found: true, refAmount: found?.rawQty ?? refPaid, refToken: found?.tokenAddress ?? null };
+        }
       }
     }
   }
@@ -232,11 +262,12 @@ async function analyzeChain(chain, wallet) {
 
     for (const { hash, out } of sellCands) {
       const leg    = out[0];
-      const result = await trySwapEnrich(chain.rpcUrl, chain.poolManager, hash, leg.rawQty, 'sell');
+      const result = await trySwapEnrich(chain.rpcUrl, chain.poolManager, hash, leg.token, leg.rawQty, 'sell');
       if (result.found) {
         matched++;
-        const eth = fmtEth(result.wethAmount);
-        console.log(`  MATCH  ${hash.slice(0, 12)}  sold ${leg.qty.toFixed(6).padStart(16)} ${leg.symbol.padEnd(10)} → rcvd ${eth} ${chain.wethSymbol}`);
+        const refAmt  = fmtEth(result.refAmount);
+        const refLabel = result.refToken ? result.refToken.slice(0, 10) : chain.wethSymbol;
+        console.log(`  MATCH  ${hash.slice(0, 12)}  sold ${leg.qty.toFixed(6).padStart(16)} ${leg.symbol.padEnd(10)} → rcvd ${refAmt} ${refLabel}`);
       } else {
         unmatched++;
         console.log(`  MISS   ${hash.slice(0, 12)}  sold ${leg.qty.toFixed(6).padStart(16)} ${leg.symbol.padEnd(10)}   (${result.reason})`);
@@ -252,11 +283,12 @@ async function analyzeChain(chain, wallet) {
 
     for (const { hash, in: inn } of buyCands) {
       const leg    = inn[0];
-      const result = await trySwapEnrich(chain.rpcUrl, chain.poolManager, hash, leg.rawQty, 'buy');
+      const result = await trySwapEnrich(chain.rpcUrl, chain.poolManager, hash, leg.token, leg.rawQty, 'buy');
       if (result.found) {
         matched++;
-        const eth = fmtEth(result.wethAmount);
-        console.log(`  MATCH  ${hash.slice(0, 12)}  rcvd ${leg.qty.toFixed(6).padStart(16)} ${leg.symbol.padEnd(10)} ← paid ${eth} ${chain.wethSymbol}`);
+        const refAmt  = fmtEth(result.refAmount);
+        const refLabel = result.refToken ? result.refToken.slice(0, 10) : chain.wethSymbol;
+        console.log(`  MATCH  ${hash.slice(0, 12)}  rcvd ${leg.qty.toFixed(6).padStart(16)} ${leg.symbol.padEnd(10)} ← paid ${refAmt} ${refLabel}`);
       } else {
         unmatched++;
         console.log(`  MISS   ${hash.slice(0, 12)}  rcvd ${leg.qty.toFixed(6).padStart(16)} ${leg.symbol.padEnd(10)}   (${result.reason})`);

@@ -23,6 +23,12 @@ const POOL_MANAGER_BY_CHAIN: Partial<Record<EdgeChainId, string>> = {
   base: '0x498581ff718922c3f8e6a244956af099b2652b2b', // Uniswap V4 on Base
 };
 const SWAP_TOPIC = '0x40e9cecb9f5f1f1c5b9c97dec2917b7ee92e57ba5563708daca94dd84ad7112f';
+const TRANSFER_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
+
+// Non-18-decimal tokens that may appear as reference legs.
+const KNOWN_DECIMALS: Record<string, number> = {
+  '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913': 6, // USDC on Base
+};
 
 const _BIT255 = BigInt(2) ** BigInt(255);
 const _TWO256 = BigInt(2) ** BigInt(256);
@@ -34,6 +40,42 @@ const _TWO256 = BigInt(2) ** BigInt(256);
 function abiSignedInt(hex: string): bigint {
   const u = BigInt(hex);
   return u >= _BIT255 ? u - _TWO256 : u;
+}
+
+/**
+ * Scan the receipt's ERC20 Transfer events to find the actual reference token
+ * that was received/paid in a V4 swap. Preferred over hardcoding WETH because
+ * V4 pools can be TOKEN/VIRTUAL, TOKEN/CBBTC, etc.
+ *
+ * Looks for a Transfer log where:
+ *   - The token address is NOT the known trade token (excludeToken)
+ *   - The transferred amount is within maxToleranceBps of expectedRawQty
+ * Returns the best (closest) match, or null if nothing qualifies.
+ */
+function findReferenceTokenTransfer(
+  receipt: any,
+  excludeToken: string,
+  expectedRawQty: bigint,
+  maxToleranceBps = 200
+): { tokenAddress: string; rawQty: bigint; decimals: number } | null {
+  if (!receipt?.logs) return null;
+  const exclude = excludeToken.toLowerCase();
+  let best: { tokenAddress: string; rawQty: bigint; decimals: number; diff: bigint } | null = null;
+
+  for (const log of receipt.logs) {
+    if (log.topics?.[0] !== TRANSFER_TOPIC) continue;
+    const tokenAddr = log.address?.toLowerCase();
+    if (!tokenAddr || tokenAddr === exclude) continue;
+    const amt = BigInt(log.data);
+    if (amt <= BigInt(0)) continue;
+    const diff = amt > expectedRawQty ? amt - expectedRawQty : expectedRawQty - amt;
+    if (diff > (expectedRawQty * BigInt(maxToleranceBps)) / BigInt(10000)) continue;
+    if (!best || diff < best.diff) {
+      best = { tokenAddress: tokenAddr, rawQty: amt, decimals: KNOWN_DECIMALS[tokenAddr] ?? 18, diff };
+    }
+  }
+
+  return best ? { tokenAddress: best.tokenAddress, rawQty: best.rawQty, decimals: best.decimals } : null;
 }
 
 /**
@@ -60,8 +102,8 @@ async function enrichUniswapV4Legs(
   const poolManager = POOL_MANAGER_BY_CHAIN[chain];
   if (!poolManager) return [];
 
-  const wethAddress = REFERENCE_TOKENS[chain]?.find((t) => t.symbol === 'WETH')?.address;
-  if (!wethAddress) return [];
+  // WETH used only as last-resort fallback when Transfer scanning finds nothing.
+  const wethAddress = REFERENCE_TOKENS[chain]?.find((t) => t.symbol === 'WETH')?.address ?? null;
 
   const byHash = new Map<string, { out: NormalizedTransfer[]; in: NormalizedTransfer[] }>();
   for (const t of transfers) {
@@ -124,7 +166,7 @@ async function enrichUniswapV4Legs(
         if (leg.rawQty === BigInt(0)) continue;
 
         if (direction === 'sell') {
-          // Negative amount = token paid to pool (sold). Positive = WETH received.
+          // Negative amount = token paid to pool (sold). Positive = reference token received.
           // Try both amount0/amount1 orderings.
           for (const [paidAmt, receivedAmt] of [
             [amount0, amount1],
@@ -135,26 +177,36 @@ async function enrichUniswapV4Legs(
             const diff = absPaid > leg.rawQty ? absPaid - leg.rawQty : leg.rawQty - absPaid;
             if (diff > leg.rawQty / BigInt(500)) continue; // 0.2%
 
-            const wethQty = Number(receivedAmt) / 1e18;
+            // Detect actual reference token from ERC20 Transfer events (handles
+            // TOKEN/VIRTUAL, TOKEN/CBBTC etc. — not just TOKEN/WETH pools).
+            const found = findReferenceTokenTransfer(receipt, leg.tokenAddress, receivedAmt);
+            const refAddr = found?.tokenAddress ?? wethAddress;
+            if (!refAddr) break; // no reference token detectable — skip
+
+            const refRawQty = found?.rawQty ?? receivedAmt;
+            const refDecimals = found?.decimals ?? 18;
+            const refQty = Number(refRawQty) / 10 ** refDecimals;
+            const refLabel = found ? refAddr.slice(0, 10) : 'WETH(fallback)';
+
             synthetic.push({
               hash: candidate.hash,
               from: poolManager,
               to: wallet,
-              tokenAddress: wethAddress,
-              qty: wethQty,
-              rawQty: receivedAmt,
+              tokenAddress: refAddr,
+              qty: refQty,
+              rawQty: refRawQty,
               ts: leg.ts,
               blockNumber: leg.blockNumber,
             });
             console.log(
-              `[edge:fetchTrades] ${chain} V4 sell hash=${candidate.hash.slice(0, 10)} sold=${leg.qty.toFixed(4)} ${leg.tokenAddress.slice(0, 10)} rcvd=${wethQty.toFixed(8)} WETH`
+              `[edge:fetchTrades] ${chain} V4 sell hash=${candidate.hash.slice(0, 10)} sold=${leg.qty.toFixed(4)} ${leg.tokenAddress.slice(0, 10)} rcvd=${refQty.toFixed(8)} ${refLabel}`
             );
             enriched = true;
             break;
           }
         } else {
-          // direction === 'buy' (relay-buy: token arrived at wallet, WETH paid cross-chain)
-          // Positive amount = token received by caller (bought). Negative = WETH paid.
+          // direction === 'buy' (relay-buy: token arrived at wallet, reference token paid cross-chain)
+          // Positive amount = token received by caller (bought). Negative = reference token paid.
           // Relay bridge takes a fee, so matching tolerance is widened to 1%.
           for (const [receivedAmt, paidAmt] of [
             [amount0, amount1],
@@ -165,20 +217,28 @@ async function enrichUniswapV4Legs(
               receivedAmt > leg.rawQty ? receivedAmt - leg.rawQty : leg.rawQty - receivedAmt;
             if (diff > leg.rawQty / BigInt(100)) continue; // 1% (relay fee headroom)
 
-            const wethPaid = -paidAmt;
-            const wethQty = Number(wethPaid) / 1e18;
+            const refPaidRaw = -paidAmt;
+            const found = findReferenceTokenTransfer(receipt, leg.tokenAddress, refPaidRaw);
+            const refAddr = found?.tokenAddress ?? wethAddress;
+            if (!refAddr) break; // no reference token detectable — skip
+
+            const refRawQty = found?.rawQty ?? refPaidRaw;
+            const refDecimals = found?.decimals ?? 18;
+            const refQty = Number(refRawQty) / 10 ** refDecimals;
+            const refLabel = found ? refAddr.slice(0, 10) : 'WETH(fallback)';
+
             synthetic.push({
               hash: candidate.hash,
               from: wallet,
               to: poolManager,
-              tokenAddress: wethAddress,
-              qty: wethQty,
-              rawQty: wethPaid,
+              tokenAddress: refAddr,
+              qty: refQty,
+              rawQty: refRawQty,
               ts: leg.ts,
               blockNumber: leg.blockNumber,
             });
             console.log(
-              `[edge:fetchTrades] ${chain} V4 relay-buy hash=${candidate.hash.slice(0, 10)} rcvd=${leg.qty.toFixed(4)} ${leg.tokenAddress.slice(0, 10)} paid=${wethQty.toFixed(8)} WETH`
+              `[edge:fetchTrades] ${chain} V4 relay-buy hash=${candidate.hash.slice(0, 10)} rcvd=${leg.qty.toFixed(4)} ${leg.tokenAddress.slice(0, 10)} paid=${refQty.toFixed(8)} ${refLabel}`
             );
             enriched = true;
             break;
@@ -401,8 +461,6 @@ export async function fetchWalletSwapLegs(chain: EdgeChainId, wallet: string): P
     }
   };
 
-  const wethAddr = REFERENCE_TOKENS[chain].find((t) => t.symbol === 'WETH')?.address;
-
   if (!hasReferenceTokens(chain)) {
     if (byHash.size > 0) bump(`no reference tokens configured for ${cfg.displayName} yet`);
   } else {
@@ -437,7 +495,7 @@ export async function fetchWalletSwapLegs(chain: EdgeChainId, wallet: string): P
         continue;
       }
 
-      const refPriceUsd = await getReferencePriceUsd(chain, refToken.symbol, refLeg.ts, wethAddr);
+      const refPriceUsd = await getReferencePriceUsd(chain, refToken.symbol, refLeg.ts, refToken.address);
       if (refPriceUsd <= 0) {
         bump('could not price the reference-token leg', hash);
         continue;
