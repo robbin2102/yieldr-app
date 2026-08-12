@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { useParams } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import styles from './edge.module.css';
 
 interface ConfidenceBlock {
@@ -124,6 +124,7 @@ const EXIT_STYLE_COLOR: Record<ExitBucket['conditionLabel'], string> = {
 export default function EdgePage() {
   const params = useParams<{ address: string }>();
   const address = params.address;
+  const router = useRouter();
 
   const [status, setStatus] = useState<'idle' | 'running' | 'done' | 'error'>('idle');
   const [portfolio, setPortfolio] = useState<PortfolioStage | null>(null);
@@ -354,7 +355,10 @@ export default function EdgePage() {
 
           <div className={styles.footer}>
             <div className={styles.tbTag}>{status === 'running' ? 'Analysis in progress...' : status === 'done' ? 'Analysis complete' : ''}</div>
-            <button className={styles.btnF} onClick={runAnalysis}>Re-run</button>
+            <div className={styles.fbtns}>
+              <button className={styles.btnO} onClick={runAnalysis}>Re-run</button>
+              <button className={styles.btnF} onClick={() => router.push('/pricing')}>Open Quant Terminal →</button>
+            </div>
           </div>
         </div>
 
