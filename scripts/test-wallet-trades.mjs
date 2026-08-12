@@ -39,8 +39,9 @@ const CHAINS = [
     poolManager:    '0x8366a39cc670b4001a1121b8f6a443a643e40951',
     wethAddress:    '0x0bd7d308f8e1639fab988df18a8011f41eacad73',
     wethSymbol:     'WETH',
-    // HOOD genesis ~2026-07-01; 2s blocks → 2M covers full chain history
-    lookbackBlocks: 2_000_000,
+    // HOOD blocks are ~0.1s each (not 2s). 2M blocks = only ~6 days.
+    // Since the chain launched ~2026-07-01 (under 90 days old), scan from genesis.
+    lookbackBlocks: null,
     // HOOD does not support 'internal' category in alchemy_getAssetTransfers
     categories:     ['erc20', 'external'],
   },
@@ -178,9 +179,13 @@ async function analyzeChain(chain, wallet) {
 
   const latestHex = await rpc(chain.rpcUrl, 'eth_blockNumber', []);
   const latest    = BigInt(latestHex);
-  const fromBlock = latest > BigInt(chain.lookbackBlocks) ? latest - BigInt(chain.lookbackBlocks) : 0n;
+  const fromBlock = chain.lookbackBlocks === null ? 0n
+    : latest > BigInt(chain.lookbackBlocks) ? latest - BigInt(chain.lookbackBlocks) : 0n;
   const fromHex   = '0x' + fromBlock.toString(16);
-  console.log(`Block range: ${fromBlock.toLocaleString()} → ${latest.toLocaleString()} (${chain.lookbackBlocks.toLocaleString()} blocks)\n`);
+  const windowDesc = chain.lookbackBlocks === null
+    ? 'full chain history (genesis → latest)'
+    : `${chain.lookbackBlocks.toLocaleString()} block lookback`;
+  console.log(`Block range: ${fromBlock.toLocaleString()} → ${latest.toLocaleString()} (${windowDesc})\n`);
 
   const transfers = await fetchTransfers(chain.name, chain.rpcUrl, wallet, fromHex, latestHex, chain.categories);
 
