@@ -17,8 +17,11 @@ interface NormalizedTransfer {
   blockNumber: bigint;
 }
 
-// HOOD/Doppler DEX constants for Swap event decoding
-const HOOD_POOL_MANAGER = '0x8366a39cc670b4001a1121b8f6a443a643e40951';
+// Uniswap V4 PoolManager addresses per chain (for Swap event enrichment)
+const POOL_MANAGER_BY_CHAIN: Partial<Record<EdgeChainId, string>> = {
+  hood: '0x8366a39cc670b4001a1121b8f6a443a643e40951', // Doppler DEX on Robinhood Chain
+  base: '0x498581ff718922c3f8e6a244956af099b2652b2b', // Uniswap V4 on Base
+};
 const SWAP_TOPIC = '0x40e9cecb9f5f1f1c5b9c97dec2917b7ee92e57ba5563708daca94dd84ad7112f';
 
 const _BIT255 = BigInt(2) ** BigInt(255);
@@ -34,26 +37,32 @@ function abiSignedInt(hex: string): bigint {
 }
 
 /**
- * On HOOD, Doppler DEX routes swaps through RobinHoodSettler which never
- * sends tokens back to the wallet address directly. The only on-chain record
- * of the WETH received is in the PoolManager's Swap event. This function:
- *  1. Identifies txs with an outgoing transfer but no incoming transfer (the
- *     Doppler trade pattern).
- *  2. Fetches the tx receipt for each such tx.
- *  3. Finds the PoolManager Swap event where one signed amount matches the
- *     outgoing raw token amount (within 0.2%).
- *  4. Returns synthetic NormalizedTransfer records for the WETH "in" leg so
- *     the existing 1-out + 1-in matching logic can price the trade normally.
+ * Enriches Uniswap V4 swaps where one side of the trade is invisible to
+ * Alchemy's asset-transfer API. Two patterns:
+ *
+ *  SELL (1-out-0-in): wallet sends a token; WETH receipt never hits the wallet
+ *    address directly (HOOD Doppler/RobinHoodSettler, Base V4 sells via router).
+ *    Injects a synthetic WETH in-leg from the PoolManager Swap event.
+ *
+ *  RELAY-BUY (0-out-1-in): wallet receives a token; the payment came from
+ *    another chain or intermediary (FOMO Base trades funded from Solana via
+ *    Relay bridge). Injects a synthetic WETH out-leg from the Swap event.
+ *
+ * Both HOOD (Doppler) and Base (Uniswap V4) use the same Swap event signature
+ * and ABI layout — only the PoolManager address differs.
  */
-async function enrichHoodDopplerLegs(
+async function enrichUniswapV4Legs(
+  chain: EdgeChainId,
   client: any,
   wallet: string,
   transfers: NormalizedTransfer[]
 ): Promise<NormalizedTransfer[]> {
-  const wethAddress = REFERENCE_TOKENS['hood'].find((t) => t.symbol === 'WETH')?.address;
+  const poolManager = POOL_MANAGER_BY_CHAIN[chain];
+  if (!poolManager) return [];
+
+  const wethAddress = REFERENCE_TOKENS[chain]?.find((t) => t.symbol === 'WETH')?.address;
   if (!wethAddress) return [];
 
-  // Index by hash to find 1-out-0-in pattern
   const byHash = new Map<string, { out: NormalizedTransfer[]; in: NormalizedTransfer[] }>();
   for (const t of transfers) {
     const g = byHash.get(t.hash) ?? { out: [], in: [] };
@@ -62,15 +71,27 @@ async function enrichHoodDopplerLegs(
     byHash.set(t.hash, g);
   }
 
-  const candidates = Array.from(byHash.entries())
-    .filter(([, g]) => g.out.length === 1 && g.in.length === 0)
-    .map(([hash, g]) => ({ hash, out: g.out[0] }));
+  type Candidate =
+    | { hash: string; direction: 'sell'; leg: NormalizedTransfer }
+    | { hash: string; direction: 'buy'; leg: NormalizedTransfer };
+
+  const candidates: Candidate[] = [];
+  for (const [hash, g] of byHash) {
+    if (g.out.length === 1 && g.in.length === 0) {
+      candidates.push({ hash, direction: 'sell', leg: g.out[0] });
+    } else if (g.out.length === 0 && g.in.length === 1) {
+      candidates.push({ hash, direction: 'buy', leg: g.in[0] });
+    }
+  }
 
   if (candidates.length === 0) return [];
 
-  console.log(`[edge:fetchTrades] hood enriching ${candidates.length} Doppler trade(s) via PoolManager Swap events`);
+  console.log(
+    `[edge:fetchTrades] ${chain} enriching ${candidates.length} Uniswap V4 trade(s) (${
+      candidates.filter((c) => c.direction === 'sell').length
+    } sell, ${candidates.filter((c) => c.direction === 'buy').length} relay-buy)`
+  );
 
-  // Fetch receipts in parallel (capped to avoid overwhelming RPC)
   const BATCH = 10;
   const synthetic: NormalizedTransfer[] = [];
 
@@ -83,13 +104,13 @@ async function enrichHoodDopplerLegs(
     );
 
     for (let j = 0; j < batch.length; j++) {
-      const { hash, out } = batch[j];
+      const candidate = batch[j];
       const receipt: any = receipts[j];
       if (!receipt) continue;
 
       const swapLogs = (receipt.logs ?? []).filter(
         (log: any) =>
-          log.address?.toLowerCase() === HOOD_POOL_MANAGER && log.topics?.[0] === SWAP_TOPIC
+          log.address?.toLowerCase() === poolManager && log.topics?.[0] === SWAP_TOPIC
       );
 
       let enriched = false;
@@ -99,44 +120,75 @@ async function enrichHoodDopplerLegs(
         const amount0 = abiSignedInt('0x' + data.slice(0, 64));
         const amount1 = abiSignedInt('0x' + data.slice(64, 128));
 
-        // The settler "pays" the sold token to the pool (negative) and
-        // "receives" WETH from the pool (positive). Try both orderings.
-        for (const [paidAmt, receivedAmt] of [
-          [amount0, amount1],
-          [amount1, amount0],
-        ] as [bigint, bigint][]) {
-          if (paidAmt >= BigInt(0) || receivedAmt <= BigInt(0)) continue;
-          const absPaid = -paidAmt;
-          if (out.rawQty === BigInt(0)) continue;
+        const { direction, leg } = candidate;
+        if (leg.rawQty === BigInt(0)) continue;
 
-          // Match within 0.2%
-          const diff = absPaid > out.rawQty ? absPaid - out.rawQty : out.rawQty - absPaid;
-          if (diff > out.rawQty / BigInt(500)) continue;
+        if (direction === 'sell') {
+          // Negative amount = token paid to pool (sold). Positive = WETH received.
+          // Try both amount0/amount1 orderings.
+          for (const [paidAmt, receivedAmt] of [
+            [amount0, amount1],
+            [amount1, amount0],
+          ] as [bigint, bigint][]) {
+            if (paidAmt >= BigInt(0) || receivedAmt <= BigInt(0)) continue;
+            const absPaid = -paidAmt;
+            const diff = absPaid > leg.rawQty ? absPaid - leg.rawQty : leg.rawQty - absPaid;
+            if (diff > leg.rawQty / BigInt(500)) continue; // 0.2%
 
-          const wethQty = Number(receivedAmt) / 1e18;
-          synthetic.push({
-            hash,
-            from: HOOD_POOL_MANAGER,
-            to: wallet,
-            tokenAddress: wethAddress,
-            qty: wethQty,
-            rawQty: receivedAmt,
-            ts: out.ts,
-            blockNumber: out.blockNumber,
-          });
-          console.log(
-            `[edge:fetchTrades] hood Doppler trade decoded hash=${hash.slice(0, 10)} sold=${out.qty.toFixed(4)} ${
-              out.tokenAddress.slice(0, 10)
-            } received=${wethQty.toFixed(8)} WETH`
-          );
-          enriched = true;
-          break;
+            const wethQty = Number(receivedAmt) / 1e18;
+            synthetic.push({
+              hash: candidate.hash,
+              from: poolManager,
+              to: wallet,
+              tokenAddress: wethAddress,
+              qty: wethQty,
+              rawQty: receivedAmt,
+              ts: leg.ts,
+              blockNumber: leg.blockNumber,
+            });
+            console.log(
+              `[edge:fetchTrades] ${chain} V4 sell hash=${candidate.hash.slice(0, 10)} sold=${leg.qty.toFixed(4)} ${leg.tokenAddress.slice(0, 10)} rcvd=${wethQty.toFixed(8)} WETH`
+            );
+            enriched = true;
+            break;
+          }
+        } else {
+          // direction === 'buy' (relay-buy: token arrived at wallet, WETH paid cross-chain)
+          // Positive amount = token received by caller (bought). Negative = WETH paid.
+          // Relay bridge takes a fee, so matching tolerance is widened to 1%.
+          for (const [receivedAmt, paidAmt] of [
+            [amount0, amount1],
+            [amount1, amount0],
+          ] as [bigint, bigint][]) {
+            if (receivedAmt <= BigInt(0) || paidAmt >= BigInt(0)) continue;
+            const diff =
+              receivedAmt > leg.rawQty ? receivedAmt - leg.rawQty : leg.rawQty - receivedAmt;
+            if (diff > leg.rawQty / BigInt(100)) continue; // 1% (relay fee headroom)
+
+            const wethPaid = -paidAmt;
+            const wethQty = Number(wethPaid) / 1e18;
+            synthetic.push({
+              hash: candidate.hash,
+              from: wallet,
+              to: poolManager,
+              tokenAddress: wethAddress,
+              qty: wethQty,
+              rawQty: wethPaid,
+              ts: leg.ts,
+              blockNumber: leg.blockNumber,
+            });
+            console.log(
+              `[edge:fetchTrades] ${chain} V4 relay-buy hash=${candidate.hash.slice(0, 10)} rcvd=${leg.qty.toFixed(4)} ${leg.tokenAddress.slice(0, 10)} paid=${wethQty.toFixed(8)} WETH`
+            );
+            enriched = true;
+            break;
+          }
         }
       }
 
-      if (!enriched) {
+      if (!enriched && swapLogs.length > 0) {
         console.log(
-          `[edge:fetchTrades] hood Doppler trade hash=${hash.slice(0, 10)} has no matching Swap event (hook-only or unsupported pattern)`
+          `[edge:fetchTrades] ${chain} V4 ${candidate.direction} hash=${candidate.hash.slice(0, 10)} — ${swapLogs.length} Swap event(s) found but no amount matched (multi-hop or unsupported pool)`
         );
       }
     }
@@ -315,12 +367,11 @@ export async function fetchWalletSwapLegs(chain: EdgeChainId, wallet: string): P
     }`
   );
 
-  // HOOD/Doppler trades settle WETH into RobinHoodSettler, never back to the
-  // wallet address directly. The PoolManager's Swap event is the only on-chain
-  // record of what WETH was received. Inject synthetic WETH in-legs so the
-  // standard 1-out + 1-in matching below can price these trades normally.
-  if (chain === 'hood') {
-    const enriched = await enrichHoodDopplerLegs(client, walletLower, transfers);
+  // For chains with a known Uniswap V4 PoolManager, inject synthetic legs for
+  // trades where one side is invisible to Alchemy (HOOD Doppler sells; Base
+  // relay-buys funded from Solana via cross-chain bridge).
+  if (POOL_MANAGER_BY_CHAIN[chain]) {
+    const enriched = await enrichUniswapV4Legs(chain, client, walletLower, transfers);
     if (enriched.length > 0) transfers = [...transfers, ...enriched];
   }
 
