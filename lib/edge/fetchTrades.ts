@@ -31,7 +31,9 @@ async function fetchViaAlchemyEnhancedApi(
 
   for (const direction of ['from', 'to'] as const) {
     let pageKey: string | undefined;
+    let pages = 0;
     do {
+      pages++;
       const params: Record<string, unknown> = {
         fromBlock: fromBlockHex,
         toBlock: toBlockHex,
@@ -54,10 +56,14 @@ async function fetchViaAlchemyEnhancedApi(
         params: [params],
       });
 
+      let skippedNoAddress = 0;
       for (const t of res?.transfers ?? []) {
         const isNative = t.category === 'external';
         const tokenAddress = isNative ? NATIVE_PSEUDO_ADDRESS : t.rawContract?.address?.toLowerCase();
-        if (!tokenAddress) continue;
+        if (!tokenAddress) {
+          skippedNoAddress++;
+          continue;
+        }
         results.push({
           hash: t.hash,
           from: t.from?.toLowerCase(),
@@ -68,6 +74,11 @@ async function fetchViaAlchemyEnhancedApi(
           blockNumber: BigInt(t.blockNum ?? '0x0'),
         });
       }
+      console.log(
+        `[edge:fetchTrades] ${chain} alchemy_getAssetTransfers dir=${direction} page=${pages} got=${
+          res?.transfers?.length ?? 0
+        } skippedNoAddress=${skippedNoAddress} hasNextPage=${Boolean(res?.pageKey)}`
+      );
       pageKey = res?.pageKey;
     } while (pageKey);
   }
@@ -131,8 +142,10 @@ export async function fetchWalletSwapLegs(chain: EdgeChainId, wallet: string): P
   const client = getPublicClient(chain);
   const { fromBlock, toBlock } = await resolveBlockRangeForWindow(client, windowDays);
   const walletLower = wallet.toLowerCase();
+  console.log(`[edge:fetchTrades] ${chain} ${walletLower} window=${windowDays}d blocks=${fromBlock}-${toBlock}`);
 
   let transfers: NormalizedTransfer[];
+  let fetchPath: 'alchemy-enhanced' | 'log-scan-fallback';
   try {
     transfers = await fetchViaAlchemyEnhancedApi(
       chain,
@@ -140,9 +153,29 @@ export async function fetchWalletSwapLegs(chain: EdgeChainId, wallet: string): P
       `0x${fromBlock.toString(16)}`,
       `0x${toBlock.toString(16)}`
     );
-  } catch {
+    fetchPath = 'alchemy-enhanced';
+  } catch (err) {
+    // This fallback has NO native-ETH support (see fetchViaLogScan) - any
+    // swap where ETH moved as tx.value rather than a WETH Transfer will end
+    // up as a lone unbalanced leg once we get here. Logging the real error
+    // (previously swallowed) so a silent Alchemy failure - wrong method,
+    // rate limit, non-Alchemy RPC URL - is visible instead of looking like
+    // a data problem with the wallet itself.
+    console.error(
+      `[edge:fetchTrades] ${chain} alchemy_getAssetTransfers FAILED, falling back to log-scan (NO native-ETH support): ${
+        err instanceof Error ? err.message : String(err)
+      }`
+    );
     transfers = await fetchViaLogScan(chain, walletLower, fromBlock, toBlock);
+    fetchPath = 'log-scan-fallback';
   }
+
+  const nativeCount = transfers.filter((t) => t.tokenAddress === NATIVE_PSEUDO_ADDRESS).length;
+  console.log(
+    `[edge:fetchTrades] ${chain} path=${fetchPath} rawTransfers=${transfers.length} native=${nativeCount} erc20=${
+      transfers.length - nativeCount
+    }`
+  );
 
   const byHash = new Map<string, { out: NormalizedTransfer[]; in: NormalizedTransfer[] }>();
   for (const t of transfers) {
@@ -151,6 +184,12 @@ export async function fetchWalletSwapLegs(chain: EdgeChainId, wallet: string): P
     if (t.to === walletLower) g.in.push(t);
     byHash.set(t.hash, g);
   }
+  const balanced = Array.from(byHash.values()).filter((g) => g.out.length === 1 && g.in.length === 1).length;
+  console.log(
+    `[edge:fetchTrades] ${chain} distinctTxHashes=${byHash.size} balanced(1out/1in)=${balanced} unbalanced=${
+      byHash.size - balanced
+    }`
+  );
 
   const legsByToken = new Map<string, TradeLeg[]>();
   const excludedCounts = new Map<string, number>();
@@ -233,6 +272,13 @@ export async function fetchWalletSwapLegs(chain: EdgeChainId, wallet: string): P
     sampleTxHashes: excludedSamples.get(reason) ?? [],
   }));
   for (const legs of legsByToken.values()) legs.sort((a, b) => a.ts.getTime() - b.ts.getTime());
+
+  console.log(
+    `[edge:fetchTrades] ${chain} priced ${legsByToken.size} token(s), ${Array.from(legsByToken.values()).reduce(
+      (s, l) => s + l.length,
+      0
+    )} leg(s) total. Excluded: ${excluded.map((e) => `${e.count}x ${e.reason}`).join('; ') || 'none'}`
+  );
 
   return { legsByToken, excluded, windowDays };
 }

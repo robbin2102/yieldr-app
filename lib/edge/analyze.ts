@@ -34,6 +34,7 @@ function isWin(p: ReconstructedPosition) {
 }
 
 export async function analyzeWallet(wallet: string, onStage?: StageCallback): Promise<EdgeReport> {
+  console.log(`[edge:analyze] START wallet=${wallet} chains=${activeChains().join(',')}`);
   onStage?.('scan_start', { wallet, chains: activeChains() });
 
   const chains = activeChains().filter((c): c is EdgeChainId => c !== 'solana');
@@ -43,6 +44,9 @@ export async function analyzeWallet(wallet: string, onStage?: StageCallback): Pr
   const excludedTrades = mergeExcluded(portfolios.flatMap((p) => p.excludedTrades));
   const currentHoldingsUsd = portfolios.reduce((s, p) => s + p.currentHoldingsUsd, 0);
   const tokensTraded = portfolios.flatMap((p) => p.tokensTraded);
+  console.log(
+    `[edge:analyze] portfolios merged: ${allPositions.length} position(s) across ${portfolios.length} chain(s), ${tokensTraded.length} token(s) traded`
+  );
 
   const closedRaw = allPositions.filter((p) => !p.isOpen && !p.isDust && p.realizedPnlUsd !== null);
   const realizedPnlUsd = closedRaw.reduce((s, p) => s + (p.realizedPnlUsd ?? 0), 0);
@@ -50,6 +54,11 @@ export async function analyzeWallet(wallet: string, onStage?: StageCallback): Pr
   const expectancyUsd = closedRaw.length > 0 ? realizedPnlUsd / closedRaw.length : 0;
   const capitalDeployed = closedRaw.reduce((s, p) => s + p.totalSizeUsd, 0);
   const roiPct = capitalDeployed > 0 ? (realizedPnlUsd / capitalDeployed) * 100 : 0;
+  console.log(
+    `[edge:analyze] closed trades=${closedRaw.length} realizedPnlUsd=${realizedPnlUsd.toFixed(2)} winRate=${(
+      winRate * 100
+    ).toFixed(1)}% capitalDeployed=${capitalDeployed.toFixed(2)}`
+  );
 
   onStage?.('portfolio', {
     currentHoldingsUsd,
@@ -68,14 +77,18 @@ export async function analyzeWallet(wallet: string, onStage?: StageCallback): Pr
     const withEntry = await enrichEntryContext(p.chain, p);
     return enrichExitContext(p.chain, withEntry);
   });
+  console.log(`[edge:analyze] enriched ${enrichedClosed.length} closed position(s) with entry/exit context`);
 
   const entry = computeEntryCategory(enrichedClosed);
+  console.log(`[edge:analyze] entry verdict=${entry.verdict} driver="${entry.primaryDriver}" buckets=${entry.conditionBreakdown.length}`);
   onStage?.('entry', entry);
 
   const exit = computeExitCategory(enrichedClosed);
+  console.log(`[edge:analyze] exit verdict=${exit.verdict} peakCapture=${exit.peakCapturePct.toFixed(1)}% roundTrip=${exit.roundTripRatePct.toFixed(1)}%`);
   onStage?.('exit', exit);
 
   const sizing = computeSizingCategory(enrichedClosed);
+  console.log(`[edge:analyze] sizing verdict=${sizing.verdict} convictionRatio=${sizing.convictionRatio.toFixed(2)}x`);
   onStage?.('sizing', sizing);
 
   const chronological = [...enrichedClosed].sort((a, b) => a.entryTs.getTime() - b.entryTs.getTime()).map(isWin);
@@ -89,6 +102,7 @@ export async function analyzeWallet(wallet: string, onStage?: StageCallback): Pr
   );
 
   const { edgeScore } = computeCompositeScore(entry, exit, sizing, walletConfidence);
+  console.log(`[edge:analyze] DONE wallet=${wallet} edgeScore=${edgeScore} confidenceTier=${walletConfidence.tier}`);
 
   const report: EdgeReport = {
     wallet: wallet.toLowerCase(),

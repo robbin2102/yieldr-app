@@ -135,6 +135,7 @@ export interface WalletPortfolio {
 /** Full pipeline for one chain: fetch legs -> classify per token -> FIFO reconstruct -> value open positions. */
 export async function reconstructWalletPortfolio(chain: EdgeChainId, wallet: string): Promise<WalletPortfolio> {
   const { legsByToken, excluded: fetchExcluded } = await fetchWalletSwapLegs(chain, wallet);
+  console.log(`[edge:reconstruct] ${chain} received ${legsByToken.size} priced token(s) from fetchTrades`);
 
   const positions: ReconstructedPosition[] = [];
   const excludedCounts = new Map<string, number>();
@@ -164,6 +165,14 @@ export async function reconstructWalletPortfolio(chain: EdgeChainId, wallet: str
       meta?.poolAddress ?? null,
       legs
     );
+    const closedCount = tokenPositions.filter((p) => !p.isOpen && !p.isDust).length;
+    console.log(
+      `[edge:reconstruct] ${chain} ${symbol} (${tokenAddress.slice(0, 8)}): ${legs.length} leg(s) -> ${
+        tokenPositions.length
+      } position(s) (${closedCount} closed, non-dust)${
+        excluded.length ? `, excluded: ${excluded.map((e) => `${e.count}x ${e.reason}`).join('; ')}` : ''
+      }`
+    );
     for (const e of excluded) bump(e.reason, e.count, e.sampleTxHashes);
 
     for (const pos of tokenPositions) {
@@ -183,6 +192,12 @@ export async function reconstructWalletPortfolio(chain: EdgeChainId, wallet: str
     count,
     sampleTxHashes: excludedSamples.get(reason) ?? [],
   }));
+
+  console.log(
+    `[edge:reconstruct] ${chain} totals: ${positions.length} position(s) (${
+      positions.filter((p) => !p.isOpen && !p.isDust).length
+    } closed non-dust), currentHoldingsUsd=${currentHoldingsUsd.toFixed(2)}`
+  );
 
   return { chain, positions, excludedTrades, currentHoldingsUsd, tokensTraded };
 }
