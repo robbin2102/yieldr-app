@@ -91,6 +91,39 @@ const SizingCategorySchema = new Schema(
   { _id: false }
 );
 
+const TopFindingSchema = new Schema(
+  {
+    category: { type: String, enum: ['entry', 'exit', 'sizing'], required: true },
+    label: { type: String, required: true },
+    impactUsd: { type: Number, required: true },
+    detail: { type: String, required: true },
+    confidenceTier: { type: String, enum: ['insufficient', 'provisional', 'high'], required: true },
+  },
+  { _id: false }
+);
+
+const EdgeSnapshotPointSchema = new Schema(
+  {
+    computedAt: { type: Date, required: true },
+    edgeScore: { type: Number, required: true },
+    winRate: { type: Number, required: true },
+    expectancyUsd: { type: Number, required: true },
+  },
+  { _id: false }
+);
+
+const EdgeDecaySchema = new Schema(
+  {
+    status: { type: String, enum: ['improving', 'stable', 'decaying', 'insufficient_history'], required: true },
+    edgeScoreDelta: { type: Number, default: null },
+    winRateDeltaPct: { type: Number, default: null },
+    expectancyDeltaUsd: { type: Number, default: null },
+    priorSnapshotCount: { type: Number, required: true },
+    snapshots: { type: [EdgeSnapshotPointSchema], default: [] },
+  },
+  { _id: false }
+);
+
 const EdgeReportSchema = new Schema(
   {
     chains: { type: [String], required: true },
@@ -118,6 +151,9 @@ const EdgeReportSchema = new Schema(
       exit: { type: ExitCategorySchema, required: true },
       sizing: { type: SizingCategorySchema, required: true },
     },
+    topStrengths: { type: [TopFindingSchema], default: [] },
+    topWeaknesses: { type: [TopFindingSchema], default: [] },
+    edgeDecay: { type: EdgeDecaySchema, required: true },
     flags: {
       isTeamWallet: { type: Boolean, default: false },
       isBundlerLinked: { type: Boolean, default: false },
@@ -131,6 +167,8 @@ export interface IEdgeScore extends Document {
   wallet: string;
   history: (typeof EdgeReportSchema)[];
   latestComputedAt: Date;
+  /** Gate for the periodic reasoning cron (app/api/edge/cron/reason) - null until the first reasoning run. */
+  lastReasoningAt: Date | null;
 }
 
 const EdgeScoreSchema = new Schema<IEdgeScore>(
@@ -138,6 +176,7 @@ const EdgeScoreSchema = new Schema<IEdgeScore>(
     wallet: { type: String, required: true, lowercase: true, index: true },
     history: { type: [EdgeReportSchema], default: [] },
     latestComputedAt: { type: Date, default: Date.now },
+    lastReasoningAt: { type: Date, default: null },
   },
   {
     timestamps: true,

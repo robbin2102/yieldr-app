@@ -124,6 +124,50 @@ export interface SizingCategoryResult {
   confidence: ConfidenceBlock;
 }
 
+/**
+ * One ranked finding surfaced to the user - "here's what's actually
+ * driving your results", not a raw metric dump. impactUsd is the ranking
+ * key: for entry/exit it's realized $ PnL attributable to that bucket;
+ * for sizing (which has no PnL-bucketed breakdown - it's wallet-level
+ * behavior) it's a $ capital-tilt proxy, not literal PnL. Both are USD
+ * magnitudes so cross-category ranking is reasonable, but sizing's number
+ * answers "how much capital does this behavior move", not "how much did
+ * this make/lose".
+ */
+export interface TopFinding {
+  category: 'entry' | 'exit' | 'sizing';
+  label: string;
+  impactUsd: number;
+  detail: string;
+  confidenceTier: ConfidenceTier;
+}
+
+export interface TopFindingsResult {
+  strengths: TopFinding[];
+  weaknesses: TopFinding[];
+}
+
+/** One point on the wallet's edge-over-time series - the raw material for a decay chart. */
+export interface EdgeSnapshotPoint {
+  computedAt: Date;
+  edgeScore: number;
+  winRate: number;
+  expectancyUsd: number;
+}
+
+export type EdgeDecayStatus = 'improving' | 'stable' | 'decaying' | 'insufficient_history';
+
+export interface EdgeDecayResult {
+  status: EdgeDecayStatus;
+  /** current edgeScore minus the trailing average of the last few prior snapshots; null until there's enough history */
+  edgeScoreDelta: number | null;
+  winRateDeltaPct: number | null;
+  expectancyDeltaUsd: number | null;
+  priorSnapshotCount: number;
+  /** full chronological series including the current point - feeds the UI's edge-over-time chart directly */
+  snapshots: EdgeSnapshotPoint[];
+}
+
 export interface EdgeReport {
   wallet: string;
   chains: EdgeChainId[];
@@ -144,6 +188,9 @@ export interface EdgeReport {
     exit: ExitCategoryResult;
     sizing: SizingCategoryResult;
   };
+  topStrengths: TopFinding[];
+  topWeaknesses: TopFinding[];
+  edgeDecay: EdgeDecayResult;
   flags: { isTeamWallet: boolean; isBundlerLinked: boolean };
   computedAt: Date;
 }

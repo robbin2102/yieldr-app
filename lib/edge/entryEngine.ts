@@ -5,6 +5,14 @@ const MIN_SPLIT_SIZE = 2; // smallest side a sweep will consider - smaller bucke
 const AGE_CUTOFFS_MIN = [5, 10, 15, 30, 60];
 const LIQUIDITY_CUTOFFS_USD = [10_000, 25_000, 50_000, 100_000];
 
+/** UTC-hour session buckets - a wallet-only stand-in for "time of day they trade best", no external data needed. */
+const ENTRY_SESSIONS: { label: string; startHourUtc: number; endHourUtc: number }[] = [
+  { label: 'Asia hours (00-08 UTC)', startHourUtc: 0, endHourUtc: 8 },
+  { label: 'EU hours (08-13 UTC)', startHourUtc: 8, endHourUtc: 13 },
+  { label: 'US hours (13-21 UTC)', startHourUtc: 13, endHourUtc: 21 },
+  { label: 'Late/off-hours (21-24 UTC)', startHourUtc: 21, endHourUtc: 24 },
+];
+
 type ClosedPosition = ReconstructedPosition & { realizedPnlUsd: number };
 
 function isWin(p: ClosedPosition) {
@@ -63,56 +71,95 @@ function sweepBestSplit(
 
 interface Tag {
   label: string;
-  dimension: 'age' | 'liquidity' | 'momentum' | 'percentile';
+  dimension: 'age' | 'liquidity' | 'momentum' | 'percentile' | 'session' | 'repeat_token';
   positions: ClosedPosition[];
 }
 
 function discoverPrimitiveTags(positions: ClosedPosition[]): Tag[] {
   const tags: Tag[] = [];
 
-  const ageSplit = sweepBestSplit(
-    positions,
-    (p) => (p.ageAtEntrySeconds !== null ? p.ageAtEntrySeconds / 60 : null),
-    AGE_CUTOFFS_MIN,
-    (cutoff, side) => (side === 'below' ? `Sniped (bought within ${cutoff}m of launch)` : `Bought ${cutoff}m+ after launch`)
-  );
-  if (ageSplit) {
-    tags.push({ label: ageSplit.belowLabel, dimension: 'age', positions: ageSplit.below });
-    tags.push({ label: ageSplit.aboveLabel, dimension: 'age', positions: ageSplit.above });
+  // --- Coin-data-dependent primitives (age/liquidity/momentum/price-percentile at entry) ---
+  // MVP runs wallet-data-only: analyze.ts no longer calls enrichEntryContext,
+  // so these fields are always null and every block below is a no-op today.
+  // Left in place (commented) so re-enabling coin context later is a one-line
+  // uncomment in analyze.ts, not a rewrite of the entry engine.
+  //
+  // const ageSplit = sweepBestSplit(
+  //   positions,
+  //   (p) => (p.ageAtEntrySeconds !== null ? p.ageAtEntrySeconds / 60 : null),
+  //   AGE_CUTOFFS_MIN,
+  //   (cutoff, side) => (side === 'below' ? `Sniped (bought within ${cutoff}m of launch)` : `Bought ${cutoff}m+ after launch`)
+  // );
+  // if (ageSplit) {
+  //   tags.push({ label: ageSplit.belowLabel, dimension: 'age', positions: ageSplit.below });
+  //   tags.push({ label: ageSplit.aboveLabel, dimension: 'age', positions: ageSplit.above });
+  // }
+  //
+  // const liqSplit = sweepBestSplit(
+  //   positions,
+  //   (p) => p.liquidityUsdAtEntry,
+  //   LIQUIDITY_CUTOFFS_USD,
+  //   (cutoff, side) => (side === 'below' ? `Thin liquidity (<$${cutoff.toLocaleString()})` : `Deep liquidity ($${cutoff.toLocaleString()}+)`)
+  // );
+  // if (liqSplit) {
+  //   tags.push({ label: liqSplit.belowLabel, dimension: 'liquidity', positions: liqSplit.below });
+  //   tags.push({ label: liqSplit.aboveLabel, dimension: 'liquidity', positions: liqSplit.above });
+  // }
+  //
+  // const withMomentum = positions.filter((p) => p.momentumAtEntryPct !== null);
+  // if (withMomentum.length >= MIN_SPLIT_SIZE) {
+  //   const breakout = withMomentum.filter((p) => p.momentumAtEntryPct! > 10);
+  //   const pullback = withMomentum.filter((p) => p.momentumAtEntryPct! < -10);
+  //   const flat = withMomentum.filter((p) => p.momentumAtEntryPct! >= -10 && p.momentumAtEntryPct! <= 10);
+  //   if (breakout.length >= MIN_SPLIT_SIZE) tags.push({ label: 'Chased a breakout', dimension: 'momentum', positions: breakout });
+  //   if (pullback.length >= MIN_SPLIT_SIZE) tags.push({ label: 'Bought a pullback/dip', dimension: 'momentum', positions: pullback });
+  //   if (flat.length >= MIN_SPLIT_SIZE) tags.push({ label: 'Bought while flat/choppy', dimension: 'momentum', positions: flat });
+  // }
+  //
+  // const withPct = positions.filter((p) => p.pricePercentileAtEntry !== null);
+  // if (withPct.length >= MIN_SPLIT_SIZE) {
+  //   const nearHigh = withPct.filter((p) => p.pricePercentileAtEntry! > 0.66);
+  //   const nearLow = withPct.filter((p) => p.pricePercentileAtEntry! < 0.33);
+  //   const mid = withPct.filter((p) => p.pricePercentileAtEntry! >= 0.33 && p.pricePercentileAtEntry! <= 0.66);
+  //   if (nearHigh.length >= MIN_SPLIT_SIZE) tags.push({ label: 'Bought near the local high', dimension: 'percentile', positions: nearHigh });
+  //   if (nearLow.length >= MIN_SPLIT_SIZE) tags.push({ label: 'Bought near the local low', dimension: 'percentile', positions: nearLow });
+  //   if (mid.length >= MIN_SPLIT_SIZE) tags.push({ label: 'Bought mid-range', dimension: 'percentile', positions: mid });
+  // }
+
+  // --- Wallet-data-only primitives (MVP) ---
+
+  const bySession = new Map<string, ClosedPosition[]>();
+  for (const p of positions) {
+    const hour = p.entryTs.getUTCHours();
+    const session = ENTRY_SESSIONS.find((s) => hour >= s.startHourUtc && hour < s.endHourUtc);
+    if (!session) continue;
+    const arr = bySession.get(session.label) ?? [];
+    arr.push(p);
+    bySession.set(session.label, arr);
+  }
+  for (const [label, group] of bySession) {
+    if (group.length >= MIN_SPLIT_SIZE) tags.push({ label: `Entered during ${label}`, dimension: 'session', positions: group });
   }
 
-  const liqSplit = sweepBestSplit(
-    positions,
-    (p) => p.liquidityUsdAtEntry,
-    LIQUIDITY_CUTOFFS_USD,
-    (cutoff, side) => (side === 'below' ? `Thin liquidity (<$${cutoff.toLocaleString()})` : `Deep liquidity ($${cutoff.toLocaleString()}+)`)
-  );
-  if (liqSplit) {
-    tags.push({ label: liqSplit.belowLabel, dimension: 'liquidity', positions: liqSplit.below });
-    tags.push({ label: liqSplit.aboveLabel, dimension: 'liquidity', positions: liqSplit.above });
-  }
-
-  const withMomentum = positions.filter((p) => p.momentumAtEntryPct !== null);
-  if (withMomentum.length >= MIN_SPLIT_SIZE) {
-    const breakout = withMomentum.filter((p) => p.momentumAtEntryPct! > 10);
-    const pullback = withMomentum.filter((p) => p.momentumAtEntryPct! < -10);
-    const flat = withMomentum.filter((p) => p.momentumAtEntryPct! >= -10 && p.momentumAtEntryPct! <= 10);
-    if (breakout.length >= MIN_SPLIT_SIZE) tags.push({ label: 'Chased a breakout', dimension: 'momentum', positions: breakout });
-    if (pullback.length >= MIN_SPLIT_SIZE) tags.push({ label: 'Bought a pullback/dip', dimension: 'momentum', positions: pullback });
-    if (flat.length >= MIN_SPLIT_SIZE) tags.push({ label: 'Bought while flat/choppy', dimension: 'momentum', positions: flat });
-  }
-
-  const withPct = positions.filter((p) => p.pricePercentileAtEntry !== null);
-  if (withPct.length >= MIN_SPLIT_SIZE) {
-    const nearHigh = withPct.filter((p) => p.pricePercentileAtEntry! > 0.66);
-    const nearLow = withPct.filter((p) => p.pricePercentileAtEntry! < 0.33);
-    const mid = withPct.filter((p) => p.pricePercentileAtEntry! >= 0.33 && p.pricePercentileAtEntry! <= 0.66);
-    if (nearHigh.length >= MIN_SPLIT_SIZE) tags.push({ label: 'Bought near the local high', dimension: 'percentile', positions: nearHigh });
-    if (nearLow.length >= MIN_SPLIT_SIZE) tags.push({ label: 'Bought near the local low', dimension: 'percentile', positions: nearLow });
-    if (mid.length >= MIN_SPLIT_SIZE) tags.push({ label: 'Bought mid-range', dimension: 'percentile', positions: mid });
-  }
+  const repeatFlags = tagRepeatTokens(positions);
+  const repeatBuys = positions.filter((p) => repeatFlags.get(positionKey(p)));
+  const freshBuys = positions.filter((p) => !repeatFlags.get(positionKey(p)));
+  if (repeatBuys.length >= MIN_SPLIT_SIZE) tags.push({ label: 'Re-bought a token traded before', dimension: 'repeat_token', positions: repeatBuys });
+  if (freshBuys.length >= MIN_SPLIT_SIZE) tags.push({ label: 'First time trading this token', dimension: 'repeat_token', positions: freshBuys });
 
   return tags;
+}
+
+/** True if the wallet had already opened a position in this token before this one - chronological, wallet-data-only. */
+function tagRepeatTokens(positions: ClosedPosition[]): Map<string, boolean> {
+  const result = new Map<string, boolean>();
+  const seenTokens = new Set<string>();
+  const chronological = [...positions].sort((a, b) => a.entryTs.getTime() - b.entryTs.getTime());
+  for (const p of chronological) {
+    result.set(positionKey(p), seenTokens.has(p.tokenAddress));
+    seenTokens.add(p.tokenAddress);
+  }
+  return result;
 }
 
 /** Stable identity for a position - there's no persisted _id at this stage, so token+entryTs stands in for one. */

@@ -13,6 +13,10 @@
     {
       "path": "/api/cron/check-traders",
       "schedule": "* * * * *"
+    },
+    {
+      "path": "/api/edge/cron/reason",
+      "schedule": "0 * * * *"
     }
   ]
 }

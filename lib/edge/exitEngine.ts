@@ -16,18 +16,39 @@ function expectancyUsd(g: ClosedPosition[]) {
   return g.length === 0 ? 0 : g.reduce((s, p) => s + p.realizedPnlUsd, 0) / g.length;
 }
 
+/**
+ * Wallet-only proxy for the token's peak price between entry and exit: the
+ * highest individual sell-leg price actually seen. MVP runs without OHLC
+ * (analyze.ts no longer calls enrichExitContext), so p.peakPriceUsd is
+ * always null here in practice - this proxy is the real signal source.
+ * Needs 2+ sell legs to mean anything: a single-sell exit reveals nothing
+ * about what price did in between, so this returns null rather than
+ * fabricating a peak, and that position is simply excluded from
+ * peak-capture / round-trip analysis (same "degrade to null" convention
+ * as the rest of the pipeline). If coin-context enrichment is re-enabled
+ * post-MVP, the real OHLC-derived peakPriceUsd takes priority.
+ */
+function effectivePeakPriceUsd(p: ClosedPosition): number | null {
+  if (p.peakPriceUsd !== null) return p.peakPriceUsd;
+  const sellPrices = p.legs.filter((l) => l.side === 'sell').map((l) => l.priceUsd);
+  if (sellPrices.length < 2) return null;
+  return Math.max(...sellPrices);
+}
+
 /** (exit - entry) / (peak - entry), clamped to [0,1]. Null if the price never meaningfully rose above entry - there was no run to capture. */
 function peakCapturePct(p: ClosedPosition): number | null {
-  if (p.peakPriceUsd === null) return null;
-  const runUp = p.peakPriceUsd - p.avgEntryPriceUsd;
-  if (runUp <= 0 || p.avgEntryPriceUsd === 0 || (p.peakPriceUsd / p.avgEntryPriceUsd - 1) * 100 < RUNUP_THRESHOLD_PCT / 2) return null;
+  const peak = effectivePeakPriceUsd(p);
+  if (peak === null) return null;
+  const runUp = peak - p.avgEntryPriceUsd;
+  if (runUp <= 0 || p.avgEntryPriceUsd === 0 || (peak / p.avgEntryPriceUsd - 1) * 100 < RUNUP_THRESHOLD_PCT / 2) return null;
   const captured = (p.avgExitPriceUsd - p.avgEntryPriceUsd) / runUp;
   return Math.max(0, Math.min(1, captured));
 }
 
 function wasUpMeaningfully(p: ClosedPosition): boolean {
-  if (p.peakPriceUsd === null || p.avgEntryPriceUsd === 0) return false;
-  return (p.peakPriceUsd / p.avgEntryPriceUsd - 1) * 100 >= RUNUP_THRESHOLD_PCT;
+  const peak = effectivePeakPriceUsd(p);
+  if (peak === null || p.avgEntryPriceUsd === 0) return false;
+  return (peak / p.avgEntryPriceUsd - 1) * 100 >= RUNUP_THRESHOLD_PCT;
 }
 
 function classifyExitStyle(p: ClosedPosition): ExitStyleLabel {
