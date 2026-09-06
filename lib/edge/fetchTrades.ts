@@ -4,7 +4,6 @@ import { getReferenceToken, hasReferenceTokens, REFERENCE_TOKENS, NATIVE_PSEUDO_
 import { getReferencePriceUsd, recordObservedTradePrice } from './priceService';
 import { scanTransfersViaLogs, getDecimals, getBlockTimestamp } from './logScanFallback';
 import { getCachedReceipts, cacheReceipts } from './receiptCache';
-import { bulkFetchLogsForBlocks } from './bulkLogScan';
 import { withRateLimitRetry } from './rpcRetry';
 import type { TradeLeg } from './types';
 
@@ -366,128 +365,89 @@ async function enrichUniswapV4Legs(
     return { enriched, totalSwapsSeen, closestDiffBps };
   }
 
-  // ── Tier 1: targeted per-block eth_getLogs scan ──────────────────────
-  // We already know the exact block of every candidate trade (same block
-  // as the wallet's own transfer leg, since it's the same transaction) -
-  // no need to scan a range at all. One eth_getLogs call per unique block,
-  // filtered to (PoolManager OR reference tokens) x (Swap OR Transfer
-  // topic). Total requests = unique blocks this wallet traded in, not a
-  // function of the analysis window size.
-  const blockNumbers = candidates.map((c) => c.leg.blockNumber);
-  const referenceTokenAddresses = Array.from(
-    new Set(
-      (REFERENCE_TOKENS[chain] ?? [])
-        .map((t) => t.address.toLowerCase())
-        .filter((addr) => addr !== NATIVE_PSEUDO_ADDRESS)
-    )
+  // ── Per-transaction receipt fetch (cached, concurrency-capped, rate-limit-aware) ──
+  // Tried two "clever" bulk eth_getLogs approaches before this (a full
+  // range scan, then a per-block scan) - both looked cheaper on paper by
+  // cutting request COUNT, but both ended up pulling in far more DATA than
+  // a receipt does: filtering by contract address alone can't distinguish
+  // "this wallet's WETH transfer" from every other WETH transfer on Base
+  // in that block (WETH/USDC are among the most-used contracts on the
+  // whole chain - one test block averaged ~130 unrelated matching logs).
+  // A receipt is the one primitive that's actually scoped to exactly what
+  // we need: this transaction's own logs, nothing else. So: cache first
+  // (receipts are immutable - a repeat analysis or the periodic reasoning
+  // cron only pays for transactions genuinely new since last time),
+  // concurrency-capped batches for whatever's left, with rate-limit
+  // backoff+jitter on every call.
+  const receiptsByHash = await getCachedReceipts(chain, candidates.map((c) => c.hash));
+  const toFetch = candidates.filter((c) => !receiptsByHash.has(c.hash.toLowerCase()));
+  console.log(
+    `[edge:fetchTrades] ${chain} receipt cache: ${candidates.length - toFetch.length}/${candidates.length} hit, ${toFetch.length} to fetch`
   );
 
-  const { swapLogsByHash, transferLogsByHash } = await bulkFetchLogsForBlocks(
-    client,
-    chain,
-    poolManager,
-    SWAP_TOPIC,
-    TRANSFER_TOPIC,
-    referenceTokenAddresses,
-    blockNumbers
-  );
+  const BATCH = 25;
+  const PROGRESS_EVERY = 500;
+  const startedAt = Date.now();
+  const newlyFetched: { hash: string; logs: any[] }[] = [];
 
-  const needsFallback: Candidate[] = [];
-  let bulkEnrichedCount = 0;
-  let amountMismatchCount = 0; // found swap data but amounts never matched tolerance (likely multi-hop)
-  let fallbackEnrichedCount = 0;
-  let zeroDataCount = 0; // no relevant log found anywhere, even in a full receipt
+  for (let i = 0; i < toFetch.length; i += BATCH) {
+    const batch = toFetch.slice(i, i + BATCH);
+    const receipts = await Promise.all(
+      batch.map(({ hash }) =>
+        withRateLimitRetry(() => client.request({ method: 'eth_getTransactionReceipt', params: [hash] }), {
+          label: `${chain} eth_getTransactionReceipt`,
+        }).catch(() => null)
+      )
+    );
 
-  for (const candidate of candidates) {
-    const hash = candidate.hash.toLowerCase();
-    const swapLogs = swapLogsByHash.get(hash) ?? [];
-    const transferLogs = transferLogsByHash.get(hash) ?? [];
-
-    if (swapLogs.length === 0 && transferLogs.length === 0) {
-      // Bulk scan found nothing at all for this tx - either it's a
-      // Base V2/Virtuals-only trade (different topic, arbitrary pool
-      // address, not covered by the bulk scan) or something the bulk
-      // scan's scoped filters missed. Worth a real receipt fallback.
-      needsFallback.push(candidate);
-      continue;
+    if (i > 0 && i % PROGRESS_EVERY < BATCH) {
+      const pct = ((i / toFetch.length) * 100).toFixed(0);
+      const elapsedS = ((Date.now() - startedAt) / 1000).toFixed(0);
+      const ratePerS = i / Math.max(1, (Date.now() - startedAt) / 1000);
+      const etaS = ratePerS > 0 ? Math.round((toFetch.length - i) / ratePerS) : null;
+      console.log(
+        `[edge:fetchTrades] ${chain} receipt fetch progress: ${i}/${toFetch.length} (${pct}%), elapsed=${elapsedS}s${etaS !== null ? `, eta=${etaS}s` : ''}`
+      );
     }
 
-    const { enriched, totalSwapsSeen, closestDiffBps } = await tryEnrichCandidate(candidate, { logs: [...swapLogs, ...transferLogs] });
+    batch.forEach((c, j) => {
+      const r: any = receipts[j];
+      if (!r) return;
+      const logs = r.logs ?? [];
+      receiptsByHash.set(c.hash.toLowerCase(), { logs });
+      newlyFetched.push({ hash: c.hash, logs });
+    });
+  }
+
+  await cacheReceipts(chain, newlyFetched);
+  console.log(`[edge:fetchTrades] ${chain} cached ${newlyFetched.length} new receipt(s)`);
+
+  let matchedCount = 0;
+  let amountMismatchCount = 0; // found swap data but amounts never matched tolerance (likely multi-hop)
+  let zeroDataCount = 0; // no relevant log found in the receipt at all
+
+  for (const candidate of candidates) {
+    const receipt = receiptsByHash.get(candidate.hash.toLowerCase());
+    if (!receipt) {
+      zeroDataCount++;
+      continue;
+    }
+    const { enriched, totalSwapsSeen, closestDiffBps } = await tryEnrichCandidate(candidate, receipt);
     if (enriched) {
-      bulkEnrichedCount++;
-    } else if (totalSwapsSeen === 0) {
-      // Had reference-token Transfer activity but no relevant Swap log -
-      // possible multi-hop route the bulk scan's single-Swap-per-tx
-      // matching can't see; give the real receipt a chance too.
-      needsFallback.push(candidate);
-    } else {
+      matchedCount++;
+    } else if (totalSwapsSeen > 0) {
       amountMismatchCount++;
       console.log(
         `[edge:fetchTrades] ${chain} ${candidate.direction} hash=${candidate.hash.slice(0, 10)} — ${totalSwapsSeen} Swap event(s) found but no amount matched (closest was ${closestDiffBps !== null ? (closestDiffBps / 100).toFixed(2) + '%' : 'n/a'} off - large = likely multi-hop, small = tolerance too tight)`
       );
+    } else {
+      zeroDataCount++;
     }
   }
 
+  const capturePct = candidates.length > 0 ? ((matchedCount / candidates.length) * 100).toFixed(1) : '0.0';
   console.log(
-    `[edge:fetchTrades] ${chain} bulk scan matched ${bulkEnrichedCount}/${candidates.length}, ${needsFallback.length} candidate(s) need a per-tx receipt fallback`
-  );
-
-  // ── Tier 2: per-tx receipt fallback (cached) for whatever the bulk scan missed ──
-  if (needsFallback.length > 0) {
-    const receiptsByHash = await getCachedReceipts(chain, needsFallback.map((c) => c.hash));
-    const toFetch = needsFallback.filter((c) => !receiptsByHash.has(c.hash.toLowerCase()));
-    console.log(
-      `[edge:fetchTrades] ${chain} fallback receipt cache: ${needsFallback.length - toFetch.length}/${needsFallback.length} hit, ${toFetch.length} to fetch`
-    );
-
-    const BATCH = 25;
-    const newlyFetched: { hash: string; logs: any[] }[] = [];
-
-    for (let i = 0; i < toFetch.length; i += BATCH) {
-      const batch = toFetch.slice(i, i + BATCH);
-      const receipts = await Promise.all(
-        batch.map(({ hash }) =>
-          withRateLimitRetry(() => client.request({ method: 'eth_getTransactionReceipt', params: [hash] }), {
-            label: `${chain} eth_getTransactionReceipt`,
-          }).catch(() => null)
-        )
-      );
-      batch.forEach((c, j) => {
-        const r: any = receipts[j];
-        if (!r) return;
-        const logs = r.logs ?? [];
-        receiptsByHash.set(c.hash.toLowerCase(), { logs });
-        newlyFetched.push({ hash: c.hash, logs });
-      });
-    }
-
-    await cacheReceipts(chain, newlyFetched);
-    console.log(`[edge:fetchTrades] ${chain} cached ${newlyFetched.length} new fallback receipt(s)`);
-
-    for (const candidate of needsFallback) {
-      const receipt = receiptsByHash.get(candidate.hash.toLowerCase());
-      if (!receipt) {
-        zeroDataCount++;
-        continue;
-      }
-      const { enriched, totalSwapsSeen, closestDiffBps } = await tryEnrichCandidate(candidate, receipt);
-      if (enriched) {
-        fallbackEnrichedCount++;
-      } else if (totalSwapsSeen > 0) {
-        amountMismatchCount++;
-        console.log(
-          `[edge:fetchTrades] ${chain} ${candidate.direction} hash=${candidate.hash.slice(0, 10)} — ${totalSwapsSeen} Swap event(s) found but no amount matched (closest was ${closestDiffBps !== null ? (closestDiffBps / 100).toFixed(2) + '%' : 'n/a'} off - large = likely multi-hop, small = tolerance too tight)`
-        );
-      } else {
-        zeroDataCount++;
-      }
-    }
-  }
-
-  const totalEnriched = bulkEnrichedCount + fallbackEnrichedCount;
-  const capturePct = candidates.length > 0 ? ((totalEnriched / candidates.length) * 100).toFixed(1) : '0.0';
-  console.log(
-    `[edge:fetchTrades] ${chain} CAPTURE RATE: ${totalEnriched}/${candidates.length} (${capturePct}%) matched — ${amountMismatchCount} amount-mismatch (likely multi-hop), ${zeroDataCount} zero relevant log data found`
+    `[edge:fetchTrades] ${chain} CAPTURE RATE: ${matchedCount}/${candidates.length} (${capturePct}%) matched — ${amountMismatchCount} amount-mismatch (likely multi-hop), ${zeroDataCount} zero relevant log data found`
   );
 
   return synthetic;
