@@ -7,7 +7,7 @@ import { getCachedReceipts, cacheReceipts } from './receiptCache';
 import { withRateLimitRetry } from './rpcRetry';
 import type { TradeLeg } from './types';
 
-interface NormalizedTransfer {
+export interface NormalizedTransfer {
   hash: string;
   from: string;
   to: string;
@@ -20,7 +20,7 @@ interface NormalizedTransfer {
 }
 
 // Uniswap V4 PoolManager addresses per chain (for Swap event enrichment)
-const POOL_MANAGER_BY_CHAIN: Partial<Record<EdgeChainId, string>> = {
+export const POOL_MANAGER_BY_CHAIN: Partial<Record<EdgeChainId, string>> = {
   hood: '0x8366a39cc670b4001a1121b8f6a443a643e40951', // Doppler DEX on Robinhood Chain
   base: '0x498581ff718922c3f8e6a244956af099b2652b2b', // Uniswap V4 on Base
 };
@@ -124,35 +124,30 @@ function findReferenceTokenTransfer(
  * Both HOOD (Doppler) and Base (Uniswap V4) use the same Swap event signature
  * and ABI layout — only the PoolManager address differs.
  */
-async function enrichUniswapV4Legs(
-  chain: EdgeChainId,
-  client: any,
-  wallet: string,
-  transfers: NormalizedTransfer[]
-): Promise<NormalizedTransfer[]> {
-  const poolManagerOrNull = POOL_MANAGER_BY_CHAIN[chain];
-  if (!poolManagerOrNull) return [];
-  // TS doesn't narrow a captured variable inside a nested closure (tryEnrichCandidate
-  // below), even though the guard above guarantees it's defined - rebind to a
-  // provably-string const so the closure's type checks out.
-  const poolManager: string = poolManagerOrNull;
+export type CandidateDirection = 'sell' | 'buy';
+export interface SwapCandidate {
+  hash: string;
+  direction: CandidateDirection;
+  leg: NormalizedTransfer;
+}
 
-  // WETH used only as last-resort fallback when Transfer scanning finds nothing.
-  const wethAddress = REFERENCE_TOKENS[chain]?.find((t) => t.symbol === 'WETH')?.address ?? null;
-
+/**
+ * STAGE: classify. Groups transfers by tx hash and picks out the
+ * unbalanced ones (1-out-0-in or 0-out-1-in) - these are the sell/relay-buy
+ * candidates that need Swap-log enrichment because one side of the trade
+ * never touched the wallet as a plain transfer. Pure/sync - no IO, so it's
+ * cheap to test in isolation.
+ */
+export function classifySwapCandidates(walletLower: string, transfers: NormalizedTransfer[]): SwapCandidate[] {
   const byHash = new Map<string, { out: NormalizedTransfer[]; in: NormalizedTransfer[] }>();
   for (const t of transfers) {
     const g = byHash.get(t.hash) ?? { out: [], in: [] };
-    if (t.from === wallet) g.out.push(t);
-    if (t.to === wallet) g.in.push(t);
+    if (t.from === walletLower) g.out.push(t);
+    if (t.to === walletLower) g.in.push(t);
     byHash.set(t.hash, g);
   }
 
-  type Candidate =
-    | { hash: string; direction: 'sell'; leg: NormalizedTransfer }
-    | { hash: string; direction: 'buy'; leg: NormalizedTransfer };
-
-  const candidates: Candidate[] = [];
+  const candidates: SwapCandidate[] = [];
   for (const [hash, g] of byHash) {
     if (g.out.length === 1 && g.in.length === 0) {
       candidates.push({ hash, direction: 'sell', leg: g.out[0] });
@@ -160,244 +155,49 @@ async function enrichUniswapV4Legs(
       candidates.push({ hash, direction: 'buy', leg: g.in[0] });
     }
   }
+  return candidates;
+}
 
-  if (candidates.length === 0) return [];
+export interface ReceiptFetchResult {
+  receiptsByHash: Map<string, { logs: any[] }>;
+  cacheHits: number;
+  newlyFetchedCount: number;
+  failedCount: number;
+  elapsedMs: number;
+}
 
-  console.log(
-    `[edge:fetchTrades] ${chain} enriching ${candidates.length} Uniswap V4 trade(s) (${
-      candidates.filter((c) => c.direction === 'sell').length
-    } sell, ${candidates.filter((c) => c.direction === 'buy').length} relay-buy)`
-  );
-
-  const synthetic: NormalizedTransfer[] = [];
-
-  /**
-   * Tries to enrich one candidate from a receipt-shaped {logs} object
-   * (either bulk-scanned or a real per-tx receipt - both look the same to
-   * this function). Returns whether it matched, plus how many Swap events
-   * were seen at all (for the "found logs but nothing matched" diagnostic).
-   */
-  async function tryEnrichCandidate(
-    candidate: Candidate,
-    receipt: { logs: any[] }
-  ): Promise<{ enriched: boolean; totalSwapsSeen: number; closestDiffBps: number | null }> {
-    const swapLogs = (receipt.logs ?? []).filter(
-      (log: any) => log.address?.toLowerCase() === poolManager && log.topics?.[0] === SWAP_TOPIC
-    );
-
-    // Tracks how close the nearest-but-failed match was, in basis points of the
-    // expected amount - turns "no amount matched" from a dead end into a real
-    // diagnostic: a multi-hop route typically misses by a lot (thousands of
-    // bps), while a too-tight tolerance on a genuine relay fee misses by a
-    // little (tens of bps) - the fix is different in each case.
-    let closestDiffBps: number | null = null;
-    const trackClosest = (diff: bigint, expected: bigint) => {
-      if (expected <= BigInt(0)) return;
-      const bps = Number((diff * BigInt(10000)) / expected);
-      if (closestDiffBps === null || bps < closestDiffBps) closestDiffBps = bps;
-    };
-
-    let enriched = false;
-    for (const swapLog of swapLogs) {
-      if (enriched) break;
-      const data = (swapLog.data as string).slice(2);
-      const amount0 = abiSignedInt('0x' + data.slice(0, 64));
-      const amount1 = abiSignedInt('0x' + data.slice(64, 128));
-
-      const { direction, leg } = candidate;
-      if (leg.rawQty === BigInt(0)) continue;
-
-      if (direction === 'sell') {
-        // Negative amount = token paid to pool (sold). Positive = reference token received.
-        // Try both amount0/amount1 orderings.
-        for (const [paidAmt, receivedAmt] of [
-          [amount0, amount1],
-          [amount1, amount0],
-        ] as [bigint, bigint][]) {
-          if (paidAmt >= BigInt(0) || receivedAmt <= BigInt(0)) continue;
-          const absPaid = -paidAmt;
-          const diff = absPaid > leg.rawQty ? absPaid - leg.rawQty : leg.rawQty - absPaid;
-          trackClosest(diff, leg.rawQty);
-          if (diff > leg.rawQty / BigInt(500)) continue; // 0.2%
-
-          // Detect actual reference token from ERC20 Transfer events (handles
-          // TOKEN/VIRTUAL, TOKEN/CBBTC etc. — not just TOKEN/WETH pools).
-          const found = findReferenceTokenTransfer(receipt, leg.tokenAddress, receivedAmt);
-          const refAddr = found?.tokenAddress ?? wethAddress;
-          if (!refAddr) break; // no reference token detectable — skip
-
-          const refRawQty = found?.rawQty ?? receivedAmt;
-          const refDecimals = await getDecimals(client, refAddr as `0x${string}`);
-          const refQty = Number(refRawQty) / 10 ** refDecimals;
-          const refLabel = found ? refAddr.slice(0, 10) : 'WETH(fallback)';
-
-          synthetic.push({
-            hash: candidate.hash,
-            from: poolManager,
-            to: wallet,
-            tokenAddress: refAddr,
-            qty: refQty,
-            rawQty: refRawQty,
-            ts: leg.ts,
-            blockNumber: leg.blockNumber,
-          });
-          console.log(
-            `[edge:fetchTrades] ${chain} V4 sell hash=${candidate.hash.slice(0, 10)} sold=${leg.qty.toFixed(4)} ${leg.tokenAddress.slice(0, 10)} rcvd=${refQty.toFixed(8)} ${refLabel}`
-          );
-          enriched = true;
-          break;
-        }
-      } else {
-        // direction === 'buy' (relay-buy: token arrived at wallet, reference token paid cross-chain)
-        // Positive amount = token received by caller (bought). Negative = reference token paid.
-        // Relay bridge takes a fee, so matching tolerance is widened to 1%.
-        for (const [receivedAmt, paidAmt] of [
-          [amount0, amount1],
-          [amount1, amount0],
-        ] as [bigint, bigint][]) {
-          if (receivedAmt <= BigInt(0) || paidAmt >= BigInt(0)) continue;
-          const diff = receivedAmt > leg.rawQty ? receivedAmt - leg.rawQty : leg.rawQty - receivedAmt;
-          trackClosest(diff, leg.rawQty);
-          if (diff > leg.rawQty / BigInt(100)) continue; // 1% (relay fee headroom)
-
-          const refPaidRaw = -paidAmt;
-          const found = findReferenceTokenTransfer(receipt, leg.tokenAddress, refPaidRaw);
-          const refAddr = found?.tokenAddress ?? wethAddress;
-          if (!refAddr) break; // no reference token detectable — skip
-
-          const refRawQty = found?.rawQty ?? refPaidRaw;
-          const refDecimals = await getDecimals(client, refAddr as `0x${string}`);
-          const refQty = Number(refRawQty) / 10 ** refDecimals;
-          const refLabel = found ? refAddr.slice(0, 10) : 'WETH(fallback)';
-
-          synthetic.push({
-            hash: candidate.hash,
-            from: wallet,
-            to: poolManager,
-            tokenAddress: refAddr,
-            qty: refQty,
-            rawQty: refRawQty,
-            ts: leg.ts,
-            blockNumber: leg.blockNumber,
-          });
-          console.log(
-            `[edge:fetchTrades] ${chain} V4 relay-buy hash=${candidate.hash.slice(0, 10)} rcvd=${leg.qty.toFixed(4)} ${leg.tokenAddress.slice(0, 10)} paid=${refQty.toFixed(8)} ${refLabel}`
-          );
-          enriched = true;
-          break;
-        }
-      }
-    }
-
-    // ── Fallback: Virtuals Protocol FPair (Uniswap V2-style) ────────────
-    // Virtuals FPair is a V2 clone where token0 = VIRTUAL, token1 = agent
-    // token. The relay bridge may buy/sell the agent token via FPair without
-    // touching the Uniswap V4 PoolManager, so the V4 Swap check above finds
-    // nothing. Detect via the V2 Swap event on any contract in the receipt.
-    if (!enriched && chain === 'base') {
-      const v2Logs = (receipt.logs ?? []).filter((log: any) => log.topics?.[0] === V2_SWAP_TOPIC);
-
-      for (const v2Log of v2Logs) {
-        if (enriched) break;
-        const d = (v2Log.data as string).slice(2);
-        const a0In = BigInt('0x' + d.slice(0, 64));
-        const a1In = BigInt('0x' + d.slice(64, 128));
-        const a0Out = BigInt('0x' + d.slice(128, 192));
-        const a1Out = BigInt('0x' + d.slice(192, 256));
-
-        const { direction, leg } = candidate;
-        if (leg.rawQty === BigInt(0)) continue;
-
-        if (direction === 'sell') {
-          for (const [soldAmt, rcvdAmt] of [
-            [a0In, a0Out],
-            [a0In, a1Out],
-            [a1In, a0Out],
-            [a1In, a1Out],
-          ] as [bigint, bigint][]) {
-            if (soldAmt === BigInt(0) || rcvdAmt === BigInt(0)) continue;
-            const diff = soldAmt > leg.rawQty ? soldAmt - leg.rawQty : leg.rawQty - soldAmt;
-            if (diff > leg.rawQty / BigInt(500)) continue; // 0.2%
-
-            const found = findReferenceTokenTransfer(receipt, leg.tokenAddress, rcvdAmt);
-            const refAddr = found?.tokenAddress ?? wethAddress;
-            if (!refAddr) break;
-            const refRawQty = found?.rawQty ?? rcvdAmt;
-            const refDecimals = await getDecimals(client, refAddr as `0x${string}`);
-            const refQty = Number(refRawQty) / 10 ** refDecimals;
-
-            synthetic.push({ hash: candidate.hash, from: poolManager, to: wallet, tokenAddress: refAddr, qty: refQty, rawQty: refRawQty, ts: leg.ts, blockNumber: leg.blockNumber });
-            console.log(`[edge:fetchTrades] ${chain} V2/Virtuals sell hash=${candidate.hash.slice(0, 10)} sold=${leg.qty.toFixed(4)} rcvd=${refQty.toFixed(8)} ${refAddr.slice(0, 10)}`);
-            enriched = true;
-            break;
-          }
-        } else {
-          // relay-buy: agent token received; VIRTUAL was paid cross-chain
-          // V2 Swap: amount_X_Out = agent token out (FPair → relay → wallet)
-          // Relay takes ~1% fee so wallet receives slightly less than FPair outputs.
-          for (const [boughtAmt, paidAmt] of [
-            [a0Out, a0In],
-            [a0Out, a1In],
-            [a1Out, a0In],
-            [a1Out, a1In],
-          ] as [bigint, bigint][]) {
-            if (boughtAmt === BigInt(0) || paidAmt === BigInt(0)) continue;
-            const diff = boughtAmt > leg.rawQty ? boughtAmt - leg.rawQty : leg.rawQty - boughtAmt;
-            if (diff > (leg.rawQty * BigInt(150)) / BigInt(10000)) continue; // 1.5%
-
-            const found = findReferenceTokenTransfer(receipt, leg.tokenAddress, paidAmt);
-            const refAddr = found?.tokenAddress ?? wethAddress;
-            if (!refAddr) break;
-            const refRawQty = found?.rawQty ?? paidAmt;
-            const refDecimals = await getDecimals(client, refAddr as `0x${string}`);
-            const refQty = Number(refRawQty) / 10 ** refDecimals;
-
-            synthetic.push({ hash: candidate.hash, from: wallet, to: poolManager, tokenAddress: refAddr, qty: refQty, rawQty: refRawQty, ts: leg.ts, blockNumber: leg.blockNumber });
-            console.log(`[edge:fetchTrades] ${chain} V2/Virtuals relay-buy hash=${candidate.hash.slice(0, 10)} rcvd=${leg.qty.toFixed(4)} paid=${refQty.toFixed(8)} ${refAddr.slice(0, 10)}`);
-            enriched = true;
-            break;
-          }
-        }
-      }
-    }
-
-    const totalSwapsSeen = swapLogs.length + (receipt.logs ?? []).filter((l: any) => l.topics?.[0] === V2_SWAP_TOPIC).length;
-    return { enriched, totalSwapsSeen, closestDiffBps };
-  }
-
-  // ── Per-transaction receipt fetch (cached, concurrency-capped, rate-limit-aware) ──
-  // Tried two "clever" bulk eth_getLogs approaches before this (a full
-  // range scan, then a per-block scan) - both looked cheaper on paper by
-  // cutting request COUNT, but both ended up pulling in far more DATA than
-  // a receipt does: filtering by contract address alone can't distinguish
-  // "this wallet's WETH transfer" from every other WETH transfer on Base
-  // in that block (WETH/USDC are among the most-used contracts on the
-  // whole chain - one test block averaged ~130 unrelated matching logs).
-  // A receipt is the one primitive that's actually scoped to exactly what
-  // we need: this transaction's own logs, nothing else. So: cache first
-  // (receipts are immutable - a repeat analysis or the periodic reasoning
-  // cron only pays for transactions genuinely new since last time),
-  // concurrency-capped batches for whatever's left, with rate-limit
-  // backoff+jitter on every call.
-  const receiptsByHash = await getCachedReceipts(chain, candidates.map((c) => c.hash));
-  const toFetch = candidates.filter((c) => !receiptsByHash.has(c.hash.toLowerCase()));
-  console.log(
-    `[edge:fetchTrades] ${chain} receipt cache: ${candidates.length - toFetch.length}/${candidates.length} hit, ${toFetch.length} to fetch`
-  );
+/**
+ * STAGE: receipt fetch. Bulk-checks the persistent cache first (receipts
+ * are immutable once mined), then fetches whatever's missing in
+ * concurrency-capped batches with rate-limit backoff+jitter, then caches
+ * the new ones. This is normally the slowest/most expensive stage on a
+ * wallet with thousands of unbalanced trades - isolated here so it can be
+ * timed and diagnosed on its own.
+ */
+export async function fetchReceiptsForHashes(
+  chain: EdgeChainId,
+  client: any,
+  hashes: string[]
+): Promise<ReceiptFetchResult> {
+  const startedAt = Date.now();
+  const receiptsByHash = await getCachedReceipts(chain, hashes);
+  const cacheHits = receiptsByHash.size;
+  const toFetch = hashes.filter((h) => !receiptsByHash.has(h.toLowerCase()));
 
   // Sustained 429s throughout an entire run (not just an initial burst) is
-  // evidence the app's actual sustained throughput is below 25 req/batch -
-  // every retry wastes 2s+ doing nothing, so a lower, steadier concurrency
-  // finishes faster in practice than a higher one that mostly gets rejected.
+  // evidence the app's actual sustained throughput is below a high batch
+  // size - every retry wastes 2s+ doing nothing, so a lower, steadier
+  // concurrency finishes faster in practice than a higher one that mostly
+  // gets rejected.
   const BATCH = Number(process.env.EDGE_RECEIPT_FETCH_BATCH) || 8;
   const PROGRESS_EVERY = 500;
-  const startedAt = Date.now();
   const newlyFetched: { hash: string; logs: any[] }[] = [];
+  let failedCount = 0;
 
   for (let i = 0; i < toFetch.length; i += BATCH) {
     const batch = toFetch.slice(i, i + BATCH);
     const receipts = await Promise.all(
-      batch.map(({ hash }) =>
+      batch.map((hash) =>
         withRateLimitRetry(() => client.request({ method: 'eth_getTransactionReceipt', params: [hash] }), {
           label: `${chain} eth_getTransactionReceipt`,
         }).catch(() => null)
@@ -414,18 +214,265 @@ async function enrichUniswapV4Legs(
       );
     }
 
-    batch.forEach((c, j) => {
+    batch.forEach((hash, j) => {
       const r: any = receipts[j];
-      if (!r) return;
+      if (!r) {
+        failedCount++;
+        return;
+      }
       const logs = r.logs ?? [];
-      receiptsByHash.set(c.hash.toLowerCase(), { logs });
-      newlyFetched.push({ hash: c.hash, logs });
+      receiptsByHash.set(hash.toLowerCase(), { logs });
+      newlyFetched.push({ hash, logs });
     });
   }
 
   await cacheReceipts(chain, newlyFetched);
-  console.log(`[edge:fetchTrades] ${chain} cached ${newlyFetched.length} new receipt(s)`);
 
+  return {
+    receiptsByHash,
+    cacheHits,
+    newlyFetchedCount: newlyFetched.length,
+    failedCount,
+    elapsedMs: Date.now() - startedAt,
+  };
+}
+
+export interface ParseSwapResult {
+  enriched: boolean;
+  /** Total Swap-shaped events seen (V4 at PoolManager + V2/Virtuals) - 0 means the receipt had nothing swap-shaped at all. */
+  totalSwapsSeen: number;
+  /** How close the nearest failed match was, in basis points of the expected amount. Large = likely multi-hop; small = tolerance too tight. */
+  closestDiffBps: number | null;
+  syntheticLeg: NormalizedTransfer | null;
+  matchLabel: string | null;
+}
+
+/**
+ * STAGE: parse. Given one candidate and its receipt's logs, tries to find
+ * the matching V4 Swap event (or, on Base, a Virtuals-style V2 Swap) and
+ * the actual reference token moved alongside it. Pure given its inputs
+ * (only IO is getDecimals, which is itself cached) - the core "does this
+ * receipt actually decode into a trade" logic, isolated so it can be
+ * tested against one specific receipt without re-fetching anything.
+ */
+export async function parseSwapFromReceipt(opts: {
+  chain: EdgeChainId;
+  client: any;
+  poolManager: string;
+  wethAddress: string | null;
+  wallet: string;
+  candidate: SwapCandidate;
+  receipt: { logs: any[] };
+}): Promise<ParseSwapResult> {
+  const { chain, client, poolManager, wethAddress, wallet, candidate, receipt } = opts;
+
+  const swapLogs = (receipt.logs ?? []).filter(
+    (log: any) => log.address?.toLowerCase() === poolManager && log.topics?.[0] === SWAP_TOPIC
+  );
+
+  let closestDiffBps: number | null = null;
+  const trackClosest = (diff: bigint, expected: bigint) => {
+    if (expected <= BigInt(0)) return;
+    const bps = Number((diff * BigInt(10000)) / expected);
+    if (closestDiffBps === null || bps < closestDiffBps) closestDiffBps = bps;
+  };
+
+  let enriched = false;
+  let syntheticLeg: NormalizedTransfer | null = null;
+  let matchLabel: string | null = null;
+
+  for (const swapLog of swapLogs) {
+    if (enriched) break;
+    const data = (swapLog.data as string).slice(2);
+    const amount0 = abiSignedInt('0x' + data.slice(0, 64));
+    const amount1 = abiSignedInt('0x' + data.slice(64, 128));
+
+    const { direction, leg } = candidate;
+    if (leg.rawQty === BigInt(0)) continue;
+
+    if (direction === 'sell') {
+      // Negative amount = token paid to pool (sold). Positive = reference token received.
+      // Try both amount0/amount1 orderings.
+      for (const [paidAmt, receivedAmt] of [
+        [amount0, amount1],
+        [amount1, amount0],
+      ] as [bigint, bigint][]) {
+        if (paidAmt >= BigInt(0) || receivedAmt <= BigInt(0)) continue;
+        const absPaid = -paidAmt;
+        const diff = absPaid > leg.rawQty ? absPaid - leg.rawQty : leg.rawQty - absPaid;
+        trackClosest(diff, leg.rawQty);
+        if (diff > leg.rawQty / BigInt(500)) continue; // 0.2%
+
+        // Detect actual reference token from ERC20 Transfer events (handles
+        // TOKEN/VIRTUAL, TOKEN/CBBTC etc. — not just TOKEN/WETH pools).
+        const found = findReferenceTokenTransfer(receipt, leg.tokenAddress, receivedAmt);
+        const refAddr = found?.tokenAddress ?? wethAddress;
+        if (!refAddr) break; // no reference token detectable — skip
+
+        const refRawQty = found?.rawQty ?? receivedAmt;
+        const refDecimals = await getDecimals(client, refAddr as `0x${string}`);
+        const refQty = Number(refRawQty) / 10 ** refDecimals;
+
+        syntheticLeg = {
+          hash: candidate.hash,
+          from: poolManager,
+          to: wallet,
+          tokenAddress: refAddr,
+          qty: refQty,
+          rawQty: refRawQty,
+          ts: leg.ts,
+          blockNumber: leg.blockNumber,
+        };
+        matchLabel = `V4 sell sold=${leg.qty.toFixed(4)} ${leg.tokenAddress.slice(0, 10)} rcvd=${refQty.toFixed(8)} ${found ? refAddr.slice(0, 10) : 'WETH(fallback)'}`;
+        enriched = true;
+        break;
+      }
+    } else {
+      // direction === 'buy' (relay-buy: token arrived at wallet, reference token paid cross-chain)
+      // Positive amount = token received by caller (bought). Negative = reference token paid.
+      // Relay bridge takes a fee, so matching tolerance is widened to 1%.
+      for (const [receivedAmt, paidAmt] of [
+        [amount0, amount1],
+        [amount1, amount0],
+      ] as [bigint, bigint][]) {
+        if (receivedAmt <= BigInt(0) || paidAmt >= BigInt(0)) continue;
+        const diff = receivedAmt > leg.rawQty ? receivedAmt - leg.rawQty : leg.rawQty - receivedAmt;
+        trackClosest(diff, leg.rawQty);
+        if (diff > leg.rawQty / BigInt(100)) continue; // 1% (relay fee headroom)
+
+        const refPaidRaw = -paidAmt;
+        const found = findReferenceTokenTransfer(receipt, leg.tokenAddress, refPaidRaw);
+        const refAddr = found?.tokenAddress ?? wethAddress;
+        if (!refAddr) break; // no reference token detectable — skip
+
+        const refRawQty = found?.rawQty ?? refPaidRaw;
+        const refDecimals = await getDecimals(client, refAddr as `0x${string}`);
+        const refQty = Number(refRawQty) / 10 ** refDecimals;
+
+        syntheticLeg = {
+          hash: candidate.hash,
+          from: wallet,
+          to: poolManager,
+          tokenAddress: refAddr,
+          qty: refQty,
+          rawQty: refRawQty,
+          ts: leg.ts,
+          blockNumber: leg.blockNumber,
+        };
+        matchLabel = `V4 relay-buy rcvd=${leg.qty.toFixed(4)} ${leg.tokenAddress.slice(0, 10)} paid=${refQty.toFixed(8)} ${found ? refAddr.slice(0, 10) : 'WETH(fallback)'}`;
+        enriched = true;
+        break;
+      }
+    }
+  }
+
+  // ── Fallback: Virtuals Protocol FPair (Uniswap V2-style) ────────────
+  // Virtuals FPair is a V2 clone where token0 = VIRTUAL, token1 = agent
+  // token. The relay bridge may buy/sell the agent token via FPair without
+  // touching the Uniswap V4 PoolManager, so the V4 Swap check above finds
+  // nothing. Detect via the V2 Swap event on any contract in the receipt.
+  if (!enriched && chain === 'base') {
+    const v2Logs = (receipt.logs ?? []).filter((log: any) => log.topics?.[0] === V2_SWAP_TOPIC);
+
+    for (const v2Log of v2Logs) {
+      if (enriched) break;
+      const d = (v2Log.data as string).slice(2);
+      const a0In = BigInt('0x' + d.slice(0, 64));
+      const a1In = BigInt('0x' + d.slice(64, 128));
+      const a0Out = BigInt('0x' + d.slice(128, 192));
+      const a1Out = BigInt('0x' + d.slice(192, 256));
+
+      const { direction, leg } = candidate;
+      if (leg.rawQty === BigInt(0)) continue;
+
+      if (direction === 'sell') {
+        for (const [soldAmt, rcvdAmt] of [
+          [a0In, a0Out],
+          [a0In, a1Out],
+          [a1In, a0Out],
+          [a1In, a1Out],
+        ] as [bigint, bigint][]) {
+          if (soldAmt === BigInt(0) || rcvdAmt === BigInt(0)) continue;
+          const diff = soldAmt > leg.rawQty ? soldAmt - leg.rawQty : leg.rawQty - soldAmt;
+          if (diff > leg.rawQty / BigInt(500)) continue; // 0.2%
+
+          const found = findReferenceTokenTransfer(receipt, leg.tokenAddress, rcvdAmt);
+          const refAddr = found?.tokenAddress ?? wethAddress;
+          if (!refAddr) break;
+          const refRawQty = found?.rawQty ?? rcvdAmt;
+          const refDecimals = await getDecimals(client, refAddr as `0x${string}`);
+          const refQty = Number(refRawQty) / 10 ** refDecimals;
+
+          syntheticLeg = { hash: candidate.hash, from: poolManager, to: wallet, tokenAddress: refAddr, qty: refQty, rawQty: refRawQty, ts: leg.ts, blockNumber: leg.blockNumber };
+          matchLabel = `V2/Virtuals sell sold=${leg.qty.toFixed(4)} rcvd=${refQty.toFixed(8)} ${refAddr.slice(0, 10)}`;
+          enriched = true;
+          break;
+        }
+      } else {
+        // relay-buy: agent token received; VIRTUAL was paid cross-chain
+        // V2 Swap: amount_X_Out = agent token out (FPair → relay → wallet)
+        // Relay takes ~1% fee so wallet receives slightly less than FPair outputs.
+        for (const [boughtAmt, paidAmt] of [
+          [a0Out, a0In],
+          [a0Out, a1In],
+          [a1Out, a0In],
+          [a1Out, a1In],
+        ] as [bigint, bigint][]) {
+          if (boughtAmt === BigInt(0) || paidAmt === BigInt(0)) continue;
+          const diff = boughtAmt > leg.rawQty ? boughtAmt - leg.rawQty : leg.rawQty - boughtAmt;
+          if (diff > (leg.rawQty * BigInt(150)) / BigInt(10000)) continue; // 1.5%
+
+          const found = findReferenceTokenTransfer(receipt, leg.tokenAddress, paidAmt);
+          const refAddr = found?.tokenAddress ?? wethAddress;
+          if (!refAddr) break;
+          const refRawQty = found?.rawQty ?? paidAmt;
+          const refDecimals = await getDecimals(client, refAddr as `0x${string}`);
+          const refQty = Number(refRawQty) / 10 ** refDecimals;
+
+          syntheticLeg = { hash: candidate.hash, from: wallet, to: poolManager, tokenAddress: refAddr, qty: refQty, rawQty: refRawQty, ts: leg.ts, blockNumber: leg.blockNumber };
+          matchLabel = `V2/Virtuals relay-buy rcvd=${leg.qty.toFixed(4)} paid=${refQty.toFixed(8)} ${refAddr.slice(0, 10)}`;
+          enriched = true;
+          break;
+        }
+      }
+    }
+  }
+
+  const totalSwapsSeen = swapLogs.length + (receipt.logs ?? []).filter((l: any) => l.topics?.[0] === V2_SWAP_TOPIC).length;
+  return { enriched, totalSwapsSeen, closestDiffBps, syntheticLeg, matchLabel };
+}
+
+/** Orchestrates classify -> fetch receipts -> parse for the full wallet-legs pipeline. See fetchTrades.ts stage functions above for the pieces this calls. */
+async function enrichUniswapV4Legs(
+  chain: EdgeChainId,
+  client: any,
+  wallet: string,
+  transfers: NormalizedTransfer[]
+): Promise<NormalizedTransfer[]> {
+  const poolManagerOrNull = POOL_MANAGER_BY_CHAIN[chain];
+  if (!poolManagerOrNull) return [];
+  const poolManager: string = poolManagerOrNull;
+  const wethAddress = REFERENCE_TOKENS[chain]?.find((t) => t.symbol === 'WETH')?.address ?? null;
+
+  const candidates = classifySwapCandidates(wallet, transfers);
+  if (candidates.length === 0) return [];
+
+  console.log(
+    `[edge:fetchTrades] ${chain} enriching ${candidates.length} Uniswap V4 trade(s) (${
+      candidates.filter((c) => c.direction === 'sell').length
+    } sell, ${candidates.filter((c) => c.direction === 'buy').length} relay-buy)`
+  );
+
+  const { receiptsByHash, cacheHits, newlyFetchedCount } = await fetchReceiptsForHashes(
+    chain,
+    client,
+    candidates.map((c) => c.hash)
+  );
+  console.log(
+    `[edge:fetchTrades] ${chain} receipt cache: ${cacheHits}/${candidates.length} hit, ${newlyFetchedCount} newly fetched`
+  );
+
+  const synthetic: NormalizedTransfer[] = [];
   let matchedCount = 0;
   let amountMismatchCount = 0; // found swap data but amounts never matched tolerance (likely multi-hop)
   let zeroDataCount = 0; // no relevant log found in the receipt at all
@@ -442,9 +489,19 @@ async function enrichUniswapV4Legs(
       }
       continue;
     }
-    const { enriched, totalSwapsSeen, closestDiffBps } = await tryEnrichCandidate(candidate, receipt);
-    if (enriched) {
+    const { enriched, totalSwapsSeen, closestDiffBps, syntheticLeg, matchLabel } = await parseSwapFromReceipt({
+      chain,
+      client,
+      poolManager,
+      wethAddress,
+      wallet,
+      candidate,
+      receipt,
+    });
+    if (enriched && syntheticLeg) {
+      synthetic.push(syntheticLeg);
       matchedCount++;
+      console.log(`[edge:fetchTrades] ${chain} ${matchLabel} hash=${candidate.hash.slice(0, 10)}`);
     } else if (totalSwapsSeen > 0) {
       amountMismatchCount++;
       console.log(
@@ -455,10 +512,6 @@ async function enrichUniswapV4Legs(
       if (zeroDataDiagnosticsLogged < MAX_ZERO_DATA_DIAGNOSTICS) {
         zeroDataDiagnosticsLogged++;
         const allLogs: any[] = receipt.logs ?? [];
-        // Show what's ACTUALLY in this receipt instead of guessing - every
-        // distinct (address, topic0) pair present, so we can tell "the
-        // receipt really has nothing swap-shaped" apart from "our
-        // PoolManager address/topic assumption doesn't match what's here".
         const seen = new Set<string>();
         const pairs: string[] = [];
         for (const l of allLogs) {
@@ -492,7 +545,7 @@ async function enrichUniswapV4Legs(
  * catches ETH returned via internal contract calls (e.g. router unwrapping
  * WETH on a sell).
  */
-async function fetchViaAlchemyEnhancedApi(
+export async function fetchViaAlchemyEnhancedApi(
   chain: EdgeChainId,
   wallet: string,
   fromBlockHex: string,
