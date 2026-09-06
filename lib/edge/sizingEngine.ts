@@ -1,4 +1,5 @@
 import { buildConfidenceBlock } from './stats';
+import { computePostLossBehavior } from './postLossBehavior';
 import type { ReconstructedPosition, SizingCategoryResult, Verdict } from './types';
 
 type ClosedPosition = ReconstructedPosition & { realizedPnlUsd: number };
@@ -82,6 +83,8 @@ export function computeSizingCategory(allClosedPositions: ReconstructedPosition[
           ? 'scaled_in'
           : 'mixed';
 
+  const postLossBehavior = computePostLossBehavior(positions);
+
   const negativeFindings: string[] = [];
   if (addAfterLossRatioPct > 40 && multiLegPositions.length >= 3) {
     negativeFindings.push(`Averaging down: ${addAfterLossRatioPct.toFixed(0)}% of multi-buy positions added size below the running average entry price`);
@@ -89,9 +92,14 @@ export function computeSizingCategory(allClosedPositions: ReconstructedPosition[
   if (convictionRatio < 1 && losers.length >= 3 && winners.length >= 3) {
     negativeFindings.push(`Sizing is inverted: avg size on losers ($${avgSizeLosersUsd.toFixed(0)}) exceeds avg size on winners ($${avgSizeWinnersUsd.toFixed(0)})`);
   }
+  if (postLossBehavior.label === 'revenge_sizing') {
+    negativeFindings.push(
+      `Revenge sizing: bets ${(postLossBehavior.avgSizeRatioPostLoss ?? 0).toFixed(1)}x bigger than usual in the ${postLossBehavior.windowTradesAnalyzed} trades right after a big loss`
+    );
+  }
 
   let verdict: Verdict = 'no_edge';
-  if (convictionRatio > 1.3 && sizeSpectrumLabel !== 'erratic') verdict = 'strong_edge';
+  if (convictionRatio > 1.3 && sizeSpectrumLabel !== 'erratic' && postLossBehavior.label !== 'revenge_sizing') verdict = 'strong_edge';
   else if (convictionRatio > 1) verdict = 'possible_edge';
   else if (negativeFindings.length > 0) verdict = 'negative_edge';
 
@@ -115,6 +123,7 @@ export function computeSizingCategory(allClosedPositions: ReconstructedPosition[
     lossSideSizeCutSpeedSeconds,
     addAfterLossRatioPct,
     scaleInShapeLabel,
+    postLossBehavior,
     negativeFindings,
     confidence: buildConfidenceBlock(
       positions.filter(isWin).length,

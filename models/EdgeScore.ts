@@ -12,6 +12,20 @@ const ConfidenceBlockSchema = new Schema(
   { _id: false }
 );
 
+const LuckTestSchema = new Schema(
+  {
+    n: { type: Number, required: true },
+    distinctTokenCount: { type: Number, required: true },
+    expectancyAllUsd: { type: Number, required: true },
+    expectancyExcludingBestUsd: { type: Number, required: true },
+    bestTradePnlUsd: { type: Number, default: null },
+    pctOfTotalPnlFromBestTrade: { type: Number, default: null },
+    bootstrapPositiveExpectancyPct: { type: Number, required: true },
+    robust: { type: Boolean, required: true },
+  },
+  { _id: false }
+);
+
 const EntryConditionBucketSchema = new Schema(
   {
     conditionLabel: { type: String, required: true },
@@ -20,6 +34,7 @@ const EntryConditionBucketSchema = new Schema(
     expectancyUsd: { type: Number, required: true },
     totalPnlUsd: { type: Number, required: true },
     confidence: { type: ConfidenceBlockSchema, required: true },
+    luckTest: { type: LuckTestSchema, required: true },
   },
   { _id: false }
 );
@@ -36,6 +51,7 @@ const ExitConditionBucketSchema = new Schema(
     peakCaptureAvg: { type: Number, required: true },
     expectancyUsd: { type: Number, required: true },
     confidence: { type: ConfidenceBlockSchema, required: true },
+    luckTest: { type: LuckTestSchema, required: true },
   },
   { _id: false }
 );
@@ -70,6 +86,19 @@ const ExitCategorySchema = new Schema(
   { _id: false }
 );
 
+const PostLossBehaviorSchema = new Schema(
+  {
+    bigLossEventCount: { type: Number, required: true },
+    windowTradesAnalyzed: { type: Number, required: true },
+    avgSizeRatioPostLoss: { type: Number, default: null },
+    winRatePostLoss: { type: Number, default: null },
+    winRateBaseline: { type: Number, required: true },
+    label: { type: String, enum: ['revenge_sizing', 'disciplined_after_loss', 'no_signal'], required: true },
+    confidenceTier: { type: String, enum: ['insufficient', 'provisional', 'high'], required: true },
+  },
+  { _id: false }
+);
+
 const SizingCategorySchema = new Schema(
   {
     verdict: { type: String, enum: ['strong_edge', 'possible_edge', 'no_edge', 'negative_edge'], required: true },
@@ -85,6 +114,7 @@ const SizingCategorySchema = new Schema(
     lossSideSizeCutSpeedSeconds: { type: Number, default: null },
     addAfterLossRatioPct: { type: Number, required: true },
     scaleInShapeLabel: { type: String, enum: ['single_shot', 'scaled_in', 'mixed'], required: true },
+    postLossBehavior: { type: PostLossBehaviorSchema, required: true },
     negativeFindings: { type: [String], default: [] },
     confidence: { type: ConfidenceBlockSchema, required: true },
   },
@@ -97,6 +127,33 @@ const TopFindingSchema = new Schema(
     label: { type: String, required: true },
     impactUsd: { type: Number, required: true },
     detail: { type: String, required: true },
+    confidenceTier: { type: String, enum: ['insufficient', 'provisional', 'high'], required: true },
+    robust: { type: Boolean, required: true },
+  },
+  { _id: false }
+);
+
+const RiskAdjustedStatsSchema = new Schema(
+  {
+    n: { type: Number, required: true },
+    meanReturnPct: { type: Number, required: true },
+    medianReturnPct: { type: Number, required: true },
+    stdDevReturnPct: { type: Number, required: true },
+    downsideDeviationPct: { type: Number, required: true },
+    sharpeRatio: { type: Number, default: null },
+    sortinoRatio: { type: Number, default: null },
+    bestTradeReturnPct: { type: Number, default: null },
+    worstTradeReturnPct: { type: Number, default: null },
+  },
+  { _id: false }
+);
+
+const BettablePatternSchema = new Schema(
+  {
+    name: { type: String, enum: ['disciplined_scaler', 'loss_averse_exiter', 'repeat_conviction_trader'], required: true },
+    label: { type: String, required: true },
+    detected: { type: Boolean, required: true },
+    evidence: { type: String, required: true },
     confidenceTier: { type: String, enum: ['insufficient', 'provisional', 'high'], required: true },
   },
   { _id: false }
@@ -154,6 +211,9 @@ const EdgeReportSchema = new Schema(
     topStrengths: { type: [TopFindingSchema], default: [] },
     topWeaknesses: { type: [TopFindingSchema], default: [] },
     edgeDecay: { type: EdgeDecaySchema, required: true },
+    riskAdjusted: { type: RiskAdjustedStatsSchema, required: true },
+    luckTest: { type: LuckTestSchema, required: true },
+    bettablePatterns: { type: [BettablePatternSchema], default: [] },
     flags: {
       isTeamWallet: { type: Boolean, default: false },
       isBundlerLinked: { type: Boolean, default: false },

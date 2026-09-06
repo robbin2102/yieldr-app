@@ -59,7 +59,7 @@ async function main() {
   console.log(`  primary driver   : ${report.categories.entry.primaryDriver}`);
   for (const b of report.categories.entry.conditionBreakdown) {
     console.log(
-      `    - ${b.conditionLabel}: ${b.trades} trades, ${fmtPct(b.winRate)} win rate, ${fmtUsd(b.expectancyUsd)}/trade [${b.confidence.tier}]`
+      `    - ${b.conditionLabel}: ${b.trades} trades, ${fmtPct(b.winRate)} win rate, ${fmtUsd(b.expectancyUsd)}/trade [${b.confidence.tier}] luck-test: ${b.luckTest.robust ? 'ROBUST' : 'not robust'} (${b.luckTest.distinctTokenCount} tokens, bootstrap+ ${b.luckTest.bootstrapPositiveExpectancyPct.toFixed(0)}%)`
     );
   }
 
@@ -72,7 +72,7 @@ async function main() {
   console.log(`  loss-side exit speed : ${(report.categories.exit.lossSideExitSpeedSeconds / 60).toFixed(1)} min`);
   for (const b of report.categories.exit.conditionBreakdown) {
     console.log(
-      `    - ${b.conditionLabel}: ${b.trades} trades (${b.frequencyPct.toFixed(0)}%), ${fmtUsd(b.expectancyUsd)}/trade [${b.confidence.tier}]`
+      `    - ${b.conditionLabel}: ${b.trades} trades (${b.frequencyPct.toFixed(0)}%), ${fmtUsd(b.expectancyUsd)}/trade [${b.confidence.tier}] luck-test: ${b.luckTest.robust ? 'ROBUST' : 'not robust'} (${b.luckTest.distinctTokenCount} tokens, bootstrap+ ${b.luckTest.bootstrapPositiveExpectancyPct.toFixed(0)}%)`
     );
   }
 
@@ -83,6 +83,43 @@ async function main() {
   console.log(`  size spectrum      : ${report.categories.sizing.sizeSpectrumLabel} (CoV ${report.categories.sizing.sizeCoV.toFixed(2)})`);
   console.log(`  scale-in shape     : ${report.categories.sizing.scaleInShapeLabel}`);
   console.log(`  averaging down     : ${report.categories.sizing.addAfterLossRatioPct.toFixed(0)}% of multi-buy positions`);
+  const plb = report.categories.sizing.postLossBehavior;
+  console.log(
+    `  post-loss behavior : ${plb.label} (${plb.windowTradesAnalyzed} trades after ${plb.bigLossEventCount} big loss(es)${plb.avgSizeRatioPostLoss !== null ? `, size ratio ${plb.avgSizeRatioPostLoss.toFixed(2)}x` : ''})`
+  );
+
+  console.log('\n──────────────────────────────────────────');
+  console.log('RISK-ADJUSTED STATS (position-size normalized, per trade - not regime-normalized)');
+  console.log('──────────────────────────────────────────');
+  const ra = report.riskAdjusted;
+  console.log(`  n                  : ${ra.n} trades`);
+  console.log(`  mean return        : ${ra.meanReturnPct.toFixed(1)}%`);
+  console.log(`  median return      : ${ra.medianReturnPct.toFixed(1)}%`);
+  console.log(`  std dev            : ${ra.stdDevReturnPct.toFixed(1)}%`);
+  console.log(`  downside deviation : ${ra.downsideDeviationPct.toFixed(1)}%`);
+  console.log(`  Sharpe (per-trade) : ${ra.sharpeRatio !== null ? ra.sharpeRatio.toFixed(2) : 'n/a'}`);
+  console.log(`  Sortino (per-trade): ${ra.sortinoRatio !== null ? ra.sortinoRatio.toFixed(2) : 'n/a'}`);
+  console.log(`  best/worst trade   : ${ra.bestTradeReturnPct?.toFixed(1) ?? 'n/a'}% / ${ra.worstTradeReturnPct?.toFixed(1) ?? 'n/a'}%`);
+
+  console.log('\n──────────────────────────────────────────');
+  console.log('LUCK TEST (wallet-level - is the overall edge real or one lucky trade/token?)');
+  console.log('──────────────────────────────────────────');
+  const lt = report.luckTest;
+  console.log(`  robust                        : ${lt.robust ? 'YES' : 'no'}`);
+  console.log(`  distinct tokens                : ${lt.distinctTokenCount}`);
+  console.log(`  expectancy (all trades)        : ${fmtUsd(lt.expectancyAllUsd)}`);
+  console.log(`  expectancy (excl. best trade)  : ${fmtUsd(lt.expectancyExcludingBestUsd)}`);
+  console.log(`  best trade PnL                 : ${lt.bestTradePnlUsd !== null ? fmtUsd(lt.bestTradePnlUsd) : 'n/a'}`);
+  console.log(`  % of profit from best trade    : ${lt.pctOfTotalPnlFromBestTrade !== null ? lt.pctOfTotalPnlFromBestTrade.toFixed(0) + '%' : 'n/a'}`);
+  console.log(`  bootstrap % positive expectancy: ${lt.bootstrapPositiveExpectancyPct.toFixed(0)}%`);
+
+  console.log('\n──────────────────────────────────────────');
+  console.log('BETTABLE PATTERNS (Tier-1 composite signatures)');
+  console.log('──────────────────────────────────────────');
+  for (const p of report.bettablePatterns) {
+    console.log(`  [${p.detected ? 'X' : ' '}] ${p.label} [${p.confidenceTier}]`);
+    console.log(`      ${p.evidence}`);
+  }
 
   console.log('\n──────────────────────────────────────────');
   console.log('TOP 3 STRENGTHS');

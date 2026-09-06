@@ -62,6 +62,24 @@ export interface ReconstructedPosition {
   momentumAtEntryPct: number | null;
 }
 
+/**
+ * The luck-vs-skill test result for a group of trades: does the apparent
+ * edge survive losing its best trade, and does it hold up across bootstrap
+ * resamples of its own history? See lib/edge/luckTest.ts. Attached to every
+ * entry/exit bucket (and computed once at the wallet level) so a "strength"
+ * backed by 2 trades on 1 token can be told apart from a real pattern.
+ */
+export interface LuckTestResult {
+  n: number;
+  distinctTokenCount: number;
+  expectancyAllUsd: number;
+  expectancyExcludingBestUsd: number;
+  bestTradePnlUsd: number | null;
+  pctOfTotalPnlFromBestTrade: number | null;
+  bootstrapPositiveExpectancyPct: number;
+  robust: boolean;
+}
+
 export interface EntryConditionBucket {
   conditionLabel: string;
   trades: number;
@@ -69,6 +87,7 @@ export interface EntryConditionBucket {
   expectancyUsd: number;
   totalPnlUsd: number;
   confidence: ConfidenceBlock;
+  luckTest: LuckTestResult;
 }
 
 export type ExitStyleLabel = 'scaled_out' | 'sold_all_at_once' | 'held_into_loss_after_being_up';
@@ -80,6 +99,7 @@ export interface ExitConditionBucket {
   peakCaptureAvg: number;
   expectancyUsd: number;
   confidence: ConfidenceBlock;
+  luckTest: LuckTestResult;
 }
 
 export interface EntryCategoryResult {
@@ -106,6 +126,19 @@ export interface ExitCategoryResult {
   confidence: ConfidenceBlock;
 }
 
+/** How a wallet sizes/behaves in the trades immediately following a big loss - tilt/revenge-sizing vs staying disciplined. See lib/edge/postLossBehavior.ts. */
+export type PostLossLabel = 'revenge_sizing' | 'disciplined_after_loss' | 'no_signal';
+
+export interface PostLossBehaviorResult {
+  bigLossEventCount: number;
+  windowTradesAnalyzed: number;
+  avgSizeRatioPostLoss: number | null;
+  winRatePostLoss: number | null;
+  winRateBaseline: number;
+  label: PostLossLabel;
+  confidenceTier: ConfidenceTier;
+}
+
 export interface SizingCategoryResult {
   verdict: Verdict;
   primaryDriver: string;
@@ -120,8 +153,42 @@ export interface SizingCategoryResult {
   lossSideSizeCutSpeedSeconds: number | null;
   addAfterLossRatioPct: number;
   scaleInShapeLabel: 'single_shot' | 'scaled_in' | 'mixed';
+  postLossBehavior: PostLossBehaviorResult;
   negativeFindings: string[];
   confidence: ConfidenceBlock;
+}
+
+/**
+ * Risk-adjusted, position-size-normalized trade returns (expectancy,
+ * median, per-trade Sharpe/Sortino). See lib/edge/riskMetrics.ts for the
+ * explicit caveats (not regime-normalized, not time-annualized).
+ */
+export interface RiskAdjustedStats {
+  n: number;
+  meanReturnPct: number;
+  medianReturnPct: number;
+  stdDevReturnPct: number;
+  downsideDeviationPct: number;
+  sharpeRatio: number | null;
+  sortinoRatio: number | null;
+  bestTradeReturnPct: number | null;
+  worstTradeReturnPct: number | null;
+}
+
+export type BettablePatternName = 'disciplined_scaler' | 'loss_averse_exiter' | 'repeat_conviction_trader';
+
+/**
+ * A named, composite behavioral signature built from multiple independent
+ * metrics that reinforce the same story - the closest thing this pipeline
+ * has to "here's a pattern worth following", as distinct from a single
+ * bucket finding. See lib/edge/bettablePatterns.ts.
+ */
+export interface BettablePattern {
+  name: BettablePatternName;
+  label: string;
+  detected: boolean;
+  evidence: string;
+  confidenceTier: ConfidenceTier;
 }
 
 /**
@@ -140,6 +207,8 @@ export interface TopFinding {
   impactUsd: number;
   detail: string;
   confidenceTier: ConfidenceTier;
+  /** Passed the luck test (survives losing its best trade, spans enough distinct tokens, holds up under bootstrap resampling). Sizing findings default true - they're computed over all closed trades already, not a searched/split bucket, so they carry inherently lower overfit risk. Strengths are gated on this; weaknesses are not (better to over-warn than under-warn). */
+  robust: boolean;
 }
 
 export interface TopFindingsResult {
@@ -191,6 +260,12 @@ export interface EdgeReport {
   topStrengths: TopFinding[];
   topWeaknesses: TopFinding[];
   edgeDecay: EdgeDecayResult;
+  /** Wallet-level risk-adjusted stats (across all closed trades) - see lib/edge/riskMetrics.ts. */
+  riskAdjusted: RiskAdjustedStats;
+  /** Wallet-level luck test (across all closed trades) - is the wallet's overall edge dominated by one trade/token, or does it survive resampling? */
+  luckTest: LuckTestResult;
+  /** Named composite behavioral patterns detected across entry/exit/sizing - see lib/edge/bettablePatterns.ts. */
+  bettablePatterns: BettablePattern[];
   flags: { isTeamWallet: boolean; isBundlerLinked: boolean };
   computedAt: Date;
 }

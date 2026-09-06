@@ -1,4 +1,5 @@
 import { buildConfidenceBlock } from './stats';
+import { computeLuckTest } from './luckTest';
 import type { ReconstructedPosition, ExitCategoryResult, ExitConditionBucket, ExitStyleLabel, Verdict } from './types';
 
 const MIN_BUCKET = 2;
@@ -104,6 +105,7 @@ export function computeExitCategory(allClosedPositions: ReconstructedPosition[])
         chronological,
         baselineWinRate
       ),
+      luckTest: computeLuckTest(group),
     });
   }
   conditionBreakdown.sort((a, b) => b.frequencyPct - a.frequencyPct);

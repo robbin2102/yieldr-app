@@ -14,6 +14,9 @@ import { computeSizingCategory } from './sizingEngine';
 import { computeCompositeScore } from './compositeScore';
 import { computeTopFindings } from './topFindings';
 import { computeEdgeDecay } from './edgeDecay';
+import { computeRiskAdjustedStats } from './riskMetrics';
+import { computeLuckTest } from './luckTest';
+import { detectBettablePatterns } from './bettablePatterns';
 import { buildConfidenceBlock } from './stats';
 import type { EdgeReport, ReconstructedPosition, EdgeSnapshotPoint } from './types';
 import type { ExcludedTradeReason } from './fetchTrades';
@@ -122,6 +125,18 @@ export async function analyzeWallet(wallet: string, onStage?: StageCallback): Pr
     `[edge:analyze] top findings: ${topStrengths.length} strength(s), ${topWeaknesses.length} weakness(es)`
   );
 
+  const closedWithPnl = enrichedClosed as (ReconstructedPosition & { realizedPnlUsd: number })[];
+  const riskAdjusted = computeRiskAdjustedStats(closedWithPnl);
+  const walletLuckTest = computeLuckTest(closedWithPnl);
+  console.log(
+    `[edge:analyze] risk-adjusted: median=${riskAdjusted.medianReturnPct.toFixed(1)}% sharpe=${riskAdjusted.sharpeRatio?.toFixed(2) ?? 'n/a'} | luck test: robust=${walletLuckTest.robust} bootstrap+=${walletLuckTest.bootstrapPositiveExpectancyPct.toFixed(0)}% tokens=${walletLuckTest.distinctTokenCount}`
+  );
+
+  const bettablePatterns = detectBettablePatterns(entry, exit, sizing);
+  console.log(
+    `[edge:analyze] bettable patterns detected: ${bettablePatterns.filter((p) => p.detected).map((p) => p.label).join(', ') || 'none'}`
+  );
+
   const computedAt = new Date();
   const priorSnapshots = await loadPriorSnapshots(wallet);
   const edgeDecay = computeEdgeDecay(priorSnapshots, { computedAt, edgeScore, winRate, expectancyUsd });
@@ -145,6 +160,9 @@ export async function analyzeWallet(wallet: string, onStage?: StageCallback): Pr
     topStrengths,
     topWeaknesses,
     edgeDecay,
+    riskAdjusted,
+    luckTest: walletLuckTest,
+    bettablePatterns,
     flags: { isTeamWallet: false, isBundlerLinked: false },
     computedAt,
   };

@@ -37,27 +37,33 @@ export function computeTopFindings(
 
   for (const b of entry.conditionBreakdown) {
     if (b.conditionLabel.startsWith('Other entries')) continue;
-    if (b.trades < 2) continue;
+    if (b.confidence.tier === 'insufficient') continue; // too few trades to call this a pattern, not just an anecdote
     candidates.push({
       category: 'entry',
       label: b.conditionLabel,
       impactUsd: b.totalPnlUsd,
-      detail: `${b.trades} trades, ${(b.winRate * 100).toFixed(0)}% win rate, ${fmtUsd(b.expectancyUsd)}/trade`,
+      detail: `${b.trades} trades across ${b.luckTest.distinctTokenCount} token(s), ${(b.winRate * 100).toFixed(0)}% win rate, ${fmtUsd(b.expectancyUsd)}/trade`,
       confidenceTier: b.confidence.tier,
+      robust: b.luckTest.robust,
     });
   }
 
   for (const b of exit.conditionBreakdown) {
+    if (b.confidence.tier === 'insufficient') continue;
     candidates.push({
       category: 'exit',
       label: EXIT_STYLE_LABEL[b.conditionLabel],
       impactUsd: b.expectancyUsd * b.trades,
-      detail: `${b.trades} trades (${b.frequencyPct.toFixed(0)}% of exits), ${fmtUsd(b.expectancyUsd)}/trade`,
+      detail: `${b.trades} trades (${b.frequencyPct.toFixed(0)}% of exits) across ${b.luckTest.distinctTokenCount} token(s), ${fmtUsd(b.expectancyUsd)}/trade`,
       confidenceTier: b.confidence.tier,
+      robust: b.luckTest.robust,
     });
   }
 
-  if (sizing.confidence.trades >= 3) {
+  // Sizing findings are computed over ALL closed trades, not a searched/split bucket - inherently lower
+  // overfit risk than entry/exit buckets, so no per-bucket luck test exists for them yet. Treated as
+  // robust by default; still gated on the wallet having a non-insufficient sample.
+  if (sizing.confidence.trades >= 3 && sizing.confidence.tier !== 'insufficient') {
     const capitalTilt = sizing.avgSizeWinnersUsd - sizing.avgSizeLosersUsd;
     if (Number.isFinite(capitalTilt) && capitalTilt !== 0) {
       candidates.push({
@@ -66,6 +72,7 @@ export function computeTopFindings(
         impactUsd: capitalTilt,
         detail: `avg $${sizing.avgSizeWinnersUsd.toFixed(0)} on winners vs $${sizing.avgSizeLosersUsd.toFixed(0)} on losers`,
         confidenceTier: sizing.confidence.tier,
+        robust: true,
       });
     }
 
@@ -76,6 +83,27 @@ export function computeTopFindings(
         impactUsd: -(sizing.addAfterLossRatioPct / 100) * sizing.avgSizeLosersUsd,
         detail: `${sizing.addAfterLossRatioPct.toFixed(0)}% of multi-buy positions added size below their running average entry price`,
         confidenceTier: sizing.confidence.tier,
+        robust: true,
+      });
+    }
+
+    if (sizing.postLossBehavior.label === 'revenge_sizing') {
+      candidates.push({
+        category: 'sizing',
+        label: 'Revenge-sizes after big losses',
+        impactUsd: -(sizing.postLossBehavior.avgSizeRatioPostLoss ?? 1) * sizing.avgSizeLosersUsd,
+        detail: `sizes ${(sizing.postLossBehavior.avgSizeRatioPostLoss ?? 0).toFixed(1)}x bigger than usual in the ${sizing.postLossBehavior.windowTradesAnalyzed} trades right after a big loss`,
+        confidenceTier: sizing.postLossBehavior.confidenceTier,
+        robust: true,
+      });
+    } else if (sizing.postLossBehavior.label === 'disciplined_after_loss') {
+      candidates.push({
+        category: 'sizing',
+        label: 'Stays disciplined after big losses',
+        impactUsd: sizing.avgSizeLosersUsd * 0.1,
+        detail: `keeps normal size and a ${((sizing.postLossBehavior.winRatePostLoss ?? 0) * 100).toFixed(0)}% win rate in the ${sizing.postLossBehavior.windowTradesAnalyzed} trades right after a big loss`,
+        confidenceTier: sizing.postLossBehavior.confidenceTier,
+        robust: true,
       });
     }
 
@@ -87,6 +115,7 @@ export function computeTopFindings(
         impactUsd: -sizing.sizeCoV * avgSize,
         detail: `bet size varies ${(sizing.sizeCoV * 100).toFixed(0)}% - no consistent unit size`,
         confidenceTier: sizing.confidence.tier,
+        robust: true,
       });
     } else if (sizing.sizeSpectrumLabel === 'disciplined') {
       candidates.push({
@@ -95,12 +124,15 @@ export function computeTopFindings(
         impactUsd: (1 - sizing.sizeCoV) * avgSize * 0.1,
         detail: `bet size stays consistent (size varies ${(sizing.sizeCoV * 100).toFixed(0)}%)`,
         confidenceTier: sizing.confidence.tier,
+        robust: true,
       });
     }
   }
 
+  // Strengths invite copying, so they're held to the higher bar: must pass the luck test too.
+  // Weaknesses are cautionary - better to over-warn than let a real leak hide behind a strict gate.
   const strengths = candidates
-    .filter((c) => c.impactUsd > 0)
+    .filter((c) => c.impactUsd > 0 && c.robust)
     .sort((a, b) => rank(b) - rank(a))
     .slice(0, 3);
 

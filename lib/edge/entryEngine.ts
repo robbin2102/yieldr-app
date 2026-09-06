@@ -1,4 +1,5 @@
 import { twoProportionPValue, buildConfidenceBlock } from './stats';
+import { computeLuckTest } from './luckTest';
 import type { ReconstructedPosition, EntryCategoryResult, EntryConditionBucket, Verdict } from './types';
 
 const MIN_SPLIT_SIZE = 2; // smallest side a sweep will consider - smaller buckets still get reported, just tagged "insufficient"
@@ -221,6 +222,7 @@ function assignBuckets(
         chronological,
         baselineWinRate
       ),
+      luckTest: computeLuckTest(group),
     });
   }
 
@@ -241,6 +243,7 @@ function assignBuckets(
         chronological,
         baselineWinRate
       ),
+      luckTest: computeLuckTest(remaining),
     });
   }
 
