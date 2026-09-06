@@ -454,7 +454,28 @@ async function enrichUniswapV4Legs(
   const poolManager: string = poolManagerOrNull;
   const wethAddress = REFERENCE_TOKENS[chain]?.find((t) => t.symbol === 'WETH')?.address ?? null;
 
-  const candidates = classifySwapCandidates(wallet, transfers);
+  const allCandidates = classifySwapCandidates(wallet, transfers);
+  if (allCandidates.length === 0) return [];
+
+  // A candidate whose OWN leg token is already a reference token (USDC,
+  // WETH, ...) moving with nothing coming back the other way is not a
+  // meme-token trade at all - findReferenceTokenTransfer explicitly
+  // excludes the candidate's own token from matching, so a reference-token
+  // outflow/inflow was ALWAYS going to find zero swap data, no matter how
+  // the receipt is fetched. Confirmed on a real example: a Base "sell
+  // candidate" that was just a USDC Approval+Transfer to a paymaster inside
+  // an ERC-4337 UserOperation (BeforeExecution/UserOperationEvent at the
+  // EntryPoint, 0x4337084d...) - a gas payment, not a trade. Skipping these
+  // before the receipt fetch saves the RPC cost entirely and stops
+  // reporting them as failed trade decodes when they were never trades.
+  const referenceTokenAddrs = new Set((REFERENCE_TOKENS[chain] ?? []).map((t) => t.address.toLowerCase()));
+  const candidates = allCandidates.filter((c) => !referenceTokenAddrs.has(c.leg.tokenAddress.toLowerCase()));
+  const skippedRefOnly = allCandidates.length - candidates.length;
+  if (skippedRefOnly > 0) {
+    console.log(
+      `[edge:fetchTrades] ${chain} skipping ${skippedRefOnly} candidate(s) where the wallet's own leg is itself a reference token (USDC/WETH/...) with nothing matching on the other side - almost certainly gas/fee/funding outflows, not trades`
+    );
+  }
   if (candidates.length === 0) return [];
 
   console.log(
