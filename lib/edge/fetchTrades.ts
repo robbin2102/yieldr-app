@@ -3,6 +3,7 @@ import { resolveBlockRangeForWindow } from './blockRange';
 import { getReferenceToken, hasReferenceTokens, REFERENCE_TOKENS, NATIVE_PSEUDO_ADDRESS } from './referenceTokens';
 import { getReferencePriceUsd, recordObservedTradePrice } from './priceService';
 import { scanTransfersViaLogs, getDecimals, getBlockTimestamp } from './logScanFallback';
+import { getCachedReceipts, cacheReceipts } from './receiptCache';
 import type { TradeLeg } from './types';
 
 interface NormalizedTransfer {
@@ -163,17 +164,24 @@ async function enrichUniswapV4Legs(
     } sell, ${candidates.filter((c) => c.direction === 'buy').length} relay-buy)`
   );
 
-  // One eth_getTransactionReceipt round-trip per BATCH candidates - on a wallet
-  // with thousands of unbalanced trades (common on HOOD) this is the dominant
-  // cost of the whole analysis. BATCH=25 keeps well under Alchemy's per-app
-  // rate limit while cutting round-trips vs the previous BATCH=10.
+  // Receipts are immutable once mined, so check the persistent cache first -
+  // a repeat analysis of the same wallet (re-run button, or the periodic
+  // reasoning cron re-analyzing every EDGE_REASONING_INTERVAL_HOURS) then
+  // only pays Alchemy CUs for transactions genuinely new since last time,
+  // instead of re-fetching thousands of receipts from scratch every run.
+  const receiptsByHash = await getCachedReceipts(chain, candidates.map((c) => c.hash));
+  const toFetch = candidates.filter((c) => !receiptsByHash.has(c.hash.toLowerCase()));
+  console.log(
+    `[edge:fetchTrades] ${chain} receipt cache: ${candidates.length - toFetch.length}/${candidates.length} hit, ${toFetch.length} to fetch`
+  );
+
   const BATCH = 25;
   const PROGRESS_EVERY = 500; // candidates, not batches - keeps the log readable on huge wallets
-  const synthetic: NormalizedTransfer[] = [];
   const startedAt = Date.now();
+  const newlyFetched: { hash: string; logs: any[] }[] = [];
 
-  for (let i = 0; i < candidates.length; i += BATCH) {
-    const batch = candidates.slice(i, i + BATCH);
+  for (let i = 0; i < toFetch.length; i += BATCH) {
+    const batch = toFetch.slice(i, i + BATCH);
     const receipts = await Promise.all(
       batch.map(({ hash }) =>
         client.request({ method: 'eth_getTransactionReceipt', params: [hash] }).catch(() => null)
@@ -181,21 +189,34 @@ async function enrichUniswapV4Legs(
     );
 
     if (i > 0 && i % PROGRESS_EVERY < BATCH) {
-      const pct = ((i / candidates.length) * 100).toFixed(0);
+      const pct = ((i / toFetch.length) * 100).toFixed(0);
       const elapsedS = ((Date.now() - startedAt) / 1000).toFixed(0);
       const ratePerS = i / Math.max(1, (Date.now() - startedAt) / 1000);
-      const etaS = ratePerS > 0 ? Math.round((candidates.length - i) / ratePerS) : null;
+      const etaS = ratePerS > 0 ? Math.round((toFetch.length - i) / ratePerS) : null;
       console.log(
-        `[edge:fetchTrades] ${chain} receipt fetch progress: ${i}/${candidates.length} (${pct}%), matched=${synthetic.length}, elapsed=${elapsedS}s${etaS !== null ? `, eta=${etaS}s` : ''}`
+        `[edge:fetchTrades] ${chain} receipt fetch progress: ${i}/${toFetch.length} (${pct}%), elapsed=${elapsedS}s${etaS !== null ? `, eta=${etaS}s` : ''}`
       );
     }
 
-    for (let j = 0; j < batch.length; j++) {
-      const candidate = batch[j];
-      const receipt: any = receipts[j];
-      if (!receipt) continue;
+    batch.forEach((c, j) => {
+      const r: any = receipts[j];
+      if (!r) return;
+      const logs = r.logs ?? [];
+      receiptsByHash.set(c.hash.toLowerCase(), { logs });
+      newlyFetched.push({ hash: c.hash, logs });
+    });
+  }
 
-      const swapLogs = (receipt.logs ?? []).filter(
+  await cacheReceipts(chain, newlyFetched);
+  console.log(`[edge:fetchTrades] ${chain} cached ${newlyFetched.length} new receipt(s)`);
+
+  const synthetic: NormalizedTransfer[] = [];
+
+  for (const candidate of candidates) {
+    const receipt = receiptsByHash.get(candidate.hash.toLowerCase());
+    if (!receipt) continue;
+
+    const swapLogs = (receipt.logs ?? []).filter(
         (log: any) =>
           log.address?.toLowerCase() === poolManager && log.topics?.[0] === SWAP_TOPIC
       );
@@ -363,7 +384,6 @@ async function enrichUniswapV4Legs(
           );
         }
       }
-    }
   }
 
   return synthetic;
