@@ -521,7 +521,7 @@ async function enrichUniswapV4Legs(
           pairs.push(`${l.address?.slice(0, 10)}…:${l.topics?.[0]?.slice(0, 10)}…`);
         }
         console.log(
-          `[edge:fetchTrades] ${chain} ${candidate.direction} hash=${candidate.hash.slice(0, 10)} — ZERO DATA: receipt has ${allLogs.length} total log(s), expected poolManager=${poolManager.slice(0, 10)}… swapTopic=${SWAP_TOPIC.slice(0, 10)}…. Distinct (address:topic0) pairs present: ${pairs.length === 0 ? '(none - receipt.logs is empty)' : pairs.slice(0, 10).join(', ')}`
+          `[edge:fetchTrades] ${chain} ${candidate.direction} hash=${candidate.hash} — ZERO DATA: receipt has ${allLogs.length} total log(s), expected poolManager=${poolManager.slice(0, 10)}… swapTopic=${SWAP_TOPIC.slice(0, 10)}…. Distinct (address:topic0) pairs present: ${pairs.length === 0 ? '(none - receipt.logs is empty)' : pairs.slice(0, 10).join(', ')}`
         );
       }
     }

@@ -137,7 +137,7 @@ async function runChain(chain: EdgeChainId) {
           const logs = receipt.logs ?? [];
           const pairs = Array.from(new Set(logs.map((l: any) => `${l.address?.slice(0, 10)}…:${l.topics?.[0]?.slice(0, 10)}…`)));
           console.log(
-            `  [zero-data] hash=${candidate.hash.slice(0, 10)} ${candidate.direction} - receipt has ${logs.length} log(s). Distinct pairs: ${pairs.slice(0, 8).join(', ') || '(none)'}`
+            `  [zero-data] hash=${candidate.hash} ${candidate.direction} - receipt has ${logs.length} log(s). Distinct pairs: ${pairs.slice(0, 8).join(', ') || '(none)'}`
           );
         }
       }
