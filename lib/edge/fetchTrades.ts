@@ -1,7 +1,7 @@
 import { getPublicClient, CHAINS, ChainNotSupportedError, effectiveLookbackDays, type EdgeChainId } from './chains';
 import { resolveBlockRangeForWindow } from './blockRange';
 import { getReferenceToken, hasReferenceTokens, REFERENCE_TOKENS, NATIVE_PSEUDO_ADDRESS } from './referenceTokens';
-import { getReferencePriceUsd, recordObservedTradePrice } from './priceService';
+import { getReferencePriceUsd, getTokenPriceUsdAt, recordObservedTradePrice } from './priceService';
 import { scanTransfersViaLogs, getDecimals, getBlockTimestamp } from './logScanFallback';
 import { getCachedReceipts, cacheReceipts } from './receiptCache';
 import { withRateLimitRetry } from './rpcRetry';
@@ -124,6 +124,40 @@ function findReferenceTokenTransfer(
  * Both HOOD (Doppler) and Base (Uniswap V4) use the same Swap event signature
  * and ABI layout — only the PoolManager address differs.
  */
+/**
+ * Fomo settlement-path classification, ported from an independently built
+ * and validated investigation (robbin2102/fomo-traders-analysis). Wallet-
+ * originated Fomo trades do NOT show up as an atomic same-transaction swap
+ * - the wallet is an ERC-4337/EIP-7702 smart account, and each trade leg is
+ * a separate, non-atomic ERC20 transfer to/from a fixed settlement
+ * contract (buys/sells) or a fixed collector (stablecoin funding
+ * payments). These addresses were confirmed identical across Base,
+ * Robinhood Chain, and BNB Chain in that investigation.
+ *
+ * This is strictly cheaper and more accurate than trying to find a
+ * matching Swap event in the same transaction (see parseSwapFromReceipt
+ * below, kept only as a fallback for whatever this doesn't classify):
+ * classification needs zero extra RPC calls, since it's a pure function of
+ * transfers already fetched via alchemy_getAssetTransfers.
+ */
+export const FOMO_TOKEN_SETTLEMENT = '0xb92fe925dc43a0ecde6c8b1a2709c170ec4fff4f';
+export const FOMO_STABLECOIN_COLLECTOR = '0x4cd00e387622c35bddb9b4c962c136462338bc31';
+
+export type SettlementClassification =
+  | 'TOKEN_CREDIT_FROM_SETTLEMENT' // buy: token moved from the settlement contract to the wallet
+  | 'TOKEN_DEBIT_TO_SETTLEMENT' // sell: token moved from the wallet to the settlement contract
+  | 'STABLECOIN_PAYMENT'; // stablecoin moved from the wallet to the collector - a funding leg, not a priced trade on its own
+
+export function classifySettlementTransfer(
+  walletLower: string,
+  t: NormalizedTransfer
+): SettlementClassification | null {
+  if (t.from === FOMO_TOKEN_SETTLEMENT && t.to === walletLower) return 'TOKEN_CREDIT_FROM_SETTLEMENT';
+  if (t.from === walletLower && t.to === FOMO_TOKEN_SETTLEMENT) return 'TOKEN_DEBIT_TO_SETTLEMENT';
+  if (t.from === walletLower && t.to === FOMO_STABLECOIN_COLLECTOR) return 'STABLECOIN_PAYMENT';
+  return null;
+}
+
 export type CandidateDirection = 'sell' | 'buy';
 export interface SwapCandidate {
   hash: string;
@@ -726,28 +760,6 @@ export async function fetchWalletSwapLegs(chain: EdgeChainId, wallet: string): P
     }`
   );
 
-  // For chains with a known Uniswap V4 PoolManager, inject synthetic legs for
-  // trades where one side is invisible to Alchemy (HOOD Doppler sells; Base
-  // relay-buys funded from Solana via cross-chain bridge).
-  if (POOL_MANAGER_BY_CHAIN[chain]) {
-    const enriched = await enrichUniswapV4Legs(chain, client, walletLower, transfers);
-    if (enriched.length > 0) transfers = [...transfers, ...enriched];
-  }
-
-  const byHash = new Map<string, { out: NormalizedTransfer[]; in: NormalizedTransfer[] }>();
-  for (const t of transfers) {
-    const g = byHash.get(t.hash) ?? { out: [], in: [] };
-    if (t.from === walletLower) g.out.push(t);
-    if (t.to === walletLower) g.in.push(t);
-    byHash.set(t.hash, g);
-  }
-  const balanced = Array.from(byHash.values()).filter((g) => g.out.length === 1 && g.in.length === 1).length;
-  console.log(
-    `[edge:fetchTrades] ${chain} distinctTxHashes=${byHash.size} balanced(1out/1in)=${balanced} unbalanced=${
-      byHash.size - balanced
-    }`
-  );
-
   const legsByToken = new Map<string, TradeLeg[]>();
   const excludedCounts = new Map<string, number>();
   const excludedSamples = new Map<string, string[]>();
@@ -759,6 +771,75 @@ export async function fetchWalletSwapLegs(chain: EdgeChainId, wallet: string): P
       excludedSamples.set(reason, samples);
     }
   };
+
+  // ── Fomo settlement-path classification (primary path) ─────────────
+  // Classify every transfer directly against the fixed settlement/collector
+  // addresses before any balanced/unbalanced grouping - these legs are
+  // single-sided by construction (the wallet's own leg is the only transfer
+  // touching it in that transaction), so there's nothing to pair and no
+  // receipt to fetch. Whatever's left over after pulling these out is what
+  // the old same-tx Swap-matching fallback below gets a chance at.
+  const settlementHandledHashes = new Set<string>();
+  let settlementBuys = 0;
+  let settlementSells = 0;
+  for (const t of transfers) {
+    const cls = classifySettlementTransfer(walletLower, t);
+    if (!cls) continue;
+    settlementHandledHashes.add(t.hash);
+
+    if (cls === 'STABLECOIN_PAYMENT') {
+      bump('stablecoin payment to Fomo collector (funding leg, not a priced trade on its own)', t.hash);
+      continue;
+    }
+    if (t.qty <= 0) {
+      bump('zero-value Fomo settlement leg', t.hash);
+      continue;
+    }
+
+    const priceUsd = await getTokenPriceUsdAt(chain, t.tokenAddress, t.ts);
+    if (priceUsd <= 0) {
+      bump('could not price Fomo settlement leg (token not indexed for a USD price)', t.hash);
+      continue;
+    }
+
+    const side: 'buy' | 'sell' = cls === 'TOKEN_CREDIT_FROM_SETTLEMENT' ? 'buy' : 'sell';
+    const usd = t.qty * priceUsd;
+    const leg: TradeLeg = { side, ts: t.ts, blockNumber: t.blockNumber, qty: t.qty, priceUsd, usd, txHash: t.hash };
+    const arr = legsByToken.get(t.tokenAddress) ?? [];
+    arr.push(leg);
+    legsByToken.set(t.tokenAddress, arr);
+    if (side === 'buy') settlementBuys++; else settlementSells++;
+
+    await recordObservedTradePrice(chain, t.tokenAddress, priceUsd, t.ts);
+  }
+  console.log(
+    `[edge:fetchTrades] ${chain} settlement-path: ${settlementBuys} buy(s), ${settlementSells} sell(s) classified via Fomo settlement contract (no receipt fetch needed)`
+  );
+
+  const remainingTransfers = transfers.filter((t) => !settlementHandledHashes.has(t.hash));
+
+  // For chains with a known Uniswap V4 PoolManager, inject synthetic legs for
+  // whatever the settlement classification above didn't resolve - trades
+  // where one side is invisible to Alchemy but not a Fomo settlement leg
+  // (e.g. non-Fomo direct V4/Virtuals swaps).
+  if (POOL_MANAGER_BY_CHAIN[chain]) {
+    const enriched = await enrichUniswapV4Legs(chain, client, walletLower, remainingTransfers);
+    if (enriched.length > 0) remainingTransfers.push(...enriched);
+  }
+
+  const byHash = new Map<string, { out: NormalizedTransfer[]; in: NormalizedTransfer[] }>();
+  for (const t of remainingTransfers) {
+    const g = byHash.get(t.hash) ?? { out: [], in: [] };
+    if (t.from === walletLower) g.out.push(t);
+    if (t.to === walletLower) g.in.push(t);
+    byHash.set(t.hash, g);
+  }
+  const balanced = Array.from(byHash.values()).filter((g) => g.out.length === 1 && g.in.length === 1).length;
+  console.log(
+    `[edge:fetchTrades] ${chain} (non-settlement) distinctTxHashes=${byHash.size} balanced(1out/1in)=${balanced} unbalanced=${
+      byHash.size - balanced
+    }`
+  );
 
   if (!hasReferenceTokens(chain)) {
     if (byHash.size > 0) bump(`no reference tokens configured for ${cfg.displayName} yet`);

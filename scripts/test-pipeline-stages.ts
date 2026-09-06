@@ -6,12 +6,15 @@
  *
  * Stages:
  *   1. Bulk transfer fetch      - alchemy_getAssetTransfers (paginated)
- *   2. Classify candidates      - split into balanced / sell / relay-buy
- *   3. Receipt fetch            - cached + concurrency-capped RPC calls
- *   4. Parse swaps from receipts - the actual Swap/Transfer-log decoding
- *   5. Full fetchWalletSwapLegs - pricing included (re-runs 1-4 internally,
- *                                 but receipts are now cached from stage 3)
- *   6. Full reconstruction      - FIFO position building
+ *   2. Settlement classification - Fomo settlement-contract legs, no RPC needed
+ *                                 (primary path - see fetchTrades.ts)
+ *   3. Classify remaining candidates - whatever settlement classification
+ *                                 didn't resolve, split into balanced / sell / relay-buy
+ *   4. Receipt fetch            - cached + concurrency-capped RPC calls (fallback path only)
+ *   5. Parse swaps from receipts - the actual Swap/Transfer-log decoding (fallback path only)
+ *   6. Full fetchWalletSwapLegs - pricing included (re-runs 1-5 internally,
+ *                                 but receipts are now cached from stage 4)
+ *   7. Full reconstruction      - FIFO position building
  *
  * Run:   npm run edge:test-stages -- 0xWallet [base|hood|both]
  * Needs: MONGODB_URI + ALCHEMY_BASE_RPC_URL and/or ALCHEMY_HOOD_RPC_URL in .env.local
@@ -22,6 +25,7 @@ import {
   fetchViaAlchemyEnhancedApi,
   fetchWalletSwapLegs,
   classifySwapCandidates,
+  classifySettlementTransfer,
   fetchReceiptsForHashes,
   parseSwapFromReceipt,
   POOL_MANAGER_BY_CHAIN,
@@ -75,38 +79,67 @@ async function runChain(chain: EdgeChainId) {
     return;
   }
 
-  // ── Stage 2: classify ─────────────────────────────────────────────
-  const { result: candidates, timing: t2 } = await timeStage('2. Classify candidates', () =>
-    Promise.resolve(classifySwapCandidates(WALLET, transfers))
+  // ── Stage 2: Fomo settlement-path classification (primary, no RPC) ──
+  const { result: settlementResult, timing: t2 } = await timeStage(
+    '2. Settlement classification (Fomo settlement contract, no RPC)',
+    () =>
+      Promise.resolve(
+        (() => {
+          const handled = new Set<string>();
+          let buys = 0;
+          let sells = 0;
+          let stableSkipped = 0;
+          for (const t of transfers as NormalizedTransfer[]) {
+            const cls = classifySettlementTransfer(WALLET, t);
+            if (!cls) continue;
+            handled.add(t.hash);
+            if (cls === 'STABLECOIN_PAYMENT') stableSkipped++;
+            else if (cls === 'TOKEN_CREDIT_FROM_SETTLEMENT') buys++;
+            else sells++;
+          }
+          return { handled, buys, sells, stableSkipped };
+        })()
+      )
   );
   timings.push(t2);
-  const byHashCount = new Set(transfers.map((t: NormalizedTransfer) => t.hash)).size;
+  console.log(
+    `  -> settlement-classified: ${settlementResult.buys} buy(s), ${settlementResult.sells} sell(s), ${settlementResult.stableSkipped} stablecoin payment(s) skipped (${settlementResult.handled.size} tx(s) resolved with zero receipt fetches)`
+  );
+
+  const remainingTransfers = (transfers as NormalizedTransfer[]).filter((t) => !settlementResult.handled.has(t.hash));
+
+  // ── Stage 3: classify whatever's left ─────────────────────────────
+  const { result: candidates, timing: t3 } = await timeStage('3. Classify remaining candidates (non-settlement)', () =>
+    Promise.resolve(classifySwapCandidates(WALLET, remainingTransfers))
+  );
+  timings.push(t3);
+  const byHashCount = new Set(remainingTransfers.map((t: NormalizedTransfer) => t.hash)).size;
   const sellCount = candidates.filter((c) => c.direction === 'sell').length;
   const buyCount = candidates.filter((c) => c.direction === 'buy').length;
   console.log(
-    `  -> ${byHashCount} distinct tx(s): ${byHashCount - candidates.length} balanced (already priceable), ${sellCount} sell candidate(s), ${buyCount} relay-buy candidate(s)`
+    `  -> ${byHashCount} distinct non-settlement tx(s): ${byHashCount - candidates.length} balanced (already priceable), ${sellCount} sell candidate(s), ${buyCount} relay-buy candidate(s)`
   );
 
   if (!POOL_MANAGER_BY_CHAIN[chain] || candidates.length === 0) {
-    console.log('  No PoolManager configured or no candidates need enrichment - stopping here.');
+    console.log('  No PoolManager configured or no leftover candidates need enrichment - stopping here.');
     printSummary(chain, timings);
     return;
   }
 
-  // ── Stage 3: receipt fetch ────────────────────────────────────────
-  const { result: receiptResult, timing: t3 } = await timeStage('3. Receipt fetch (cached + rate-limit-aware)', () =>
+  // ── Stage 4: receipt fetch (fallback path only) ───────────────────
+  const { result: receiptResult, timing: t4 } = await timeStage('4. Receipt fetch (cached + rate-limit-aware, fallback path)', () =>
     fetchReceiptsForHashes(chain, client, candidates.map((c) => c.hash))
   );
-  timings.push(t3);
+  timings.push(t4);
   console.log(
     `  -> cache hits=${receiptResult.cacheHits}/${candidates.length}, newly fetched=${receiptResult.newlyFetchedCount}, failed=${receiptResult.failedCount}`
   );
 
-  // ── Stage 4: parse ────────────────────────────────────────────────
+  // ── Stage 5: parse (fallback path only) ───────────────────────────
   const poolManager = POOL_MANAGER_BY_CHAIN[chain]!;
   const wethAddress = REFERENCE_TOKENS[chain]?.find((t) => t.symbol === 'WETH')?.address ?? null;
 
-  const { result: parseStats, timing: t4 } = await timeStage('4. Parse swaps from receipts', async () => {
+  const { result: parseStats, timing: t5 } = await timeStage('5. Parse swaps from receipts (fallback path)', async () => {
     let matched = 0;
     let amountMismatch = 0;
     let zeroData = 0;
@@ -144,28 +177,28 @@ async function runChain(chain: EdgeChainId) {
     }
     return { matched, amountMismatch, zeroData };
   });
-  timings.push(t4);
+  timings.push(t5);
   const capturePct = candidates.length > 0 ? ((parseStats.matched / candidates.length) * 100).toFixed(1) : '0.0';
   console.log(
-    `  -> CAPTURE RATE: ${parseStats.matched}/${candidates.length} (${capturePct}%), ${parseStats.amountMismatch} amount-mismatch, ${parseStats.zeroData} zero-data`
+    `  -> CAPTURE RATE (fallback path only): ${parseStats.matched}/${candidates.length} (${capturePct}%), ${parseStats.amountMismatch} amount-mismatch, ${parseStats.zeroData} zero-data`
   );
 
-  // ── Stage 5: full fetchWalletSwapLegs (integration check incl. pricing) ──
-  const { result: legsResult, timing: t5 } = await timeStage(
-    '5. Full fetchWalletSwapLegs (pricing incl. - integration check)',
+  // ── Stage 6: full fetchWalletSwapLegs (integration check incl. pricing) ──
+  const { result: legsResult, timing: t6 } = await timeStage(
+    '6. Full fetchWalletSwapLegs (pricing incl. - integration check)',
     () => fetchWalletSwapLegs(chain, WALLET)
   );
-  timings.push(t5);
+  timings.push(t6);
   const totalLegs = Array.from(legsResult.legsByToken.values()).reduce((s, l) => s + l.length, 0);
   console.log(`  -> ${legsResult.legsByToken.size} token(s) priced, ${totalLegs} leg(s) total`);
   for (const e of legsResult.excluded) console.log(`     excluded: ${e.count}x ${e.reason}`);
 
-  // ── Stage 6: full reconstruction (integration check) ──────────────
-  const { result: portfolio, timing: t6 } = await timeStage(
-    '6. Full reconstructWalletPortfolio (FIFO - integration check)',
+  // ── Stage 7: full reconstruction (integration check) ──────────────
+  const { result: portfolio, timing: t7 } = await timeStage(
+    '7. Full reconstructWalletPortfolio (FIFO - integration check)',
     () => reconstructWalletPortfolio(chain, WALLET)
   );
-  timings.push(t6);
+  timings.push(t7);
   const closedCount = portfolio.positions.filter((p) => !p.isOpen && !p.isDust).length;
   console.log(
     `  -> ${portfolio.positions.length} position(s) (${closedCount} closed, non-dust), currentHoldingsUsd=${portfolio.currentHoldingsUsd.toFixed(2)}`

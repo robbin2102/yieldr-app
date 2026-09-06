@@ -176,10 +176,38 @@ export function peakPriceInWindow(candles: Candle[], fallback: number | null): n
 }
 
 /**
+ * USD price of ANY token at a point in time, via its own best-liquidity
+ * GeckoTerminal pool (found once, cached in TokenCache) and the OHLC
+ * candle nearest `at`. This works the same whether the token is a known
+ * "reference" token (ETH/WETH/USDC) or the meme/agent token actually being
+ * traded - pricing doesn't depend on both sides of a trade sharing a
+ * transaction, which matters for Fomo settlement-contract legs where the
+ * traded token and its counter-value move in two separate, non-atomic txs.
+ */
+export async function getTokenPriceUsdAt(chain: EdgeChainId, tokenAddress: string, at: Date): Promise<number> {
+  const meta = await getTokenMetadata(chain, tokenAddress);
+  if (!meta?.poolAddress) return 0;
+
+  const windowStart = new Date(at.getTime() - 20 * 60 * 1000);
+  const windowEnd = new Date(at.getTime() + 20 * 60 * 1000);
+  const { candles } = await getOhlcWindow(chain, meta.poolAddress, windowStart, windowEnd);
+  if (candles.length === 0) {
+    const live = await getCurrentPriceUsd(chain, tokenAddress);
+    return live.priceUsd ?? 0;
+  }
+
+  const nearest = candles.reduce((best, c) =>
+    Math.abs(c.ts.getTime() - at.getTime()) < Math.abs(best.ts.getTime() - at.getTime()) ? c : best
+  );
+  return nearest.close;
+}
+
+/**
  * USD price of a reference token (ETH/WETH/USDC) at a point in time - this
  * is what turns a reference-token trade leg into a USD size for the trade
  * it's funding/settling, without needing the traded meme token itself to
- * be indexed anywhere.
+ * be indexed anywhere. Stables short-circuit to $1; everything else defers
+ * to the same own-pool lookup used for arbitrary tokens.
  */
 export async function getReferencePriceUsd(
   chain: EdgeChainId,
@@ -189,20 +217,5 @@ export async function getReferencePriceUsd(
 ): Promise<number> {
   if (symbol === 'USDC' || symbol === 'USDG') return 1;
   if (!refAddress) return 0;
-
-  const meta = await getTokenMetadata(chain, refAddress);
-  if (!meta?.poolAddress) return 0;
-
-  const windowStart = new Date(at.getTime() - 20 * 60 * 1000);
-  const windowEnd = new Date(at.getTime() + 20 * 60 * 1000);
-  const { candles } = await getOhlcWindow(chain, meta.poolAddress, windowStart, windowEnd);
-  if (candles.length === 0) {
-    const live = await getCurrentPriceUsd(chain, refAddress);
-    return live.priceUsd ?? 0;
-  }
-
-  const nearest = candles.reduce((best, c) =>
-    Math.abs(c.ts.getTime() - at.getTime()) < Math.abs(best.ts.getTime() - at.getTime()) ? c : best
-  );
-  return nearest.close;
+  return getTokenPriceUsdAt(chain, refAddress, at);
 }
