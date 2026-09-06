@@ -385,7 +385,11 @@ async function enrichUniswapV4Legs(
     `[edge:fetchTrades] ${chain} receipt cache: ${candidates.length - toFetch.length}/${candidates.length} hit, ${toFetch.length} to fetch`
   );
 
-  const BATCH = 25;
+  // Sustained 429s throughout an entire run (not just an initial burst) is
+  // evidence the app's actual sustained throughput is below 25 req/batch -
+  // every retry wastes 2s+ doing nothing, so a lower, steadier concurrency
+  // finishes faster in practice than a higher one that mostly gets rejected.
+  const BATCH = Number(process.env.EDGE_RECEIPT_FETCH_BATCH) || 8;
   const PROGRESS_EVERY = 500;
   const startedAt = Date.now();
   const newlyFetched: { hash: string; logs: any[] }[] = [];
@@ -425,11 +429,17 @@ async function enrichUniswapV4Legs(
   let matchedCount = 0;
   let amountMismatchCount = 0; // found swap data but amounts never matched tolerance (likely multi-hop)
   let zeroDataCount = 0; // no relevant log found in the receipt at all
+  let zeroDataDiagnosticsLogged = 0;
+  const MAX_ZERO_DATA_DIAGNOSTICS = 5; // don't spam - a handful of real examples is enough to root-cause
 
   for (const candidate of candidates) {
     const receipt = receiptsByHash.get(candidate.hash.toLowerCase());
     if (!receipt) {
       zeroDataCount++;
+      if (zeroDataDiagnosticsLogged < MAX_ZERO_DATA_DIAGNOSTICS) {
+        zeroDataDiagnosticsLogged++;
+        console.log(`[edge:fetchTrades] ${chain} hash=${candidate.hash.slice(0, 10)} — receipt fetch FAILED entirely (not even null-logs; likely rate-limited past all retries)`);
+      }
       continue;
     }
     const { enriched, totalSwapsSeen, closestDiffBps } = await tryEnrichCandidate(candidate, receipt);
@@ -442,6 +452,25 @@ async function enrichUniswapV4Legs(
       );
     } else {
       zeroDataCount++;
+      if (zeroDataDiagnosticsLogged < MAX_ZERO_DATA_DIAGNOSTICS) {
+        zeroDataDiagnosticsLogged++;
+        const allLogs: any[] = receipt.logs ?? [];
+        // Show what's ACTUALLY in this receipt instead of guessing - every
+        // distinct (address, topic0) pair present, so we can tell "the
+        // receipt really has nothing swap-shaped" apart from "our
+        // PoolManager address/topic assumption doesn't match what's here".
+        const seen = new Set<string>();
+        const pairs: string[] = [];
+        for (const l of allLogs) {
+          const key = `${l.address?.toLowerCase()}|${l.topics?.[0]}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          pairs.push(`${l.address?.slice(0, 10)}…:${l.topics?.[0]?.slice(0, 10)}…`);
+        }
+        console.log(
+          `[edge:fetchTrades] ${chain} ${candidate.direction} hash=${candidate.hash.slice(0, 10)} — ZERO DATA: receipt has ${allLogs.length} total log(s), expected poolManager=${poolManager.slice(0, 10)}… swapTopic=${SWAP_TOPIC.slice(0, 10)}…. Distinct (address:topic0) pairs present: ${pairs.length === 0 ? '(none - receipt.logs is empty)' : pairs.slice(0, 10).join(', ')}`
+        );
+      }
     }
   }
 
