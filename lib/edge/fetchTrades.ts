@@ -5,6 +5,7 @@ import { getReferencePriceUsd, recordObservedTradePrice } from './priceService';
 import { scanTransfersViaLogs, getDecimals, getBlockTimestamp } from './logScanFallback';
 import { getCachedReceipts, cacheReceipts } from './receiptCache';
 import { bulkFetchSwapAndReferenceTransferLogs } from './bulkLogScan';
+import { withRateLimitRetry } from './rpcRetry';
 import type { TradeLeg } from './types';
 
 interface NormalizedTransfer {
@@ -180,10 +181,22 @@ async function enrichUniswapV4Legs(
   async function tryEnrichCandidate(
     candidate: Candidate,
     receipt: { logs: any[] }
-  ): Promise<{ enriched: boolean; totalSwapsSeen: number }> {
+  ): Promise<{ enriched: boolean; totalSwapsSeen: number; closestDiffBps: number | null }> {
     const swapLogs = (receipt.logs ?? []).filter(
       (log: any) => log.address?.toLowerCase() === poolManager && log.topics?.[0] === SWAP_TOPIC
     );
+
+    // Tracks how close the nearest-but-failed match was, in basis points of the
+    // expected amount - turns "no amount matched" from a dead end into a real
+    // diagnostic: a multi-hop route typically misses by a lot (thousands of
+    // bps), while a too-tight tolerance on a genuine relay fee misses by a
+    // little (tens of bps) - the fix is different in each case.
+    let closestDiffBps: number | null = null;
+    const trackClosest = (diff: bigint, expected: bigint) => {
+      if (expected <= BigInt(0)) return;
+      const bps = Number((diff * BigInt(10000)) / expected);
+      if (closestDiffBps === null || bps < closestDiffBps) closestDiffBps = bps;
+    };
 
     let enriched = false;
     for (const swapLog of swapLogs) {
@@ -205,6 +218,7 @@ async function enrichUniswapV4Legs(
           if (paidAmt >= BigInt(0) || receivedAmt <= BigInt(0)) continue;
           const absPaid = -paidAmt;
           const diff = absPaid > leg.rawQty ? absPaid - leg.rawQty : leg.rawQty - absPaid;
+          trackClosest(diff, leg.rawQty);
           if (diff > leg.rawQty / BigInt(500)) continue; // 0.2%
 
           // Detect actual reference token from ERC20 Transfer events (handles
@@ -244,6 +258,7 @@ async function enrichUniswapV4Legs(
         ] as [bigint, bigint][]) {
           if (receivedAmt <= BigInt(0) || paidAmt >= BigInt(0)) continue;
           const diff = receivedAmt > leg.rawQty ? receivedAmt - leg.rawQty : leg.rawQty - receivedAmt;
+          trackClosest(diff, leg.rawQty);
           if (diff > leg.rawQty / BigInt(100)) continue; // 1% (relay fee headroom)
 
           const refPaidRaw = -paidAmt;
@@ -348,7 +363,7 @@ async function enrichUniswapV4Legs(
     }
 
     const totalSwapsSeen = swapLogs.length + (receipt.logs ?? []).filter((l: any) => l.topics?.[0] === V2_SWAP_TOPIC).length;
-    return { enriched, totalSwapsSeen };
+    return { enriched, totalSwapsSeen, closestDiffBps };
   }
 
   // ── Tier 1: bulk eth_getLogs scan ────────────────────────────────────
@@ -386,6 +401,9 @@ async function enrichUniswapV4Legs(
 
   const needsFallback: Candidate[] = [];
   let bulkEnrichedCount = 0;
+  let amountMismatchCount = 0; // found swap data but amounts never matched tolerance (likely multi-hop)
+  let fallbackEnrichedCount = 0;
+  let zeroDataCount = 0; // no relevant log found anywhere, even in a full receipt
 
   for (const candidate of candidates) {
     const hash = candidate.hash.toLowerCase();
@@ -401,7 +419,7 @@ async function enrichUniswapV4Legs(
       continue;
     }
 
-    const { enriched, totalSwapsSeen } = await tryEnrichCandidate(candidate, { logs: [...swapLogs, ...transferLogs] });
+    const { enriched, totalSwapsSeen, closestDiffBps } = await tryEnrichCandidate(candidate, { logs: [...swapLogs, ...transferLogs] });
     if (enriched) {
       bulkEnrichedCount++;
     } else if (totalSwapsSeen === 0) {
@@ -410,8 +428,9 @@ async function enrichUniswapV4Legs(
       // matching can't see; give the real receipt a chance too.
       needsFallback.push(candidate);
     } else {
+      amountMismatchCount++;
       console.log(
-        `[edge:fetchTrades] ${chain} ${candidate.direction} hash=${candidate.hash.slice(0, 10)} — ${totalSwapsSeen} Swap event(s) found but no amount matched`
+        `[edge:fetchTrades] ${chain} ${candidate.direction} hash=${candidate.hash.slice(0, 10)} — ${totalSwapsSeen} Swap event(s) found but no amount matched (closest was ${closestDiffBps !== null ? (closestDiffBps / 100).toFixed(2) + '%' : 'n/a'} off - large = likely multi-hop, small = tolerance too tight)`
       );
     }
   }
@@ -434,7 +453,11 @@ async function enrichUniswapV4Legs(
     for (let i = 0; i < toFetch.length; i += BATCH) {
       const batch = toFetch.slice(i, i + BATCH);
       const receipts = await Promise.all(
-        batch.map(({ hash }) => client.request({ method: 'eth_getTransactionReceipt', params: [hash] }).catch(() => null))
+        batch.map(({ hash }) =>
+          withRateLimitRetry(() => client.request({ method: 'eth_getTransactionReceipt', params: [hash] }), {
+            label: `${chain} eth_getTransactionReceipt`,
+          }).catch(() => null)
+        )
       );
       batch.forEach((c, j) => {
         const r: any = receipts[j];
@@ -450,15 +473,29 @@ async function enrichUniswapV4Legs(
 
     for (const candidate of needsFallback) {
       const receipt = receiptsByHash.get(candidate.hash.toLowerCase());
-      if (!receipt) continue;
-      const { enriched, totalSwapsSeen } = await tryEnrichCandidate(candidate, receipt);
-      if (!enriched && totalSwapsSeen > 0) {
+      if (!receipt) {
+        zeroDataCount++;
+        continue;
+      }
+      const { enriched, totalSwapsSeen, closestDiffBps } = await tryEnrichCandidate(candidate, receipt);
+      if (enriched) {
+        fallbackEnrichedCount++;
+      } else if (totalSwapsSeen > 0) {
+        amountMismatchCount++;
         console.log(
-          `[edge:fetchTrades] ${chain} ${candidate.direction} hash=${candidate.hash.slice(0, 10)} — ${totalSwapsSeen} Swap event(s) found but no amount matched`
+          `[edge:fetchTrades] ${chain} ${candidate.direction} hash=${candidate.hash.slice(0, 10)} — ${totalSwapsSeen} Swap event(s) found but no amount matched (closest was ${closestDiffBps !== null ? (closestDiffBps / 100).toFixed(2) + '%' : 'n/a'} off - large = likely multi-hop, small = tolerance too tight)`
         );
+      } else {
+        zeroDataCount++;
       }
     }
   }
+
+  const totalEnriched = bulkEnrichedCount + fallbackEnrichedCount;
+  const capturePct = candidates.length > 0 ? ((totalEnriched / candidates.length) * 100).toFixed(1) : '0.0';
+  console.log(
+    `[edge:fetchTrades] ${chain} CAPTURE RATE: ${totalEnriched}/${candidates.length} (${capturePct}%) matched — ${amountMismatchCount} amount-mismatch (likely multi-hop), ${zeroDataCount} zero relevant log data found`
+  );
 
   return synthetic;
 }
@@ -502,10 +539,10 @@ async function fetchViaAlchemyEnhancedApi(
       };
       if (pageKey) params.pageKey = pageKey;
 
-      const res: any = await (client as any).request({
-        method: 'alchemy_getAssetTransfers',
-        params: [params],
-      });
+      const res: any = await withRateLimitRetry(
+        () => (client as any).request({ method: 'alchemy_getAssetTransfers', params: [params] }),
+        { label: `${chain} alchemy_getAssetTransfers dir=${direction}` }
+      );
 
       let skippedNoAddress = 0;
       for (const t of res?.transfers ?? []) {

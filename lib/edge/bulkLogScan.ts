@@ -1,4 +1,5 @@
 import type { PublicClient } from 'viem';
+import { isRateLimitError } from './rpcRetry';
 
 /**
  * Bulk eth_getLogs fetching for the V4 enrichment path - replaces
@@ -24,6 +25,8 @@ interface RawLog {
 }
 
 const MAX_SPLIT_DEPTH = 40; // generous - each split halves the range, so this covers an absurdly large window before giving up
+const MAX_RATE_LIMIT_RETRIES = 5;
+const RATE_LIMIT_BASE_DELAY_MS = 2000;
 
 async function rawGetLogs(
   client: PublicClient,
@@ -59,12 +62,32 @@ async function getLogsAdaptive(
   topics: (string | null)[],
   fromBlock: bigint,
   toBlock: bigint,
-  depth = 0
+  depth = 0,
+  rateLimitAttempt = 0
 ): Promise<RawLog[]> {
   try {
     const logs = await rawGetLogs(client, address, topics, fromBlock, toBlock);
     return logs ?? [];
   } catch (err: any) {
+    // A 429 means "slow down", not "this range is too big" - retrying the
+    // SAME range after a real backoff is correct here. Bisecting on a 429
+    // would fire MORE concurrent requests at an already-rate-limited
+    // endpoint, making things worse.
+    if (isRateLimitError(err)) {
+      if (rateLimitAttempt >= MAX_RATE_LIMIT_RETRIES) {
+        console.log(
+          `[edge:bulkLogScan] giving up on range ${fromBlock}-${toBlock} after ${rateLimitAttempt} rate-limit retries`
+        );
+        return [];
+      }
+      const delay = RATE_LIMIT_BASE_DELAY_MS * 2 ** rateLimitAttempt;
+      console.log(
+        `[edge:bulkLogScan] rate limited on range ${fromBlock}-${toBlock}, retrying in ${delay}ms (attempt ${rateLimitAttempt + 1}/${MAX_RATE_LIMIT_RETRIES})`
+      );
+      await new Promise((r) => setTimeout(r, delay));
+      return getLogsAdaptive(client, address, topics, fromBlock, toBlock, depth, rateLimitAttempt + 1);
+    }
+
     if (fromBlock >= toBlock || depth >= MAX_SPLIT_DEPTH) {
       console.log(
         `[edge:bulkLogScan] giving up on range ${fromBlock}-${toBlock} (depth=${depth}): ${err?.message ?? err}`
