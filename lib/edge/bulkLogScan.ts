@@ -1,25 +1,27 @@
 import type { PublicClient } from 'viem';
-import { isRateLimitError } from './rpcRetry';
+import { withRateLimitRetry } from './rpcRetry';
 
 /**
- * Bulk eth_getLogs fetching for the V4 enrichment path - replaces
- * per-transaction eth_getTransactionReceipt calls with a small number of
- * scoped log scans across the whole analysis window.
+ * Targeted per-block log fetching for the V4 enrichment path.
  *
- * The block-count of the window is NOT the limiting factor here (a wallet
- * trades maybe 100x/day, so at most ~10k relevant trades in 90 days,
- * regardless of how fast the chain's blocks tick) - what actually limits an
- * eth_getLogs call is the provider's response-size/result-count cap. That
- * cap isn't published or constant across providers, so instead of guessing
- * a fixed block-count chunk size, this starts with the whole range and
- * adaptively bisects only when the provider actually rejects the call -
- * self-tuning to whatever the real limit is, on any chain.
+ * PREVIOUS DESIGN (removed): scan a continuous block range from the
+ * wallet's earliest to latest candidate, filtered by PoolManager address +
+ * Swap topic. That sounds scoped to "our data" but isn't - it returns
+ * every Swap on that PoolManager by every trader during the whole window,
+ * which on an active DEX is enormous regardless of how few trades this
+ * wallet made. That's what kept exploding into hundreds of sub-requests
+ * under adaptive bisection and triggering rate-limit storms - the design
+ * was scanning the wrong thing, not just scanning it inefficiently.
  *
- * Bisection fans out recursively (each split spawns two more), so without
- * a concurrency cap a wide range can explode into hundreds of parallel
- * requests - which then all get rate-limited at once and all retry on the
- * same clock, colliding again. A semaphore bounds how many eth_getLogs
- * calls are ever in flight at once, no matter how deep the recursion goes.
+ * THIS DESIGN: we already know the exact block number of every one of the
+ * wallet's candidate trades (from alchemy_getAssetTransfers). A trade's
+ * Swap/Transfer logs live in that SAME block (same transaction), so there
+ * is no reason to scan anything else. One eth_getLogs call per unique
+ * block, filtered to (PoolManager address OR known reference-token
+ * addresses) AND (Swap topic OR Transfer topic) - each such call returns
+ * only what happened in that single block, which is small and fast no
+ * matter how busy the chain is. Total requests = number of unique blocks
+ * the wallet actually traded in, not a function of window size at all.
  */
 
 interface RawLog {
@@ -30,11 +32,9 @@ interface RawLog {
   blockNumber: string;
 }
 
-const MAX_SPLIT_DEPTH = 40; // generous - each split halves the range, so this covers an absurdly large window before giving up
-const MAX_RATE_LIMIT_RETRIES = 5;
-const RATE_LIMIT_BASE_DELAY_MS = 2000;
-/** Max eth_getLogs calls in flight at once, across the whole bisection tree - the fix for the self-inflicted rate-limit storm. */
-const MAX_CONCURRENT_REQUESTS = 4;
+/** Max eth_getLogs calls in flight at once - single-block calls are cheap, so this can be higher than the old range-scan concurrency. */
+const MAX_CONCURRENT_REQUESTS = 8;
+const PROGRESS_EVERY = 200; // blocks
 
 class Semaphore {
   private active = 0;
@@ -63,125 +63,107 @@ class Semaphore {
 
 const requestSemaphore = new Semaphore(MAX_CONCURRENT_REQUESTS);
 
-/** Small random jitter so many callers rate-limited at the same moment don't all retry on the exact same clock tick and collide again. */
-function jitter(ms: number): number {
-  return ms + Math.floor(Math.random() * ms * 0.25);
-}
-
-async function rawGetLogs(
+async function fetchLogsForBlock(
   client: PublicClient,
-  address: string | string[] | undefined,
-  topics: (string | null)[],
-  fromBlock: bigint,
-  toBlock: bigint
+  addresses: string[],
+  topics: string[],
+  blockNumber: bigint
 ): Promise<RawLog[]> {
-  const release = await requestSemaphore.acquire();
-  try {
-    return await (client as any).request({
-      method: 'eth_getLogs',
-      params: [
-        {
-          fromBlock: `0x${fromBlock.toString(16)}`,
-          toBlock: `0x${toBlock.toString(16)}`,
-          ...(address ? { address } : {}),
-          topics,
-        },
-      ],
-    });
-  } finally {
-    release();
-  }
-}
-
-/**
- * Fetches logs for [fromBlock, toBlock] in one call; on any error (range
- * too large, too many results, provider timeout - the exact reason varies
- * by provider and isn't worth special-casing) splits the range in half and
- * retries both halves. A 429 is handled separately: that means "you're
- * requesting too fast", so it backs off and retries the SAME range rather
- * than bisecting into more parallel requests (which would make the rate
- * limit worse, not better). The semaphore above caps how many requests -
- * original or split - are ever in flight at once.
- */
-async function getLogsAdaptive(
-  client: PublicClient,
-  address: string | string[] | undefined,
-  topics: (string | null)[],
-  fromBlock: bigint,
-  toBlock: bigint,
-  depth = 0,
-  rateLimitAttempt = 0
-): Promise<RawLog[]> {
-  try {
-    const logs = await rawGetLogs(client, address, topics, fromBlock, toBlock);
-    return logs ?? [];
-  } catch (err: any) {
-    if (isRateLimitError(err)) {
-      if (rateLimitAttempt >= MAX_RATE_LIMIT_RETRIES) {
-        console.log(
-          `[edge:bulkLogScan] giving up on range ${fromBlock}-${toBlock} after ${rateLimitAttempt} rate-limit retries`
-        );
-        return [];
+  return withRateLimitRetry(
+    async () => {
+      const release = await requestSemaphore.acquire();
+      try {
+        const logs = await (client as any).request({
+          method: 'eth_getLogs',
+          params: [
+            {
+              fromBlock: `0x${blockNumber.toString(16)}`,
+              toBlock: `0x${blockNumber.toString(16)}`,
+              address: addresses,
+              topics: [topics],
+            },
+          ],
+        });
+        return logs ?? [];
+      } finally {
+        release();
       }
-      const delay = jitter(RATE_LIMIT_BASE_DELAY_MS * 2 ** rateLimitAttempt);
-      console.log(
-        `[edge:bulkLogScan] rate limited on range ${fromBlock}-${toBlock}, retrying in ${delay}ms (attempt ${rateLimitAttempt + 1}/${MAX_RATE_LIMIT_RETRIES})`
-      );
-      await new Promise((r) => setTimeout(r, delay));
-      return getLogsAdaptive(client, address, topics, fromBlock, toBlock, depth, rateLimitAttempt + 1);
-    }
-
-    if (fromBlock >= toBlock || depth >= MAX_SPLIT_DEPTH) {
-      console.log(
-        `[edge:bulkLogScan] giving up on range ${fromBlock}-${toBlock} (depth=${depth}): ${err?.message ?? err}`
-      );
-      return [];
-    }
-    const mid = fromBlock + (toBlock - fromBlock) / BigInt(2);
-    const [left, right] = await Promise.all([
-      getLogsAdaptive(client, address, topics, fromBlock, mid, depth + 1),
-      getLogsAdaptive(client, address, topics, mid + BigInt(1), toBlock, depth + 1),
-    ]);
-    return [...left, ...right];
-  }
+    },
+    { label: `eth_getLogs block=${blockNumber}` }
+  );
 }
 
-function groupByTxHash(logs: RawLog[]): Map<string, RawLog[]> {
-  const map = new Map<string, RawLog[]>();
-  for (const log of logs) {
-    const h = log.transactionHash.toLowerCase();
-    const arr = map.get(h) ?? [];
-    arr.push(log);
-    map.set(h, arr);
-  }
-  return map;
+export interface BlockLogsResult {
+  swapLogsByHash: Map<string, RawLog[]>;
+  transferLogsByHash: Map<string, RawLog[]>;
 }
 
 /**
- * Bulk-fetches every Swap event at `poolManager` and every Transfer event
- * for each address in `referenceTokenAddresses`, across [fromBlock,
- * toBlock], and returns both grouped by transaction hash. This covers the
- * two log types enrichUniswapV4Legs actually needs (the V4 Swap match +
- * findReferenceTokenTransfer's Transfer scan) without touching any
- * transaction this wallet wasn't even involved in - callers still filter
- * down to their own candidate hashes afterward.
+ * Fetches Swap events at `poolManager` and Transfer events at each
+ * `referenceTokenAddresses` entry, for exactly the given block numbers -
+ * one eth_getLogs call per unique block, concurrency-capped, with
+ * step-by-step progress logging so a long scan is visibly moving instead
+ * of looking hung.
  */
-export async function bulkFetchSwapAndReferenceTransferLogs(
+export async function bulkFetchLogsForBlocks(
   client: PublicClient,
+  chainLabel: string,
   poolManager: string,
   swapTopic: string,
   transferTopic: string,
   referenceTokenAddresses: string[],
-  fromBlock: bigint,
-  toBlock: bigint
-): Promise<{ swapLogsByHash: Map<string, RawLog[]>; transferLogsByHash: Map<string, RawLog[]> }> {
-  const [swapLogs, ...transferLogSets] = await Promise.all([
-    getLogsAdaptive(client, poolManager, [swapTopic], fromBlock, toBlock),
-    ...referenceTokenAddresses.map((addr) => getLogsAdaptive(client, addr, [transferTopic], fromBlock, toBlock)),
-  ]);
+  blockNumbers: bigint[]
+): Promise<BlockLogsResult> {
+  const uniqueBlocks = Array.from(new Set(blockNumbers.map((b) => b.toString()))).map((s) => BigInt(s));
+  const addresses = [poolManager, ...referenceTokenAddresses];
+  const topics = [swapTopic, transferTopic];
 
-  return {
-    swapLogsByHash: groupByTxHash(swapLogs),
-    transferLogsByHash: groupByTxHash(transferLogSets.flat()),
-  };
+  console.log(
+    `[edge:bulkLogScan] ${chainLabel} scanning ${uniqueBlocks.length} unique block(s) (from ${blockNumbers.length} candidates) — addresses=[poolManager + ${referenceTokenAddresses.length} reference token(s)], concurrency=${MAX_CONCURRENT_REQUESTS}`
+  );
+
+  const swapLogsByHash = new Map<string, RawLog[]>();
+  const transferLogsByHash = new Map<string, RawLog[]>();
+  const startedAt = Date.now();
+  let done = 0;
+  let failedBlocks = 0;
+  let totalLogsFound = 0;
+
+  await Promise.all(
+    uniqueBlocks.map(async (block) => {
+      let logs: RawLog[] = [];
+      try {
+        logs = await fetchLogsForBlock(client, addresses, topics, block);
+      } catch (err: any) {
+        failedBlocks++;
+        console.log(`[edge:bulkLogScan] ${chainLabel} block=${block} FAILED after retries: ${err?.message ?? err}`);
+      }
+
+      for (const log of logs) {
+        const h = log.transactionHash.toLowerCase();
+        const isSwap = log.address?.toLowerCase() === poolManager.toLowerCase() && log.topics?.[0] === swapTopic;
+        const target = isSwap ? swapLogsByHash : transferLogsByHash;
+        const arr = target.get(h) ?? [];
+        arr.push(log);
+        target.set(h, arr);
+      }
+
+      done++;
+      totalLogsFound += logs.length;
+      if (done % PROGRESS_EVERY === 0 || done === uniqueBlocks.length) {
+        const elapsedS = ((Date.now() - startedAt) / 1000).toFixed(1);
+        const rate = done / Math.max(0.1, (Date.now() - startedAt) / 1000);
+        const etaS = rate > 0 ? Math.round((uniqueBlocks.length - done) / rate) : 0;
+        console.log(
+          `[edge:bulkLogScan] ${chainLabel} progress: ${done}/${uniqueBlocks.length} blocks (${((done / uniqueBlocks.length) * 100).toFixed(0)}%), ${totalLogsFound} log(s) found so far, ${failedBlocks} failed, ${elapsedS}s elapsed${done < uniqueBlocks.length ? `, eta=${etaS}s` : ''}`
+        );
+      }
+    })
+  );
+
+  console.log(
+    `[edge:bulkLogScan] ${chainLabel} DONE: ${uniqueBlocks.length} block(s) scanned, ${swapLogsByHash.size} tx(s) with Swap logs, ${transferLogsByHash.size} tx(s) with reference-token Transfer logs, ${failedBlocks} block(s) failed, ${((Date.now() - startedAt) / 1000).toFixed(1)}s total`
+  );
+
+  return { swapLogsByHash, transferLogsByHash };
 }

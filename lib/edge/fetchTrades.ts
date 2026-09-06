@@ -4,7 +4,7 @@ import { getReferenceToken, hasReferenceTokens, REFERENCE_TOKENS, NATIVE_PSEUDO_
 import { getReferencePriceUsd, recordObservedTradePrice } from './priceService';
 import { scanTransfersViaLogs, getDecimals, getBlockTimestamp } from './logScanFallback';
 import { getCachedReceipts, cacheReceipts } from './receiptCache';
-import { bulkFetchSwapAndReferenceTransferLogs } from './bulkLogScan';
+import { bulkFetchLogsForBlocks } from './bulkLogScan';
 import { withRateLimitRetry } from './rpcRetry';
 import type { TradeLeg } from './types';
 
@@ -366,17 +366,14 @@ async function enrichUniswapV4Legs(
     return { enriched, totalSwapsSeen, closestDiffBps };
   }
 
-  // ── Tier 1: bulk eth_getLogs scan ────────────────────────────────────
-  // Instead of one eth_getTransactionReceipt per candidate (the old
-  // approach - tens of thousands of Alchemy CUs on an active wallet),
-  // fetch every Swap event at the PoolManager and every Transfer event for
-  // each known reference token across the WHOLE candidate block range in
-  // a handful of eth_getLogs calls, then match locally. A wallet trades at
-  // most a few thousand times in 90 days regardless of how fast the chain's
-  // blocks tick, so this is bounded by real activity, not block count.
+  // ── Tier 1: targeted per-block eth_getLogs scan ──────────────────────
+  // We already know the exact block of every candidate trade (same block
+  // as the wallet's own transfer leg, since it's the same transaction) -
+  // no need to scan a range at all. One eth_getLogs call per unique block,
+  // filtered to (PoolManager OR reference tokens) x (Swap OR Transfer
+  // topic). Total requests = unique blocks this wallet traded in, not a
+  // function of the analysis window size.
   const blockNumbers = candidates.map((c) => c.leg.blockNumber);
-  const fromBlock = blockNumbers.reduce((a, b) => (b < a ? b : a));
-  const toBlock = blockNumbers.reduce((a, b) => (b > a ? b : a));
   const referenceTokenAddresses = Array.from(
     new Set(
       (REFERENCE_TOKENS[chain] ?? [])
@@ -385,18 +382,14 @@ async function enrichUniswapV4Legs(
     )
   );
 
-  const bulkStartedAt = Date.now();
-  const { swapLogsByHash, transferLogsByHash } = await bulkFetchSwapAndReferenceTransferLogs(
+  const { swapLogsByHash, transferLogsByHash } = await bulkFetchLogsForBlocks(
     client,
+    chain,
     poolManager,
     SWAP_TOPIC,
     TRANSFER_TOPIC,
     referenceTokenAddresses,
-    fromBlock,
-    toBlock
-  );
-  console.log(
-    `[edge:fetchTrades] ${chain} bulk log scan: ${swapLogsByHash.size} tx(s) with Swap logs, ${transferLogsByHash.size} tx(s) with reference-token Transfer logs, ${((Date.now() - bulkStartedAt) / 1000).toFixed(1)}s`
+    blockNumbers
   );
 
   const needsFallback: Candidate[] = [];
