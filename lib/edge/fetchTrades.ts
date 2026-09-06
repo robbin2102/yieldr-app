@@ -72,9 +72,35 @@ function findReferenceTokenTransfer(
 
   for (const log of receipt.logs) {
     if (log.topics?.[0] !== TRANSFER_TOPIC) continue;
+
+    // ERC721 Transfer(address indexed from, address indexed to, uint256 indexed tokenId)
+    // hashes to the SAME topic0 as ERC20 Transfer(address,address,uint256) - the event
+    // signature string is identical, indexing doesn't change the hash. ERC721's tokenId
+    // is indexed (3 indexed args -> 4 topics total incl. topic0), so its data is empty
+    // ('0x') instead of holding a value - that's what was crashing BigInt(log.data)
+    // below. A standard ERC20 Transfer always has exactly 3 topics (topic0, from, to).
+    if (log.topics.length !== 3) {
+      console.log(
+        `[edge:fetchTrades] skipping non-ERC20 Transfer-topic log (topics=${log.topics?.length}, likely an NFT transfer) at ${log.address}`
+      );
+      continue;
+    }
+
     const tokenAddr = log.address?.toLowerCase();
     if (!tokenAddr || tokenAddr === exclude) continue;
-    const amt = BigInt(log.data);
+
+    if (!log.data || log.data === '0x') {
+      console.log(`[edge:fetchTrades] skipping Transfer log with empty data at ${log.address} (tx has non-standard logs)`);
+      continue;
+    }
+
+    let amt: bigint;
+    try {
+      amt = BigInt(log.data);
+    } catch (err) {
+      console.log(`[edge:fetchTrades] failed to parse Transfer log data "${log.data}" at ${log.address}:`, err);
+      continue;
+    }
     if (amt <= BigInt(0)) continue;
     const diff = amt > expectedRawQty ? amt - expectedRawQty : expectedRawQty - amt;
     if (diff > (expectedRawQty * BigInt(maxToleranceBps)) / BigInt(10000)) continue;
