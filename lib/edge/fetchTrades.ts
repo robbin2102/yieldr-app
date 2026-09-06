@@ -33,11 +33,6 @@ const TRANSFER_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a
 // (BaseScan readContract tab also works — no wallet required)
 const VIRTUALS_BONDING_BASE = '0x1a540088125d00dd3990f9da45ca0859af4d3b01';
 
-// Non-18-decimal tokens that may appear as reference legs.
-const KNOWN_DECIMALS: Record<string, number> = {
-  '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913': 6, // USDC on Base
-};
-
 const _BIT255 = BigInt(2) ** BigInt(255);
 const _TWO256 = BigInt(2) ** BigInt(256);
 
@@ -65,10 +60,10 @@ function findReferenceTokenTransfer(
   excludeToken: string,
   expectedRawQty: bigint,
   maxToleranceBps = 200
-): { tokenAddress: string; rawQty: bigint; decimals: number } | null {
+): { tokenAddress: string; rawQty: bigint } | null {
   if (!receipt?.logs) return null;
   const exclude = excludeToken.toLowerCase();
-  let best: { tokenAddress: string; rawQty: bigint; decimals: number; diff: bigint } | null = null;
+  let best: { tokenAddress: string; rawQty: bigint; diff: bigint } | null = null;
 
   for (const log of receipt.logs) {
     if (log.topics?.[0] !== TRANSFER_TOPIC) continue;
@@ -105,11 +100,11 @@ function findReferenceTokenTransfer(
     const diff = amt > expectedRawQty ? amt - expectedRawQty : expectedRawQty - amt;
     if (diff > (expectedRawQty * BigInt(maxToleranceBps)) / BigInt(10000)) continue;
     if (!best || diff < best.diff) {
-      best = { tokenAddress: tokenAddr, rawQty: amt, decimals: KNOWN_DECIMALS[tokenAddr] ?? 18, diff };
+      best = { tokenAddress: tokenAddr, rawQty: amt, diff };
     }
   }
 
-  return best ? { tokenAddress: best.tokenAddress, rawQty: best.rawQty, decimals: best.decimals } : null;
+  return best ? { tokenAddress: best.tokenAddress, rawQty: best.rawQty } : null;
 }
 
 /**
@@ -168,8 +163,14 @@ async function enrichUniswapV4Legs(
     } sell, ${candidates.filter((c) => c.direction === 'buy').length} relay-buy)`
   );
 
-  const BATCH = 10;
+  // One eth_getTransactionReceipt round-trip per BATCH candidates - on a wallet
+  // with thousands of unbalanced trades (common on HOOD) this is the dominant
+  // cost of the whole analysis. BATCH=25 keeps well under Alchemy's per-app
+  // rate limit while cutting round-trips vs the previous BATCH=10.
+  const BATCH = 25;
+  const PROGRESS_EVERY = 500; // candidates, not batches - keeps the log readable on huge wallets
   const synthetic: NormalizedTransfer[] = [];
+  const startedAt = Date.now();
 
   for (let i = 0; i < candidates.length; i += BATCH) {
     const batch = candidates.slice(i, i + BATCH);
@@ -178,6 +179,16 @@ async function enrichUniswapV4Legs(
         client.request({ method: 'eth_getTransactionReceipt', params: [hash] }).catch(() => null)
       )
     );
+
+    if (i > 0 && i % PROGRESS_EVERY < BATCH) {
+      const pct = ((i / candidates.length) * 100).toFixed(0);
+      const elapsedS = ((Date.now() - startedAt) / 1000).toFixed(0);
+      const ratePerS = i / Math.max(1, (Date.now() - startedAt) / 1000);
+      const etaS = ratePerS > 0 ? Math.round((candidates.length - i) / ratePerS) : null;
+      console.log(
+        `[edge:fetchTrades] ${chain} receipt fetch progress: ${i}/${candidates.length} (${pct}%), matched=${synthetic.length}, elapsed=${elapsedS}s${etaS !== null ? `, eta=${etaS}s` : ''}`
+      );
+    }
 
     for (let j = 0; j < batch.length; j++) {
       const candidate = batch[j];
@@ -218,7 +229,7 @@ async function enrichUniswapV4Legs(
             if (!refAddr) break; // no reference token detectable — skip
 
             const refRawQty = found?.rawQty ?? receivedAmt;
-            const refDecimals = found?.decimals ?? 18;
+            const refDecimals = await getDecimals(client, refAddr as `0x${string}`);
             const refQty = Number(refRawQty) / 10 ** refDecimals;
             const refLabel = found ? refAddr.slice(0, 10) : 'WETH(fallback)';
 
@@ -257,7 +268,7 @@ async function enrichUniswapV4Legs(
             if (!refAddr) break; // no reference token detectable — skip
 
             const refRawQty = found?.rawQty ?? refPaidRaw;
-            const refDecimals = found?.decimals ?? 18;
+            const refDecimals = await getDecimals(client, refAddr as `0x${string}`);
             const refQty = Number(refRawQty) / 10 ** refDecimals;
             const refLabel = found ? refAddr.slice(0, 10) : 'WETH(fallback)';
 
@@ -311,7 +322,7 @@ async function enrichUniswapV4Legs(
               const refAddr = found?.tokenAddress ?? wethAddress;
               if (!refAddr) break;
               const refRawQty = found?.rawQty ?? rcvdAmt;
-              const refDecimals = found?.decimals ?? 18;
+              const refDecimals = await getDecimals(client, refAddr as `0x${string}`);
               const refQty = Number(refRawQty) / 10 ** refDecimals;
 
               synthetic.push({ hash: candidate.hash, from: poolManager, to: wallet, tokenAddress: refAddr, qty: refQty, rawQty: refRawQty, ts: leg.ts, blockNumber: leg.blockNumber });
@@ -332,7 +343,7 @@ async function enrichUniswapV4Legs(
               const refAddr = found?.tokenAddress ?? wethAddress;
               if (!refAddr) break;
               const refRawQty = found?.rawQty ?? paidAmt;
-              const refDecimals = found?.decimals ?? 18;
+              const refDecimals = await getDecimals(client, refAddr as `0x${string}`);
               const refQty = Number(refRawQty) / 10 ** refDecimals;
 
               synthetic.push({ hash: candidate.hash, from: wallet, to: poolManager, tokenAddress: refAddr, qty: refQty, rawQty: refRawQty, ts: leg.ts, blockNumber: leg.blockNumber });
