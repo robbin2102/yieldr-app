@@ -30,7 +30,7 @@ export async function withRateLimitRetry<T>(
       return await fn();
     } catch (err: any) {
       if (!isRateLimitError(err) || attempt >= maxRetries) throw err;
-      const delay = baseDelayMs * 2 ** attempt;
+      const delay = baseDelayMs * 2 ** attempt + Math.floor(Math.random() * baseDelayMs * 0.25);
       console.log(
         `[edge:rpcRetry]${opts.label ? ` ${opts.label}` : ''} rate limited (429), retrying in ${delay}ms (attempt ${attempt + 1}/${maxRetries})`
       );

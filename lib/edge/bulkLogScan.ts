@@ -12,8 +12,14 @@ import { isRateLimitError } from './rpcRetry';
  * eth_getLogs call is the provider's response-size/result-count cap. That
  * cap isn't published or constant across providers, so instead of guessing
  * a fixed block-count chunk size, this starts with the whole range and
- * adaptively bisects only when the provider actually rejects a call -
+ * adaptively bisects only when the provider actually rejects the call -
  * self-tuning to whatever the real limit is, on any chain.
+ *
+ * Bisection fans out recursively (each split spawns two more), so without
+ * a concurrency cap a wide range can explode into hundreds of parallel
+ * requests - which then all get rate-limited at once and all retry on the
+ * same clock, colliding again. A semaphore bounds how many eth_getLogs
+ * calls are ever in flight at once, no matter how deep the recursion goes.
  */
 
 interface RawLog {
@@ -27,6 +33,40 @@ interface RawLog {
 const MAX_SPLIT_DEPTH = 40; // generous - each split halves the range, so this covers an absurdly large window before giving up
 const MAX_RATE_LIMIT_RETRIES = 5;
 const RATE_LIMIT_BASE_DELAY_MS = 2000;
+/** Max eth_getLogs calls in flight at once, across the whole bisection tree - the fix for the self-inflicted rate-limit storm. */
+const MAX_CONCURRENT_REQUESTS = 4;
+
+class Semaphore {
+  private active = 0;
+  private queue: (() => void)[] = [];
+  constructor(private readonly max: number) {}
+
+  async acquire(): Promise<() => void> {
+    if (this.active < this.max) {
+      this.active++;
+      return () => this.release();
+    }
+    return new Promise((resolve) => {
+      this.queue.push(() => {
+        this.active++;
+        resolve(() => this.release());
+      });
+    });
+  }
+
+  private release() {
+    this.active--;
+    const next = this.queue.shift();
+    if (next) next();
+  }
+}
+
+const requestSemaphore = new Semaphore(MAX_CONCURRENT_REQUESTS);
+
+/** Small random jitter so many callers rate-limited at the same moment don't all retry on the exact same clock tick and collide again. */
+function jitter(ms: number): number {
+  return ms + Math.floor(Math.random() * ms * 0.25);
+}
 
 async function rawGetLogs(
   client: PublicClient,
@@ -35,26 +75,33 @@ async function rawGetLogs(
   fromBlock: bigint,
   toBlock: bigint
 ): Promise<RawLog[]> {
-  return (client as any).request({
-    method: 'eth_getLogs',
-    params: [
-      {
-        fromBlock: `0x${fromBlock.toString(16)}`,
-        toBlock: `0x${toBlock.toString(16)}`,
-        ...(address ? { address } : {}),
-        topics,
-      },
-    ],
-  });
+  const release = await requestSemaphore.acquire();
+  try {
+    return await (client as any).request({
+      method: 'eth_getLogs',
+      params: [
+        {
+          fromBlock: `0x${fromBlock.toString(16)}`,
+          toBlock: `0x${toBlock.toString(16)}`,
+          ...(address ? { address } : {}),
+          topics,
+        },
+      ],
+    });
+  } finally {
+    release();
+  }
 }
 
 /**
  * Fetches logs for [fromBlock, toBlock] in one call; on any error (range
  * too large, too many results, provider timeout - the exact reason varies
  * by provider and isn't worth special-casing) splits the range in half and
- * retries both halves in parallel. Converges quickly in practice since a
- * rejection almost always means "still too big", so a handful of splits
- * gets under whatever the real cap is.
+ * retries both halves. A 429 is handled separately: that means "you're
+ * requesting too fast", so it backs off and retries the SAME range rather
+ * than bisecting into more parallel requests (which would make the rate
+ * limit worse, not better). The semaphore above caps how many requests -
+ * original or split - are ever in flight at once.
  */
 async function getLogsAdaptive(
   client: PublicClient,
@@ -69,10 +116,6 @@ async function getLogsAdaptive(
     const logs = await rawGetLogs(client, address, topics, fromBlock, toBlock);
     return logs ?? [];
   } catch (err: any) {
-    // A 429 means "slow down", not "this range is too big" - retrying the
-    // SAME range after a real backoff is correct here. Bisecting on a 429
-    // would fire MORE concurrent requests at an already-rate-limited
-    // endpoint, making things worse.
     if (isRateLimitError(err)) {
       if (rateLimitAttempt >= MAX_RATE_LIMIT_RETRIES) {
         console.log(
@@ -80,7 +123,7 @@ async function getLogsAdaptive(
         );
         return [];
       }
-      const delay = RATE_LIMIT_BASE_DELAY_MS * 2 ** rateLimitAttempt;
+      const delay = jitter(RATE_LIMIT_BASE_DELAY_MS * 2 ** rateLimitAttempt);
       console.log(
         `[edge:bulkLogScan] rate limited on range ${fromBlock}-${toBlock}, retrying in ${delay}ms (attempt ${rateLimitAttempt + 1}/${MAX_RATE_LIMIT_RETRIES})`
       );
