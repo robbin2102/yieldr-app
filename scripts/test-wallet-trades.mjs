@@ -27,7 +27,7 @@ try {
   }
 } catch { /* no .env.local — rely on shell env */ }
 
-const WALLET = (process.argv[2] || '0x9d948fdbc6e905C3dD2e382197906AFbc07B765e').toLowerCase();
+const WALLET = (process.argv[2] || '0x0a6ebed0155edb4b21d92ad02897a626cd90119e').toLowerCase();
 const SWAP_TOPIC    = '0x40e9cecb9f5f1f1c5b9c97dec2917b7ee92e57ba5563708daca94dd84ad7112f'; // Uniswap V4
 const V2_SWAP_TOPIC = '0xd78ad95fa46c994b6551d0da85fc275fe613ce37657fb8d5e3d130840159d822'; // Uniswap V2 / Virtuals FPair
 const BIT255 = 2n ** 255n;

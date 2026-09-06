@@ -20,7 +20,7 @@
 import { analyzeWallet } from '../lib/edge/analyze';
 import mongoose from 'mongoose';
 
-const WALLET = process.argv[2] || '0x9d948fdbc6e905C3dD2e382197906AFbc07B765e';
+const WALLET = process.argv[2] || '0x0a6ebed0155edb4b21d92ad02897a626cd90119e';
 
 function fmtUsd(n: number): string {
   return `${n >= 0 ? '' : '-'}$${Math.abs(n).toFixed(2)}`;
