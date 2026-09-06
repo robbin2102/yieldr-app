@@ -4,6 +4,7 @@ import { getReferenceToken, hasReferenceTokens, REFERENCE_TOKENS, NATIVE_PSEUDO_
 import { getReferencePriceUsd, recordObservedTradePrice } from './priceService';
 import { scanTransfersViaLogs, getDecimals, getBlockTimestamp } from './logScanFallback';
 import { getCachedReceipts, cacheReceipts } from './receiptCache';
+import { bulkFetchSwapAndReferenceTransferLogs } from './bulkLogScan';
 import type { TradeLeg } from './types';
 
 interface NormalizedTransfer {
@@ -129,8 +130,12 @@ async function enrichUniswapV4Legs(
   wallet: string,
   transfers: NormalizedTransfer[]
 ): Promise<NormalizedTransfer[]> {
-  const poolManager = POOL_MANAGER_BY_CHAIN[chain];
-  if (!poolManager) return [];
+  const poolManagerOrNull = POOL_MANAGER_BY_CHAIN[chain];
+  if (!poolManagerOrNull) return [];
+  // TS doesn't narrow a captured variable inside a nested closure (tryEnrichCandidate
+  // below), even though the guard above guarantees it's defined - rebind to a
+  // provably-string const so the closure's type checks out.
+  const poolManager: string = poolManagerOrNull;
 
   // WETH used only as last-resort fallback when Transfer scanning finds nothing.
   const wethAddress = REFERENCE_TOKENS[chain]?.find((t) => t.symbol === 'WETH')?.address ?? null;
@@ -164,226 +169,295 @@ async function enrichUniswapV4Legs(
     } sell, ${candidates.filter((c) => c.direction === 'buy').length} relay-buy)`
   );
 
-  // Receipts are immutable once mined, so check the persistent cache first -
-  // a repeat analysis of the same wallet (re-run button, or the periodic
-  // reasoning cron re-analyzing every EDGE_REASONING_INTERVAL_HOURS) then
-  // only pays Alchemy CUs for transactions genuinely new since last time,
-  // instead of re-fetching thousands of receipts from scratch every run.
-  const receiptsByHash = await getCachedReceipts(chain, candidates.map((c) => c.hash));
-  const toFetch = candidates.filter((c) => !receiptsByHash.has(c.hash.toLowerCase()));
-  console.log(
-    `[edge:fetchTrades] ${chain} receipt cache: ${candidates.length - toFetch.length}/${candidates.length} hit, ${toFetch.length} to fetch`
-  );
-
-  const BATCH = 25;
-  const PROGRESS_EVERY = 500; // candidates, not batches - keeps the log readable on huge wallets
-  const startedAt = Date.now();
-  const newlyFetched: { hash: string; logs: any[] }[] = [];
-
-  for (let i = 0; i < toFetch.length; i += BATCH) {
-    const batch = toFetch.slice(i, i + BATCH);
-    const receipts = await Promise.all(
-      batch.map(({ hash }) =>
-        client.request({ method: 'eth_getTransactionReceipt', params: [hash] }).catch(() => null)
-      )
-    );
-
-    if (i > 0 && i % PROGRESS_EVERY < BATCH) {
-      const pct = ((i / toFetch.length) * 100).toFixed(0);
-      const elapsedS = ((Date.now() - startedAt) / 1000).toFixed(0);
-      const ratePerS = i / Math.max(1, (Date.now() - startedAt) / 1000);
-      const etaS = ratePerS > 0 ? Math.round((toFetch.length - i) / ratePerS) : null;
-      console.log(
-        `[edge:fetchTrades] ${chain} receipt fetch progress: ${i}/${toFetch.length} (${pct}%), elapsed=${elapsedS}s${etaS !== null ? `, eta=${etaS}s` : ''}`
-      );
-    }
-
-    batch.forEach((c, j) => {
-      const r: any = receipts[j];
-      if (!r) return;
-      const logs = r.logs ?? [];
-      receiptsByHash.set(c.hash.toLowerCase(), { logs });
-      newlyFetched.push({ hash: c.hash, logs });
-    });
-  }
-
-  await cacheReceipts(chain, newlyFetched);
-  console.log(`[edge:fetchTrades] ${chain} cached ${newlyFetched.length} new receipt(s)`);
-
   const synthetic: NormalizedTransfer[] = [];
 
-  for (const candidate of candidates) {
-    const receipt = receiptsByHash.get(candidate.hash.toLowerCase());
-    if (!receipt) continue;
-
+  /**
+   * Tries to enrich one candidate from a receipt-shaped {logs} object
+   * (either bulk-scanned or a real per-tx receipt - both look the same to
+   * this function). Returns whether it matched, plus how many Swap events
+   * were seen at all (for the "found logs but nothing matched" diagnostic).
+   */
+  async function tryEnrichCandidate(
+    candidate: Candidate,
+    receipt: { logs: any[] }
+  ): Promise<{ enriched: boolean; totalSwapsSeen: number }> {
     const swapLogs = (receipt.logs ?? []).filter(
-        (log: any) =>
-          log.address?.toLowerCase() === poolManager && log.topics?.[0] === SWAP_TOPIC
-      );
+      (log: any) => log.address?.toLowerCase() === poolManager && log.topics?.[0] === SWAP_TOPIC
+    );
 
-      let enriched = false;
-      for (const swapLog of swapLogs) {
+    let enriched = false;
+    for (const swapLog of swapLogs) {
+      if (enriched) break;
+      const data = (swapLog.data as string).slice(2);
+      const amount0 = abiSignedInt('0x' + data.slice(0, 64));
+      const amount1 = abiSignedInt('0x' + data.slice(64, 128));
+
+      const { direction, leg } = candidate;
+      if (leg.rawQty === BigInt(0)) continue;
+
+      if (direction === 'sell') {
+        // Negative amount = token paid to pool (sold). Positive = reference token received.
+        // Try both amount0/amount1 orderings.
+        for (const [paidAmt, receivedAmt] of [
+          [amount0, amount1],
+          [amount1, amount0],
+        ] as [bigint, bigint][]) {
+          if (paidAmt >= BigInt(0) || receivedAmt <= BigInt(0)) continue;
+          const absPaid = -paidAmt;
+          const diff = absPaid > leg.rawQty ? absPaid - leg.rawQty : leg.rawQty - absPaid;
+          if (diff > leg.rawQty / BigInt(500)) continue; // 0.2%
+
+          // Detect actual reference token from ERC20 Transfer events (handles
+          // TOKEN/VIRTUAL, TOKEN/CBBTC etc. — not just TOKEN/WETH pools).
+          const found = findReferenceTokenTransfer(receipt, leg.tokenAddress, receivedAmt);
+          const refAddr = found?.tokenAddress ?? wethAddress;
+          if (!refAddr) break; // no reference token detectable — skip
+
+          const refRawQty = found?.rawQty ?? receivedAmt;
+          const refDecimals = await getDecimals(client, refAddr as `0x${string}`);
+          const refQty = Number(refRawQty) / 10 ** refDecimals;
+          const refLabel = found ? refAddr.slice(0, 10) : 'WETH(fallback)';
+
+          synthetic.push({
+            hash: candidate.hash,
+            from: poolManager,
+            to: wallet,
+            tokenAddress: refAddr,
+            qty: refQty,
+            rawQty: refRawQty,
+            ts: leg.ts,
+            blockNumber: leg.blockNumber,
+          });
+          console.log(
+            `[edge:fetchTrades] ${chain} V4 sell hash=${candidate.hash.slice(0, 10)} sold=${leg.qty.toFixed(4)} ${leg.tokenAddress.slice(0, 10)} rcvd=${refQty.toFixed(8)} ${refLabel}`
+          );
+          enriched = true;
+          break;
+        }
+      } else {
+        // direction === 'buy' (relay-buy: token arrived at wallet, reference token paid cross-chain)
+        // Positive amount = token received by caller (bought). Negative = reference token paid.
+        // Relay bridge takes a fee, so matching tolerance is widened to 1%.
+        for (const [receivedAmt, paidAmt] of [
+          [amount0, amount1],
+          [amount1, amount0],
+        ] as [bigint, bigint][]) {
+          if (receivedAmt <= BigInt(0) || paidAmt >= BigInt(0)) continue;
+          const diff = receivedAmt > leg.rawQty ? receivedAmt - leg.rawQty : leg.rawQty - receivedAmt;
+          if (diff > leg.rawQty / BigInt(100)) continue; // 1% (relay fee headroom)
+
+          const refPaidRaw = -paidAmt;
+          const found = findReferenceTokenTransfer(receipt, leg.tokenAddress, refPaidRaw);
+          const refAddr = found?.tokenAddress ?? wethAddress;
+          if (!refAddr) break; // no reference token detectable — skip
+
+          const refRawQty = found?.rawQty ?? refPaidRaw;
+          const refDecimals = await getDecimals(client, refAddr as `0x${string}`);
+          const refQty = Number(refRawQty) / 10 ** refDecimals;
+          const refLabel = found ? refAddr.slice(0, 10) : 'WETH(fallback)';
+
+          synthetic.push({
+            hash: candidate.hash,
+            from: wallet,
+            to: poolManager,
+            tokenAddress: refAddr,
+            qty: refQty,
+            rawQty: refRawQty,
+            ts: leg.ts,
+            blockNumber: leg.blockNumber,
+          });
+          console.log(
+            `[edge:fetchTrades] ${chain} V4 relay-buy hash=${candidate.hash.slice(0, 10)} rcvd=${leg.qty.toFixed(4)} ${leg.tokenAddress.slice(0, 10)} paid=${refQty.toFixed(8)} ${refLabel}`
+          );
+          enriched = true;
+          break;
+        }
+      }
+    }
+
+    // ── Fallback: Virtuals Protocol FPair (Uniswap V2-style) ────────────
+    // Virtuals FPair is a V2 clone where token0 = VIRTUAL, token1 = agent
+    // token. The relay bridge may buy/sell the agent token via FPair without
+    // touching the Uniswap V4 PoolManager, so the V4 Swap check above finds
+    // nothing. Detect via the V2 Swap event on any contract in the receipt.
+    if (!enriched && chain === 'base') {
+      const v2Logs = (receipt.logs ?? []).filter((log: any) => log.topics?.[0] === V2_SWAP_TOPIC);
+
+      for (const v2Log of v2Logs) {
         if (enriched) break;
-        const data = (swapLog.data as string).slice(2);
-        const amount0 = abiSignedInt('0x' + data.slice(0, 64));
-        const amount1 = abiSignedInt('0x' + data.slice(64, 128));
+        const d = (v2Log.data as string).slice(2);
+        const a0In = BigInt('0x' + d.slice(0, 64));
+        const a1In = BigInt('0x' + d.slice(64, 128));
+        const a0Out = BigInt('0x' + d.slice(128, 192));
+        const a1Out = BigInt('0x' + d.slice(192, 256));
 
         const { direction, leg } = candidate;
         if (leg.rawQty === BigInt(0)) continue;
 
         if (direction === 'sell') {
-          // Negative amount = token paid to pool (sold). Positive = reference token received.
-          // Try both amount0/amount1 orderings.
-          for (const [paidAmt, receivedAmt] of [
-            [amount0, amount1],
-            [amount1, amount0],
+          for (const [soldAmt, rcvdAmt] of [
+            [a0In, a0Out],
+            [a0In, a1Out],
+            [a1In, a0Out],
+            [a1In, a1Out],
           ] as [bigint, bigint][]) {
-            if (paidAmt >= BigInt(0) || receivedAmt <= BigInt(0)) continue;
-            const absPaid = -paidAmt;
-            const diff = absPaid > leg.rawQty ? absPaid - leg.rawQty : leg.rawQty - absPaid;
+            if (soldAmt === BigInt(0) || rcvdAmt === BigInt(0)) continue;
+            const diff = soldAmt > leg.rawQty ? soldAmt - leg.rawQty : leg.rawQty - soldAmt;
             if (diff > leg.rawQty / BigInt(500)) continue; // 0.2%
 
-            // Detect actual reference token from ERC20 Transfer events (handles
-            // TOKEN/VIRTUAL, TOKEN/CBBTC etc. — not just TOKEN/WETH pools).
-            const found = findReferenceTokenTransfer(receipt, leg.tokenAddress, receivedAmt);
+            const found = findReferenceTokenTransfer(receipt, leg.tokenAddress, rcvdAmt);
             const refAddr = found?.tokenAddress ?? wethAddress;
-            if (!refAddr) break; // no reference token detectable — skip
-
-            const refRawQty = found?.rawQty ?? receivedAmt;
+            if (!refAddr) break;
+            const refRawQty = found?.rawQty ?? rcvdAmt;
             const refDecimals = await getDecimals(client, refAddr as `0x${string}`);
             const refQty = Number(refRawQty) / 10 ** refDecimals;
-            const refLabel = found ? refAddr.slice(0, 10) : 'WETH(fallback)';
 
-            synthetic.push({
-              hash: candidate.hash,
-              from: poolManager,
-              to: wallet,
-              tokenAddress: refAddr,
-              qty: refQty,
-              rawQty: refRawQty,
-              ts: leg.ts,
-              blockNumber: leg.blockNumber,
-            });
-            console.log(
-              `[edge:fetchTrades] ${chain} V4 sell hash=${candidate.hash.slice(0, 10)} sold=${leg.qty.toFixed(4)} ${leg.tokenAddress.slice(0, 10)} rcvd=${refQty.toFixed(8)} ${refLabel}`
-            );
+            synthetic.push({ hash: candidate.hash, from: poolManager, to: wallet, tokenAddress: refAddr, qty: refQty, rawQty: refRawQty, ts: leg.ts, blockNumber: leg.blockNumber });
+            console.log(`[edge:fetchTrades] ${chain} V2/Virtuals sell hash=${candidate.hash.slice(0, 10)} sold=${leg.qty.toFixed(4)} rcvd=${refQty.toFixed(8)} ${refAddr.slice(0, 10)}`);
             enriched = true;
             break;
           }
         } else {
-          // direction === 'buy' (relay-buy: token arrived at wallet, reference token paid cross-chain)
-          // Positive amount = token received by caller (bought). Negative = reference token paid.
-          // Relay bridge takes a fee, so matching tolerance is widened to 1%.
-          for (const [receivedAmt, paidAmt] of [
-            [amount0, amount1],
-            [amount1, amount0],
+          // relay-buy: agent token received; VIRTUAL was paid cross-chain
+          // V2 Swap: amount_X_Out = agent token out (FPair → relay → wallet)
+          // Relay takes ~1% fee so wallet receives slightly less than FPair outputs.
+          for (const [boughtAmt, paidAmt] of [
+            [a0Out, a0In],
+            [a0Out, a1In],
+            [a1Out, a0In],
+            [a1Out, a1In],
           ] as [bigint, bigint][]) {
-            if (receivedAmt <= BigInt(0) || paidAmt >= BigInt(0)) continue;
-            const diff =
-              receivedAmt > leg.rawQty ? receivedAmt - leg.rawQty : leg.rawQty - receivedAmt;
-            if (diff > leg.rawQty / BigInt(100)) continue; // 1% (relay fee headroom)
+            if (boughtAmt === BigInt(0) || paidAmt === BigInt(0)) continue;
+            const diff = boughtAmt > leg.rawQty ? boughtAmt - leg.rawQty : leg.rawQty - boughtAmt;
+            if (diff > (leg.rawQty * BigInt(150)) / BigInt(10000)) continue; // 1.5%
 
-            const refPaidRaw = -paidAmt;
-            const found = findReferenceTokenTransfer(receipt, leg.tokenAddress, refPaidRaw);
+            const found = findReferenceTokenTransfer(receipt, leg.tokenAddress, paidAmt);
             const refAddr = found?.tokenAddress ?? wethAddress;
-            if (!refAddr) break; // no reference token detectable — skip
-
-            const refRawQty = found?.rawQty ?? refPaidRaw;
+            if (!refAddr) break;
+            const refRawQty = found?.rawQty ?? paidAmt;
             const refDecimals = await getDecimals(client, refAddr as `0x${string}`);
             const refQty = Number(refRawQty) / 10 ** refDecimals;
-            const refLabel = found ? refAddr.slice(0, 10) : 'WETH(fallback)';
 
-            synthetic.push({
-              hash: candidate.hash,
-              from: wallet,
-              to: poolManager,
-              tokenAddress: refAddr,
-              qty: refQty,
-              rawQty: refRawQty,
-              ts: leg.ts,
-              blockNumber: leg.blockNumber,
-            });
-            console.log(
-              `[edge:fetchTrades] ${chain} V4 relay-buy hash=${candidate.hash.slice(0, 10)} rcvd=${leg.qty.toFixed(4)} ${leg.tokenAddress.slice(0, 10)} paid=${refQty.toFixed(8)} ${refLabel}`
-            );
+            synthetic.push({ hash: candidate.hash, from: wallet, to: poolManager, tokenAddress: refAddr, qty: refQty, rawQty: refRawQty, ts: leg.ts, blockNumber: leg.blockNumber });
+            console.log(`[edge:fetchTrades] ${chain} V2/Virtuals relay-buy hash=${candidate.hash.slice(0, 10)} rcvd=${leg.qty.toFixed(4)} paid=${refQty.toFixed(8)} ${refAddr.slice(0, 10)}`);
             enriched = true;
             break;
           }
         }
       }
+    }
 
-      // ── Fallback: Virtuals Protocol FPair (Uniswap V2-style) ────────────
-      // Virtuals FPair is a V2 clone where token0 = VIRTUAL, token1 = agent
-      // token. The relay bridge may buy/sell the agent token via FPair without
-      // touching the Uniswap V4 PoolManager, so the V4 Swap check above finds
-      // nothing. Detect via the V2 Swap event on any contract in the receipt.
-      if (!enriched && chain === 'base') {
-        const v2Logs = (receipt.logs ?? []).filter(
-          (log: any) => log.topics?.[0] === V2_SWAP_TOPIC
+    const totalSwapsSeen = swapLogs.length + (receipt.logs ?? []).filter((l: any) => l.topics?.[0] === V2_SWAP_TOPIC).length;
+    return { enriched, totalSwapsSeen };
+  }
+
+  // ── Tier 1: bulk eth_getLogs scan ────────────────────────────────────
+  // Instead of one eth_getTransactionReceipt per candidate (the old
+  // approach - tens of thousands of Alchemy CUs on an active wallet),
+  // fetch every Swap event at the PoolManager and every Transfer event for
+  // each known reference token across the WHOLE candidate block range in
+  // a handful of eth_getLogs calls, then match locally. A wallet trades at
+  // most a few thousand times in 90 days regardless of how fast the chain's
+  // blocks tick, so this is bounded by real activity, not block count.
+  const blockNumbers = candidates.map((c) => c.leg.blockNumber);
+  const fromBlock = blockNumbers.reduce((a, b) => (b < a ? b : a));
+  const toBlock = blockNumbers.reduce((a, b) => (b > a ? b : a));
+  const referenceTokenAddresses = Array.from(
+    new Set(
+      (REFERENCE_TOKENS[chain] ?? [])
+        .map((t) => t.address.toLowerCase())
+        .filter((addr) => addr !== NATIVE_PSEUDO_ADDRESS)
+    )
+  );
+
+  const bulkStartedAt = Date.now();
+  const { swapLogsByHash, transferLogsByHash } = await bulkFetchSwapAndReferenceTransferLogs(
+    client,
+    poolManager,
+    SWAP_TOPIC,
+    TRANSFER_TOPIC,
+    referenceTokenAddresses,
+    fromBlock,
+    toBlock
+  );
+  console.log(
+    `[edge:fetchTrades] ${chain} bulk log scan: ${swapLogsByHash.size} tx(s) with Swap logs, ${transferLogsByHash.size} tx(s) with reference-token Transfer logs, ${((Date.now() - bulkStartedAt) / 1000).toFixed(1)}s`
+  );
+
+  const needsFallback: Candidate[] = [];
+  let bulkEnrichedCount = 0;
+
+  for (const candidate of candidates) {
+    const hash = candidate.hash.toLowerCase();
+    const swapLogs = swapLogsByHash.get(hash) ?? [];
+    const transferLogs = transferLogsByHash.get(hash) ?? [];
+
+    if (swapLogs.length === 0 && transferLogs.length === 0) {
+      // Bulk scan found nothing at all for this tx - either it's a
+      // Base V2/Virtuals-only trade (different topic, arbitrary pool
+      // address, not covered by the bulk scan) or something the bulk
+      // scan's scoped filters missed. Worth a real receipt fallback.
+      needsFallback.push(candidate);
+      continue;
+    }
+
+    const { enriched, totalSwapsSeen } = await tryEnrichCandidate(candidate, { logs: [...swapLogs, ...transferLogs] });
+    if (enriched) {
+      bulkEnrichedCount++;
+    } else if (totalSwapsSeen === 0) {
+      // Had reference-token Transfer activity but no relevant Swap log -
+      // possible multi-hop route the bulk scan's single-Swap-per-tx
+      // matching can't see; give the real receipt a chance too.
+      needsFallback.push(candidate);
+    } else {
+      console.log(
+        `[edge:fetchTrades] ${chain} ${candidate.direction} hash=${candidate.hash.slice(0, 10)} — ${totalSwapsSeen} Swap event(s) found but no amount matched`
+      );
+    }
+  }
+
+  console.log(
+    `[edge:fetchTrades] ${chain} bulk scan matched ${bulkEnrichedCount}/${candidates.length}, ${needsFallback.length} candidate(s) need a per-tx receipt fallback`
+  );
+
+  // ── Tier 2: per-tx receipt fallback (cached) for whatever the bulk scan missed ──
+  if (needsFallback.length > 0) {
+    const receiptsByHash = await getCachedReceipts(chain, needsFallback.map((c) => c.hash));
+    const toFetch = needsFallback.filter((c) => !receiptsByHash.has(c.hash.toLowerCase()));
+    console.log(
+      `[edge:fetchTrades] ${chain} fallback receipt cache: ${needsFallback.length - toFetch.length}/${needsFallback.length} hit, ${toFetch.length} to fetch`
+    );
+
+    const BATCH = 25;
+    const newlyFetched: { hash: string; logs: any[] }[] = [];
+
+    for (let i = 0; i < toFetch.length; i += BATCH) {
+      const batch = toFetch.slice(i, i + BATCH);
+      const receipts = await Promise.all(
+        batch.map(({ hash }) => client.request({ method: 'eth_getTransactionReceipt', params: [hash] }).catch(() => null))
+      );
+      batch.forEach((c, j) => {
+        const r: any = receipts[j];
+        if (!r) return;
+        const logs = r.logs ?? [];
+        receiptsByHash.set(c.hash.toLowerCase(), { logs });
+        newlyFetched.push({ hash: c.hash, logs });
+      });
+    }
+
+    await cacheReceipts(chain, newlyFetched);
+    console.log(`[edge:fetchTrades] ${chain} cached ${newlyFetched.length} new fallback receipt(s)`);
+
+    for (const candidate of needsFallback) {
+      const receipt = receiptsByHash.get(candidate.hash.toLowerCase());
+      if (!receipt) continue;
+      const { enriched, totalSwapsSeen } = await tryEnrichCandidate(candidate, receipt);
+      if (!enriched && totalSwapsSeen > 0) {
+        console.log(
+          `[edge:fetchTrades] ${chain} ${candidate.direction} hash=${candidate.hash.slice(0, 10)} — ${totalSwapsSeen} Swap event(s) found but no amount matched`
         );
-
-        for (const v2Log of v2Logs) {
-          if (enriched) break;
-          const d = (v2Log.data as string).slice(2);
-          const a0In  = BigInt('0x' + d.slice(0,   64));
-          const a1In  = BigInt('0x' + d.slice(64,  128));
-          const a0Out = BigInt('0x' + d.slice(128, 192));
-          const a1Out = BigInt('0x' + d.slice(192, 256));
-
-          const { direction, leg } = candidate;
-          if (leg.rawQty === BigInt(0)) continue;
-
-          if (direction === 'sell') {
-            for (const [soldAmt, rcvdAmt] of [[a0In, a0Out], [a0In, a1Out], [a1In, a0Out], [a1In, a1Out]] as [bigint, bigint][]) {
-              if (soldAmt === BigInt(0) || rcvdAmt === BigInt(0)) continue;
-              const diff = soldAmt > leg.rawQty ? soldAmt - leg.rawQty : leg.rawQty - soldAmt;
-              if (diff > leg.rawQty / BigInt(500)) continue; // 0.2%
-
-              const found = findReferenceTokenTransfer(receipt, leg.tokenAddress, rcvdAmt);
-              const refAddr = found?.tokenAddress ?? wethAddress;
-              if (!refAddr) break;
-              const refRawQty = found?.rawQty ?? rcvdAmt;
-              const refDecimals = await getDecimals(client, refAddr as `0x${string}`);
-              const refQty = Number(refRawQty) / 10 ** refDecimals;
-
-              synthetic.push({ hash: candidate.hash, from: poolManager, to: wallet, tokenAddress: refAddr, qty: refQty, rawQty: refRawQty, ts: leg.ts, blockNumber: leg.blockNumber });
-              console.log(`[edge:fetchTrades] ${chain} V2/Virtuals sell hash=${candidate.hash.slice(0, 10)} sold=${leg.qty.toFixed(4)} rcvd=${refQty.toFixed(8)} ${refAddr.slice(0, 10)}`);
-              enriched = true;
-              break;
-            }
-          } else {
-            // relay-buy: agent token received; VIRTUAL was paid cross-chain
-            // V2 Swap: amount_X_Out = agent token out (FPair → relay → wallet)
-            // Relay takes ~1% fee so wallet receives slightly less than FPair outputs.
-            for (const [boughtAmt, paidAmt] of [[a0Out, a0In], [a0Out, a1In], [a1Out, a0In], [a1Out, a1In]] as [bigint, bigint][]) {
-              if (boughtAmt === BigInt(0) || paidAmt === BigInt(0)) continue;
-              const diff = boughtAmt > leg.rawQty ? boughtAmt - leg.rawQty : leg.rawQty - boughtAmt;
-              if (diff > (leg.rawQty * BigInt(150)) / BigInt(10000)) continue; // 1.5%
-
-              const found = findReferenceTokenTransfer(receipt, leg.tokenAddress, paidAmt);
-              const refAddr = found?.tokenAddress ?? wethAddress;
-              if (!refAddr) break;
-              const refRawQty = found?.rawQty ?? paidAmt;
-              const refDecimals = await getDecimals(client, refAddr as `0x${string}`);
-              const refQty = Number(refRawQty) / 10 ** refDecimals;
-
-              synthetic.push({ hash: candidate.hash, from: wallet, to: poolManager, tokenAddress: refAddr, qty: refQty, rawQty: refRawQty, ts: leg.ts, blockNumber: leg.blockNumber });
-              console.log(`[edge:fetchTrades] ${chain} V2/Virtuals relay-buy hash=${candidate.hash.slice(0, 10)} rcvd=${leg.qty.toFixed(4)} paid=${refQty.toFixed(8)} ${refAddr.slice(0, 10)}`);
-              enriched = true;
-              break;
-            }
-          }
-        }
       }
-
-      if (!enriched) {
-        const totalSwaps = swapLogs.length + (receipt.logs ?? []).filter((l: any) => l.topics?.[0] === V2_SWAP_TOPIC).length;
-        if (totalSwaps > 0) {
-          console.log(
-            `[edge:fetchTrades] ${chain} ${candidate.direction} hash=${candidate.hash.slice(0, 10)} — ${totalSwaps} Swap event(s) found but no amount matched`
-          );
-        }
-      }
+    }
   }
 
   return synthetic;
