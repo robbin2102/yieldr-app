@@ -152,7 +152,7 @@ input::placeholder{color:#646E88}
 </header>
 
 <div style="flex-grow: 1; display: flex; min-height: 0">
-<aside aria-label="Your agent" style="width: 380px; flex-shrink: 0; border-right: 1px solid rgba(238,241,247,.08); background: #0A0E1D; display: flex; flex-direction: column; position: relative">
+<aside aria-label="Your agent" style="flex: 380 1 0; min-width: 300px; box-sizing: border-box; border-right: 1px solid rgba(238,241,247,.08); background: #0A0E1D; display: flex; flex-direction: column; position: relative">
 
 <div style="padding: 14px 16px 12px; display: flex; gap: 12px; align-items: center; background: radial-gradient(ellipse at 10% 0%, rgba(61,220,132,.12), transparent 65%)">
 <div class="orb" style="width: 42px; height: 42px" role="img" aria-label="Your agent preview"></div>
@@ -253,7 +253,7 @@ input::placeholder{color:#646E88}
 </div>
 </sc-if>
 </aside>
-<main style="width: 740px; flex-shrink: 0; display: flex; flex-direction: column; min-width: 0; position: relative">
+<main style="flex: 740 1 0; display: flex; flex-direction: column; min-width: 480px; position: relative">
 <div style="flex-grow: 1; padding: 14px 18px; display: flex; flex-direction: column; gap: 12px; overflow: hidden">
 
 <div style="display: flex; align-items: center; gap: 12px">
@@ -366,7 +366,7 @@ input::placeholder{color:#646E88}
 </section>
 </sc-if>
 </main>
-<aside aria-label="Coins and traders" style="width: 320px; flex-shrink: 0; border-left: 1px solid rgba(238,241,247,.08); background: #0A0E1D; display: flex; flex-direction: column">
+<aside aria-label="Coins and traders" style="flex: 320 1 0; min-width: 300px; box-sizing: border-box; border-left: 1px solid rgba(238,241,247,.08); background: #0A0E1D; display: flex; flex-direction: column">
 <nav style="display: flex; border-bottom: 1px solid rgba(238,241,247,.08)"><button class="{{tabC}}" onClick="{{goCoins}}">Coins</button><button class="{{tabT}}" onClick="{{goTraders}}">Top Money</button><button class="{{tabM}}" onClick="{{goMine}}">Portfolio</button></nav>
 <sc-if value="{{isCoins}}" hint-placeholder-val="{{ true }}">
 <div style="padding: 10px 14px 6px; display: flex; align-items: center; gap: 6px"><span class="lbl">Top 10 by market cap</span><div style="flex-grow: 1"></div><span class="chip">All chains</span></div>
