@@ -29,7 +29,7 @@ Remove `EDGE_ALLOW_LOCAL_SERVICE` and `EDGE_ALLOW_FORCE_FRESH` from Production. 
 
 ## 3. Domain and landing CTA
 
-In Vercel → yieldr-app → Settings → Domains, add `app.yieldr.org` if not already assigned. At the DNS provider, add the exact record Vercel requests and wait for verification/TLS. No path rewrite is required: `/edge` is a real application route.
+In Vercel → yieldr-app → Settings → Domains, add `app.yieldr.org` if not already assigned. At the DNS provider, add the exact record Vercel requests and wait for verification/TLS. The app host root `/` redirects to `/edge` using a host-specific Next.js redirect. `/edge` is a real application route.
 
 In the separate `yieldr` landing repository, set every “Find your edge” CTA href to `https://app.yieldr.org/edge`, then deploy that landing project after acceptance succeeds. This change is not included in the app repository.
 

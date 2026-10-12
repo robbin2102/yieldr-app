@@ -1,5 +1,15 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  async redirects() {
+    return [
+      {
+        source: '/',
+        has: [{ type: 'host', value: 'app.yieldr.org' }],
+        destination: '/edge',
+        permanent: false,
+      },
+    ];
+  },
   async rewrites() {
     return [
       {
