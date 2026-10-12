@@ -79,3 +79,9 @@ Holdings queries run concurrently with history and with each other. EVM balances
 Terminal receives the originating scan ID; its logo, My edge navigation and banner return link lead back to that result.
 
 Historical OHLCV now uses the pool endpoint with the requested token explicitly specified. The token-address OHLCV endpoint was rejected by the existing account (HTTP 401) despite working token metadata requests. History reads and job journals are batched; preview writes are throttled; HTTP errors and access-blocked flags remain in coverage diagnostics. Historical candles are persisted as each successful response arrives. The 50-call budget and missing-data exclusions remain enforced. This is on-demand backfill, not a continuous OHLCV daemon.
+
+### Bounded historical-price concurrency
+
+Historical pool requests now overlap up to four network waits (`EDGE_OHLC_CONCURRENCY`, clamped to 1–4; default 4). A single shared CoinGecko client retains its one-second request-start limiter, including retries. The first request probes access before fan-out; a 401/403 stops scheduling more work and drains the bounded in-flight set. Error status comes from the request's own exception rather than another thread's shared metrics.
+
+Cache coverage, sparse-response cooldowns and duplicate job IDs are checked before reserving the existing `EDGE_MAX_OHLC_CALLS` budget (default 50). Scheduling does not raise that budget or lower the rate interval. Candle persistence and preview updates remain on the coordinator thread, with progress advancing as each token's scheduled work finishes. Setting concurrency to 1 restores sequential operation. No new production variables are required. A full 50-request backfill still needs roughly 50 seconds of request spacing; the improvement overlaps response latency and database writes rather than promising instant cold scans.

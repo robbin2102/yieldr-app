@@ -7,6 +7,7 @@ import hashlib
 import importlib
 import json
 import os
+import re
 from datetime import timedelta
 from pymongo.errors import BulkWriteError
 from pymongo import UpdateOne
@@ -14,7 +15,7 @@ from time import monotonic
 from decimal import Decimal
 import bootstrap
 from token_cache import TokenCache, decorate, WSOL, canonical
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed, wait, FIRST_COMPLETED
 from threading import RLock, Event
 from copy import deepcopy
 from rpc_cache import encode_rpc, decode_rpc
@@ -198,40 +199,82 @@ class Inputs:
         # Journal missing ranges once; keep the old token-endpoint failures intact.
         insert_evidence(self.db.fomo_analysis_edge_candle_jobs,[{**j,'status':'pending'} for j in pending if j['_id'] not in previous])
         checked_tokens=set();attempted=set();updates=[];last_publish=0;errors={};access_blocked=False
-        for window_index,window in enumerate(windows):
-            for job in plans.get((window.chain,window.token_address),[]):
+        # Reserve the budget before scheduling; duplicate windows must not spend twice.
+        tasks=[];remaining={}
+        concurrency=max(1,min(4,int(os.getenv('EDGE_OHLC_CONCURRENCY','4'))))
+        for window in windows:
+            token=(window.chain,window.token_address)
+            for job in plans.get(token,[]):
                 key=job['_id'];old=previous.get(key,{})
                 if key in attempted:continue
                 attempted.add(key)
                 cooling=old.get('attempted_at') and time(old['attempted_at'])>now()-timedelta(hours=1)
                 covered=any(r.get('status') in ('fetched','no_data') and r['start']<=job['start'] and r['end']>=job['end'] and r.get('attempted_at') and time(r['attempted_at'])>now()-timedelta(hours=1) for r in prior_ranges.get((window.chain,window.token_address,job.get('pool_address')),[]))
-                if not client or window.chain not in networks or jobs>=budget or cooling or covered or access_blocked:continue
-                pool=job['pool_address']
-                if not pool:
-                    # Missing pool metadata is a separate backfill requirement, not a failed price.
+                if not client or window.chain not in networks or len(tasks)>=budget or cooling or covered:continue
+                if not job['pool_address']:
                     updates.append((key,{'status':'pool_metadata_missing'}));continue
-                jobs+=1;status='provider_unavailable';http_status=None
-                gap_start,gap_end=job['start'],job['end'];expected=int((gap_end-gap_start)/step)+1
-                try:
-                    fresh=client.pool_ohlcv_by_network_id(networks[window.chain],window.chain,pool,window.token_address,aggregate=5,limit=min(1000,expected),before_timestamp=int(gap_end.timestamp())+1)
-                    documents=[]
-                    for candle in fresh:
-                        if not gap_start<=candle.open_time<=gap_end:continue
-                        row=serial(candle.__dict__);row['open_time']=candle.open_time;row['pool_address']=pool
-                        documents.append({'_id':digest([candle.chain,candle.token_address,candle.open_time,'5m']),**row});add(row,window.chain,window.token_address)
-                    insert_evidence(self.db.fomo_analysis_edge_candles,documents)
-                    status='fetched' if documents else 'no_data';http_status=200
-                except Exception:
-                    metrics=getattr(client,'metrics',[]);http_status=metrics[-1].status_code if metrics else None
-                    status='provider_access_denied' if http_status in (401,403) else 'provider_unavailable'
-                    access_blocked=http_status in (401,403)
-                    errors[str(http_status or 'unknown')]=errors.get(str(http_status or 'unknown'),0)+1
-                updates.append((key,{'status':status,'http_status':http_status,'attempted_at':now()}))
-            checked_tokens.add((window.chain,window.token_address))
-            stamp=monotonic()
-            if hasattr(self,'preview') and (window_index==0 or window_index==len(windows)-1 or stamp-last_publish>=1):
-                self.preview(positions=[p for p in getattr(self,'preview_positions',[]) if (p['chain'],p['tokenAddress']) in checked_tokens],liveProgress={'phase':'market','current':window_index+1,'total':len(windows),'unit':'coin price histories checked','providerCalls':jobs,'providerErrors':errors.copy(),'accessBlocked':access_blocked})
-                last_publish=monotonic()
+                tasks.append(job);remaining[token]=remaining.get(token,0)+1
+        completed_windows=0
+        def publish_ready():
+            nonlocal completed_windows,last_publish
+            for window in windows:
+                token=(window.chain,window.token_address)
+                if token in checked_tokens or remaining.get(token,0):continue
+                checked_tokens.add(token)
+                completed_windows=sum((w.chain,w.token_address) in checked_tokens for w in windows)
+                stamp=monotonic()
+                if hasattr(self,'preview') and (completed_windows==1 or completed_windows==len(windows) or stamp-last_publish>=1):
+                    self.preview(positions=[p for p in getattr(self,'preview_positions',[]) if (p['chain'],p['tokenAddress']) in checked_tokens],liveProgress={'phase':'market','current':completed_windows,'total':len(windows),'unit':'coin price histories checked','providerCalls':jobs,'providerErrors':errors.copy(),'accessBlocked':access_blocked})
+                    last_publish=monotonic()
+        def fetch_job(job):
+            expected=int((job['end']-job['start'])/step)+1
+            try:
+                fresh=client.pool_ohlcv_by_network_id(networks[job['chain']],job['chain'],job['pool_address'],job['token_address'],aggregate=5,limit=min(1000,expected),before_timestamp=int(job['end'].timestamp())+1)
+                return fresh,200
+            except Exception as exc:
+                # Shared client metrics can contain another thread's response.
+                # The source client includes the HTTP status in its exception.
+                match=re.search(r'HTTP (\d{3})',str(exc))
+                return [],int(match.group(1)) if match else None
+        def consume(job,result):
+            nonlocal access_blocked
+            fresh,http_status=result;documents=[]
+            if http_status==200:
+                for candle in fresh:
+                    if not job['start']<=candle.open_time<=job['end']:continue
+                    row=serial(candle.__dict__);row['open_time']=candle.open_time;row['pool_address']=job['pool_address']
+                    documents.append({'_id':digest([candle.chain,candle.token_address,candle.open_time,'5m']),**row});add(row,job['chain'],job['token_address'])
+                insert_evidence(self.db.fomo_analysis_edge_candles,documents)
+                status='fetched' if documents else 'no_data'
+            else:
+                status='provider_access_denied' if http_status in (401,403) else 'provider_unavailable'
+                access_blocked=access_blocked or http_status in (401,403)
+                errors[str(http_status or 'unknown')]=errors.get(str(http_status or 'unknown'),0)+1
+            updates.append((job['_id'],{'status':status,'http_status':http_status,'attempted_at':now()}))
+            token=(job['chain'],job['token_address']);remaining[token]-=1
+            publish_ready()
+        publish_ready()
+        # Probe access once, so invalid credentials cannot fan out paid requests.
+        if tasks:
+            jobs+=1;consume(tasks[0],fetch_job(tasks[0]))
+        if len(tasks)>1 and not access_blocked:
+            # The shared source client's lock spaces *all* attempts (including
+            # retries) one second apart, while network waits overlap.
+            with ThreadPoolExecutor(max_workers=concurrency) as pool:
+                queue=iter(tasks[1:]);active={}
+                def fill():
+                    nonlocal jobs
+                    while not access_blocked and len(active)<concurrency:
+                        job=next(queue,None)
+                        if job is None:break
+                        jobs+=1;active[pool.submit(fetch_job,job)]=job
+                fill()
+                while active:
+                    done,_=wait(active,return_when=FIRST_COMPLETED)
+                    for future in done:consume(active.pop(future),future.result())
+                    fill()
+        # Unscheduled work remains pending for a later scan; no invented prices.
+        remaining.clear();publish_ready()
         for offset in range(0,len(updates),250):
             self.db.fomo_analysis_edge_candle_jobs.bulk_write([UpdateOne({'_id':key},{'$set':fields}) for key,fields in updates[offset:offset+250]],ordered=False)
         for window,start,end in ranges:
