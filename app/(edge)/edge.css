@@ -1,0 +1,111 @@
+.edge-app{--edge-bg:#05070f;--edge-panel:#0a0e1d;--edge-card:#0e1324;--edge-text:#eef1f7;--edge-muted:#8791ab;--edge-green:#3ddc84;min-height:100vh;background:var(--edge-bg);color:var(--edge-text);font-family:Manrope,sans-serif;font-size:14px;line-height:1.55}.edge-app *{box-sizing:border-box}.edge-app a{text-decoration:none;color:#5be0d8}.edge-app a:hover{color:#9df0ea}.edge-app button,.edge-app input{font:inherit}.edge-app button:disabled{opacity:.6;cursor:wait}.edge-app :focus-visible{outline:2px solid #5be0d8;outline-offset:4px}.edge-app .mono{font-family:'JetBrains Mono',monospace}.edge-app .small{font-size:12px}.edge-app .edge-muted{color:#a7b0c4}.edge-app .positive{color:#3ddc84}.edge-app .negative{color:#ff8a7c}.edge-app .warning{color:#f1c36b}.edge-label{text-transform:uppercase;letter-spacing:.1em;font-size:11px;font-weight:800;color:#8791ab}.edge-header{height:56px;padding:0 22px;display:flex;align-items:center;justify-content:space-between;gap:16px;background:#0a0e1d;border-bottom:1px solid #eef1f714}.edge-header.landing-header{height:72px;padding:0 64px;background:transparent;border:0}.edge-brand{display:flex;gap:10px;align-items:center;font-size:17px;font-weight:800;color:#eef1f7!important}.brand-mark{width:24px;height:24px;border-radius:7px;background:#3ddc84;display:inline-block}.edge-header nav{display:flex;align-items:center;gap:14px}.edge-header nav>a{color:#a7b0c4;font-weight:700}.edge-chip{display:inline-flex;align-items:center;border:1px solid #eef1f729;border-radius:999px;padding:3px 9px;font-size:11px;font-weight:800;line-height:1.5}.edge-card{background:#0e1324;border:1px solid #eef1f717;border-radius:16px;min-width:0}.section-heading{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}.edge-button{display:inline-flex;align-items:center;justify-content:center;border-radius:10px;border:1px solid #eef1f72e;background:#161d33;color:#eef1f7!important;padding:10px 16px;font-weight:800;cursor:pointer}.edge-button.primary{background:#3ddc84;border-color:#3ddc84;color:#04140b!important}.edge-button.primary:hover{background:#5be89a}.edge-landing{display:grid;grid-template-columns:minmax(0,1fr) 560px;gap:72px;padding:56px 64px 48px;max-width:1640px;margin:auto;min-height:calc(100vh - 72px)}.landing-intro{display:flex;flex-direction:column;gap:26px;padding-top:24px;min-width:0}.landing-intro h1{font:400 92px/.95 'Instrument Serif',Georgia,serif;letter-spacing:-.015em}.landing-copy{font-size:18px;line-height:1.55;max-width:560px;color:#a7b0c4}.wallet-form{display:flex;gap:10px;max-width:660px}.wallet-form label{display:flex;align-items:center;gap:10px;min-width:0;flex:1;height:60px;padding:0 18px;border-radius:12px;background:#0e1324;border:1px solid #3ddc8480}.wallet-form label span{white-space:nowrap;letter-spacing:.06em}.wallet-form input{background:transparent;border:0;outline:0;min-width:0;flex:1;color:#eef1f7;font-family:'JetBrains Mono',monospace;font-size:15px}.wallet-form label:focus-within{outline:2px solid #5be0d8}.wallet-form button{padding:0 24px;font-size:16px;white-space:nowrap}.wallet-form input::placeholder{color:#8791ab}#wallet-error:empty{display:none}.landing-benefits{display:grid;grid-template-columns:repeat(3,1fr);gap:28px;margin-top:18px}.landing-benefits b{font-size:14px}.landing-benefits p{font-size:13px;color:#a7b0c4;margin-top:4px;line-height:1.5}.landing-preview{display:flex;flex-direction:column;gap:16px}.illustration{padding:18px 18px 8px}.illustration img{width:100%;height:auto;display:block}.trader-list .section-heading{padding:14px}.trader-row{display:flex;text-align:left;align-items:center;justify-content:space-between;gap:10px;padding:14px;border:0;border-top:1px solid #eef1f712;background:transparent;color:#eef1f7;width:100%;cursor:pointer}.trader-row:hover{background:#151c30}.trader-row small{display:block;color:#a7b0c4;margin-top:4px}.empty-state{padding:26px;color:#a7b0c4;line-height:1.7}.empty-state .edge-button,.empty-state a{margin:14px 12px 0 0}.scan-grid{display:grid;grid-template-columns:minmax(220px,25%) minmax(0,1fr) minmax(230px,26%);min-height:calc(100vh - 56px)}.scan-aside{background:#0a0e1d;border-right:1px solid #eef1f714;max-height:calc(100vh - 56px);overflow:auto}.right-aside{border-left:1px solid #eef1f714;border-right:0}.aside-heading{padding:18px 16px 12px;display:grid;gap:8px}.holding{padding:14px;border-top:1px solid #eef1f712;display:grid;gap:8px}.scan-main{padding:30px 32px;display:flex;flex-direction:column;gap:20px;min-width:0}.section-title{font:400 32px/1.15 'Instrument Serif',Georgia,serif}.scan-stages{padding:0 0 0 22px;color:#a7b0c4;font-size:12px}.position-chart{padding:18px;display:grid;gap:12px}.position-chart svg{width:100%;height:auto;background:#090d1b;border-radius:12px}.position-chart circle{cursor:pointer}.position-chart circle:focus{stroke:#fff;stroke-width:2}.chart-detail{padding:12px;border:1px solid #8791ab;border-radius:10px;overflow-wrap:anywhere}.findings{display:grid;gap:12px}.finding{padding:16px;display:grid;gap:9px}.finding.validated{border-color:#3ddc8455}.finding.risk{border-color:#ff7a6b55}.finding h3{font-size:15px}.finding-metrics{display:flex;gap:10px;flex-wrap:wrap;font-size:12px;color:#a7b0c4}.edge-app details summary{cursor:pointer;font-weight:700;overflow-wrap:anywhere}.edge-app details p{margin-top:10px}.edge-app details details{padding-top:10px}.edge-app pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:350px;overflow:auto;font:11px/1.7 'JetBrains Mono',monospace;margin-top:12px;color:#a7b0c4}.result-grid{max-width:1540px;margin:auto;padding:32px 40px;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.08fr);gap:32px}.result-overview,.result-findings{display:flex;flex-direction:column;gap:16px;min-width:0}.result-title{font:400 56px/1.05 'Instrument Serif',Georgia,serif}.radial-print{padding:18px}.radial-print svg{width:100%;height:auto}.metrics,.evidence{padding:20px}.metrics h2{font-size:16px;margin-bottom:10px}.metrics dl{margin-top:12px}.metrics dl>div{display:flex;justify-content:space-between;gap:18px;padding:9px 0;border-top:1px solid #eef1f712;font-size:12px}.metrics dd{text-align:right}.edge-tabs{display:flex;gap:6px;flex-wrap:wrap}.edge-tabs button{background:transparent;color:#a7b0c4;border:1px solid #eef1f71a;padding:8px 12px;border-radius:999px;cursor:pointer;font-size:12px}.edge-tabs [aria-selected=true]{background:#152b23;color:#3ddc84;border-color:#3ddc8460}.result-wide{grid-column:1/-1;display:grid;gap:18px}.story{padding:18px}.story ol{padding-left:22px}.story li{padding:16px 0;border-bottom:1px solid #eef1f714}.story time{font:11px 'JetBrains Mono',monospace;color:#8791ab}.story h3{font-size:14px}.terminal-dock{padding:30px;display:grid;justify-items:start;gap:18px;border-color:#5be0d84d;background:#080f16}.wallet-text{overflow-wrap:anywhere;font-size:11px}.terminal-banner{padding:12px;text-align:center;background:#19211c;color:#3ddc84}.terminal-preview{display:grid;grid-template-columns:280px minmax(0,1fr) 280px;gap:20px;padding:24px;min-height:75vh}.terminal-preview>aside{padding:22px;display:flex;flex-direction:column;gap:20px}.terminal-preview>section{padding:30px;display:flex;flex-direction:column;align-items:flex-start;gap:30px}@media(min-width:1600px){.edge-landing{padding-top:90px}}@media(max-width:1200px){.edge-landing{grid-template-columns:minmax(0,1fr) 440px;gap:36px;padding:40px 32px}.edge-header.landing-header{padding:0 32px}.landing-intro h1{font-size:76px}.wallet-form{flex-direction:column}.wallet-form label{flex:none}.wallet-form button{height:54px}.scan-grid{grid-template-columns:230px minmax(0,1fr)}.right-aside{grid-column:1/-1;max-height:none}.scan-main{padding:24px}.terminal-preview{grid-template-columns:220px minmax(0,1fr)}.terminal-preview>aside:last-child{grid-column:1/-1}}@media(max-width:800px){.edge-landing{grid-template-columns:1fr;gap:32px;padding:24px}.landing-intro{padding-top:12px;gap:22px}.landing-intro h1{font-size:72px}.landing-preview{max-width:560px;width:100%}.wallet-form{flex-direction:row}.wallet-form button{height:60px}.landing-benefits{gap:18px}.scan-grid{display:flex;flex-direction:column}.scan-main{order:0}.scan-aside{max-height:400px;order:1;border-top:1px solid #eef1f714}.right-aside{order:2}.result-grid{grid-template-columns:1fr;padding:24px;gap:24px}.result-title{font-size:48px}.terminal-preview{display:flex;flex-direction:column}.terminal-preview>section{order:-1;padding:12px}.edge-header nav .edge-chip{max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}@media(max-width:520px){.edge-header.landing-header{padding:0 22px;height:64px}.edge-header nav{font-size:12px;gap:8px}.edge-landing{padding:24px 20px}.landing-intro h1{font-size:64px}.landing-copy{font-size:16px}.wallet-form{flex-direction:column}.wallet-form button{height:56px}.landing-benefits{grid-template-columns:1fr;gap:18px}.illustration{padding:14px 10px}.illustration .section-heading{padding:0 4px}.trader-row{align-items:flex-start;flex-direction:column}.scan-main{padding:24px 18px}.result-grid{padding:24px 18px}.metrics dl>div{font-size:11px;gap:10px}.finding .section-heading{align-items:flex-start;flex-direction:column}.edge-app .edge-chip{white-space:normal}.result-title{font-size:46px}.edge-header{padding:0 18px}.position-chart{padding:12px}}
+@media(prefers-reduced-motion:reduce){.edge-app *{animation:none!important;transition:none!important}}
+
+.print-mobile-legend{display:none}@media(max-width:520px){.print-mobile-legend{display:grid;gap:8px;list-style:none;margin-bottom:14px;font-size:12px}.print-mobile-legend li{display:flex;justify-content:space-between;gap:8px}.radial-print .print-spoke text{display:none}.radial-print svg>text{font-size:24px}}
+.position-table{font-size:12px}.table-scroll{max-height:320px;overflow:auto;margin-top:12px}.position-table table{width:100%;border-collapse:collapse;text-align:left}.position-table caption{text-align:left;color:#a7b0c4;padding-bottom:10px}.position-table th,.position-table td{padding:9px;border-bottom:1px solid #eef1f714;vertical-align:top}.position-table th{max-width:160px;overflow-wrap:anywhere}.position-table small{display:block;font-weight:400;color:#a7b0c4}
+/* Reference-aligned geometry; factual empty states replace unavailable sample feeds. */
+.edge-app .brand-mark{width:28px;height:28px;border-radius:0;background:none;object-fit:contain;display:block}
+.edge-app .wallet-form{max-width:620px}
+.edge-app .trader-row{display:grid;grid-template-columns:minmax(0,1fr) 100px;padding:11px 14px;font-size:12.5px;line-height:1.4}
+.edge-app .trader-row small{font-size:12px;margin-top:0}
+.edge-app .trader-row .edge-chip{justify-self:end}
+.edge-app .trader-list .section-heading{padding:14px 14px 8px}
+.edge-app .landing-intro h1{letter-spacing:normal}
+.edge-app .scan-grid{grid-template-columns:360px minmax(0,1fr) 380px}
+.edge-app .scan-aside{display:flex;flex-direction:column;max-height:none}
+.edge-app .scan-main{padding:28px 32px;gap:18px}
+.edge-app .scan-heading{display:flex;align-items:center;gap:14px}
+.edge-app .scan-heading>div{flex:1;min-width:0}
+.edge-app .scan-heading .section-title{font-size:30px;line-height:1.05;margin-top:2px}
+.edge-app .agent-mark{object-fit:contain;flex-shrink:0}
+.edge-app .scan-count{font-size:14px;white-space:nowrap}
+.edge-app .scan-progress{height:6px;border-radius:3px;background:#161d33;overflow:hidden}
+.edge-app .scan-progress>span{display:block;height:100%;background:#3ddc84;transition:width .25s}
+.edge-app .scan-narration{font-size:14px;line-height:1.5;min-height:42px}
+.edge-app .scan-provenance{margin-top:-8px;font-size:11px}
+.edge-app .scan-notice{padding:22px;display:grid;gap:14px}
+.edge-app .scan-actions{display:flex;flex-wrap:wrap;gap:10px}
+.edge-app .scan-findings{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.edge-app .scan-finding{padding:14px 16px;display:flex;flex-direction:column;gap:6px;border-radius:14px}
+.edge-app .scan-finding.validated{border-color:#3ddc8473}
+.edge-app .scan-finding.risk{border-color:#ff7a6b73}
+.edge-app .scan-finding h3{font-size:15px;font-weight:700}
+.edge-app .scan-finding .edge-chip{padding:2px 7px;font-size:10px}
+.edge-app .scan-finding .edge-label{font-size:10px}
+.edge-app .scan-result-link{align-self:flex-start;padding:14px 22px;border-radius:12px;font-size:15px}
+.edge-app .scan-read-details{font-size:11px;color:#8791ab}
+.edge-app .scan-read-details ol{margin-top:8px}
+.edge-app .wire-item{padding:13px 14px;border-top:1px solid #eef1f712;display:flex;flex-direction:column;align-items:flex-start;gap:7px;font-size:12.5px;line-height:1.45}
+.edge-app .aside-footer{margin-top:auto;padding:16px;color:#8791ab;font-size:12px}
+.edge-app .scan-main .position-chart{padding:16px 18px;gap:10px;border-radius:14px}
+.edge-app .scan-main .position-chart svg{height:150px}
+.edge-app .scan-main .position-chart .small{font-size:11px}
+.edge-app .scan-main .position-chart>p{line-height:1.45}
+.edge-app .result-grid{grid-template-columns:minmax(0,640px) minmax(0,1fr);max-width:1440px}
+.edge-app .result-title{font-size:44px;line-height:1.05}
+.edge-app .result-findings{gap:12px}
+.edge-app .finding{padding:14px 16px;gap:8px;border-radius:14px;font-size:13px}
+.edge-app .result-section-heading{font-size:17px;font-weight:800}
+@media(max-width:1300px){.edge-app .scan-grid{grid-template-columns:260px minmax(0,1fr) 280px}.edge-app .scan-main{padding:24px}.edge-app .scan-heading{flex-wrap:wrap}.edge-app .scan-count{margin-left:58px}.edge-app .scan-findings{grid-template-columns:1fr}.edge-app .result-grid{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}}
+@media(max-width:1050px){.edge-app .scan-grid{grid-template-columns:240px minmax(0,1fr)}.edge-app .right-aside{grid-column:1/-1}.edge-app .scan-count{margin-left:0}.edge-app .scan-findings{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:800px){.edge-app .scan-grid{display:flex}.edge-app .scan-aside{max-height:none}.edge-app .scan-count{margin-left:58px}.edge-app .result-grid{grid-template-columns:1fr}.edge-app .scan-main{padding:24px 18px}.edge-app .scan-main .position-chart{padding:12px}.edge-app .scan-findings{grid-template-columns:1fr}.edge-app .result-title{font-size:40px}}
+@media(max-width:520px){.edge-app .trader-row{grid-template-columns:minmax(0,1fr) 90px}.edge-app .scan-heading .section-title{font-size:28px}.edge-app .scan-count{font-size:12px}.edge-app .brand-mark{width:26px;height:26px}}
+.edge-app .supported-groups{display:grid;gap:12px}
+.edge-app .supported-groups .empty-state{padding:14px 16px;font-size:12px;border:1px solid #eef1f717;border-radius:14px;background:#0e1324}
+.edge-app .radial-print{padding:8px 8px 0}
+.edge-app .radial-print>p{padding:0 10px 14px}
+.edge-app .radial-print svg{display:block}
+.edge-app .metrics>summary{font-size:14px}
+.edge-app .metrics>p{font-size:12px}
+.edge-app .print-mobile-legend{padding:0 10px}
+.scan-wallet-strip{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:12px 22px;border-bottom:1px solid #eef1f714;background:#0a0e1d;color:#a7b0c4;font-size:12px}.scan-wallet-strip code{overflow-wrap:anywhere;color:#eef1f7}.scan-wallet-strip p{width:100%;color:#f1c36b}.edge-app article.trader-row{cursor:default}.edge-app article.trader-row:hover{background:transparent}
+/* V5 source orb, compact holdings and factual progressive scan. */
+@keyframes edge-morph{0%{border-radius:42% 58% 63% 37%/41% 44% 56% 59%;transform:rotate(0deg)}33%{border-radius:63% 37% 38% 62%/58% 62% 38% 42%}66%{border-radius:38% 62% 56% 44%/63% 41% 59% 37%}100%{border-radius:42% 58% 63% 37%/41% 44% 56% 59%;transform:rotate(360deg)}}
+@keyframes edge-glow{0%,100%{box-shadow:0 0 22px 4px #3ddc8466,0 0 60px 10px #9d8cff29}50%{box-shadow:0 0 34px 8px #5be0d880,0 0 80px 16px #9d8cff47}}
+.edge-app .agent-orb{width:72px;height:72px;flex-shrink:0;background:radial-gradient(circle at 30% 30%,#c8ffe0,#3ddc84 38%,#5be0d8 64%,#9d8cff 100%);animation:edge-morph 8s ease-in-out infinite,edge-glow 3s ease-in-out infinite}
+.edge-app .scan-heading>.agent-orb{width:44px;height:44px;box-shadow:none;background:radial-gradient(circle at 30% 30%,#64f7a0,#2ec876 65%,#178f54)}
+.edge-app .scan-grid{grid-template-columns:minmax(250px,25%) minmax(0,700px);justify-content:start}
+.edge-app .scan-main{display:flex;flex-direction:column}
+.edge-app .scan-findings>.findings{display:contents}
+.edge-app .scan-chart-wait{padding:18px;min-height:210px;background:#0e1324}
+.edge-app .chart-baseline{height:95px;border-bottom:1px solid #eef1f71a;margin-bottom:40px}
+.edge-app .coin-title{display:flex;align-items:center;gap:8px;font-size:13px}.edge-app .coin-title b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.edge-app .coin-title img{border-radius:50%;object-fit:cover}.edge-app .coin-title .mono{margin-left:auto;font-size:12px;white-space:nowrap}
+.edge-app .coin-address{border:0;background:transparent;padding:0;color:#8791ab;cursor:pointer;font-size:11px}.edge-app .coin-badge{font-size:11px;color:#a7b0c4;margin:7px 0}.edge-app .holding>p{margin-top:3px}.edge-app .holding .small{font-size:11px}
+.edge-app .agent-dock{display:grid;grid-template-columns:96px minmax(0,1fr);gap:20px;padding:22px 24px;border-radius:18px;background:#070d12;border:1px solid #3ddc8480;box-shadow:0 0 42px -12px #3ddc8438}
+.edge-app .orb-column{display:flex;flex-direction:column;align-items:center;gap:16px;padding-top:6px}.edge-app .agent-content{display:grid;gap:12px}.edge-app .agent-bubble{padding:14px 16px;border-radius:4px 16px 16px 16px;background:#111a26;border:1px solid #eef1f714;font-size:15px;max-width:760px}.edge-app .agent-presets{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;max-width:860px}.edge-app .agent-preset{padding:14px 16px;display:grid;gap:4px;text-align:left;border:1px solid #3ddc8473;background:#0b1a14;color:#eef1f7;border-radius:14px;cursor:pointer}.edge-app .agent-input{display:flex;gap:10px;padding:6px 6px 6px 16px;border-radius:24px;background:#0e1324;border:1px solid #eef1f729;max-width:860px}.edge-app .agent-input input{flex:1;min-width:0;border:0;background:transparent;color:#eef1f7;outline:none}.edge-app .agent-input button{width:36px;height:36px;border-radius:50%;border:0;background:#3ddc84;color:#04140b;cursor:pointer}
+.edge-app .terminal-reference{width:100%;height:calc(100vh - 60px);border:0;background:#05070f}.edge-app .terminal-banner{position:sticky;top:0;z-index:10}.edge-app .terminal-banner a{margin-left:14px}
+@keyframes edge-dot-in{from{opacity:0;transform:translateY(5px)}to{opacity:.85;transform:translateY(0)}}.edge-app .position-dot{animation:edge-dot-in .4s ease-out}
+@media(max-width:800px){.edge-app .scan-grid{display:flex}.edge-app .agent-dock{grid-template-columns:1fr;padding:20px}.edge-app .orb-column{flex-direction:row;justify-content:flex-start}.edge-app .agent-orb{width:48px;height:48px}.edge-app .agent-presets{grid-template-columns:1fr}.edge-app .scan-findings{grid-template-columns:1fr}}
+.edge-app .scan-heading>.agent-orb{flex:0 0 44px;min-width:44px;max-width:44px;height:44px}
+.edge-app .scan-grid{grid-template-columns: minmax(260px,25%) minmax(0,1fr)}
+.edge-app .scan-main{max-width:900px;width:100%;margin:0 auto}
+.edge-app .scan-aside{max-height:calc(100vh - 100px);overflow:auto;position:sticky;top:0}
+.edge-app .holding{padding:12px 16px;line-height:1.5}
+.edge-app .scan-main .position-chart svg{height:auto;min-height:150px}
+@media(max-width:800px){.edge-app .scan-aside{position:static;max-height:540px;width:100%}.edge-app .scan-grid{display:flex}}
+.edge-app .finding h3{font-weight:700}
+.edge-app .radial-print svg>text:first-of-type,.edge-app .print-spoke text:last-child{font-family:'JetBrains Mono',monospace}
+.edge-app .radial-print svg>text:last-of-type{font-size:13px}
+/* A travelling highlight signals active work without inventing a percentage. */
+.scan-progress.is-scanning{position:relative;overflow:hidden}
+.scan-progress.is-scanning:after{content:"";position:absolute;inset:0 auto 0 0;width:18%;background:linear-gradient(90deg,transparent,rgba(61,220,132,.65),transparent);animation:scan-sweep 2s linear infinite}
+@keyframes scan-sweep{from{transform:translateX(-100%)}to{transform:translateX(650%)}}
+@media(prefers-reduced-motion:reduce){.scan-progress.is-scanning:after{animation:none}.position-dot{animation:none}}
+
+/* Compact V5 holdings: identity/value, quantity/return, address/profit. */
+.edge-app .holdings-heading{padding:16px 14px 12px;gap:5px}
+.edge-app .holdings-heading>div{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.edge-app .holdings-heading .mono{font-size:12px}
+.edge-app .holdings-heading p,.edge-app .holdings-footnote{font-size:10px;color:#8791ab;line-height:1.5}
+.edge-app .compact-holding{padding:12px 14px;gap:7px}
+.edge-app .holding-top,.edge-app .holding-middle,.edge-app .holding-bottom{display:flex;align-items:center;justify-content:space-between;gap:10px;min-width:0}
+.edge-app .holding-identity{display:flex;align-items:center;gap:7px;min-width:0;font-size:12px}
+.edge-app .holding-identity img{border-radius:50%;object-fit:cover;flex-shrink:0}
+.edge-app .holding-identity b{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.edge-app .holding-value{font-size:12px;white-space:nowrap}
+.edge-app .holding-middle{font-size:11px;color:#8791ab}
+.edge-app .holding-return{font-size:12px;white-space:nowrap}
+.edge-app .compact-holding .coin-address{display:inline-flex;align-items:center;gap:6px;margin:0;padding:2px 0;text-align:left;font-size:10px;min-height:22px;white-space:nowrap}
+.edge-app .compact-holding .coin-address:hover{color:#eef1f7}
+.edge-app .holding-profit{font-size:10px;white-space:nowrap}
+.edge-app .holdings-footnote{padding:12px 14px;display:grid;gap:4px;border-top:1px solid #eef1f712}

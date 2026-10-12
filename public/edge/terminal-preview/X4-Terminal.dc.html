@@ -1,0 +1,572 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Yieldr Terminal · agent-first</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<div id="preview-notice" role="status" style="position:fixed;bottom:12px;left:16px;right:16px;z-index:100;background:#0e1324;color:#3ddc84;padding:12px;border:1px solid #3ddc84;border-radius:8px;display:none">This feature is under development. No trades, messages or jobs are executed.</div>
+<script>document.addEventListener('click',function(e){const back=e.target.closest('[data-edge-back]');if(back){e.preventDefault();const id=new URLSearchParams(location.search).get('scanId');window.top.location.href=id&&/^[a-f0-9]{64}$/.test(id)?'/edge/result/'+id:'/edge';return;}if(e.target.closest('button,a')&&!e.target.closest('a[target="_top"]')){e.preventDefault();document.getElementById('preview-notice').style.display='block';}});</script>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&amp;family=JetBrains+Mono:wght@400;600&amp;family=Manrope:wght@400;600;700;800&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#05070F;font-family:'Manrope',sans-serif;color:#EEF1F7}
+a{color:#5BE0D8}a:hover{color:#9DF0EA}
+.mono{font-family:'JetBrains Mono',monospace}
+.serif{font-family:'Instrument Serif',Georgia,serif;font-weight:400}
+.lbl{font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:#8791AB;font-weight:800}
+.card{background:#0E1324;border:1px solid rgba(238,241,247,.09);border-radius:12px}
+.chip{display:inline-flex;align-items:center;gap:5px;padding:2px 8px;border-radius:999px;font-size:10.5px;font-weight:800;border:1px solid rgba(238,241,247,.16);color:#C9D0DE;white-space:nowrap}
+.g{color:#3DDC84}.a{color:#F1C36B}.r{color:#FF8A7C}.v{color:#B3A6FF}.c{color:#5BE0D8}.m{color:#8791AB}.i2{color:#A7B0C4}
+.btn{font:inherit;font-size:12px;font-weight:800;padding:7px 11px;border-radius:8px;border:1px solid rgba(238,241,247,.18);background:#161D33;color:#EEF1F7;cursor:pointer;white-space:nowrap;text-decoration:none;display:inline-flex;align-items:center;gap:5px}
+.btn:hover{background:#1D2642}
+.btn.p{background:#3DDC84;color:#04140B;border-color:#3DDC84}
+.btn.jl{border-color:rgba(157,140,255,.5);background:#15112A;color:#DCD5FF}
+.nav{padding:7px 14px;border-radius:9px;color:#A7B0C4;text-decoration:none;font-weight:800;font-size:14px}
+.nav:hover{background:#111729;color:#EEF1F7}
+.nav.on{background:#161D33;color:#EEF1F7}
+.ltab{flex:1;text-align:center;padding:9px 0;font-size:12.5px;font-weight:800;color:#8791AB;border-bottom:2px solid transparent;text-decoration:none}
+.ltab.on{color:#EEF1F7;border-bottom-color:#3DDC84}
+.vt{padding:7px 12px;border-radius:8px;font-size:12.5px;font-weight:800;color:#A7B0C4;text-decoration:none}
+.vt.on{background:#161D33;color:#EEF1F7}
+.dot{width:7px;height:7px;border-radius:999px;display:inline-block;flex-shrink:0}
+@keyframes pulse{0%{opacity:1}50%{opacity:.35}100%{opacity:1}}
+.live{animation:pulse 1.6s ease-in-out infinite}
+@keyframes tape{from{transform:translateX(0)}to{transform:translateX(-50%)}}
+.tape{display:flex;gap:28px;width:max-content;animation:tape 48s linear infinite}
+.ti{display:inline-flex;align-items:center;gap:7px;font-size:12.5px;white-space:nowrap}
+.crow{display:grid;grid-template-columns:18px minmax(0,1fr) 62px 58px;gap:8px;align-items:center;padding:9px 14px;border-bottom:1px solid rgba(238,241,247,.06);text-decoration:none;color:#EEF1F7}
+.crow:hover{background:#111729}
+.crow.on{background:#131B30;box-shadow:inset 3px 0 0 #3DDC84}
+.ch{font-size:9px;font-weight:900;letter-spacing:.06em;padding:1px 5px;border-radius:4px;margin-left:5px}
+.sol{color:#B3A6FF;background:rgba(157,140,255,.14)}.base{color:#7FB2FF;background:rgba(110,168,255,.14)}.rh{color:#D4F55B;background:rgba(212,245,91,.12)}
+.mini{position:relative;height:4px;border-radius:2px;background:#161D33;margin-top:5px}
+.prow{display:grid;grid-template-columns:30px minmax(0,1fr) 62px;gap:8px;align-items:center;padding:7px 0}
+.trk{position:relative;height:10px;border-radius:5px;background:#161D33}
+.trk2{position:relative;height:5px;margin-top:4px}
+.mid{position:absolute;left:50%;top:-3px;width:1px;height:22px;background:rgba(238,241,247,.4)}
+.bar{position:absolute;top:0;height:10px;transition:width .6s ease}
+.bar2{position:absolute;top:0;height:5px;transition:width .6s ease;box-sizing:border-box;border:1px solid #A7B0C4}
+.lad{display:grid;grid-template-columns:62px minmax(0,1fr) 2px minmax(0,1fr);align-items:center;height:22px}
+.lb{height:12px}
+.sf{padding:12px;display:flex;flex-direction:column;gap:6px}
+.tt{display:grid;grid-template-columns:86px minmax(0,1fr) 92px;gap:8px;align-items:center;padding:9px 0;border-top:1px solid rgba(238,241,247,.07);font-size:12px}
+.sp{font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:600;padding:2px 6px;border-radius:5px;white-space:nowrap}
+.w{background:rgba(61,220,132,.14);color:#3DDC84}.l{background:rgba(255,122,107,.14);color:#FF8A7C}
+@keyframes morph{0%{border-radius:42% 58% 63% 37%/41% 44% 56% 59%;transform:rotate(0deg)}33%{border-radius:63% 37% 38% 62%/58% 62% 38% 42%}66%{border-radius:38% 62% 56% 44%/63% 41% 59% 37%}100%{border-radius:42% 58% 63% 37%/41% 44% 56% 59%;transform:rotate(360deg)}}
+@keyframes glow{0%,100%{box-shadow:0 0 14px 2px rgba(61,220,132,.4)}50%{box-shadow:0 0 22px 5px rgba(157,140,255,.45)}}
+.orb{width:34px;height:34px;flex-shrink:0;background:radial-gradient(circle at 30% 30%,#C8FFE0,#3DDC84 38%,#5BE0D8 64%,#9D8CFF 100%);animation:morph 8s ease-in-out infinite,glow 3s ease-in-out infinite}
+.job{display:grid;grid-template-columns:10px minmax(0,1fr) auto;gap:10px;align-items:center;padding:9px 11px;border-radius:10px;background:#0E1324;border:1px solid rgba(157,140,255,.28);text-decoration:none;color:#EEF1F7}
+.job:hover{border-color:rgba(157,140,255,.6)}
+.al{padding:12px;display:flex;flex-direction:column;gap:7px;border-radius:12px;background:#0E1324;border:1px solid rgba(238,241,247,.09)}
+.sug{font:inherit;font-size:11.5px;font-weight:700;padding:5px 10px;border-radius:999px;border:1px solid rgba(61,220,132,.35);background:transparent;color:#CFFBE2;cursor:pointer}
+.trow{display:flex;flex-direction:column;gap:3px;padding:10px 14px;border-bottom:1px solid rgba(238,241,247,.06);text-decoration:none;color:#EEF1F7}
+.trow:hover{background:#111729}
+.trow.on{background:#131B30;box-shadow:inset 3px 0 0 #5BE0D8}
+.call{font-size:9.5px;font-weight:900;letter-spacing:.06em;padding:2px 6px;border-radius:5px}
+.orb.big{width:60px;height:60px}
+.status{font-size:12.5px;color:#CFFBE2;min-height:18px;line-height:1.4}
+@keyframes blink{50%{opacity:0}}
+.caret{display:inline-block;width:7px;height:13px;margin-left:3px;background:#3DDC84;vertical-align:-2px;animation:blink 1s steps(1) infinite}
+.watching{font:inherit;align-self:flex-start;background:transparent;border:0;padding:0;color:#8791AB;font-size:11.5px;font-weight:700;cursor:pointer;border-bottom:1px dotted #646E88;text-align:left}
+.watching:hover{color:#EEF1F7}
+.jobc{display:flex;flex-direction:column;gap:5px;padding:11px 12px;border-radius:12px;background:#0E1324;border:1px solid rgba(157,140,255,.3);text-decoration:none;color:#EEF1F7}
+.jobc:hover{border-color:rgba(157,140,255,.65);color:#EEF1F7}
+.scan{position:relative;height:3px;border-radius:2px;background:#161D33;overflow:hidden}
+@keyframes sweep{0%{left:-30%}100%{left:100%}}
+.sweep{position:absolute;top:0;left:-30%;width:30%;height:3px;border-radius:2px;background:linear-gradient(90deg,transparent,#9D8CFF,transparent);animation:sweep 2.4s ease-in-out infinite}
+.msg{display:flex;gap:8px;align-items:flex-start}
+.mb{flex-grow:1;padding:10px 12px;border-radius:4px 14px 14px 14px;background:#111A26;border:1px solid rgba(238,241,247,.08);font-size:12.5px;line-height:1.45;display:flex;flex-direction:column;gap:7px}
+.wr{display:flex;align-items:center;gap:10px;padding:7px 10px;border-radius:8px;background:#111729;font-size:12.5px}
+.wr b{width:64px}
+.wr span{flex-grow:1;font-weight:700;font-size:12px}
+.fol{font:inherit;font-size:10.5px;font-weight:800;padding:3px 9px;border-radius:999px;border:1px solid rgba(91,224,216,.5);background:transparent;color:#5BE0D8;cursor:pointer;white-space:nowrap}
+.fol.on{background:rgba(91,224,216,.16);color:#CFF7F4}
+button.ltab{background:transparent;border:0;border-bottom:2px solid transparent;font:inherit;font-size:12.5px;font-weight:800;color:#8791AB;cursor:pointer;flex:1;padding:10px 0}
+button.ltab.on{color:#EEF1F7;border-bottom-color:#3DDC84}
+.jchip{position:relative;display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:999px;background:#0E1324;border:1px solid rgba(157,140,255,.3);font-size:12px;font-weight:800;cursor:default;white-space:nowrap;outline:none}
+.jchip:hover,.jchip:focus,.jchip.show{border-color:rgba(157,140,255,.7)}
+.jchip .n{font-family:'JetBrains Mono',monospace;font-size:11px}
+.jchip .pop{display:none;position:absolute;top:calc(100% + 8px);left:0;width:280px;z-index:30;padding:12px;border-radius:12px;background:#0B1020;border:1px solid rgba(157,140,255,.55);box-shadow:0 20px 50px rgba(0,0,0,.6);flex-direction:column;gap:7px;white-space:normal;font-weight:600;box-sizing:border-box}
+.jchip:hover .pop,.jchip:focus .pop,.jchip.show .pop{display:flex}
+.jplus{font:inherit;font-size:11px;font-weight:800;padding:4px 10px;border-radius:999px;border:1px solid rgba(157,140,255,.5);background:#15112A;color:#DCD5FF;cursor:pointer;white-space:nowrap}
+.jrow{position:relative;display:grid;grid-template-columns:8px auto minmax(0,1fr) auto;gap:8px;align-items:center;height:30px;padding:0 10px;border-radius:9px;background:#0E1324;border:1px solid rgba(157,140,255,.25);font-size:12px;outline:none;cursor:default}
+.jrow:hover,.jrow:focus,.jrow.show{border-color:rgba(157,140,255,.7)}
+.jrow .now{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#A7B0C4;font-size:11.5px}
+.jrow .n{font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:700}
+.jrow .pop{display:none;position:absolute;top:calc(100% + 6px);left:0;right:0;z-index:30;padding:12px;border-radius:12px;background:#0B1020;border:1px solid rgba(157,140,255,.55);box-shadow:0 20px 50px rgba(0,0,0,.6);flex-direction:column;gap:7px;font-weight:600;box-sizing:border-box}
+.jrow:hover .pop,.jrow:focus .pop,.jrow.show .pop{display:flex}
+.jall{font-size:11.5px;font-weight:800;text-decoration:none;padding:0 4px}
+.flt{font:inherit;font-size:11px;font-weight:800;padding:4px 9px;border-radius:999px;border:1px solid rgba(238,241,247,.12);background:transparent;color:#A7B0C4;cursor:pointer}
+.flt.on{background:#161D33;color:#EEF1F7}
+.day{display:flex;align-items:center;gap:8px;font-size:10.5px;color:#8791AB;font-weight:800;letter-spacing:.08em;text-transform:uppercase}
+.day::before,.day::after{content:'';flex:1;height:1px;background:rgba(238,241,247,.08)}
+.me{align-self:flex-end;max-width:260px;padding:8px 12px;border-radius:14px 14px 4px 14px;background:#1E3A2B;font-size:12.5px;display:flex;flex-direction:column;gap:2px}
+.meta{font-size:10px;color:#8791AB;font-weight:700}
+.tag{font-size:10px;font-weight:900;letter-spacing:.06em;text-transform:uppercase}
+.menu{position:absolute;z-index:40;padding:14px;border-radius:14px;background:#0B1020;border:1px solid rgba(157,140,255,.55);box-shadow:0 24px 60px rgba(0,0,0,.6);display:flex;flex-direction:column;gap:7px;box-sizing:border-box}
+.hrow{display:flex;flex-direction:column;gap:2px;padding:8px 10px;border-radius:8px;background:#111729;font-size:12px}
+.tpl{display:flex;flex-direction:column;gap:1px;padding:7px 10px;border-radius:8px;background:#15112A;border:1px solid rgba(157,140,255,.25);font-size:12px;cursor:pointer}
+.tpl span{color:#A7B0C4;font-size:11px}
+.tpl:hover{border-color:rgba(157,140,255,.6)}
+.hscroll{direction:rtl;overflow-x:auto;overflow-y:hidden;padding-bottom:4px}
+.hinner{direction:ltr;display:flex;gap:4px;width:max-content;padding:0 2px}
+.hcol{width:32px;display:flex;flex-direction:column;align-items:center}
+.hup{height:62px;display:flex;align-items:flex-end;gap:2px}
+.hzero{width:100%;height:1px;background:rgba(238,241,247,.35)}
+.hdn{height:40px;display:flex;align-items:flex-start;gap:2px}
+.hlab{font-family:'JetBrains Mono',monospace;font-size:9.5px;margin-top:3px}
+.sx{padding:9px 11px;border-radius:10px;background:#0E1324;border:1px solid rgba(238,241,247,.09);display:flex;flex-direction:column;gap:5px}
+.meter{position:relative;height:6px;border-radius:3px;background:#161D33;margin-top:2px}
+.lad2{display:grid;grid-template-columns:minmax(0,1fr) 70px minmax(0,1fr);align-items:center;height:24px;gap:6px;padding:0 4px}
+.lside{display:flex;flex-direction:column;gap:2px}
+.t20{display:grid;grid-template-columns:22px minmax(0,1fr) 64px 62px 150px;gap:8px;align-items:center;padding:7px 14px;font-size:12px}
+.trw{border-top:1px solid rgba(238,241,247,.06);cursor:default}
+.sw{display:inline-block;width:12px;height:7px;border-radius:2px;vertical-align:middle;box-sizing:border-box}
+.hup{height:46px}
+.hdn{height:28px}
+.lad3{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) 64px minmax(0,1fr) minmax(0,1fr);gap:6px;align-items:center;height:22px;border-radius:4px;padding:0 4px}
+.ltrk{display:flex;align-items:center;gap:4px;height:22px}
+.lv{font-family:'JetBrains Mono',monospace;font-size:9.5px;color:#8791AB;min-width:22px}
+.lv.g{color:#3DDC84}.lv.r{color:#FF8A7C}
+.sx{padding:8px 10px;gap:7px}
+.t20{padding:6px 14px}
+input::placeholder{color:#646E88}
+</style>
+</helmet>
+<div style="width: 100%; min-width: 1100px; height: 1100px; display: flex; flex-direction: column; background: #05070F; overflow: hidden; position: relative">
+
+<header style="height: 56px; flex-shrink: 0; display: flex; align-items: center; gap: 6px; padding: 0 18px; border-bottom: 1px solid rgba(238,241,247,.08); background: #0A0E1D">
+<a href="/edge" target="_top" data-edge-back aria-label="Back to My Edge" style="display:flex;align-items:center;gap:8px;text-decoration:none;color:inherit"><img src="/edge/yieldr-icon.png" alt="" width="26" height="26" style="object-fit:contain">
+<span style="font-weight: 800; font-size: 16px; margin-right: 16px">Yieldr</span></a>
+<a class="nav on" href="#">Terminal</a>
+
+<a class="nav" href="/edge" target="_top" data-edge-back>My edge</a>
+<label style="margin-left: 18px; flex-grow: 1; max-width: 420px; display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 12px; border-radius: 9px; background: #111729; border: 1px solid rgba(238,241,247,.1)"><input aria-label="Search coin or trader" placeholder="Search coin or trader, or paste a contract address" style="flex-grow: 1; background: transparent; border: 0; outline: none; color: #EEF1F7; font: inherit; font-size: 12.5px"></label>
+<div style="flex-grow: 1"></div>
+<span class="chip m" style="border-style: dashed">Example data</span>
+<span class="chip g">Pro</span>
+<span class="chip mono" style="font-weight: 600">@samtrades</span>
+</header>
+
+<div style="flex-grow: 1; display: flex; min-height: 0">
+<aside aria-label="Your agent" style="width: 380px; flex-shrink: 0; border-right: 1px solid rgba(238,241,247,.08); background: #0A0E1D; display: flex; flex-direction: column; position: relative">
+
+<div style="padding: 14px 16px 12px; display: flex; gap: 12px; align-items: center; background: radial-gradient(ellipse at 10% 0%, rgba(61,220,132,.12), transparent 65%)">
+<div class="orb" style="width: 42px; height: 42px" role="img" aria-label="Your agent preview"></div>
+<div style="display: flex; flex-direction: column; gap: 2px; min-width: 0; flex-grow: 1">
+<b style="font-size: 15px">Your agent</b>
+<span class="status">{{status}}<span class="caret"></span></span>
+<button class="watching" onClick="{{toggleModal}}">Watching 7 coins · following 3 traders ›</button>
+</div>
+</div>
+
+<div style="padding: 0 16px 12px; display: flex; flex-direction: column; gap: 6px; border-bottom: 1px solid rgba(238,241,247,.08)">
+<div style="display: flex; align-items: center; gap: 8px"><span class="lbl v">Jobs · example only</span><div style="flex-grow: 1"></div><button class="jplus" onClick="{{toggleNew}}">+ New</button></div>
+<div class="jrow {{hoverClass}}" tabindex="0"><span class="dot live" style="background: #F1C36B"></span><b>Watch my coins</b><span class="now">MYRAD past your peak · UFG smart money leaving</span><span class="n a">2</span>
+<div class="pop"><div style="display: flex; align-items: center; gap: 6px"><span class="lbl a">Watch my coins</span><div style="flex-grow: 1"></div><span class="chip" style="padding: 1px 7px; font-size: 9.5px">default</span></div><span style="font-size: 12px; line-height: 1.45">4 holdings and 3 watchlist coins. Exit, risk and add signals, rug watch, and guards on every fill.</span><div class="scan"><div class="sweep"></div></div><span style="font-size: 11.5px"><span class="m">Now:</span> MYRAD past your peak window · UFG smart money leaving</span><span class="m" style="font-size: 11px">Fired 14× this week · 71% right</span></div>
+</div>
+<div class="jrow" tabindex="0"><span class="dot live" style="background: #3DDC84"></span><b>Hunt my next setup</b><span class="now">NOVA dip-buy forming · KIWI top traders in</span><span class="n g">3</span>
+<div class="pop"><div style="display: flex; align-items: center; gap: 6px"><span class="lbl g">Hunt my next setup</span><div style="flex-grow: 1"></div><span class="chip" style="padding: 1px 7px; font-size: 9.5px">default</span></div><span style="font-size: 12px; line-height: 1.45">Your setups, top traders’ on-pattern entries (last 5m–1h), smart-money first buys and traders you follow. Covers your coins, watchlist and the top 10.</span><div class="scan"><div class="sweep" style="animation-delay: .8s"></div></div><span style="font-size: 11.5px"><span class="m">Now:</span> NOVA dip-buy at −24%, triggers at −25%</span><span class="m" style="font-size: 11px">Fired 9× this week · 5 worked</span></div>
+</div>
+</div>
+
+<div style="padding: 8px 16px; display: flex; align-items: center; gap: 6px; border-bottom: 1px solid rgba(238,241,247,.06)">
+<button class="flt on">All</button><button class="flt">Setups</button><button class="flt">Alerts</button><button class="flt">My chats</button>
+<div style="flex-grow: 1"></div>
+<button class="flt" onClick="{{toggleHist}}">History ▾</button>
+</div>
+
+<div style="flex-grow: 1; min-height: 0; padding: 12px 16px; display: flex; flex-direction: column; justify-content: flex-end; gap: 10px; overflow: hidden">
+<div class="day"><span>Today</span></div>
+
+<div class="msg"><div class="orb" style="width: 20px; height: 20px"></div><div class="mb">
+<span class="meta">08:10 · brief</span>
+<span>Morning, Sam. Overnight: top money added $412K to CATE, UFG’s top holders started selling, and your dip-buy is close on NOVA.</span>
+</div></div>
+
+<div class="me"><span class="meta" style="text-align: right">08:12</span>is UFG done?</div>
+
+<div class="msg"><div class="orb" style="width: 20px; height: 20px"></div><div class="mb">
+<span class="tag r">Signal · UFG · you hold</span>
+<span>Not done, but the smart money is leaving: 2 of 3 validated holders cut 40% in an hour. The last 34 times this happened, it fell 28% over 4h.</span>
+<div style="display: flex; gap: 6px"><button class="btn" style="font-size: 11px; padding: 5px 9px">Plan my exit</button><button class="btn" style="font-size: 11px; padding: 5px 9px">Why 34?</button></div>
+</div></div>
+
+<div class="msg"><div class="orb" style="width: 20px; height: 20px"></div><div class="mb" style="border-color: rgba(61,220,132,.45)">
+<span class="tag g">Your setup · NOVA · watchlist · 09:40</span>
+<span>Your dip-buy is forming: −24% after a 2.1× run, triggers at −25%. unipcs bought 2 min ago.</span>
+<div style="display: flex; gap: 6px"><a class="btn p" href="#check" style="font-size: 11px; padding: 5px 9px">Check it</a><button class="btn" style="font-size: 11px; padding: 5px 9px">Ping at trigger</button></div>
+</div></div>
+
+<div class="me"><span class="meta" style="text-align: right">09:41</span>what size on NOVA?</div>
+
+<div class="msg"><div class="orb" style="width: 20px; height: 20px"></div><div class="mb">
+<span><b>$500</b>, your usual. It’s a validated setup (1×) and you’re not on a losing streak. Stop at <b>−15%</b>, your dip-buy’s usual worst dip. Review at <b>6h</b>.</span>
+</div></div>
+
+<div class="msg"><div class="orb" style="width: 20px; height: 20px"></div><div class="mb" style="border-color: rgba(91,224,216,.45)">
+<span class="tag c">Top trader setup · KIWI · you follow nightshift · 09:52</span>
+<span>nightshift and monk entered early, before the crowd. Same setup as your S2 (+19% median for you). Followable for ~3 more min.</span>
+<div style="display: flex; gap: 6px"><a class="btn" href="#check" style="font-size: 11px; padding: 5px 9px">Check it</a></div>
+</div></div>
+
+<div class="msg"><div class="orb" style="width: 20px; height: 20px"></div><div class="mb" style="border-color: rgba(241,195,107,.45)">
+<span class="tag a">Signal · MYRAD · +41% · 10:05</span>
+<span>Past where your dip-buy winners peak (+38% by 6h). You usually give back 70% from here.</span>
+<div style="display: flex; gap: 6px"><button class="btn" style="font-size: 11px; padding: 5px 9px">Trim a third ↗</button><button class="btn" style="font-size: 11px; padding: 5px 9px">Trail stop</button></div>
+</div></div>
+</div>
+
+<div style="padding: 10px 16px 14px; display: flex; flex-direction: column; gap: 8px; border-top: 1px solid rgba(238,241,247,.08)">
+<div style="display: flex; gap: 6px; flex-wrap: wrap"><button class="sug">Check a trade</button><button class="sug">Size this for me</button><button class="sug">Watch a coin</button></div>
+<label style="display: flex; align-items: center; gap: 8px; height: 46px; padding: 0 5px 0 14px; border-radius: 23px; background: #0E1324; border: 1px solid rgba(61,220,132,.5)"><input aria-label="Message your agent" placeholder="Ask about any setup, coin or position…" style="flex-grow: 1; background: transparent; border: 0; outline: none; color: #EEF1F7; font: inherit; font-size: 13px"><button aria-label="Send" style="width: 36px; height: 36px; border-radius: 999px; border: 0; background: #3DDC84; color: #04140B; font-weight: 900; cursor: pointer">↑</button></label>
+</div>
+
+<sc-if value="{{histOpen}}" hint-placeholder-val="{{ false }}">
+<div class="menu" style="top: 150px; right: 16px; width: 260px">
+<div style="display: flex; align-items: center"><span class="lbl">Earlier chats</span><div style="flex-grow: 1"></div><button class="flt" onClick="{{toggleHist}}">✕</button></div>
+<div class="hrow"><b>Yesterday</b><span class="m">KIWI check · ZORB exit · 6 alerts</span></div>
+<div class="hrow"><b>Sep 29</b><span class="m">Why I lost on KITE · 4 alerts</span></div>
+<div class="hrow"><b>Sep 28</b><span class="m">Edge Print walkthrough</span></div>
+<label style="display: flex; align-items: center; height: 32px; padding: 0 10px; border-radius: 8px; background: #111729"><input aria-label="Search chats" placeholder="Search chats and alerts" style="flex-grow: 1; background: transparent; border: 0; outline: none; color: #EEF1F7; font: inherit; font-size: 12px"></label>
+</div>
+</sc-if>
+
+<sc-if value="{{newOpen}}" hint-placeholder-val="{{ false }}">
+<div class="menu" style="top: 128px; left: 16px; right: 16px">
+<div style="display: flex; align-items: center"><span class="lbl v">New job</span><div style="flex-grow: 1"></div><button class="flt" onClick="{{toggleNew}}">✕</button></div>
+<span class="lbl" style="font-size: 9.5px">Entries</span>
+<div class="tpl"><b>Setup zone alert</b><span>ping when a coin enters your dip-buy zone</span></div>
+<div class="tpl"><b>Smart-money first buys</b><span>2+ validated wallets in within 30 min</span></div>
+<div class="tpl"><b>Launch and graduation watch</b><span>new coins with validated early buyers</span></div>
+<span class="lbl" style="font-size: 9.5px">Exits</span>
+<div class="tpl"><b>Take initials</b><span>get your cost back at 2×</span></div>
+<div class="tpl"><b>Take-profit ladder</b><span>2×, 3×, 5× or where your winners peak</span></div>
+<div class="tpl"><b>Dead-coin time stop</b><span>no progress and volume dying</span></div>
+<span class="lbl" style="font-size: 9.5px">Guards</span>
+<div class="tpl"><b>Rug watch</b><span>insider clusters selling, liquidity pulled</span></div>
+<div class="tpl"><b>Chase and tilt guard</b><span>FOMO buys and revenge sizing</span></div>
+<label style="display: flex; align-items: center; height: 34px; padding: 0 10px; border-radius: 8px; background: #111729; border: 1px solid rgba(157,140,255,.35)"><input aria-label="Describe a custom job" placeholder="Or describe your own job…" style="flex-grow: 1; background: transparent; border: 0; outline: none; color: #EEF1F7; font: inherit; font-size: 12px"></label>
+</div>
+</sc-if>
+</aside>
+<main style="width: 740px; flex-shrink: 0; display: flex; flex-direction: column; min-width: 0; position: relative">
+<div style="flex-grow: 1; padding: 14px 18px; display: flex; flex-direction: column; gap: 12px; overflow: hidden">
+
+<div style="display: flex; align-items: center; gap: 12px">
+<div style="width: 40px; height: 40px; border-radius: 10px; background: #161D33; display: flex; align-items: center; justify-content: center; font-weight: 900">C</div>
+<div style="display: flex; flex-direction: column; gap: 1px"><div style="display: flex; align-items: baseline; gap: 8px"><span style="font-size: 20px; font-weight: 900">CATE</span><span class="ch sol">SOL</span><span class="mono m" style="font-size: 11px">Ai66LH…5ppump</span></div><span class="m" style="font-size: 11.5px">$45.0M · <span class="g">+82.7%</span> 24h · 80.8K holders · 4 validated in the top 20 · you don’t hold it</span></div>
+<div style="flex-grow: 1"></div>
+<span class="m" style="font-size: 11px">updated 2s ago</span>
+<button class="btn jl">+ Watch for me</button>
+<a class="btn" href="#fomo">Fomo ↗</a>
+</div>
+
+<section class="card" style="padding: 12px 14px; display: flex; flex-direction: column; gap: 8px">
+<div style="display: flex; align-items: center; gap: 10px"><span class="dot live" style="background: #3DDC84"></span><b style="font-size: 13px">Buy and sell pressure</b><div style="flex-grow: 1"></div><span class="i2" style="font-size: 10.5px"><span class="sw" style="background: #3DDC84"></span> top money <span class="sw" style="border: 1px solid #A7B0C4; margin-left: 8px"></span> crowd · right or up = buying</span></div>
+<div style="display: grid; grid-template-columns: 210px minmax(0, 1fr); gap: 18px; align-items: start">
+<div style="display: flex; flex-direction: column">
+<span class="lbl" style="font-size: 9px; padding-bottom: 2px">Now</span>
+<sc-for list="{{rows}}" as="p" hint-placeholder-count="4">
+<div class="prow" style="grid-template-columns: 28px minmax(0,1fr) 50px; padding: 5px 0">
+<span class="mono" style="font-size: 11px; font-weight: 600">{{p.tf}}</span>
+<div><div class="trk"><div class="mid"></div><div class="bar" style="left: 50%; width: {{p.tmPos}}%; border-radius: 0 5px 5px 0; background: #3DDC84"></div><div class="bar" style="right: 50%; width: {{p.tmNeg}}%; border-radius: 5px 0 0 5px; background: #FF7A6B"></div></div><div class="trk2"><div class="bar2" style="left: 50%; width: {{p.crPos}}%; border-radius: 0 3px 3px 0"></div><div class="bar2" style="right: 50%; width: {{p.crNeg}}%; border-radius: 3px 0 0 3px"></div></div></div>
+<span class="mono" style="font-size: 11px; font-weight: 600; text-align: right; color: {{p.tmColor}}">{{p.tmTxt}}</span>
+</div>
+</sc-for>
+</div>
+<div style="display: flex; flex-direction: column; min-width: 0">
+<div style="display: flex; align-items: center; padding-bottom: 2px"><span class="lbl" style="font-size: 9px">Net flow by hour</span><div style="flex-grow: 1"></div><span class="m" style="font-size: 10px">← scroll to 24h</span></div>
+<div class="hscroll">
+<div class="hinner">
+<sc-for list="{{hours}}" as="h" hint-placeholder-count="12">
+<div class="hcol">
+<div class="hup"><div style="width: 11px; height: {{h.tmUp}}px; background: #3DDC84; border-radius: 2px 2px 0 0"></div><div style="width: 11px; height: {{h.crUp}}px; border: 1px solid #A7B0C4; border-bottom: 0; box-sizing: border-box; border-radius: 2px 2px 0 0"></div></div>
+<div class="hzero"></div>
+<div class="hdn"><div style="width: 11px; height: {{h.tmDn}}px; background: #FF7A6B; border-radius: 0 0 2px 2px"></div><div style="width: 11px; height: {{h.crDn}}px; border: 1px solid #A7B0C4; border-top: 0; box-sizing: border-box; border-radius: 0 0 2px 2px"></div></div>
+<span class="hlab" style="color: {{h.labColor}}">{{h.label}}</span>
+</div>
+</sc-for>
+</div>
+</div>
+</div>
+</div>
+</section>
+
+<section class="card" style="padding: 12px 14px; display: flex; flex-direction: column; gap: 2px">
+<div style="display: flex; align-items: center; gap: 10px; padding-bottom: 6px"><b style="font-size: 13px">Entry &amp; exit ladder</b><span class="m" style="font-size: 10.5px">% of each group’s buying and selling at each price · 7 days</span><div style="flex-grow: 1"></div><span class="v" style="font-size: 10.5px; font-weight: 800">▮ your dip-buy zone</span></div>
+<div class="lad3 lbl" style="font-size: 9px; height: 16px"><span style="text-align: right">Crowd bought</span><span style="text-align: right" class="g">Top money bought</span><span style="text-align: center">Market cap</span><span class="r">Top money sold</span><span>Crowd sold</span></div>
+<sc-for list="{{ladder}}" as="r" hint-placeholder-count="8">
+<sc-if value="{{r.now}}" hint-placeholder-val="{{ false }}"><div style="display: flex; align-items: center; gap: 8px; height: 12px"><div style="flex-grow: 1; height: 1px; background: #EEF1F7"></div><span class="mono" style="font-size: 9.5px; font-weight: 700">NOW $45M</span><div style="flex-grow: 1; height: 1px; background: #EEF1F7"></div></div></sc-if>
+<div class="lad3" style="background: {{r.bg}}">
+<div class="ltrk" style="justify-content: flex-end"><span class="lv">{{r.cbT}}</span><div style="width: {{r.cbW}}%; height: 10px; border: 1px solid #A7B0C4; box-sizing: border-box; border-radius: 3px 0 0 3px"></div></div>
+<div class="ltrk" style="justify-content: flex-end"><span class="lv g">{{r.tbT}}</span><div style="width: {{r.tbW}}%; height: 10px; background: #3DDC84; border-radius: 3px 0 0 3px"></div></div>
+<span class="mono" style="font-size: 10.5px; text-align: center; color: {{r.mcColor}}">{{r.mc}}</span>
+<div class="ltrk"><div style="width: {{r.tsW}}%; height: 10px; background: #FF7A6B; border-radius: 0 3px 3px 0"></div><span class="lv r">{{r.tsT}}</span></div>
+<div class="ltrk"><div style="width: {{r.csW}}%; height: 10px; border: 1px solid #A7B0C4; box-sizing: border-box; border-radius: 0 3px 3px 0"></div><span class="lv">{{r.csT}}</span></div>
+</div>
+</sc-for>
+</section>
+
+<div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px">
+<div class="sx" style="border-color: rgba(61,220,132,.45)">
+<div style="display: flex; align-items: center; gap: 6px"><span class="lbl g" style="font-size: 9px">Your setup</span><b style="font-size: 12px">Dip-buy · $29–36M</b><div style="flex-grow: 1"></div><span class="mono" style="font-size: 10px">20% away</span></div>
+<div class="meter"><div style="position: absolute; left: 50%; width: 37.5%; top: 0; bottom: 0; background: rgba(157,140,255,.4); border-radius: 3px"></div><div style="position: absolute; left: 7.5%; top: -3px; width: 3px; height: 12px; background: #EEF1F7; border-radius: 2px"></div></div>
+</div>
+<div class="sx" style="border-color: rgba(91,224,216,.4)">
+<div style="display: flex; align-items: center; gap: 6px"><span class="lbl c" style="font-size: 9px">Top trader</span><b style="font-size: 12px">unipcs · $31–36M</b><div style="flex-grow: 1"></div><span class="mono g" style="font-size: 10px">+18%</span></div>
+<div class="meter"><div style="position: absolute; left: 55%; width: 32%; top: 0; bottom: 0; background: rgba(91,224,216,.4); border-radius: 3px"></div><div style="position: absolute; left: 7.5%; top: -3px; width: 3px; height: 12px; background: #EEF1F7; border-radius: 2px"></div></div>
+</div>
+<div class="sx" style="border-color: rgba(255,122,107,.45); background: #140D12">
+<div style="display: flex; align-items: center; gap: 6px"><span class="lbl r" style="font-size: 9px">Risk</span><b style="font-size: 12px">Crowd underwater &lt; $38M</b><div style="flex-grow: 1"></div><span class="mono r" style="font-size: 10px">44%</span></div>
+<div class="meter"><div style="position: absolute; left: 0; width: 44%; top: 0; bottom: 0; background: #FF7A6B; border-radius: 3px"></div></div>
+</div>
+</div>
+
+<section class="card" style="display: flex; flex-direction: column; flex-grow: 1; min-height: 0">
+<div style="display: flex; align-items: center; gap: 8px; padding: 10px 14px 6px"><b style="font-size: 13px">Top 20 holders</b><span class="m" style="font-size: 10.5px">by value held · tinted = moved in the last hour · hover for the position story</span></div>
+<div class="t20 lbl" style="font-size: 9px; padding-top: 0; padding-bottom: 4px"><span>#</span><span>Trader</span><span style="text-align: right">Held</span><span style="text-align: right">P&amp;L</span><span>Last move</span></div>
+<div style="overflow-y: auto; flex-grow: 1; min-height: 0">
+<sc-for list="{{traders}}" as="t" hint-placeholder-count="10">
+<div class="t20 trw" onMouseEnter="{{t.enter}}" onMouseLeave="{{unhover}}" style="background: {{t.rowBg}}">
+<span class="mono m" style="font-size: 10.5px">{{t.rank}}</span>
+<span style="display: flex; align-items: center; gap: 6px; min-width: 0"><b style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{t.name}}</b><span class="chip" style="padding: 0 6px; font-size: 9.5px; color: {{t.labColor}}; border-color: {{t.labColor}}">{{t.label}}</span></span>
+<span class="mono" style="text-align: right">{{t.held}}</span>
+<span class="mono" style="text-align: right; color: {{t.pnlColor}}">{{t.pnl}}</span>
+<span style="display: flex; align-items: center; gap: 6px"><span class="dot" style="background: {{t.dotColor}}; opacity: {{t.dotOp}}"></span><span style="color: {{t.actColor}}; font-weight: 700">{{t.act}}</span><span class="mono m" style="font-size: 10.5px">{{t.when}}</span></span>
+</div>
+</sc-for>
+</div>
+</section>
+</div>
+
+<sc-if value="{{cardOpen}}" hint-placeholder-val="{{ false }}">
+<section aria-label="Position story" style="position: absolute; right: 18px; top: 150px; width: 470px; box-sizing: border-box; z-index: 25; background: #0B1020; border: 1px solid rgba(91,224,216,.5); border-radius: 16px; box-shadow: 0 30px 80px rgba(0,0,0,.65); padding: 16px; display: flex; flex-direction: column; gap: 10px">
+<div style="display: flex; align-items: center; gap: 8px"><span style="font-size: 16px; font-weight: 900">{{card.name}}</span><span class="chip" style="padding: 1px 7px; font-size: 10px; color: {{card.labColor}}; border-color: {{card.labColor}}">{{card.label}}</span><div style="flex-grow: 1"></div><span class="mono" style="font-size: 12.5px">{{card.held}}</span><span class="mono" style="font-size: 12.5px; color: {{card.pnlColor}}">{{card.pnl}}</span></div>
+<span class="lbl c">Their CATE position, start to now</span>
+<div style="position: relative; height: 64px; border-radius: 8px; background: #111729">
+<div style="position: absolute; left: 10px; right: 10px; top: 44px; height: 1px; background: rgba(238,241,247,.2)"></div>
+<sc-for list="{{card.trades}}" as="x" hint-placeholder-count="3">
+<div style="position: absolute; left: calc(10px + {{x.t}}% * 0.92); bottom: 20px; width: 10px; height: {{x.sizePx}}px; background: {{x.barColor}}; opacity: .35; border-radius: 2px 2px 0 0"></div>
+<div style="position: absolute; left: calc(10px + {{x.t}}% * 0.92); top: 39px; width: 10px; height: 10px; border-radius: 999px; background: {{x.color}}"></div>
+<span class="mono" style="position: absolute; left: calc(10px + {{x.t}}% * 0.92); top: 50px; font-size: 9.5px; color: #8791AB; transform: translateX(-4px)">{{x.when}}</span>
+</sc-for>
+</div>
+<div style="display: flex; flex-direction: column; gap: 4px">
+<sc-for list="{{card.trades}}" as="x" hint-placeholder-count="3">
+<div style="display: grid; grid-template-columns: 48px 36px 62px 52px minmax(0,1fr) auto; gap: 8px; align-items: center; font-size: 11.5px; padding: 5px 8px; border-radius: 7px; background: #111729">
+<span class="mono m">{{x.when}}</span><span style="font-weight: 800; color: {{x.color}}">{{x.type}}</span><span class="mono">{{x.usd}}</span><span class="mono m">{{x.mc}}</span><span style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{x.tag}}</span><span class="chip" style="padding: 0 6px; font-size: 9.5px; color: {{x.onColor}}; border-color: {{x.onColor}}">{{x.onTxt}}</span>
+</div>
+</sc-for>
+</div>
+<span class="i2" style="font-size: 12px; line-height: 1.5">{{card.story}}</span>
+</section>
+</sc-if>
+</main>
+<aside aria-label="Coins and traders" style="width: 320px; flex-shrink: 0; border-left: 1px solid rgba(238,241,247,.08); background: #0A0E1D; display: flex; flex-direction: column">
+<nav style="display: flex; border-bottom: 1px solid rgba(238,241,247,.08)"><button class="{{tabC}}" onClick="{{goCoins}}">Coins</button><button class="{{tabT}}" onClick="{{goTraders}}">Top Money</button><button class="{{tabM}}" onClick="{{goMine}}">Portfolio</button></nav>
+<sc-if value="{{isCoins}}" hint-placeholder-val="{{ true }}">
+<div style="padding: 10px 14px 6px; display: flex; align-items: center; gap: 6px"><span class="lbl">Top 10 by market cap</span><div style="flex-grow: 1"></div><span class="chip">All chains</span></div>
+<a class="crow on" href="#coin"><span class="mono m" style="font-size: 11px">1</span><div><div><b>CATE</b><span class="ch sol">SOL</span></div><div class="mini"><div style="position: absolute; left: 50%; width: 30%; height: 4px; background: #3DDC84"></div></div></div><span class="mono" style="font-size: 12px; text-align: right">$45.0M</span><span class="mono g" style="font-size: 12px; text-align: right">+82.7%</span></a>
+<a class="crow" href="#coin"><span class="mono m" style="font-size: 11px">2</span><div><div><b>KIWI</b><span class="ch base">BASE</span> <span class="dot" style="background: #3DDC84; margin-left: 4px"></span></div><div class="mini"><div style="position: absolute; left: 50%; width: 22%; height: 4px; background: #3DDC84"></div></div></div><span class="mono" style="font-size: 12px; text-align: right">$31.0M</span><span class="mono g" style="font-size: 12px; text-align: right">+12.0%</span></a>
+<a class="crow" href="#coin"><span class="mono m" style="font-size: 11px">3</span><div><div><b>MYRAD</b><span class="ch sol">SOL</span></div><div class="mini"><div style="position: absolute; left: 50%; width: 18%; height: 4px; background: #3DDC84"></div></div></div><span class="mono" style="font-size: 12px; text-align: right">$28.0M</span><span class="mono r" style="font-size: 12px; text-align: right">−8.4%</span></a>
+<a class="crow" href="#coin"><span class="mono m" style="font-size: 11px">4</span><div><div><b>LAPTOP</b><span class="ch base">BASE</span></div><div class="mini"><div style="position: absolute; left: 50%; width: 8%; height: 4px; background: #3DDC84"></div></div></div><span class="mono" style="font-size: 12px; text-align: right">$22.0M</span><span class="mono g" style="font-size: 12px; text-align: right">+4.1%</span></a>
+<a class="crow" href="#coin"><span class="mono m" style="font-size: 11px">5</span><div><div><b>NOVA</b><span class="ch sol">SOL</span> <span class="dot live" style="background: #3DDC84; margin-left: 4px"></span></div><div class="mini"><div style="position: absolute; left: 50%; width: 26%; height: 4px; background: #3DDC84"></div></div></div><span class="mono" style="font-size: 12px; text-align: right">$18.2M</span><span class="mono r" style="font-size: 12px; text-align: right">−27.0%</span></a>
+<a class="crow" href="#coin"><span class="mono m" style="font-size: 11px">6</span><div><div><b>STONKY</b><span class="ch rh">RH</span></div><div class="mini"><div style="position: absolute; left: 50%; width: 12%; height: 4px; background: #3DDC84"></div></div></div><span class="mono" style="font-size: 12px; text-align: right">$14.3M</span><span class="mono g" style="font-size: 12px; text-align: right">+33.0%</span></a>
+<a class="crow" href="#coin"><span class="mono m" style="font-size: 11px">7</span><div><div><b>UFG</b><span class="ch sol">SOL</span> <span class="dot" style="background: #FF7A6B; margin-left: 4px"></span></div><div class="mini"><div style="position: absolute; right: 50%; width: 40%; height: 4px; background: #FF7A6B"></div></div></div><span class="mono" style="font-size: 12px; text-align: right">$12.0M</span><span class="mono r" style="font-size: 12px; text-align: right">−22.4%</span></a>
+<a class="crow" href="#coin"><span class="mono m" style="font-size: 11px">8</span><div><div><b>ZORB</b><span class="ch base">BASE</span> <span class="dot" style="background: #3DDC84; margin-left: 4px"></span></div><div class="mini"><div style="position: absolute; left: 50%; width: 20%; height: 4px; background: #3DDC84"></div></div></div><span class="mono" style="font-size: 12px; text-align: right">$9.4M</span><span class="mono g" style="font-size: 12px; text-align: right">+61.0%</span></a>
+<a class="crow" href="#coin"><span class="mono m" style="font-size: 11px">9</span><div><div><b>MEMEX</b><span class="ch rh">RH</span></div><div class="mini"><div style="position: absolute; right: 50%; width: 6%; height: 4px; background: #FF7A6B"></div></div></div><span class="mono" style="font-size: 12px; text-align: right">$8.6M</span><span class="mono g" style="font-size: 12px; text-align: right">+5.2%</span></a>
+<a class="crow" href="#coin"><span class="mono m" style="font-size: 11px">10</span><div><div><b>DELTA</b><span class="ch base">BASE</span> <span class="dot" style="background: #FF7A6B; margin-left: 4px"></span></div><div class="mini"><div style="position: absolute; right: 50%; width: 16%; height: 4px; background: #FF7A6B"></div></div></div><span class="mono" style="font-size: 12px; text-align: right">$7.8M</span><span class="mono r" style="font-size: 12px; text-align: right">−6.0%</span></a>
+<div style="padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; font-size: 11.5px" class="i2">
+<span>Thin bar: top money in the last hour. Right = buying.</span>
+<span><span class="dot" style="background: #3DDC84"></span> setup forming · <span class="dot" style="background: #FF7A6B"></span> top money leaving</span>
+</div>
+</sc-if>
+<sc-if value="{{isTraders}}" hint-placeholder-val="{{ false }}">
+<div style="padding: 10px 14px 6px; display: flex; align-items: center; gap: 6px"><span class="lbl">Top traders by edge</span><div style="flex-grow: 1"></div><span class="chip">in top 10 coins</span></div>
+<div class="trow on"><div style="display: flex; align-items: center; gap: 6px"><b>unipcs</b><span class="chip g">Validated</span><div style="flex-grow: 1"></div><span class="mono g" style="font-size: 11.5px">+18%</span></div><span class="i2" style="font-size: 11.5px">Dip-buyer · follow ≤5m</span><div style="display: flex; align-items: center; gap: 8px"><span class="m" style="font-size: 11px">bought MYRAD 2m ago</span><div style="flex-grow: 1"></div><button class="fol on">Following</button></div></div>
+<div class="trow"><div style="display: flex; align-items: center; gap: 6px"><b>nightshift</b><span class="chip g">Validated</span><div style="flex-grow: 1"></div><span class="mono g" style="font-size: 11.5px">+21%</span></div><span class="i2" style="font-size: 11.5px">Early entries · follow ≤5m</span><div style="display: flex; align-items: center; gap: 8px"><span class="m" style="font-size: 11px">bought KIWI 12m ago</span><div style="flex-grow: 1"></div><button class="fol on">Following</button></div></div>
+<div class="trow"><div style="display: flex; align-items: center; gap: 6px"><b>pointfarm</b><span class="chip g">Validated</span><div style="flex-grow: 1"></div><span class="mono g" style="font-size: 11.5px">+14%</span></div><span class="i2" style="font-size: 11.5px">Scale-out exits · follow ≤2m</span><div style="display: flex; align-items: center; gap: 8px"><span class="m" style="font-size: 11px">trimmed UFG 1h ago</span><div style="flex-grow: 1"></div><button class="fol">Follow</button></div></div>
+<div class="trow"><div style="display: flex; align-items: center; gap: 6px"><b>monk</b><span class="chip g">Validated</span><div style="flex-grow: 1"></div><span class="mono g" style="font-size: 11.5px">+16%</span></div><span class="i2" style="font-size: 11.5px">Patient entries · follow ≤15m</span><div style="display: flex; align-items: center; gap: 8px"><span class="m" style="font-size: 11px">added CATE 40m ago</span><div style="flex-grow: 1"></div><button class="fol on">Following</button></div></div>
+<div class="trow"><div style="display: flex; align-items: center; gap: 6px"><b>mercy</b><span class="chip a">Likely</span><div style="flex-grow: 1"></div><span class="mono g" style="font-size: 11.5px">+9%</span></div><span class="i2" style="font-size: 11.5px">Sizes up in quiet markets · 18 trades</span><div style="display: flex; align-items: center; gap: 8px"><span class="m" style="font-size: 11px">no move today</span><div style="flex-grow: 1"></div><button class="fol">Follow</button></div></div>
+<div class="trow" style="opacity: .75"><div style="display: flex; align-items: center; gap: 6px"><b>hollowpoint</b><span class="chip m">Bot-only</span><div style="flex-grow: 1"></div></div><span class="i2" style="font-size: 11.5px">Launch sniper · edge gone after 2 min</span><div style="display: flex; align-items: center; gap: 8px"><span class="m" style="font-size: 11px">bought ZORB 9m ago</span><div style="flex-grow: 1"></div><span class="m" style="font-size: 10.5px; font-weight: 800">not followable</span></div></div>
+<div class="trow" style="opacity: .75"><div style="display: flex; align-items: center; gap: 6px"><b>fd87…eda8</b><span class="chip r">Fade</span><div style="flex-grow: 1"></div></div><span class="i2" style="font-size: 11.5px">Piles in late, 40+ open positions · −$324K in 90d</span><div style="display: flex; align-items: center; gap: 8px"><span class="m" style="font-size: 11px">bought DELTA 20m ago</span><div style="flex-grow: 1"></div><span class="r" style="font-size: 10.5px; font-weight: 800">fade signal</span></div></div>
+<div style="padding: 12px 14px; font-size: 11.5px; line-height: 1.5" class="i2">Ranked by edge that survives a luck test and a late entry, not by PnL. Follow a trader and the agent brings you their new setups, even on coins outside your list.</div>
+</sc-if>
+<sc-if value="{{isMine}}" hint-placeholder-val="{{ false }}">
+<div style="padding: 12px 14px 6px; display: flex; align-items: center; gap: 6px"><span class="lbl">Holding · 4</span><div style="flex-grow: 1"></div><span class="mono" style="font-size: 12px">$8,440</span></div>
+<a class="trow" href="#coin"><div style="display: flex; align-items: center; gap: 6px"><b>UFG</b><span class="mono r" style="font-size: 12px">−22%</span><div style="flex-grow: 1"></div><span class="call" style="background: rgba(255,122,107,.18); color: #FF8A7C">EXIT PLAN</span></div><span class="i2" style="font-size: 11.5px">Top holders cutting</span></a>
+<a class="trow" href="#coin"><div style="display: flex; align-items: center; gap: 6px"><b>MYRAD</b><span class="mono g" style="font-size: 12px">+41%</span><div style="flex-grow: 1"></div><span class="call" style="background: rgba(241,195,107,.18); color: #F1C36B">TRIM ⅓</span></div><span class="i2" style="font-size: 11.5px">Past your usual peak</span></a>
+<a class="trow" href="#coin"><div style="display: flex; align-items: center; gap: 6px"><b>DELTA</b><span class="mono r" style="font-size: 12px">−6%</span><div style="flex-grow: 1"></div><span class="call" style="background: rgba(241,195,107,.18); color: #F1C36B">CUT SIZE</span></div><span class="i2" style="font-size: 11.5px">3.1× your usual, after 2 losses</span></a>
+<a class="trow" href="#coin"><div style="display: flex; align-items: center; gap: 6px"><b>LAPTOP</b><span class="mono g" style="font-size: 12px">+8%</span><div style="flex-grow: 1"></div><span class="call" style="background: rgba(238,241,247,.08); color: #C9D0DE">HOLD</span></div><span class="i2" style="font-size: 11.5px">Your early-entry setup still running</span></a>
+<div style="padding: 16px 14px 6px; display: flex; align-items: center; gap: 6px"><span class="lbl v">Agent watching for you · 3</span></div>
+<a class="trow" href="#coin"><div style="display: flex; align-items: center; gap: 6px"><b>NOVA</b><span class="dot live" style="background: #3DDC84"></span><div style="flex-grow: 1"></div><span class="g" style="font-size: 11px; font-weight: 800">your setup forming</span></div><span class="i2" style="font-size: 11.5px">−24%, triggers at −25%</span></a>
+<a class="trow" href="#coin"><div style="display: flex; align-items: center; gap: 6px"><b>KIWI</b><div style="flex-grow: 1"></div><span class="c" style="font-size: 11px; font-weight: 800">top money entering</span></div><span class="i2" style="font-size: 11.5px">nightshift + monk, 12m ago</span></a>
+<a class="trow" href="#coin"><div style="display: flex; align-items: center; gap: 6px"><b>STONKY</b><div style="flex-grow: 1"></div><span class="m" style="font-size: 11px; font-weight: 800">nothing yet</span></div><span class="i2" style="font-size: 11.5px">Watching for your dip-buy</span></a>
+<label style="margin: 10px 14px; display: flex; align-items: center; gap: 8px; height: 38px; padding: 0 12px; border-radius: 10px; border: 1px dashed rgba(157,140,255,.5); background: #100D20"><span class="v" style="font-weight: 900">+</span><input aria-label="Add a coin for the agent to watch" placeholder="Add a coin for me to watch" style="flex-grow: 1; background: transparent; border: 0; outline: none; color: #EEF1F7; font: inherit; font-size: 12.5px"></label>
+<span class="i2" style="font-size: 11.5px; padding: 0 14px; line-height: 1.5">I’ll tell you when one of your setups forms on these, or when top money moves in or out.</span>
+</sc-if>
+</aside>
+</div>
+<sc-if value="{{modalOpen}}" hint-placeholder-val="{{ false }}">
+<div style="position: absolute; left: 0; right: 0; top: 0; bottom: 0; background: rgba(5,7,15,.55); z-index: 20">
+<section role="dialog" aria-label="Coins your agent is watching" style="position: absolute; left: 24px; top: 150px; width: 420px; box-sizing: border-box; background: #0B1020; border: 1px solid rgba(157,140,255,.55); border-radius: 16px; box-shadow: 0 30px 80px rgba(0,0,0,.6); padding: 18px; display: flex; flex-direction: column; gap: 12px">
+<div style="display: flex; align-items: center; gap: 8px"><b style="font-size: 15px">What your agent is watching</b><div style="flex-grow: 1"></div><button class="btn" aria-label="Close" onClick="{{toggleModal}}">✕</button></div>
+<div style="display: flex; flex-direction: column; gap: 6px">
+<span class="lbl">Your holdings · 4</span>
+<div class="wr"><b>UFG</b><span class="r">smart money leaving</span></div>
+<div class="wr"><b>MYRAD</b><span class="a">past your peak window</span></div>
+<div class="wr"><b>DELTA</b><span class="a">oversized for you</span></div>
+<div class="wr"><b>LAPTOP</b><span class="m">quiet</span></div>
+</div>
+<div style="display: flex; flex-direction: column; gap: 6px">
+<span class="lbl v">Your watchlist · 3</span>
+<div class="wr"><b>NOVA</b><span class="g">your setup forming</span><button class="btn" style="font-size: 10.5px; padding: 3px 8px">Remove</button></div>
+<div class="wr"><b>KIWI</b><span class="c">top traders entering</span><button class="btn" style="font-size: 10.5px; padding: 3px 8px">Remove</button></div>
+<div class="wr"><b>STONKY</b><span class="m">nothing yet</span><button class="btn" style="font-size: 10.5px; padding: 3px 8px">Remove</button></div>
+<label style="display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 12px; border-radius: 10px; border: 1px dashed rgba(157,140,255,.5); background: #100D20"><span class="v" style="font-weight: 900">+</span><input aria-label="Add a coin to watch" placeholder="Add a coin or paste a contract address" style="flex-grow: 1; background: transparent; border: 0; outline: none; color: #EEF1F7; font: inherit; font-size: 12.5px"></label>
+</div>
+<div style="display: flex; flex-direction: column; gap: 6px">
+<span class="lbl c">Traders you follow · 3</span>
+<div style="display: flex; gap: 6px; flex-wrap: wrap"><span class="chip">unipcs</span><span class="chip">nightshift</span><span class="chip">monk</span></div>
+<span class="m" style="font-size: 11.5px; line-height: 1.45">Their new setups reach you even on coins outside your list, as long as the setup is validated and still followable.</span>
+</div>
+</section>
+</div>
+</sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1100}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.base = [
+      { tf: '5m', tm: 12000, cr: 6000, s: 40000 },
+      { tf: '15m', tm: -46000, cr: 22000, s: 150000 },
+      { tf: '30m', tm: -30000, cr: 45000, s: 220000 },
+      { tf: '1h', tm: 120000, cr: 30000, s: 300000 }
+    ];
+    this.statuses = [
+      'Scanning NOVA for your dip-buy setup',
+      'Checking what unipcs just bought',
+      'Reading top-holder flows on MYRAD',
+      'Comparing the KIWI entry to your S2 record',
+      'Watching UFG top holders for more selling'
+    ];
+    this.hourTm = [40, 60, 90, 120, 150, 180, 210, 160, 140, 120, 90, 80, 60, 55, 70, 50, 40, 30, 20, 10, -15, -30, -46, 8];
+    this.hourCr = [5, 8, 10, 12, 15, 10, 8, 12, 20, 18, 15, 20, 25, 30, 28, 35, 40, 45, 60, 85, 110, 95, 120, 40];
+    this.ladder = [
+      { mc: '$45–50M', tb: 0, cb: 2.5, ts: 0, cs: 3.3 },
+      { mc: '$40–45M', tb: 2.4, cb: 23, ts: 79, cs: 25, now: true },
+      { mc: '$35–40M', tb: 0, cb: 37, ts: 21, cs: 30 },
+      { mc: '$30–35M', tb: 4.4, cb: 17, ts: 0, cs: 19, zone: true },
+      { mc: '$25–30M', tb: 0, cb: 9.6, ts: 0, cs: 11 },
+      { mc: '$15–25M', tb: 1.5, cb: 7.2, ts: 0, cs: 8 },
+      { mc: '$10–15M', tb: 59, cb: 2.4, ts: 0, cs: 2.8 },
+      { mc: '$5–10M', tb: 33, cb: 1.2, ts: 0, cs: 0 }
+    ];
+    const B = (t, when, usd, mc, tag, on, size) => ({ t, type: 'Buy', when, usd, mc, tag, on, size });
+    const S = (t, when, usd, mc, tag, on, size) => ({ t, type: 'Sell', when, usd, mc, tag, on, size });
+    this.traders = [
+      { id: 'unipcs', name: 'unipcs', label: 'Validated', held: '$1.53M', pnl: '+246%', act: 'added', when: '6h', side: 'buy', recent: false,
+        trades: [B(5, '6d', '$180K', '$13M', 'Dip-buy after a run', true, 40), B(35, '4d', '$90K', '$21M', 'Add on strength', true, 60), S(65, '2d', '$140K', '$38M', 'Scale-out, leg 1', true, 45), B(92, '6h', '$120K', '$33M', 'Dip-buy after a run', true, 70)],
+        story: 'Opened on their validated dip-buy at $13M, then added twice: once on strength, once on a 28% dip. Took a quarter off at $38M, their usual first scale-out. Nothing here is off-pattern, so their moves in CATE are worth following.' },
+      { id: 'nightshift', name: 'nightshift', label: 'Validated', held: '$1.21M', pnl: '+275%', act: 'holding', when: '3d', side: 'hold', recent: false,
+        trades: [B(15, '5d', '$220K', '$12M', 'Early entry, before the crowd', true, 60), B(40, '3d', '$160K', '$19M', 'Add at 3.5× their usual size', true, 100)],
+        story: 'Got in early at $12M before the crowd, then added at 3.5× their usual size. Their big bets beat their median, so this is real conviction. No sells yet.' },
+      { id: 'pointfarm', name: 'pointfarm', label: 'Validated', held: '$980K', pnl: '+359%', act: 'trimmed 20%', when: '2h', side: 'sell', recent: false,
+        trades: [B(8, '6d', '$150K', '$9.8M', 'Early entry', true, 100), S(97, '2h', '$310K', '$42M', 'Scale-out, leg 1 of 3', true, 80)],
+        story: 'Always sells in three legs, and this is leg 1. Legs 2 and 3 usually come 60% and 100% higher. A normal trim, not an exit.' },
+      { id: 'monk', name: 'monk', label: 'Validated', held: '$870K', pnl: '+329%', act: 'added', when: '40m', side: 'buy', recent: true,
+        trades: [B(20, '5d', '$90K', '$10.5M', 'Patient entry after a 6h pause', true, 70), B(99, '40m', '$65K', '$41M', 'Probe add, 0.8× their usual', true, 100)],
+        story: 'Waited 6h+ before each entry, as usual. The latest add is small for them: a probe, not conviction.' },
+      { id: 'tacit', name: 'tacit', label: 'Unproven', held: '$867K', pnl: '−30%', act: 'holding', when: '3d', side: 'hold', recent: false,
+        trades: [B(55, '3d', '$1.2M', '$20M', 'No validated setup', false, 100)], story: 'One large buy at $20M with no proven edge behind it. Size alone is not a signal.' },
+      { id: 'c1', name: '7Hq…2kd', label: 'Insider-linked', held: '$790K', pnl: '+1,400%', act: 'sold 5%', when: '12m', side: 'sell', recent: true,
+        trades: [B(1, 'launch', '$12K', '$0.4M', 'Launch-block buy with 4 linked wallets', false, 100), S(60, '3d', '$210K', '$30M', 'Cluster sell', false, 80), S(99, '12m', '$95K', '$44M', 'Cluster sell', false, 75)],
+        story: 'Bought in the launch block alongside 4 wallets funded by the same wallet. The cluster has sold 25% over 3 days. Rug watch is tracking it; a faster sell rate would trigger an alert.' },
+      { id: 'rowan', name: 'rowan', label: 'Likely', held: '$495K', pnl: '−23%', act: 'bought', when: '25m', side: 'buy', recent: true,
+        trades: [B(99, '25m', '$60K', '$44M', 'Chase near the high', false, 100)], story: 'First buy, near the high, after an 80% day. Their own record on this pattern is negative.' },
+      { id: 'mercy', name: 'mercy', label: 'Likely', held: '$410K', pnl: '+70%', act: 'holding', when: '2d', side: 'hold', recent: false,
+        trades: [B(40, '3d', '$240K', '$26M', 'Sizes up in quiet markets', true, 100)], story: 'One entry in a quiet stretch, their usual style. 18 trades so far, so still Likely rather than Validated.' },
+      { id: 'c2', name: 'Bx3…9fe', label: 'Unproven', held: '$380K', pnl: '+120%', act: 'holding', when: '4d', side: 'hold', recent: false, trades: [B(30, '4d', '$170K', '$20M', 'No validated setup', false, 100)], story: 'One buy, no proven edge.' },
+      { id: 'kilo', name: 'kilo', label: 'Likely', held: '$350K', pnl: '+90%', act: 'added', when: '3h', side: 'buy', recent: false, trades: [B(35, '4d', '$120K', '$22M', 'Breakout retest', true, 60), B(96, '3h', '$60K', '$38M', 'Add on strength', true, 100)], story: 'Entered on a breakout retest and added on strength. 14 trades on this setup so far.' },
+      { id: 'c3', name: '9Pa…c1d', label: 'Insider-linked', held: '$330K', pnl: '+1,380%', act: 'holding', when: '6d', side: 'hold', recent: false, trades: [B(1, 'launch', '$10K', '$0.4M', 'Launch-block buy, same funder as 7Hq…2kd', false, 100)], story: 'Part of the same insider cluster as 7Hq…2kd. Has not sold yet.' },
+      { id: 'hp', name: 'hollowpoint', label: 'Bot-only', held: '$300K', pnl: '+12%', act: 'bought', when: '9m', side: 'buy', recent: true, trades: [B(99, '9m', '$280K', '$44M', 'Snipe; edge gone after 2 min', false, 100)], story: 'Bot-speed trader. Their edge disappears within 2 minutes, so it cannot be followed.' },
+      { id: 'dune', name: 'dune', label: 'Likely', held: '$280K', pnl: '+44%', act: 'trimmed', when: '1h', side: 'sell', recent: false, trades: [B(50, '3d', '$200K', '$28M', 'Dip-buy after a run', true, 100), S(98, '1h', '$90K', '$43M', 'Took profit at +50%', true, 70)], story: 'Dip-buy, then took profit at +50%.' },
+      { id: 'c4', name: 'Ff2…7aa', label: 'Unproven', held: '$260K', pnl: '−12%', act: 'bought', when: '5h', side: 'buy', recent: false, trades: [B(95, '5h', '$300K', '$47M', 'No validated setup', false, 100)], story: 'Bought near the high with no proven edge.' },
+      { id: 'zeno', name: 'zeno', label: 'Likely', held: '$240K', pnl: '+61%', act: 'holding', when: '2d', side: 'hold', recent: false, trades: [B(45, '3d', '$150K', '$27M', 'Early entry', true, 100)], story: 'Early entry; building a record on this setup.' },
+      { id: 'c5', name: 'Qm8…4be', label: 'Unproven', held: '$220K', pnl: '+8%', act: 'bought', when: '50m', side: 'buy', recent: true, trades: [B(99, '50m', '$200K', '$42M', 'No validated setup', false, 100)], story: 'Fresh buy, no proven edge.' },
+      { id: 'ash', name: 'ash', label: 'Likely', held: '$210K', pnl: '+33%', act: 'holding', when: '1d', side: 'hold', recent: false, trades: [B(70, '2d', '$160K', '$33M', 'Dip-buy after a run', true, 100)], story: 'One dip-buy entry, holding.' },
+      { id: 'c6', name: 'Lr5…0dd', label: 'Unproven', held: '$190K', pnl: '−5%', act: 'bought', when: '2h', side: 'buy', recent: false, trades: [B(97, '2h', '$200K', '$46M', 'No validated setup', false, 100)], story: 'Fresh buy near the high.' },
+      { id: 'ivy', name: 'ivy', label: 'Unproven', held: '$170K', pnl: '+15%', act: 'holding', when: '3d', side: 'hold', recent: false, trades: [B(55, '3d', '$150K', '$38M', 'No validated setup', false, 100)], story: 'One buy, no proven edge.' },
+      { id: 'c7', name: 'Tt4…9ab', label: 'Unproven', held: '$160K', pnl: '+2%', act: 'bought', when: '7h', side: 'buy', recent: false, trades: [B(92, '7h', '$155K', '$44M', 'No validated setup', false, 100)], story: 'One buy, no proven edge.' }
+    ];
+    this.state = { vals: this.base.map(b => ({ tm: b.tm, cr: b.cr })), si: 0, modal: false, tab: 'coins', newOpen: false, hist: false, hov: null };
+  }
+  componentDidMount() {
+    this.timer = setInterval(() => {
+      this.setState(st => ({ vals: st.vals.map((v, i) => {
+        const b = this.base[i], k = i < 2 ? 0.09 : 0.04;
+        return { tm: v.tm + (b.tm - v.tm) * 0.25 + (Math.random() - 0.5) * b.s * k, cr: v.cr + (b.cr - v.cr) * 0.25 + (Math.random() - 0.5) * b.s * k * 0.6 };
+      }) }));
+    }, 1000);
+    this.timer2 = setInterval(() => this.setState(st => ({ si: (st.si + 1) % this.statuses.length })), 2600);
+  }
+  componentWillUnmount() { clearInterval(this.timer); clearInterval(this.timer2); }
+  renderVals() {
+    const fmt = n => (n >= 0 ? '+' : '−') + '$' + (Math.abs(n) >= 1000 ? Math.round(Math.abs(n) / 1000) + 'K' : Math.round(Math.abs(n)));
+    const pct = (n, s) => Math.min(Math.abs(n) / s, 1) * 50;
+    const rows = this.base.map((b, i) => {
+      const v = this.state.vals[i], up = v.tm >= 0;
+      return { tf: b.tf, tmPos: up ? pct(v.tm, b.s) : 0, tmNeg: up ? 0 : pct(v.tm, b.s), crPos: v.cr >= 0 ? pct(v.cr, b.s) : 0, crNeg: v.cr >= 0 ? 0 : pct(v.cr, b.s), tmTxt: fmt(v.tm), tmColor: up ? '#3DDC84' : '#FF8A7C' };
+    });
+    const px = k => Math.min(Math.abs(k) / 220 * 46, 46);
+    const hours = this.hourTm.map((tm, i) => {
+      const cr = this.hourCr[i], ago = 23 - i;
+      return { label: ago === 0 ? 'now' : '−' + ago + 'h', labColor: ago === 0 ? '#EEF1F7' : '#646E88',
+        tmUp: tm > 0 ? px(tm) : 0, tmDn: tm < 0 ? Math.min(px(tm), 28) : 0, crUp: cr > 0 ? px(cr) : 0, crDn: cr < 0 ? Math.min(px(cr), 28) : 0 };
+    });
+    const w = p => Math.min(p / 60, 1) * 82;
+    const lt = p => p >= 8 ? Math.round(p) + '%' : '';
+    const ladder = this.ladder.map(r => ({ mc: r.mc, now: !!r.now, tbW: w(r.tb), cbW: w(r.cb), tsW: w(r.ts), csW: w(r.cs),
+      tbT: lt(r.tb), cbT: lt(r.cb), tsT: lt(r.ts), csT: lt(r.cs),
+      bg: r.zone ? 'rgba(157,140,255,.14)' : 'transparent', mcColor: r.zone ? '#B3A6FF' : '#8791AB' }));
+    const labColors = { 'Validated': '#3DDC84', 'Likely': '#F1C36B', 'Unproven': '#8791AB', 'Insider-linked': '#FF8A7C', 'Bot-only': '#8791AB' };
+    const hov = this.state.hov;
+    const traders = this.traders.map((t, i) => ({
+      rank: i + 1, name: t.name, label: t.label, labColor: labColors[t.label], held: t.held, pnl: t.pnl,
+      pnlColor: t.pnl.charAt(0) === '−' ? '#FF8A7C' : '#3DDC84', act: t.act, when: t.when,
+      actColor: t.side === 'buy' ? '#3DDC84' : t.side === 'sell' ? '#FF8A7C' : '#A7B0C4',
+      dotColor: t.side === 'buy' ? '#3DDC84' : t.side === 'sell' ? '#FF7A6B' : '#646E88', dotOp: t.recent ? 1 : 0.4,
+      rowBg: hov === t.id ? '#131B30' : t.recent ? (t.side === 'sell' ? 'rgba(255,122,107,.07)' : 'rgba(61,220,132,.06)') : 'transparent',
+      enter: () => this.setState({ hov: t.id })
+    }));
+    const ct = this.traders.find(t => t.id === hov);
+    const card = ct ? { name: ct.name, label: ct.label, labColor: labColors[ct.label], held: ct.held, pnl: ct.pnl,
+      pnlColor: ct.pnl.charAt(0) === '−' ? '#FF8A7C' : '#3DDC84', story: ct.story,
+      trades: ct.trades.map(x => ({ t: x.t, when: x.when, type: x.type, usd: x.usd, mc: 'at ' + x.mc, tag: x.tag,
+        color: x.type === 'Buy' ? '#3DDC84' : '#FF7A6B', barColor: x.type === 'Buy' ? '#3DDC84' : '#FF7A6B', sizePx: Math.round(x.size * 0.3),
+        onTxt: x.on ? 'on-pattern' : 'off-pattern', onColor: x.on ? '#3DDC84' : '#FF8A7C' })) } : { trades: [] };
+    const t = this.state.tab;
+    return {
+      rows: rows, hours: hours, ladder: ladder, traders: traders, card: card, cardOpen: !!ct,
+      unhover: () => this.setState({ hov: null }),
+      status: this.statuses[this.state.si] + '…',
+      modalOpen: this.state.modal,
+      toggleModal: () => this.setState(st => ({ modal: !st.modal })),
+      newOpen: this.state.newOpen, histOpen: this.state.hist, hoverClass: '',
+      toggleNew: () => this.setState(st => ({ newOpen: !st.newOpen, hist: false })),
+      toggleHist: () => this.setState(st => ({ hist: !st.hist, newOpen: false })),
+      isCoins: t === 'coins', isTraders: t === 'traders', isMine: t === 'mine',
+      tabC: t === 'coins' ? 'ltab on' : 'ltab', tabT: t === 'traders' ? 'ltab on' : 'ltab', tabM: t === 'mine' ? 'ltab on' : 'ltab',
+      goCoins: () => this.setState({ tab: 'coins' }), goTraders: () => this.setState({ tab: 'traders' }), goMine: () => this.setState({ tab: 'mine' })
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,2261 @@
+[
+  {
+    "collection": "fomo_analysis_holder_snapshots",
+    "count": 23890,
+    "indexes": [
+      {
+        "key": {
+          "_id": 1
+        },
+        "unique": false
+      },
+      {
+        "key": {
+          "holder_snapshot_id": 1
+        },
+        "unique": true
+      },
+      {
+        "key": {
+          "token_id": 1,
+          "observed_at": -1
+        },
+        "unique": false
+      },
+      {
+        "key": {
+          "fomo_user_id": 1,
+          "observed_at": -1
+        },
+        "unique": false
+      },
+      {
+        "key": {
+          "run_id": 1,
+          "token_id": 1
+        },
+        "unique": false
+      }
+    ],
+    "shape": {
+      "_id": "ObjectId",
+      "holder_snapshot_id": "string",
+      "average_entry_price_usd": "Decimal128",
+      "average_hold_time_seconds": "Decimal128",
+      "chain": "string",
+      "completeness_status": "string",
+      "cost_basis_usd": "Decimal128",
+      "display_name": "string",
+      "entry_market_cap_usd": "null",
+      "evm_wallet": "string",
+      "fomo_user_id": "string",
+      "holder_rank": "number",
+      "holders_returned": "number",
+      "is_team": "boolean",
+      "network_id": "string",
+      "observed_at": "date",
+      "position_value_usd": "Decimal128",
+      "profile_picture_url": "string",
+      "profile_verified": "boolean",
+      "quantity": "Decimal128",
+      "realized_pnl_usd": "Decimal128",
+      "received_from_external_wallet": "boolean",
+      "reported_total_pnl_usd": "Decimal128",
+      "run_id": "string",
+      "solana_wallet": "string",
+      "source": "string",
+      "token_address": "string",
+      "token_id": "string",
+      "total_holders_reported": "number",
+      "trade_id": "string",
+      "unrealized_pnl_usd": "Decimal128",
+      "user_handle": "string",
+      "x_handle": "null"
+    }
+  },
+  {
+    "collection": "fomo_analysis_position_action_stories",
+    "count": 30701,
+    "indexes": [
+      {
+        "key": {
+          "_id": 1
+        },
+        "unique": false
+      },
+      {
+        "key": {
+          "story_id": 1
+        },
+        "unique": true
+      },
+      {
+        "key": {
+          "trader_id": 1,
+          "position_id": 1,
+          "model_version": 1
+        },
+        "unique": false
+      }
+    ],
+    "shape": {
+      "_id": "ObjectId",
+      "story_id": "string",
+      "chain": "string",
+      "chapters": [
+        {
+          "action_id": "string",
+          "action_match_state": "string",
+          "action_type": "string",
+          "assessment_id": "string",
+          "chapter_id": "string",
+          "historical_frequency": {
+            "historical_success_frequency_pct": "number",
+            "horizon_minutes": "number",
+            "is_predictive_probability": "boolean",
+            "median_raw_price_change_pct": "number",
+            "outcome_eligible_count": "number",
+            "population": "string",
+            "success_count": "number",
+            "target": "string"
+          },
+          "matched_patterns": [
+            {
+              "direction": "string",
+              "facts": {
+                "near_rolling_high_60m": "boolean"
+              },
+              "finding_status": "string",
+              "pattern_key": "string",
+              "pattern_name": "string"
+            }
+          ],
+          "occurred_at": "string",
+          "what_happened_afterward": {
+            "evaluation_status": "string",
+            "favorable_for_action": "boolean",
+            "outcome_price_usd": "string",
+            "raw_price_change_pct": "number"
+          },
+          "what_trader_did": "string"
+        }
+      ],
+      "model_version": "string",
+      "overlap_warning": "string",
+      "position_id": "string",
+      "rule_version": "string",
+      "token_address": "string",
+      "token_symbol": "string",
+      "trader_id": "string"
+    }
+  },
+  {
+    "collection": "fomo_analysis_price_coverage",
+    "count": 5842,
+    "indexes": [
+      {
+        "key": {
+          "_id": 1
+        },
+        "unique": false
+      },
+      {
+        "key": {
+          "chain": 1,
+          "token_address": 1,
+          "interval": 1
+        },
+        "unique": true
+      }
+    ],
+    "shape": {
+      "_id": "ObjectId",
+      "chain": "string",
+      "token_address": "string",
+      "interval": "string",
+      "earliest_at": "date",
+      "latest_at": "date",
+      "sampled_candle_count": "number",
+      "status": "string",
+      "updated_at": "date",
+      "candle_count": "number",
+      "sources": [
+        "string"
+      ]
+    }
+  },
+  {
+    "collection": "fomo_analysis_pattern_story_events",
+    "count": 37567,
+    "indexes": [
+      {
+        "key": {
+          "_id": 1
+        },
+        "unique": false
+      },
+      {
+        "key": {
+          "event_id": 1
+        },
+        "unique": true
+      },
+      {
+        "key": {
+          "episode_id": 1,
+          "occurred_at": 1
+        },
+        "unique": false
+      },
+      {
+        "key": {
+          "event_type": 1,
+          "occurred_at": -1
+        },
+        "unique": false
+      }
+    ],
+    "shape": {
+      "_id": "ObjectId",
+      "event_id": "string",
+      "episode_id": "string",
+      "event_type": "string",
+      "facts": {
+        "side": "string",
+        "token_amount": "string",
+        "usd_notional": "null",
+        "execution_price_usd": "null",
+        "transaction_id": "string"
+      },
+      "model_version": "string",
+      "occurred_at": "string",
+      "source_trade_id": "string"
+    }
+  },
+  {
+    "collection": "fomo_analysis_jobs",
+    "count": 38975,
+    "indexes": [
+      {
+        "key": {
+          "_id": 1
+        },
+        "unique": false
+      },
+      {
+        "key": {
+          "dedupe_key": 1
+        },
+        "unique": true
+      },
+      {
+        "key": {
+          "status": 1,
+          "next_run_at": 1
+        },
+        "unique": false
+      },
+      {
+        "key": {
+          "status": 1,
+          "priority": 1,
+          "end": -1
+        },
+        "unique": false
+      }
+    ],
+    "shape": {
+      "_id": "ObjectId",
+      "dedupe_key": "string",
+      "attempt_count": "number",
+      "chain": "string",
+      "created_at": "date",
+      "end": "date",
+      "expected_candles": "number",
+      "interval": "string",
+      "job_type": "string",
+      "network_id": "string",
+      "pool_address": "string",
+      "provider": "string",
+      "start": "date",
+      "status": "string",
+      "token_address": "string",
+      "updated_at": "date",
+      "priority": "number",
+      "reason": "string",
+      "started_at": "date",
+      "completed_at": "date",
+      "coverage_percent": "number",
+      "earliest_at": "date",
+      "last_error": "null",
+      "latest_at": "date",
+      "observed_candles": "number",
+      "requeue_reason": "string"
+    }
+  },
+  {
+    "collection": "fomo_analysis_wallet_identities",
+    "count": 4572,
+    "indexes": [
+      {
+        "key": {
+          "_id": 1
+        },
+        "unique": false
+      },
+      {
+        "key": {
+          "wallet_id": 1
+        },
+        "unique": true
+      },
+      {
+        "key": {
+          "chain": 1,
+          "address": 1
+        },
+        "unique": true
+      },
+      {
+        "key": {
+          "label": 1,
+          "analysis_support": 1
+        },
+        "unique": false
+      },
+      {
+        "key": {
+          "cohort_ids": 1,
+          "chain": 1
+        },
+        "unique": false
+      }
+    ],
+    "shape": {
+      "_id": "ObjectId",
+      "wallet_id": "string",
+      "address": "string",
+      "address_family": "string",
+      "analysis_support": "string",
+      "chain": "string",
+      "cohort_ids": [
+        "string"
+      ],
+      "contract_version": "string",
+      "fomo_user_id": "string",
+      "label": "string",
+      "observed_at": "date",
+      "profile_image_url": "string",
+      "source_platform": "string",
+      "top_money_rank": "number",
+      "trader_id": "string",
+      "x_handle": "string",
+      "trade_history_status": "string",
+      "trade_history_updated_at": "date",
+      "wallet_role": "string"
+    }
+  },
+  {
+    "collection": "fomo_analysis_cohorts",
+    "count": 1,
+    "indexes": [
+      {
+        "key": {
+          "_id": 1
+        },
+        "unique": false
+      },
+      {
+        "key": {
+          "cohort_id": 1
+        },
+        "unique": true
+      },
+      {
+        "key": {
+          "status": 1,
+          "frozen_at": -1
+        },
+        "unique": false
+      }
+    ],
+    "shape": {
+      "_id": "ObjectId",
+      "cohort_id": "string",
+      "applied": "boolean",
+      "chain_scope": [
+        "string"
+      ],
+      "contract_version": "string",
+      "frozen_at": "date",
+      "label": "string",
+      "member_count": "number",
+      "portfolio_run_ids": [
+        "string"
+      ],
+      "profile_image_count": "number",
+      "profile_image_missing_count": "number",
+      "rank_field": "string",
+      "ranking_basis": "string",
+      "ranking_snapshot_id": "string",
+      "raw_path_checks": [
+        {
+          "root": "string",
+          "sample_found": "number",
+          "sample_size": "number"
+        }
+      ],
+      "source_ingestion_run_id": "string",
+      "status": "string",
+      "wallet_identity_count": "number",
+      "trading_wallet_pairs_resolved": "number",
+      "trading_wallet_profiles_unresolved": "number",
+      "trading_wallet_resolution_completed_at": "date",
+      "updated_at": "date"
+    }
+  },
+  {
+    "collection": "fomo_analysis_price_points_5m",
+    "count": 4843187,
+    "indexes": [
+      {
+        "key": {
+          "_id": 1
+        },
+        "unique": false
+      },
+      {
+        "key": {
+          "chain": 1,
+          "token_address": 1,
+          "timestamp": 1
+        },
+        "unique": true
+      }
+    ],
+    "shape": {
+      "_id": "ObjectId",
+      "price_point_id": "string",
+      "chain": "string",
+      "close": "Decimal128",
+      "high": "Decimal128",
+      "interval": "string",
+      "low": "Decimal128",
+      "open": "Decimal128",
+      "quality": "string",
+      "sample_count": "number",
+      "source": "string",
+      "timestamp": "date",
+      "token_address": "string"
+    }
+  },
+  {
+    "collection": "fomo_analysis_position_episodes",
+    "count": 34280,
+    "indexes": [
+      {
+        "key": {
+          "_id": 1
+        },
+        "unique": false
+      },
+      {
+        "key": {
+          "episode_id": 1
+        },
+        "unique": true
+      },
+      {
+        "key": {
+          "trader_id": 1,
+          "opened_at": -1
+        },
+        "unique": false
+      }
+    ],
+    "shape": {
+      "_id": "ObjectId",
+      "episode_id": "string",
+      "analysis_version": "string",
+      "bought_quantity": "Decimal128",
+      "buy_count": "number",
+      "buy_notional_usd": "Decimal128",
+      "chain": "string",
+      "closed_at": "date",
+      "episode_number": "number",
+      "opened_at": "date",
+      "priced_buy_count": "number",
+      "priced_sell_count": "number",
+      "realized_pnl_usd": "null",
+      "remaining_quantity": "Decimal128",
+      "sell_count": "number",
+      "sell_notional_usd": "Decimal128",
+      "sold_quantity": "Decimal128",
+      "token_address": "string",
+      "token_symbol": "string",
+      "trade_ids": [
+        "string"
+      ],
+      "trader_id": "string"
+    }
+  },
+  {
+    "collection": "fomo_analysis_raw_api_payloads",
+    "count": 17408,
+    "indexes": [
+      {
+        "key": {
+          "_id": 1
+        },
+        "unique": false
+      },
+      {
+        "key": {
+          "payload_id": 1
+        },
+        "unique": true
+      },
+      {
+        "key": {
+          "run_id": 1,
+          "endpoint": 1,
+          "observed_at": 1
+        },
+        "unique": false
+      },
+      {
+        "key": {
+          "sha256": 1
+        },
+        "unique": false
+      }
+    ],
+    "shape": {
+      "_id": "ObjectId",
+      "payload_id": "string",
+      "endpoint": "string",
+      "observed_at": "date",
+      "path": "string",
+      "run_id": "string",
+      "sha256": "string"
+    }
+  },
+  {
+    "collection": "fomo_analysis_patterns",
+    "count": 312,
+    "indexes": [
+      {
+        "key": {
+          "_id": 1
+        },
+        "unique": false
+      },
+      {
+        "key": {
+          "trader_id": 1,
+          "analysis_version": 1,
+          "pattern_key": 1
+        },
+        "unique": true
+      },
+      {
+        "key": {
+          "pattern_id": 1
+        },
+        "unique": true
+      }
+    ],
+    "shape": {
+      "_id": "ObjectId",
+      "pattern_id": "string",
+      "analysis_version": "string",
+      "baseline": {
+        "count": "number",
+        "win_rate_percent": "number",
+        "mean_return_pct": "number",
+        "median_return_pct": "number"
+      },
+      "bootstrap_confidence": "number",
+      "bootstrap_uplift_ci_pct": [
+        "number"
+      ],
+      "checks": {
+        "baseline_comparison": "boolean",
+        "positive_pattern_expectancy": "boolean",
+        "positive_median_uplift": "boolean",
+        "minimum_evidence": "boolean",
+        "cross_token_breadth": "boolean",
+        "bootstrap_confidence": "boolean",
+        "remove_top_1": "boolean",
+        "remove_top_3": "boolean",
+        "remove_top_5_percent": "boolean",
+        "chronological_train": "boolean",
+        "chronological_holdout": "boolean",
+        "walk_forward": "boolean"
+      },
+      "computed_at": "date",
+      "description": "string",
+      "domain": "string",
+      "failed_checks": [
+        "string"
+      ],
+      "holdout_uplift_pct": "number",
+      "independent_token_count": "number",
+      "mean_return_uplift_pct": "number",
+      "median_return_uplift_pct": "number",
+      "pattern": {
+        "count": "number",
+        "win_rate_percent": "number",
+        "mean_return_pct": "number",
+        "median_return_pct": "number"
+      },
+      "pattern_key": "string",
+      "pattern_name": "string",
+      "remove_top_five_percent_uplift_pct": "number",
+      "remove_top_three_uplift_pct": "number",
+      "status": "string",
+      "trader_id": "string",
+      "train_uplift_pct": "number",
+      "adjusted_mean_uplift_pct": "number",
+      "adjusted_median_uplift_pct": "number",
+      "baseline_count": "number",
+      "direction": "string",
+      "economics": {
+        "n_occurrences": "number",
+        "matching_action_count": "number",
+        "attributable_acquisition_count": "number",
+        "matching_episode_count": "number",
+        "n_independent_tokens": "number",
+        "n_active_days": "number",
+        "n_active_weeks": "number",
+        "pattern_realized_pnl_usd": "number",
+        "pattern_pnl_share": "number",
+        "gross_capital_deployed_usd": "number",
+        "realized_yield_on_deployed_capital_pct": "number",
+        "live_view_label": "string",
+        "remaining_open_cost_basis_usd": "number",
+        "unrealized_pnl_usd": "null",
+        "open_episode_count": "number",
+        "completed_episode_count": "number",
+        "completed_only": {
+          "realized_pnl_usd": "number",
+          "gross_capital_deployed_usd": "number",
+          "realized_yield_on_deployed_capital_pct": "number",
+          "episode_count": "number"
+        },
+        "peak_concurrent_capital_usd": "number",
+        "analysis_period_start": "string",
+        "analysis_period_end": "string",
+        "valuation_timestamp": "null",
+        "valuation_status": "string",
+        "accounting_method": "string",
+        "fee_treatment": "string",
+        "capital_basis_provenance": "string",
+        "provenance": {
+          "capital_deployed": "string",
+          "realized_pnl": "string",
+          "unrealized_pnl": "string",
+          "source": "string"
+        },
+        "overlap_warning": "string"
+      },
+      "edge_health": "string",
+      "edge_score": "number",
+      "luck_risk": "string",
+      "occurrence_count": "number",
+      "outcome_key": "string",
+      "persistence_score": "number",
+      "recent_uplift_pct": "number",
+      "reliability_score": "number",
+      "walk_forward_uplifts_pct": [
+        "number"
+      ],
+      "behavioral_discipline_score": "null",
+      "applicability_unit": "string",
+      "recognition_timing": "string",
+      "pattern_model_version": "string"
+    }
+  },
+  {
+    "collection": "fomo_analysis_features",
+    "count": 235,
+    "indexes": [
+      {
+        "key": {
+          "_id": 1
+        },
+        "unique": false
+      },
+      {
+        "key": {
+          "trader_id": 1,
+          "analysis_version": 1,
+          "feature_key": 1
+        },
+        "unique": true
+      }
+    ],
+    "shape": {
+      "_id": "ObjectId",
+      "feature_id": "string",
+      "analysis_version": "string",
+      "computed_at": "date",
+      "feature_key": "string",
+      "trader_id": "string",
+      "values": {
+        "trade_count": "number",
+        "buy_count": "number",
+        "sell_count": "number",
+        "priced_trade_count": "number",
+        "priced_trade_percent": "number",
+        "median_trade_notional_usd": "string",
+        "position_episode_count": "number",
+        "closed_episode_count": "number",
+        "open_episode_count": "number",
+        "orphan_sell_count": "number",
+        "median_hold_minutes": "number",
+        "reentry_token_count": "number",
+        "chain_trade_counts": {
+          "base": "number",
+          "bnb": "number",
+          "robinhood": "number",
+          "solana": "number"
+        },
+        "limitations": [
+          "string"
+        ]
+      }
+    }
+  },
+  {
+    "collection": "fomo_analysis_trader_pattern_summaries",
+    "count": 161,
+    "indexes": [
+      {
+        "key": {
+          "_id": 1
+        },
+        "unique": false
+      },
+      {
+        "key": {
+          "summary_id": 1
+        },
+        "unique": true
+      },
+      {
+        "key": {
+          "trader_id": 1,
+          "model_version": 1,
+          "computed_at": -1
+        },
+        "unique": false
+      }
+    ],
+    "shape": {
+      "_id": "ObjectId",
+      "summary_id": "string",
+      "action_outcome_status_counts": {
+        "negative": "number",
+        "positive": "number",
+        "unavailable": "number",
+        "unchanged": "number"
+      },
+      "action_type_counts": {
+        "addition": "number",
+        "full_exit": "number",
+        "opening_buy": "number",
+        "partial_sell": "number",
+        "reentry": "number"
+      },
+      "aggregate_findings": [
+        {
+          "analysis_unit": "string",
+          "direction": "string",
+          "domain": "string",
+          "evidence": {
+            "best_session": "string",
+            "count": "number",
+            "uplift_pct": "number"
+          },
+          "finding_status": "string",
+          "model_version": "string",
+          "pattern_key": "string",
+          "pattern_name": "string",
+          "position_card_eligible": "boolean",
+          "rule_version": "string",
+          "validation_limitation": "string"
+        }
+      ],
+      "computed_at": "string",
+      "finding_status_counts": {
+        "candidate_under_review": "number",
+        "insufficient_evidence": "number",
+        "observed_risk": "number",
+        "rejected_hypothesis": "number"
+      },
+      "model_version": "string",
+      "price_readiness": {
+        "checks": {
+          "complete_episode_count": "boolean",
+          "complete_episode_token_count": "boolean",
+          "entry_forward_4h_coverage": "boolean",
+          "episode_path_coverage": "boolean"
+        },
+        "failed_checks": [
+          "string"
+        ],
+        "observed": {
+          "buy_entry_count": "number",
+          "closed_episode_count": "number",
+          "complete_episode_count": "number",
+          "complete_episode_token_count": "number",
+          "entry_forward_4h_coverage_percent": "number",
+          "entry_forward_4h_ready": "number",
+          "episode_path_coverage_percent": "number",
+          "episode_path_ready": "number"
+        },
+        "status": "string",
+        "thresholds": {
+          "minimum_complete_episode_count": "number",
+          "minimum_complete_episode_token_count": "number",
+          "minimum_entry_forward_4h_coverage_percent": "number",
+          "minimum_episode_path_coverage_percent": "number"
+        }
+      },
+      "rule_version": "string",
+      "trader_id": "string"
+    }
+  },
+  {
+    "collection": "fomo_analysis_episode_features",
+    "count": 16021,
+    "indexes": [
+      {
+        "key": {
+          "_id": 1
+        },
+        "unique": false
+      },
+      {
+        "key": {
+          "feature_id": 1
+        },
+        "unique": true
+      },
+      {
+        "key": {
+          "trader_id": 1,
+          "opened_at": -1
+        },
+        "unique": false
+      },
+      {
+        "key": {
+          "price_path_status": 1,
+          "chain": 1
+        },
+        "unique": false
+      }
+    ],
+    "shape": {
+      "_id": "ObjectId",
+      "feature_id": "string",
+      "analysis_version": "string",
+      "chain": "string",
+      "closed_at": "date",
+      "computed_at": "date",
+      "episode_id": "string",
+      "expected_candles": "number",
+      "giveback_from_mfe_pct": "null",
+      "mae_pct": "null",
+      "mfe_mae_ratio": "null",
+      "mfe_pct": "null",
+      "observed_candles": "number",
+      "opened_at": "date",
+      "path_coverage_percent": "number",
+      "peak_captured_pct": "null",
+      "price_path_status": "string",
+      "realized_return_pct": "null",
+      "token_address": "string",
+      "trader_id": "string",
+      "entry_price_usd": "null",
+      "exit_price_usd": "null"
+    }
+  },
+  {
+    "collection": "fomo_analysis_ingestion_runs",
+    "count": 1,
+    "indexes": [
+      {
+        "key": {
+          "_id": 1
+        },
+        "unique": false
+      },
+      {
+        "key": {
+          "ingestion_run_id": 1
+        },
+        "unique": true
+      },
+      {
+        "key": {
+          "status": 1,
+          "started_at": -1
+        },
+        "unique": false
+      }
+    ],
+    "shape": {
+      "_id": "ObjectId",
+      "ingestion_run_id": "string",
+      "database": "string",
+      "holder_run_id": "string",
+      "portfolio_run_id": "string",
+      "ranking_snapshot_id": "string",
+      "started_at": "date",
+      "status": "string",
+      "updated_at": "date",
+      "completed_at": "date",
+      "counts": {
+        "tokens": "number",
+        "traders": "number",
+        "holder_snapshots": "number",
+        "portfolio_snapshots": "number",
+        "raw_api_payloads": "number",
+        "trader_rankings": "number"
+      },
+      "canonicalization": {
+        "cohort_id": "string",
+        "label": "string",
+        "status": "string",
+        "ranking_basis": "string",
+        "rank_field": "string",
+        "ranking_snapshot_id": "string",
+        "source_ingestion_run_id": "string",
+        "member_count": "number",
+        "wallet_identity_count": "number",
+        "profile_image_count": "number",
+        "profile_image_missing_count": "number",
+        "chain_scope": [
+          "string"
+        ],
+        "portfolio_run_ids": [
+          "string"
+        ],
+        "raw_path_checks": [
+          {
+            "root": "string",
+            "sample_found": "number",
+            "sample_size": "number"
+          }
+        ],
+        "frozen_at": "date",
+        "contract_version": "string",
+        "applied": "boolean"
+      },
+      "portfolio_run_ids": [
+        "string"
+      ]
+    }
+  },
+  {
+    "collection": "fomo_analysis_trader_portfolio_snapshots",
+    "count": 17237,
+    "indexes": [
+      {
+        "key": {
+          "_id": 1
+        },
+        "unique": false
+      },
+      {
+        "key": {
+          "portfolio_snapshot_id": 1
+        },
+        "unique": true
+      },
+      {
+        "key": {
+          "fomo_user_id": 1,
+          "valuation_at": -1
+        },
+        "unique": false
+      },
+      {
+        "key": {
+          "run_id": 1,
+          "fomo_user_id": 1
+        },
+        "unique": false
+      }
+    ],
+    "shape": {
+      "_id": "ObjectId",
+      "portfolio_snapshot_id": "string",
+      "accounting_warning": "string",
+      "evm_wallet": "string",
+      "fomo_user_id": "string",
+      "fomo_username": "string",
+      "known_cost_position_count": "number",
+      "portfolio_value_usd": "Decimal128",
+      "position_count": "number",
+      "positions": [
+        {
+          "token_id": "string",
+          "chain": "string",
+          "network_id": "string",
+          "token_address": "string",
+          "symbol": "string",
+          "decimals": "number",
+          "quantity": "Decimal128",
+          "price_usd": "Decimal128",
+          "market_value_usd": "Decimal128",
+          "remaining_cost_basis_usd": "Decimal128",
+          "realized_pnl_usd": "Decimal128",
+          "unrealized_pnl_usd": "Decimal128",
+          "total_pnl_usd": "Decimal128",
+          "cost_basis_status": "string",
+          "valuation_flags": {
+            "useLivePrice": "boolean",
+            "includeInEquity": "boolean",
+            "includeUnrealizedPnl": "boolean",
+            "includeRealizedPnl": "boolean"
+          },
+          "active_trade_id": "string"
+        }
+      ],
+      "realized_pnl_usd": "Decimal128",
+      "remaining_cost_basis_usd": "Decimal128",
+      "run_id": "string",
+      "solana_wallet": "string",
+      "source": "string",
+      "total_pnl_usd": "Decimal128",
+      "unrealized_pnl_usd": "Decimal128",
+      "valuation_at": "date",
+      "x_handle": "string"
+    }
+  },
+  {
+    "collection": "fomo_analysis_episode_pattern_links",
+    "count": 23908,
+    "indexes": [
+      {
+        "key": {
+          "_id": 1
+        },
+        "unique": false
+      },
+      {
+        "key": {
+          "link_id": 1
+        },
+        "unique": true
+      },
+      {
+        "key": {
+          "episode_id": 1,
+          "recognized_at": 1
+        },
+        "unique": false
+      },
+      {
+        "key": {
+          "pattern_key": 1,
+          "state": 1
+        },
+        "unique": false
+      }
+    ],
+    "shape": {
+      "_id": "ObjectId",
+      "link_id": "string",
+      "applicability_unit": "string",
+      "domain": "string",
+      "episode_id": "string",
+      "evidence": {
+        "absolute_size_usd": "number",
+        "breakout_retest_60m": "boolean",
+        "capital_concentration_top_1": "number",
+        "concurrent_position_count": "number",
+        "consecutive_losses": "number",
+        "consecutive_wins": "number",
+        "day_of_week": "string",
+        "distance_from_low_60m_pct": "string",
+        "drawdown_from_high_240m_pct": "string",
+        "drawdown_from_high_60m_pct": "string",
+        "entry_leg_number": "number",
+        "entry_number_for_token": "number",
+        "hour_utc": "number",
+        "is_weekend": "boolean",
+        "momentum_acceleration_pct": "string",
+        "near_rolling_high_60m": "boolean",
+        "pre_return_15m_pct": "string",
+        "pre_return_240m_pct": "null",
+        "pre_return_5m_pct": "string",
+        "pre_return_60m_pct": "string",
+        "price_move_since_prior_exit_pct": "null",
+        "relative_size_vs_recent_median": "null",
+        "relative_size_vs_trader_median": "number",
+        "repeat_token": "boolean",
+        "session_bucket": "string",
+        "time_since_previous_trade_minutes": "number",
+        "time_since_prior_exit_minutes": "null",
+        "trade_number_in_session": "number",
+        "trades_last_1h": "number"
+      },
+      "model_version": "string",
+      "pattern_key": "string",
+      "pattern_name": "string",
+      "recognition_timing": "string",
+      "recognized_at": "string",
+      "rule_version": "string",
+      "source_trade_id": "string",
+      "state": "string",
+      "chain": "string",
+      "retrospective_outcome": {
+        "observed_at": "string",
+        "realized_pnl_usd": "number",
+        "realized_return_pct": "string",
+        "attributed_realized_pnl_usd": "number",
+        "attributed_capital_deployed_usd": "number",
+        "status": "string"
+      },
+      "token_address": "string",
+      "token_symbol": "null"
+    }
+  },
+  {
+    "collection": "fomo_analysis_portfolio_snapshots",
+    "count": 2,
+    "indexes": [
+      {
+        "key": {
+          "_id": 1
+        },
+        "unique": false
+      }
+    ],
+    "shape": {
+      "_id": "ObjectId",
+      "snapshot_id": "string",
+      "actual_wallet_portfolio": {
+        "priced_token_value_usd": "string",
+        "stablecoin_value_usd": "string",
+        "risk_asset_value_usd": "string",
+        "priced_non_dust_value_usd": "string",
+        "position_count": "number",
+        "priced_position_count": "number",
+        "unpriced_position_count": "number",
+        "native_gas_assets_included": "boolean",
+        "material_open_position_count": "number",
+        "material_open_positions": [
+          {
+            "token_address": "string",
+            "quantity": "string",
+            "decimals": "number",
+            "symbol": "string",
+            "name": "null",
+            "chain": "string",
+            "current_price_usd": "string",
+            "current_value_usd": "string",
+            "verified_fomo_purchase_quantity_ledger": "string",
+            "external_receipt_quantity_ledger": "string",
+            "opening_or_unreconciled_quantity": "string"
+          }
+        ],
+        "positions": [
+          {
+            "token_address": "string",
+            "quantity": "string",
+            "decimals": "number",
+            "symbol": "null",
+            "name": "null",
+            "chain": "string",
+            "current_price_usd": "string",
+            "current_value_usd": "string",
+            "verified_fomo_purchase_quantity_ledger": "string",
+            "external_receipt_quantity_ledger": "string",
+            "opening_or_unreconciled_quantity": "string"
+          }
+        ]
+      },
+      "display_labels": {
+        "rolling_capital_deployed_usd": "string",
+        "realized_return_on_rolling_capital_pct": "string",
+        "average_completed_position_return_pct": "string",
+        "realized_plus_unrealized_pnl_usd": "string"
+      },
+      "external_flow_audit": {
+        "method": "string",
+        "event_count_90d": "number",
+        "receipt_count_90d": "number",
+        "transfer_out_count_90d": "number",
+        "event_count_30d": "number"
+      },
+      "fomo_internal_funding_audit": {
+        "method": "string",
+        "event_count_90d": "number",
+        "event_count_30d": "number",
+        "stablecoin_sent_to_fomo_custody_30d_usd": "string",
+        "stablecoin_returned_from_fomo_custody_30d_usd": "string",
+        "treatment": "string"
+      },
+      "fomo_ui_reference": {
+        "source": "string",
+        "portfolio_usd": "string",
+        "pnl_30d_usd": "string",
+        "implied_opening_equity_usd_before_external_flows": "string",
+        "live_wallet_value_difference_usd": "string",
+        "fifo_pnl_difference_usd": "string",
+        "provisional_combined_equity_pnl_difference_usd": "string",
+        "status": "string"
+      },
+      "period_equity_bridge_30d": {
+        "ending_priced_token_portfolio_usd": "string",
+        "opening_priced_token_portfolio_usd": "string",
+        "net_external_stablecoin_contributions_usd": "string",
+        "period_pnl_on_common_priced_wallet_assets_usd": "string",
+        "provisional_pnl_if_fomo_custody_funds_remained_trader_owned_usd": "string",
+        "opening_token_count": "number",
+        "opening_priced_token_count": "number",
+        "opening_unpriced_token_count": "number",
+        "unvalued_non_stablecoin_external_event_count": "number",
+        "status": "string",
+        "warning": "string",
+        "opening_positions": [
+          {
+            "chain": "string",
+            "token_address": "string",
+            "quantity": "string",
+            "price_usd": "string",
+            "value_usd": "string",
+            "price_source": "string"
+          }
+        ]
+      },
+      "pnl_30d": {
+        "window_start": "string",
+        "valuation_time": "string",
+        "accounting_method": "string",
+        "realized_pnl_usd": "string",
+        "realized_sale_proceeds_usd": "string",
+        "realized_cost_basis_usd": "string",
+        "sale_proceeds_excluded_for_unknown_inventory_usd": "string",
+        "priced_sale_count": "number",
+        "open_verified_cost_basis_usd": "string",
+        "open_verified_current_value_usd": "string",
+        "open_cost_basis_missing_current_price_usd": "string",
+        "unrealized_pnl_on_priced_verified_inventory_usd": "string",
+        "realized_plus_unrealized_pnl_usd": "string",
+        "external_or_unknown_cost_current_value_usd": "string",
+        "external_receipt_count": "number",
+        "external_transfer_out_count": "number",
+        "open_positions": [
+          {
+            "chain": "string",
+            "token_address": "string",
+            "verified_purchase_quantity": "string",
+            "external_or_unknown_cost_quantity": "string",
+            "remaining_cost_basis_usd": "string",
+            "current_price_usd": "string",
+            "current_value_usd": "string",
+            "external_or_unknown_cost_current_value_usd": "string",
+            "unrealized_pnl_usd": "string"
+          }
+        ]
+      },
+      "provider": {
+        "network_ids": {
+          "base": "string",
+          "bnb": "string",
+          "solana": "string",
+          "robinhood": "string"
+        },
+        "coingecko_requests": "number",
+        "coingecko_credits_used": "number",
+        "price_errors": [],
+        "historical_price_errors": [
+          {
+            "chain": "string",
+            "token_address": "string",
+            "error": "string"
+          }
+        ],
+        "rpc_metrics": {
+          "base": {
+            "http_requests": "number",
+            "seconds": "number"
+          },
+          "robinhood": {
+            "http_requests": "number",
+            "seconds": "number"
+          },
+          "bnb": {
+            "http_requests": "number",
+            "seconds": "number"
+          },
+          "solana": {
+            "http_requests": "number",
+            "seconds": "number"
+          }
+        }
+      },
+      "reconciliation_status": "string",
+      "rolling_capital": {
+        "rolling_capital_deployed_usd": "string",
+        "attributable_sale_proceeds_usd": "string",
+        "excluded_sale_proceeds_usd": "string",
+        "ending_net_trade_cash_invested_usd": "string",
+        "capital_reuse_multiple": "string",
+        "method": "string",
+        "internal_diagnostic_purchase_volume_usd": "string"
+      },
+      "trade_ledger_through": "string",
+      "trader_id": "string",
+      "valuation_time": "string",
+      "wallets": {
+        "evm": "string",
+        "solana": "string"
+      },
+      "window_days": "number"
+    }
+  },
+  {
+    "collection": "fomo_analysis_trader_rankings",
+    "count": 17237,
+    "indexes": [
+      {
+        "key": {
+          "_id": 1
+        },
+        "unique": false
+      },
+      {
+        "key": {
+          "ranking_id": 1
+        },
+        "unique": true
+      },
+      {
+        "key": {
+          "ranking_snapshot_id": 1,
+          "portfolio_value_rank": 1
+        },
+        "unique": false
+      },
+      {
+        "key": {
+          "fomo_user_id": 1,
+          "computed_at": -1
+        },
+        "unique": false
+      }
+    ],
+    "shape": {
+      "_id": "ObjectId",
+      "ranking_id": "string",
+      "accounting_warning": "string",
+      "computed_at": "date",
+      "display_name": "string",
+      "evm_wallet": "string",
+      "fomo_user_id": "string",
+      "fomo_username": "string",
+      "known_cost_position_count": "number",
+      "known_remaining_cost_basis_usd": "Decimal128",
+      "known_roi_pct": "Decimal128",
+      "known_roi_rank": "number",
+      "known_total_pnl_usd": "Decimal128",
+      "portfolio_value_rank": "number",
+      "portfolio_value_usd": "Decimal128",
+      "position_count": "number",
+      "profile_picture_url": "string",
+      "ranking_snapshot_id": "string",
+      "realized_pnl_usd": "Decimal128",
+      "solana_wallet": "string",
+      "total_pnl_rank": "number",
+      "total_pnl_usd": "Decimal128",
+      "unknown_cost_position_count": "number",
+      "unrealized_pnl_usd": "Decimal128",
+      "user_handle": "string",
+      "x_handle": "string"
+    }
+  },
+  {
+    "collection": "fomo_analysis_trade_features",
+    "count": 56877,
+    "indexes": [
+      {
+        "key": {
+          "_id": 1
+        },
+        "unique": false
+      },
+      {
+        "key": {
+          "feature_id": 1
+        },
+        "unique": true
+      },
+      {
+        "key": {
+          "trader_id": 1,
+          "timestamp": -1
+        },
+        "unique": false
+      },
+      {
+        "key": {
+          "chain": 1,
+          "token_address": 1,
+          "timestamp": 1
+        },
+        "unique": false
+      }
+    ],
+    "shape": {
+      "_id": "ObjectId",
+      "feature_id": "string",
+      "analysis_version": "string",
+      "chain": "string",
+      "computed_at": "date",
+      "distance_from_low_15m_pct": "Decimal128",
+      "distance_from_low_240m_pct": "Decimal128",
+      "distance_from_low_60m_pct": "Decimal128",
+      "drawdown_from_high_15m_pct": "Decimal128",
+      "drawdown_from_high_240m_pct": "Decimal128",
+      "drawdown_from_high_60m_pct": "Decimal128",
+      "entry_basis_price_usd": "Decimal128",
+      "entry_basis_source": "string",
+      "entry_market_price_usd": "Decimal128",
+      "forward_return_15m_pct": "Decimal128",
+      "forward_return_240m_pct": "Decimal128",
+      "forward_return_30m_pct": "Decimal128",
+      "forward_return_5m_pct": "Decimal128",
+      "forward_return_60m_pct": "Decimal128",
+      "mae_4h_pct": "Decimal128",
+      "mfe_4h_pct": "Decimal128",
+      "pre_return_15m_pct": "Decimal128",
+      "pre_return_240m_pct": "Decimal128",
+      "pre_return_30m_pct": "Decimal128",
+      "pre_return_5m_pct": "Decimal128",
+      "pre_return_60m_pct": "Decimal128",
+      "price_feature_values_available": "number",
+      "timestamp": "date",
+      "token_address": "string",
+      "trade_id": "string",
+      "trader_id": "string",
+      "breakout_retest_60m": "boolean",
+      "mfe_mae_ratio": "string",
+      "momentum_acceleration_pct": "Decimal128",
+      "near_rolling_high_60m": "boolean"
+    }
+  },
+  {
+    "collection": "fomo_analysis_external_flows",
+    "count": 3659,
+    "indexes": [
+      {
+        "key": {
+          "_id": 1
+        },
+        "unique": false
+      }
+    ],
+    "shape": {
+      "_id": "ObjectId",
+      "event_id": "string",
+      "chain": "string",
+      "classification": "string",
+      "direction": "string",
+      "quantity": "string",
+      "timestamp": "date",
+      "token_address": "string",
+      "trader_id": "string"
+    }
+  },
+  {
+    "collection": "fomo_analysis_pattern_snapshots",
+    "count": 241,
+    "indexes": [
+      {
+        "key": {
+          "_id": 1
+        },
+        "unique": false
+      },
+      {
+        "key": {
+          "snapshot_id": 1
+        },
+        "unique": true
+      },
+      {
+        "key": {
+          "trader_id": 1,
+          "computed_at": -1
+        },
+        "unique": false
+      },
+      {
+        "key": {
+          "trader_id": 1,
+          "pattern_key": 1,
+          "rule_version": 1
+        },
+        "unique": false
+      }
+    ],
+    "shape": {
+      "_id": "ObjectId",
+      "snapshot_id": "string",
+      "applicability_unit": "string",
+      "computed_at": "string",
+      "domain": "string",
+      "economics": {
+        "accounting_method": "string",
+        "analysis_period_end": "string",
+        "analysis_period_start": "string",
+        "capital_basis_provenance": "string",
+        "completed_episode_count": "number",
+        "completed_only": {
+          "episode_count": "number",
+          "gross_capital_deployed_usd": "number",
+          "realized_pnl_usd": "number",
+          "realized_yield_on_deployed_capital_pct": "number"
+        },
+        "fee_treatment": "string",
+        "gross_capital_deployed_usd": "number",
+        "n_active_days": "number",
+        "n_active_weeks": "number",
+        "n_independent_tokens": "number",
+        "n_occurrences": "number",
+        "open_episode_count": "number",
+        "pattern_pnl_share": "number",
+        "pattern_realized_pnl_usd": "number",
+        "peak_concurrent_capital_usd": "number",
+        "realized_yield_on_deployed_capital_pct": "number",
+        "remaining_open_cost_basis_usd": "number",
+        "unrealized_pnl_usd": "null",
+        "valuation_status": "string",
+        "valuation_timestamp": "null"
+      },
+      "example_episode_ids": [
+        "string"
+      ],
+      "independent_token_count": "number",
+      "model_version": "string",
+      "occurrence_count": "number",
+      "pattern_key": "string",
+      "pattern_name": "string",
+      "plain_language_summary": "string",
+      "recognition_timing": "string",
+      "rule_version": "string",
+      "state": "string",
+      "trader_id": "string",
+      "validation": {
+        "status": "string",
+        "edge_score": "number",
+        "reliability_score": "number",
+        "persistence_score": "number",
+        "edge_health": "string",
+        "luck_risk": "string",
+        "failed_checks": [],
+        "limitation": "null"
+      }
+    }
+  },
+  {
+    "collection": "fomo_analysis_tokens",
+    "count": 13199,
+    "indexes": [
+      {
+        "key": {
+          "_id": 1
+        },
+        "unique": false
+      },
+      {
+        "key": {
+          "chain": 1,
+          "token_address": 1
+        },
+        "unique": true
+      }
+    ],
+    "shape": {
+      "_id": "ObjectId",
+      "token_id": "string",
+      "chain": "string",
+      "first_seen_at": "date",
+      "last_seen_at": "date",
+      "price_status": "string",
+      "symbol": "string",
+      "token_address": "string",
+      "updated_at": "date",
+      "current_price_usd": "Decimal128",
+      "decimals": "number",
+      "market_data_status": "string",
+      "name": "string",
+      "network_id": "string",
+      "pool_address": "string",
+      "pool_created_at": "date",
+      "pool_name": "string",
+      "pool_reserve_usd": "Decimal128",
+      "price_observed_at": "date",
+      "price_source": "string",
+      "token_side": "string",
+      "discovery_sources": [
+        "string"
+      ]
+    }
+  },
+  {
+    "collection": "fomo_analysis_cohort_memberships",
+    "count": 1000,
+    "indexes": [
+      {
+        "key": {
+          "_id": 1
+        },
+        "unique": false
+      },
+      {
+        "key": {
+          "membership_id": 1
+        },
+        "unique": true
+      },
+      {
+        "key": {
+          "cohort_id": 1,
+          "rank": 1
+        },
+        "unique": true
+      },
+      {
+        "key": {
+          "cohort_id": 1,
+          "trader_id": 1
+        },
+        "unique": true
+      }
+    ],
+    "shape": {
+      "_id": "ObjectId",
+      "membership_id": "string",
+      "cohort_id": "string",
+      "contract_version": "string",
+      "evm_wallet": "string",
+      "fomo_user_id": "string",
+      "frozen_at": "date",
+      "profile_image_url": "string",
+      "rank": "number",
+      "ranking_basis": "string",
+      "ranking_snapshot_id": "string",
+      "solana_wallet": "string",
+      "status": "string",
+      "trader_id": "string",
+      "wallet_label": "string",
+      "x_handle": "string",
+      "profile_evm_wallet": "string",
+      "profile_solana_wallet": "string",
+      "profile_trader_id": "string",
+      "trading_wallet_resolution_status": "string",
+      "trading_wallet_resolution_source": "null",
+      "wallets_resolved_at": "date"
+    }
+  },
+  {
+    "collection": "fomo_analysis_runs",
+    "count": 152,
+    "indexes": [
+      {
+        "key": {
+          "_id": 1
+        },
+        "unique": false
+      },
+      {
+        "key": {
+          "run_id": 1
+        },
+        "unique": true
+      },
+      {
+        "key": {
+          "trader_id": 1,
+          "started_at": -1
+        },
+        "unique": false
+      }
+    ],
+    "shape": {
+      "_id": "ObjectId",
+      "run_id": "string",
+      "analysis_version": "string",
+      "position_count": "number",
+      "status": "string",
+      "token_count": "number",
+      "trade_count": "number",
+      "trader_id": "string",
+      "updated_at": "date",
+      "window_end": "string",
+      "window_start": "string"
+    }
+  },
+  {
+    "collection": "fomo_analysis_traders",
+    "count": 17376,
+    "indexes": [
+      {
+        "key": {
+          "_id": 1
+        },
+        "unique": false
+      },
+      {
+        "key": {
+          "trader_id": 1
+        },
+        "unique": true
+      },
+      {
+        "key": {
+          "status": 1,
+          "priority_rank": 1
+        },
+        "unique": false
+      }
+    ],
+    "shape": {
+      "_id": "ObjectId",
+      "trader_id": "string",
+      "analysis_version": "string",
+      "created_at": "date",
+      "evm_wallet": "string",
+      "solana_wallet": "string",
+      "status": "string",
+      "updated_at": "date",
+      "fomoscan_url": "null",
+      "priority_rank": "null",
+      "resolution_status": "string",
+      "source_url": "string",
+      "username": "string",
+      "x_handle": "string"
+    }
+  },
+  {
+    "collection": "fomo_analysis_trade_legs",
+    "count": 185284,
+    "indexes": [
+      {
+        "key": {
+          "_id": 1
+        },
+        "unique": false
+      },
+      {
+        "key": {
+          "trade_id": 1
+        },
+        "unique": true
+      },
+      {
+        "key": {
+          "trader_id": 1,
+          "timestamp": -1
+        },
+        "unique": false
+      },
+      {
+        "key": {
+          "chain": 1,
+          "token_address": 1,
+          "timestamp": 1
+        },
+        "unique": false
+      }
+    ],
+    "shape": {
+      "_id": "ObjectId",
+      "trade_id": "string",
+      "amount_source": "null",
+      "analysis_version": "string",
+      "chain": "string",
+      "evidence": "string",
+      "execution_price_usd": "null",
+      "leg_index": "number",
+      "side": "string",
+      "timestamp": "date",
+      "token_address": "string",
+      "token_amount": "Decimal128",
+      "token_symbol": "string",
+      "trader_id": "string",
+      "transaction_id": "string",
+      "usd_notional": "null",
+      "wallet": "string"
+    }
+  },
+  {
+    "collection": "fomo_analysis_action_assessments",
+    "count": 187381,
+    "indexes": [
+      {
+        "key": {
+          "_id": 1
+        },
+        "unique": false
+      },
+      {
+        "key": {
+          "assessment_id": 1
+        },
+        "unique": true
+      },
+      {
+        "key": {
+          "trader_id": 1,
+          "observed_at": -1
+        },
+        "unique": false
+      },
+      {
+        "key": {
+          "action_id": 1,
+          "assessed_at": 1
+        },
+        "unique": false
+      },
+      {
+        "key": {
+          "evaluation_deadline": 1,
+          "subsequent_outcome.evaluation_status": 1
+        },
+        "unique": false
+      }
+    ],
+    "shape": {
+      "_id": "ObjectId",
+      "assessment_id": "string",
+      "action_id": "string",
+      "action_match_state": "string",
+      "action_type": "string",
+      "actual_availability_time": "string",
+      "assessed_at": "string",
+      "assessment_mode": "string",
+      "candidate_prediction": "null",
+      "chain": "string",
+      "evaluation_deadline": "string",
+      "features_available_at_assessment": {
+        "absolute_size_usd": "number",
+        "acquisition_provenance": "string",
+        "action_id": "string",
+        "action_type": "string",
+        "available_at": "string",
+        "baseline_provenance": {
+          "gap_observation_count": "number",
+          "method": "string",
+          "size_observation_count": "number"
+        },
+        "breakout_retest_60m": "boolean",
+        "capital_concentration_top_1": "number",
+        "capital_concentration_top_3": "number",
+        "chain": "string",
+        "concurrent_capital_at_risk_usd": "number",
+        "concurrent_position_count": "number",
+        "consecutive_losses": "number",
+        "consecutive_wins": "number",
+        "cost_basis_status": "string",
+        "day_of_week": "string",
+        "distance_from_low_15m_pct": "string",
+        "distance_from_low_240m_pct": "string",
+        "distance_from_low_60m_pct": "string",
+        "drawdown_from_high_15m_pct": "string",
+        "drawdown_from_high_240m_pct": "string",
+        "drawdown_from_high_60m_pct": "string",
+        "entry_basis_price_usd": "string",
+        "entry_basis_source": "string",
+        "entry_leg_number": "number",
+        "entry_market_price_usd": "string",
+        "entry_number_for_token": "number",
+        "episode_capital_deployed_usd": "number",
+        "episode_id": "string",
+        "episode_remaining_cost_basis_usd": "number",
+        "episode_remaining_quantity_fraction": "number",
+        "evaluation_deadline": "string",
+        "execution_price_usd": "string",
+        "hour_utc": "number",
+        "is_weekend": "boolean",
+        "model_version": "string",
+        "momentum_acceleration_pct": "string",
+        "near_rolling_high_60m": "boolean",
+        "observed_at": "string",
+        "outcome_alignment": {
+          "interval": "string",
+          "maximum_gap_minutes": "number",
+          "method": "string",
+          "missing_values_are_zero": "boolean",
+          "unchanged_epsilon_pct": "number"
+        },
+        "outcome_horizon_minutes": "number",
+        "outcome_quality": "string",
+        "post_loss_frequency_gap_change_pct": "null",
+        "post_loss_size_change_pct": "null",
+        "post_win_frequency_gap_change_pct": "null",
+        "post_win_size_change_pct": "null",
+        "pre_return_15m_pct": "string",
+        "pre_return_240m_pct": "string",
+        "pre_return_30m_pct": "string",
+        "pre_return_5m_pct": "string",
+        "pre_return_60m_pct": "string",
+        "previous_3_trade_return_pct": "null",
+        "previous_trade_return_pct": "null",
+        "price_feature_values_available": "number",
+        "price_move_since_prior_exit_pct": "null",
+        "primary_target": "string",
+        "reference_price_source": "string",
+        "reference_price_usd": "string",
+        "relative_size_vs_recent_median": "null",
+        "relative_size_vs_trader_median": "null",
+        "repeat_token": "boolean",
+        "session_age_minutes": "number",
+        "session_bucket": "string",
+        "side": "string",
+        "size_change_vs_previous_entry_pct": "null",
+        "source_trade_ids": [
+          "string"
+        ],
+        "time_since_previous_trade_minutes": "null",
+        "time_since_prior_exit_minutes": "null",
+        "timestamp": "string",
+        "token_address": "string",
+        "token_amount": "string",
+        "token_symbol": "null",
+        "trade_id": "string",
+        "trade_number_in_day": "number",
+        "trade_number_in_session": "number",
+        "trader_id": "string",
+        "trader_median_size_usd": "number",
+        "trader_median_trade_gap_minutes": "null",
+        "trades_last_1h": "number",
+        "trades_last_24h": "number",
+        "trades_last_6h": "number",
+        "trailing_trader_median_size_usd": "null",
+        "transaction_id": "string",
+        "usd_notional": "string",
+        "wallet": "string"
+      },
+      "historical_frequency": "null",
+      "horizon_minutes": "number",
+      "matched_patterns": [
+        {
+          "direction": "string",
+          "facts": {
+            "momentum_acceleration_pct": "string",
+            "pre_return_15m_pct": "string"
+          },
+          "finding_status": "string",
+          "pattern_key": "string",
+          "pattern_name": "string"
+        }
+      ],
+      "observed_at": "string",
+      "position_id": "string",
+      "predictive_probability_published": "boolean",
+      "provenance": {
+        "historical_story_not_live_prediction": "boolean",
+        "model_version": "string",
+        "rule_version": "string",
+        "source_trade_ids": [
+          "string"
+        ],
+        "source_transaction_ids": [
+          "string"
+        ]
+      },
+      "published_number": "null",
+      "reference_price_source": "string",
+      "reference_price_usd": "string",
+      "source_trade_ids": [
+        "string"
+      ],
+      "subsequent_outcome": {
+        "evaluation_status": "string",
+        "favorable_for_action": "boolean",
+        "outcome_price_usd": "string",
+        "raw_price_change_pct": "number"
+      },
+      "target": "string",
+      "token_address": "string",
+      "token_symbol": "null",
+      "trader_id": "string",
+      "wallet": "string",
+      "model_version": "string",
+      "rule_version": "string"
+    }
+  },
+  {
+    "collection": "fomo_analysis_economic_actions",
+    "count": 86594,
+    "indexes": [
+      {
+        "key": {
+          "_id": 1
+        },
+        "unique": false
+      },
+      {
+        "key": {
+          "action_id": 1
+        },
+        "unique": true
+      },
+      {
+        "key": {
+          "trader_id": 1,
+          "timestamp": -1
+        },
+        "unique": false
+      },
+      {
+        "key": {
+          "episode_id": 1,
+          "timestamp": 1
+        },
+        "unique": false
+      }
+    ],
+    "shape": {
+      "_id": "ObjectId",
+      "action_id": "string",
+      "absolute_size_usd": "number",
+      "acquisition_provenance": "string",
+      "action_type": "string",
+      "allocated_realized_pnl_usd": "number",
+      "available_at": "string",
+      "baseline_provenance": {
+        "method": "string",
+        "size_observation_count": "number",
+        "gap_observation_count": "number"
+      },
+      "breakout_retest_60m": "boolean",
+      "capital_concentration_top_1": "number",
+      "capital_concentration_top_3": "number",
+      "chain": "string",
+      "concurrent_capital_at_risk_usd": "number",
+      "concurrent_position_count": "number",
+      "consecutive_losses": "number",
+      "consecutive_wins": "number",
+      "cost_basis_status": "string",
+      "day_of_week": "string",
+      "distance_from_low_15m_pct": "string",
+      "distance_from_low_240m_pct": "string",
+      "distance_from_low_60m_pct": "string",
+      "drawdown_from_high_15m_pct": "string",
+      "drawdown_from_high_240m_pct": "string",
+      "drawdown_from_high_60m_pct": "string",
+      "entry_basis_price_usd": "string",
+      "entry_basis_source": "string",
+      "entry_leg_number": "number",
+      "entry_market_price_usd": "string",
+      "entry_number_for_token": "number",
+      "episode_capital_deployed_usd": "number",
+      "episode_closed_at": "date",
+      "episode_id": "string",
+      "episode_realized_pnl_usd": "number",
+      "episode_realized_return_pct": "number",
+      "episode_remaining_cost_basis_usd": "number",
+      "episode_remaining_quantity_fraction": "number",
+      "evaluation_deadline": "string",
+      "evaluation_status": "string",
+      "execution_price_usd": "string",
+      "favorable_outcome": "boolean",
+      "forward_price_return_60m_pct": "number",
+      "forward_return_15m_pct": "string",
+      "forward_return_240m_pct": "string",
+      "forward_return_30m_pct": "string",
+      "forward_return_5m_pct": "string",
+      "forward_return_60m_pct": "string",
+      "hour_utc": "number",
+      "is_weekend": "boolean",
+      "mae_4h_pct": "string",
+      "mfe_4h_pct": "string",
+      "mfe_mae_ratio": "string",
+      "model_version": "string",
+      "momentum_acceleration_pct": "string",
+      "near_rolling_high_60m": "boolean",
+      "observed_at": "string",
+      "outcome_alignment": {
+        "interval": "string",
+        "method": "string",
+        "maximum_gap_minutes": "number",
+        "unchanged_epsilon_pct": "number",
+        "missing_values_are_zero": "boolean"
+      },
+      "outcome_horizon_minutes": "number",
+      "outcome_price_usd": "string",
+      "outcome_quality": "string",
+      "post_loss_frequency_gap_change_pct": "null",
+      "post_loss_size_change_pct": "null",
+      "post_win_frequency_gap_change_pct": "null",
+      "post_win_size_change_pct": "null",
+      "pre_return_15m_pct": "string",
+      "pre_return_240m_pct": "string",
+      "pre_return_30m_pct": "string",
+      "pre_return_5m_pct": "string",
+      "pre_return_60m_pct": "string",
+      "previous_3_trade_return_pct": "null",
+      "previous_trade_return_pct": "null",
+      "price_feature_values_available": "number",
+      "price_move_since_prior_exit_pct": "null",
+      "primary_target": "string",
+      "reference_price_source": "string",
+      "reference_price_usd": "string",
+      "relative_size_vs_recent_median": "null",
+      "relative_size_vs_trader_median": "null",
+      "repeat_token": "boolean",
+      "session_age_minutes": "number",
+      "session_bucket": "string",
+      "side": "string",
+      "size_change_vs_previous_entry_pct": "null",
+      "source_trade_ids": [
+        "string"
+      ],
+      "time_since_previous_trade_minutes": "null",
+      "time_since_prior_exit_minutes": "null",
+      "timestamp": "string",
+      "token_address": "string",
+      "token_amount": "string",
+      "token_symbol": "null",
+      "trade_id": "string",
+      "trade_number_in_day": "number",
+      "trade_number_in_session": "number",
+      "trader_id": "string",
+      "trader_median_size_usd": "number",
+      "trader_median_trade_gap_minutes": "null",
+      "trades_last_1h": "number",
+      "trades_last_24h": "number",
+      "trades_last_6h": "number",
+      "trailing_trader_median_size_usd": "null",
+      "transaction_id": "string",
+      "usd_notional": "string",
+      "wallet": "string",
+      "primary_outcome_target": "string",
+      "realized_economic_outcome": {
+        "outcome_unit": "string",
+        "realization_status": "string",
+        "is_completed_observation": "boolean",
+        "acquired_quantity": "string",
+        "disposed_quantity": "string",
+        "remaining_quantity": "string",
+        "acquisition_cost_usd": "string",
+        "realized_cost_basis_usd": "string",
+        "allocated_sale_proceeds_usd": "string",
+        "realized_pnl_usd": "string",
+        "realized_return_pct": "string",
+        "completed_at": "string",
+        "disposal_action_ids": [
+          "string"
+        ],
+        "accounting_method": "string"
+      },
+      "timing_diagnostic_1h": {
+        "horizon_minutes": "number",
+        "price_return_pct": "number",
+        "evaluation_status": "string",
+        "favorable_for_action": "boolean",
+        "role": "string"
+      }
+    }
+  },
+  {
+    "versions": "trader_pattern_summaries",
+    "values": [
+      {
+        "_id": {
+          "model": "3.3.0",
+          "rule": "2026-09-09.2"
+        },
+        "count": 76
+      },
+      {
+        "_id": {
+          "model": "3.3.0",
+          "rule": "2026-09-08.1"
+        },
+        "count": 2
+      },
+      {
+        "_id": {
+          "model": "3.3.0",
+          "rule": "2026-09-09.1"
+        },
+        "count": 77
+      },
+      {
+        "_id": {
+          "model": "3.2.0",
+          "rule": "2026-09-08.6"
+        },
+        "count": 6
+      }
+    ]
+  },
+  {
+    "versions": "position_action_stories",
+    "values": [
+      {
+        "_id": {
+          "model": "3.3.0",
+          "rule": "2026-09-09.2"
+        },
+        "count": 13142
+      },
+      {
+        "_id": {
+          "model": "3.3.0",
+          "rule": "2026-09-09.1"
+        },
+        "count": 14300
+      },
+      {
+        "_id": {
+          "model": "3.3.0",
+          "rule": "2026-09-08.1"
+        },
+        "count": 1233
+      },
+      {
+        "_id": {
+          "model": "3.2.0",
+          "rule": "2026-09-08.6"
+        },
+        "count": 2026
+      }
+    ]
+  },
+  {
+    "versions": "features",
+    "values": [
+      {
+        "_id": {
+          "analysis": "0.1.0"
+        },
+        "count": 235
+      }
+    ]
+  },
+  {
+    "versions": "position_episodes",
+    "values": [
+      {
+        "_id": {
+          "analysis": "0.1.0"
+        },
+        "count": 34280
+      }
+    ]
+  }
+]
