@@ -14,9 +14,7 @@ export function Header({
       </Link>
       <nav aria-label="Main navigation">
         <span className="edge-chip">{label}</span>
-        <Link href={landing ? "#how" : "/edge"}>
-          {landing ? "How it works" : "New wallet"}
-        </Link>
+        {!landing && <Link href="/edge">New wallet</Link>}
       </nav>
     </header>
   );
