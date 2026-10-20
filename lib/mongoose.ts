@@ -23,8 +23,11 @@ async function connectDB() {
   }
 
   if (!cached.promise) {
+    // Use directConnection for non-SRV URIs (e.g., Railway proxy)
+    const isSrvUri = MONGODB_URI!.startsWith('mongodb+srv://');
     const opts = {
       bufferCommands: false,
+      ...(isSrvUri ? {} : { directConnection: true }),
     };
 
     cached.promise = mongoose.connect(MONGODB_URI!, opts).then((mongoose) => {

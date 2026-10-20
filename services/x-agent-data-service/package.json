@@ -1,0 +1,27 @@
+{
+  "name": "x-agent-data-service",
+  "version": "1.0.0",
+  "description": "Data service for X Content Agent - market indexing + 4-step trader profiling pipeline",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit",
+    "pipeline": "tsx scripts/fetch-leaderboard.ts && tsx scripts/find-consistent-traders.ts && tsx scripts/bulk-profile-ahf.ts && tsx scripts/edge-ranked-traders.ts",
+    "pipeline:leaderboard": "tsx scripts/fetch-leaderboard.ts",
+    "pipeline:consistent": "tsx scripts/find-consistent-traders.ts",
+    "pipeline:profile": "tsx scripts/bulk-profile-ahf.ts",
+    "pipeline:edge": "tsx scripts/edge-ranked-traders.ts"
+  },
+  "dependencies": {
+    "dotenv": "^16.3.1",
+    "mongodb": "^6.3.0",
+    "axios": "^1.6.0",
+    "tsx": "^4.7.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "typescript": "^5.3.0"
+  }
+}

@@ -5,7 +5,11 @@ if (!process.env.MONGODB_URI) {
 }
 
 const uri = process.env.MONGODB_URI;
-const options = {};
+
+// Use directConnection for non-SRV URIs (e.g., Railway proxy)
+// SRV URIs (mongodb+srv://) don't support directConnection
+const isSrvUri = uri.startsWith('mongodb+srv://');
+const options = isSrvUri ? {} : { directConnection: true };
 
 // Extract database name from URI (mongodb+srv://.../<dbname>?...)
 // Falls back to 'polymarket-test' if not specified

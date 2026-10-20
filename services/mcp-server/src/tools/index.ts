@@ -38,6 +38,16 @@ import { getDerivativesHistoryTool } from './market/get-derivatives-history.js';
 import { getNewsHeadlinesTool } from './market/get-news-headlines.js';
 import { getCoinPriceTool } from './market/get-coin-price.js';
 
+// X Agent tools
+import { getEdgeRankedTradersTool } from './x-agent/get-edge-ranked-traders.js';
+import { getHighConvictionTradesTool } from './x-agent/get-high-conviction-trades.js';
+import { searchMarketsByKeywordTool } from './x-agent/search-markets-by-keyword.js';
+import { getTraderPositionsInMarketTool } from './x-agent/get-trader-positions-in-market.js';
+import { getVaultPerformanceTool } from './x-agent/get-vault-performance.js';
+import { getVaultTradesTool } from './x-agent/get-vault-trades.js';
+import { getCopyTradeActivityTool } from './x-agent/get-copy-trade-activity.js';
+import { getEdgeTraderPositionsTool } from './x-agent/get-edge-trader-positions.js';
+
 // Export individual tools
 export { getTopPMTradersTool } from './top-traders/index.js';
 export { getTopPerpTradersTool } from './top-traders/index.js';
@@ -54,6 +64,7 @@ export {
 } from './live-api/index.js';
 export { getMarketSnapshotTool, fetchLiveIndicatorTool, getCoinPriceTool, getMacroSnapshotTool, getFundingRateHistoryTool, getFundingRateCurrentTool, getDerivativesHistoryTool, getNewsHeadlinesTool } from './market/index.js';
 export { getStrategyTemplateTool, openTradeTool, closeTradeTool, cancelLimitOrderTool } from './trading/index.js';
+export { getEdgeRankedTradersTool, getHighConvictionTradesTool, searchMarketsByKeywordTool, getTraderPositionsInMarketTool, getVaultPerformanceTool, getVaultTradesTool, getCopyTradeActivityTool, getEdgeTraderPositionsTool } from './x-agent/index.js';
 
 // Tool registry for MCP server
 export const tools = [
@@ -93,6 +104,15 @@ export const tools = [
   openTradeTool,
   closeTradeTool,
   cancelLimitOrderTool,
+  // X Agent tools - edge traders, high conviction, market search, vault performance
+  getEdgeRankedTradersTool,
+  getHighConvictionTradesTool,
+  searchMarketsByKeywordTool,
+  getTraderPositionsInMarketTool,
+  getVaultPerformanceTool,
+  getVaultTradesTool,
+  getCopyTradeActivityTool,
+  getEdgeTraderPositionsTool,
 ];
 
 // Tool map for quick lookup
