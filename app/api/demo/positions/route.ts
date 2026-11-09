@@ -4,7 +4,7 @@ import Position from '@/models/Position';
 
 const BANKR_WALLET_ADDRESS = '0xcdc44ffda057aca49bb9c8b7d54de212742729c7';
 const PYTHON_SERVICE_URL = process.env.PYTHON_SERVICE_URL || 'https://yieldr-app-production.up.railway.app';
-const BASE_RPC_URL = process.env.QUICKNODE_BASE_RPC_URL || process.env.BASE_RPC_URL || 'https://mainnet.base.org';
+const BASE_RPC_URL = process.env.ALCHEMY_BASE_RPC_URL || process.env.QUICKNODE_BASE_RPC_URL || process.env.BASE_RPC_URL || 'https://mainnet.base.org';
 
 /**
  * GET /api/demo/positions?wallet=0x...

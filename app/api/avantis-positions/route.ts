@@ -16,7 +16,7 @@ export async function GET(request: NextRequest) {
     }
 
     const pythonServiceUrl = process.env.PYTHON_SERVICE_URL || 'https://yieldr-app-production.up.railway.app';
-    const rpcUrl = process.env.QUICKNODE_BASE_RPC_URL || 'https://mainnet.base.org'; // FIXED!
+    const rpcUrl = process.env.ALCHEMY_BASE_RPC_URL || process.env.QUICKNODE_BASE_RPC_URL || 'https://mainnet.base.org'; // FIXED!
     
     console.log('Fetching Avantis positions for:', walletAddress);
     console.log('Using Python service:', pythonServiceUrl);

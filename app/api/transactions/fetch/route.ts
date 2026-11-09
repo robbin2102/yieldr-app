@@ -20,7 +20,7 @@ export async function POST(request: NextRequest) {
     const result = await fetchTransactionsFast(walletAddress);
 
     // Step 2: Parse with provider
-    const rpcUrl = process.env.QUICKNODE_BASE_RPC_URL || process.env.NEXT_PUBLIC_BASE_RPC_URL;
+    const rpcUrl = process.env.ALCHEMY_BASE_RPC_URL || process.env.QUICKNODE_BASE_RPC_URL || process.env.NEXT_PUBLIC_BASE_RPC_URL;
     const provider = new ethers.JsonRpcProvider(rpcUrl);
 
     const parsed = await parseAllTransactions(

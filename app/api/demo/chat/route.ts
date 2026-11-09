@@ -35,7 +35,7 @@ function normalizeUrl(url: string): string {
 const HYPERLIQUID_API_URL = 'https://api.hyperliquid.xyz/info';
 const POLYMARKET_API_BASE = 'https://data-api.polymarket.com';
 const AVANTIS_API_URL = 'https://yieldr-app-production.up.railway.app/fetch-positions';
-const BASE_RPC_URL = process.env.QUICKNODE_BASE_RPC_URL || process.env.BASE_RPC_URL || 'https://mainnet.base.org';
+const BASE_RPC_URL = process.env.ALCHEMY_BASE_RPC_URL || process.env.QUICKNODE_BASE_RPC_URL || process.env.BASE_RPC_URL || 'https://mainnet.base.org';
 
 // ─── Bankr API (replaces CDP wallet + Railway Python execution layer) ─────────
 // MIGRATION NOTE (2026-03-16): All trade execution now routes through Bankr API.
