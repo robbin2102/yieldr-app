@@ -7,6 +7,7 @@ import { createPublicClient, http } from 'viem';
 import { base } from 'viem/chains';
 import { RETRY_CONFIG } from '../config/constants';
 import type { RetryOptions } from './types';
+import { getBaseRpcUrl } from './rpc';
 
 /**
  * Singleton Viem client instance
@@ -22,11 +23,7 @@ export function getViemClient(): ReturnType<typeof createPublicClient> {
     return publicClient;
   }
 
-  const rpcUrl = process.env.QUICKNODE_BASE_RPC_URL;
-
-  if (!rpcUrl) {
-    throw new Error('QUICKNODE_BASE_RPC_URL environment variable is not set');
-  }
+  const rpcUrl = getBaseRpcUrl();
 
   console.log('[ViemClient] Initializing Viem client for Base chain...');
 

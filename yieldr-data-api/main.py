@@ -85,7 +85,7 @@ class FetchPositionsRequest(BaseModel):
 async def fetch_positions(request: FetchPositionsRequest):
     from avantis_trader_sdk import TraderClient, FeedClient
 
-    rpc_url = request.rpcUrl or settings.quicknode_endpoint or "https://mainnet.base.org"
+    rpc_url = request.rpcUrl or settings.base_rpc_url or "https://mainnet.base.org"
 
     try:
         checksummed = Web3.to_checksum_address(request.walletAddress.lower())

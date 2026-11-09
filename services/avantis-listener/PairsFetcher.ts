@@ -6,6 +6,7 @@
 import { createPublicClient, http, parseAbiItem } from 'viem';
 import { base } from 'viem/chains';
 import mongoose from 'mongoose';
+import { getBaseRpcUrl } from './core/rpc';
 
 /**
  * Avantis PairsStorage contract address on Base
@@ -51,10 +52,7 @@ const CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours
  * Create viem client for pair fetching
  */
 function createPairsClient() {
-  const rpcUrl = process.env.QUICKNODE_BASE_RPC_URL;
-  if (!rpcUrl) {
-    throw new Error('QUICKNODE_BASE_RPC_URL not set');
-  }
+  const rpcUrl = getBaseRpcUrl();
 
   return createPublicClient({
     chain: base,

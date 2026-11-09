@@ -14,7 +14,7 @@ class QuickNodeClient:
     """Client for QuickNode Base RPC."""
 
     def __init__(self):
-        self.endpoint = settings.quicknode_endpoint
+        self.endpoint = settings.base_rpc_url
         self.headers = {"Content-Type": "application/json"}
         self.timeout = 30.0
 

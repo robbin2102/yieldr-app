@@ -26,6 +26,12 @@ class Settings(BaseSettings):
 
     # Optional settings (for Part 2+)
     quicknode_endpoint: str = Field(default="", alias="QUICKNODE_BASE_RPC_URL")  # For Part 2 eth_getLogs
+    # Base RPC (Alchemy). QUICKNODE_BASE_RPC_URL is kept as a fallback for older envs.
+    alchemy_base_rpc_url: str = Field(default="", alias="ALCHEMY_BASE_RPC_URL")
+
+    @property
+    def base_rpc_url(self) -> str:
+        return self.alchemy_base_rpc_url or self.quicknode_endpoint
     taapi_api_key: str = ""
     quicknode_stream_secret: str = ""
 

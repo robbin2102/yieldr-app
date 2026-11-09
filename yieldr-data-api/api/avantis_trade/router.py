@@ -120,11 +120,11 @@ class CdpTraderClient(TraderClient):
 # ─────────────────────────────────────────────
 
 def _get_rpc_url() -> str:
-    rpc = settings.quicknode_endpoint
+    rpc = settings.base_rpc_url
     if not rpc:
         raise HTTPException(
             status_code=503,
-            detail="QUICKNODE_BASE_RPC_URL is not configured"
+            detail="ALCHEMY_BASE_RPC_URL is not configured"
         )
     return rpc
 
@@ -174,7 +174,7 @@ async def _build_trader_client(agent_wallet_address: Optional[str] = None) -> Tr
     except asyncio.TimeoutError:
         raise HTTPException(
             status_code=503,
-            detail="RPC connection timed out — QuickNode unreachable. Try again shortly.",
+            detail="RPC connection timed out — Base RPC unreachable. Try again shortly.",
         )
 
 
